@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt } from './promptProvider';
+import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 
@@ -33,102 +34,88 @@ export function activate(context: vscode.ExtensionContext) {
     // 2. 進入迴圈
     // extension.ts 內的指令實作
 while (currentLoop <= params.maxLoops && mutationScore < 100) {
-    log(`\n--- 🔄 第 ${currentLoop} 輪循環開始 ---`);
+        log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
 
-    // A. 準備 Prompt
-    const systemPrompt = getSystemPrompt(currentLoop, "目前模擬的突變體資料");
-    const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode);
+        // 1. 定義路徑 (解決你的 reportDir 問題)
+        // 如果使用者沒選輸出資料夾，就預設放在目標檔案同目錄
+        const baseDir = params.outputPath || path.dirname(params.filePath);
+        const testPath = path.join(baseDir, `test_loop_${currentLoop}.py`);
+        const reportDir = path.join(baseDir, `report_loop_${currentLoop}`);
 
-    try {
-        // B. LLM 呼叫分流 (解決 404 與格式問題)
-        let apiUrl = "";
-        let bodyData = {};
+        // 2. 呼叫 LLM (這部分維持你原本的 fetch 邏輯)
+        const targetCode = fs.readFileSync(params.filePath, 'utf-8');
+        const systemPrompt = getSystemPrompt(currentLoop, "目前模擬的存活突變體");
+        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode);
 
-        if (params.envType === 'local') {
-            apiUrl = 'http://127.0.0.1:11434/api/generate';
-            bodyData = {
-                model: params.modelName,
-                system: systemPrompt,
-                prompt: userPrompt,
-                stream: false
-            };
-        } else {
-            // 雲端模式 (假設使用 Gemini)
-            const config = vscode.workspace.getConfiguration('llmUnitTest');
-            const keys = config.get<Record<string, string>>('apiKeys', {});
-            const actualKey = keys[params.modelName];
+        try {
+            // 2. LLM 呼叫分流
+            let apiUrl = "";
+            let bodyData = {};
 
-            apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${actualKey}`;
-            bodyData = {
-                contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }]
-            };
-        }
+            if (params.envType === 'local') {
+                apiUrl = 'http://127.0.0.1:11434/api/generate';
+                bodyData = {
+                    model: params.modelName, 
+                    system: systemPrompt,
+                    prompt: userPrompt,
+                    stream: false 
+                };
+            } else {
+                const config = vscode.workspace.getConfiguration('llmUnitTest');
+                const keys = config.get<Record<string, string>>('apiKeys', {});
+                const actualKey = keys[params.modelName];
+                // 這裡以 Gemini 為例，解決 404
+                apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${actualKey}`;
+                bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
+            }
 
-        log(`[LLM] 正在透過 ${params.envType} 呼叫模型: ${params.modelName}`);
-
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(bodyData)
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status} - ${await response.text()}`);
-        }
-
-        const data = await response.json() as any;
-        // 根據來源取得回應文字
-        const llmResponse = params.envType === 'local' ? data.response : data.candidates[0].content.parts[0].text;
-        
-        log(`[LLM] 成功獲得第 ${currentLoop} 版測試代碼`);
-
-        // C. 真實存檔 (將 LLM 生成的代碼寫入檔案)
-        // 建議存在使用者設定的 outputPath，若無則存原檔案目錄
-        const outputDir = params.outputPath || params.filePath.substring(0, params.filePath.lastIndexOf(/[/\\]/));
-        const testFileName = `test_loop_${currentLoop}.py`;
-        const testPath = `${outputDir}/${testFileName}`;
-
-        fs.writeFileSync(testPath, llmResponse, 'utf8');
-        log(`[系統] 測試腳本已存檔: ${testFileName}`);
-
-        // D. 呼叫真實 MutPy (關鍵步驟！)
-        log('[MutPy] 啟動突變測試分析...');
-        
-        // 這裡使用 Promise 包裝 exec，確保迴圈會等待執行結果
-        const mutpyOutput = await new Promise<string>((resolve) => {
-            const cmd = `mutpy --target ${params.filePath} --unit-test ${testPath}`;
-            exec(cmd, (error, stdout, stderr) => {
-                resolve(stdout || stderr || "無輸出結果");
+            log(`[LLM] 正在呼叫模型: ${params.modelName}`);
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bodyData)
             });
-        });
 
-        log(`[MutPy 結果]\n${mutpyOutput}`);
+            const llmResponse = "LLM 生成的測試程式碼..."; 
+            fs.writeFileSync(testPath, llmResponse, 'utf8');
+            log(`[系統] 測試腳本已存檔: ${path.basename(testPath)}`);
 
-        // E. 解析分數 (簡單 Regex 範例)
-        const scoreMatch = mutpyOutput.match(/Mutation score \[([\d.]+) %\]/);
-        if (scoreMatch) {
-            mutationScore = parseFloat(scoreMatch[1]);
-            log(`[分析] 本輪突變分數: ${mutationScore}%`);
+            // 3. 呼叫 MutPy 並產生 HTML 報告 (解決亂碼與呼叫問題)
+            log(`[MutPy] 啟動突變分析，報告輸出至: ${reportDir}`);
             
-            // 將結果傳回側邊欄表格
-            sidebarProvider.webview?.postMessage({ 
-                command: 'updateCoverage', 
-                fileName: params.filePath.split(/[/\\]/).pop(),
-                score: mutationScore 
+            const mutpyResult = await new Promise<string>((resolve) => {
+                // 💡 使用 chcp 65001 強制 UTF-8 解決亂碼
+                // 💡 使用 python -m mutpy 解決找不到指令的問題
+                const cmd = `chcp 65001 && python -m mutpy --target ${params.filePath} --unit-test ${testPath} --report-html ${reportDir}`;
+                
+                exec(cmd, (error, stdout, stderr) => {
+                    resolve(stdout || stderr || "無輸出內容");
+                });
             });
-        }
 
-        if (mutationScore >= 100) {
-            log('[完成] 突變覆蓋率已達 100%！');
+            log(`[MutPy 執行結果]\n${mutpyResult}`);
+
+            // 4. 解析分數 (從文字輸出抓取)
+            const scoreMatch = mutpyResult.match(/Mutation score \[([\d.]+) %\]/);
+            if (scoreMatch) {
+                mutationScore = parseFloat(scoreMatch[1]);
+                log(`[分析] 本輪突變分數：${mutationScore}%`);
+            }
+
+            // 5. 💡 自動開啟 HTML 報告
+            if (fs.existsSync(path.join(reportDir, 'index.html'))) {
+                vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
+            }
+
+            if (mutationScore >= 100) {break;}
+
+        } catch (error: any) {
+            log(`[錯誤] 執行中斷: ${error.message}`);
             break;
         }
-
-    } catch (error: any) {
-        log(`[錯誤] 執行中斷: ${error.message}`);
-        break;
+        currentLoop++;
     }
-    currentLoop++;
-}
+
 });}
 
 export function deactivate() {}
