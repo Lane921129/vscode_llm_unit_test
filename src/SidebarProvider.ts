@@ -19,11 +19,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             switch (message.command) {
                 case 'getInitialData': {
                     const keys = config.get<Record<string, string>>('apiKeys', {});
+                    this.webview?.postMessage({ command: 'setApiKeys', keys });
+
+                    const customKeys = config.get<Record<string, any>>('customApiKeys', {});
+                    this.webview?.postMessage({ command: 'setCustomKeys', keys: customKeys });
+
                     const savedProjPath = config.get<string>('projectPath', '');
                     const files = await this.findPythonFiles(savedProjPath);
                     const savedPath = config.get<string>('outputPath', '');
 
-                    this.webview?.postMessage({ command: 'setApiKeys', keys });
                     if (savedProjPath) {
                         this.webview?.postMessage({ command: 'setProjectPath', path: savedProjPath });
                     }
@@ -139,6 +143,29 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'updateCustomKey': {
+                    const currentKeys = { ...config.get<Record<string, any>>('customApiKeys', {}) };
+                    if (message.oldName && message.oldName !== message.newName) {
+                        delete currentKeys[message.oldName];
+                    }
+                    currentKeys[message.newName] = { url: message.url, model: message.model, key: message.key };
+                    await config.update('customApiKeys', currentKeys, true);
+                    this.webview?.postMessage({ command: 'setCustomKeys', keys: currentKeys });
+                    vscode.window.showInformationMessage(`✅ 已存檔自訂 API：${message.newName}`);
+                    break;
+                }
+
+                case 'deleteCustomKey': {
+                    const currentKeys = { ...config.get<Record<string, any>>('customApiKeys', {}) };
+                    if (currentKeys[message.name]) {
+                        delete currentKeys[message.name];
+                        await config.update('customApiKeys', currentKeys, true);
+                        this.webview?.postMessage({ command: 'setCustomKeys', keys: currentKeys });
+                        vscode.window.showInformationMessage(`🗑️ 已刪除自訂 API：${message.name}`);
+                    }
+                    break;
+                }
+
                 case 'startAnalysis': {
                     vscode.commands.executeCommand('llm-unit-test.runCaptureAndTest', message);
                     break;
@@ -181,8 +208,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             
             const tasks = list.map(async (dirent) => {
                 const file = dirent.name;
-                if (file.startsWith('.') && file !== '.py' && file.length > 1) return; // skip hidden folders
-                if (ignoredDirs.has(file)) return;
+                if (file.startsWith('.') && file !== '.py' && file.length > 1) {return;} // skip hidden folders
+                if (ignoredDirs.has(file)) {return;}
                 
                 const fullPath = path.join(dir, file);
                 try {

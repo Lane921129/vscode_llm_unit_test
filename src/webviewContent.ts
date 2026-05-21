@@ -107,6 +107,7 @@ export function getWebviewContent() {
             <select id="env-type">
                 <option value="cloud">雲端 (Gemini API)</option>
                 <option value="local">本地 (Ollama)</option>
+                <option value="custom">自訂 (OpenAI 相容)</option>
             </select>
             
             <div id="cloud-ui">
@@ -127,6 +128,28 @@ export function getWebviewContent() {
                 <label>本地模型 (Ollama)</label>
                 <select id="model-select"><option value="">-- 載入中 --</option></select>
                 <button id="btn-refresh-models" style="width:100%;">🔄 重新整理模型</button>
+            </div>
+
+            <div id="custom-ui" style="display:none;">
+                <label>選擇自訂 API 設定</label>
+                <select id="custom-api-select"><option value="">-- 請選擇或新增 --</option></select>
+                
+                <label style="margin-top:5px;">標籤 (例: GPT-4o 或 實驗室 vLLM)</label>
+                <input type="text" id="custom-name" placeholder="設定標籤名稱">
+                
+                <label>API Base URL</label>
+                <input type="text" id="custom-url" placeholder="例: https://api.openai.com/v1/chat/completions">
+                
+                <label>模型名稱 (Model)</label>
+                <input type="text" id="custom-model" placeholder="例: gpt-4o">
+                
+                <label>API Key (選填)</label>
+                <input type="password" id="custom-key" placeholder="Bearer Token">
+                
+                <div class="flex-row">
+                    <button id="btn-save-custom" style="flex:1;">💾 儲存</button>
+                    <button id="btn-del-custom" style="flex:0.5; background:#a82a2a;">🗑️ 刪除</button>
+                </div>
             </div>
         </div>
     </details>
@@ -160,6 +183,9 @@ export function getWebviewContent() {
             <label style="margin-top:8px;">最大循環次數</label>
             <input type="number" id="max-loop" value="3" min="1">
             
+            <label>突變測試時間</label>
+            <input type="number" id="mutpy-timeout" value="5" min="1" style="width:100%;">
+
             <label>超時限制 (秒)</label>
             <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
             
@@ -204,6 +230,8 @@ export function getWebviewContent() {
         const vscode = acquireVsCodeApi();
         let currentKeys = {};
 
+        let currentCustomKeys = {};
+
         // 載入初始資料
         vscode.postMessage({ command: 'getInitialData' });
 
@@ -233,6 +261,11 @@ export function getWebviewContent() {
                         Array.from(newRow.cells).forEach(c => c.style.padding = '5px');
                     }
                     break;
+                case 'setCustomKeys':
+                    currentCustomKeys = msg.keys;
+                    const ckeys = Object.keys(msg.keys);
+                    document.getElementById('custom-api-select').innerHTML = '<option value="">-- 請選擇或新增 --</option>' + ckeys.map(k => '<option value="' + k + '">' + k + '</option>').join('');
+                    break;
                 case 'analysisFinished':
                     const runBtn = document.getElementById('btn-run');
                     const batchRunBtn = document.getElementById('btn-batch-run');
@@ -251,9 +284,10 @@ export function getWebviewContent() {
         });
 
         document.getElementById('env-type').onchange = (e) => {
-            const isLocal = e.target.value === 'local';
-            document.getElementById('local-ui').style.display = isLocal ? 'block' : 'none';
-            document.getElementById('cloud-ui').style.display = isLocal ? 'none' : 'block';
+            const val = e.target.value;
+            document.getElementById('local-ui').style.display = val === 'local' ? 'block' : 'none';
+            document.getElementById('cloud-ui').style.display = val === 'cloud' ? 'block' : 'none';
+            document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
         };
 
         document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
@@ -283,15 +317,47 @@ export function getWebviewContent() {
         document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });
         document.getElementById('btn-clear-log').onclick = () => document.getElementById('log-area').value = '';
 
+        document.getElementById('custom-api-select').onchange = (e) => {
+            const name = e.target.value;
+            const data = currentCustomKeys[name] || {url: '', model: '', key: ''};
+            document.getElementById('custom-name').value = name || '';
+            document.getElementById('custom-url').value = data.url || '';
+            document.getElementById('custom-model').value = data.model || '';
+            document.getElementById('custom-key').value = data.key || '';
+        };
+
+        document.getElementById('btn-save-custom').onclick = () => {
+            const newName = document.getElementById('custom-name').value;
+            const url = document.getElementById('custom-url').value;
+            const model = document.getElementById('custom-model').value;
+            const key = document.getElementById('custom-key').value;
+            const oldName = document.getElementById('custom-api-select').value;
+            if (newName && url && model) vscode.postMessage({ command: 'updateCustomKey', oldName, newName, url, model, key });
+        };
+
+        document.getElementById('btn-del-custom').onclick = () => {
+            const name = document.getElementById('custom-api-select').value;
+            if (name) vscode.postMessage({ command: 'deleteCustomKey', name });
+        };
+
         document.getElementById('btn-abort').onclick = () => vscode.postMessage({ command: 'abortTest' });
         
-        document.getElementById('btn-run').onclick = () => {
+        const getStartParams = () => {
             const envType = document.getElementById('env-type').value;
-            const modelName = envType === 'local' ? document.getElementById('model-select').value : document.getElementById('api-key-select').value;
+            let modelName = '';
+            if (envType === 'local') modelName = document.getElementById('model-select').value;
+            else if (envType === 'cloud') modelName = document.getElementById('api-key-select').value;
+            else if (envType === 'custom') modelName = document.getElementById('custom-model').value;
+
+            return { envType, modelName };
+        };
+
+        document.getElementById('btn-run').onclick = () => {
+            const { envType, modelName } = getStartParams();
             const filePath = document.getElementById('file-select').value;
             
             if(!envType || !modelName || !filePath) {
-                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與目標檔案皆已選擇。' });
+                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與目標檔案皆已填妥。' });
                 return;
             }
 
@@ -305,18 +371,20 @@ export function getWebviewContent() {
                 envType, modelName, filePath,
                 funcName: document.getElementById('func-select').value,
                 maxLoops: parseInt(document.getElementById('max-loop').value),
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value),
                 timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
-                outputPath: document.getElementById('output-path').value
+                outputPath: document.getElementById('output-path').value,
+                customUrl: document.getElementById('custom-url').value,
+                customKey: document.getElementById('custom-key').value
             });
         };
 
         document.getElementById('btn-batch-run').onclick = () => {
-            const envType = document.getElementById('env-type').value;
-            const modelName = envType === 'local' ? document.getElementById('model-select').value : document.getElementById('api-key-select').value;
+            const { envType, modelName } = getStartParams();
             let batchPath = document.getElementById('batch-path').value || document.getElementById('project-path').value;
             
             if(!envType || !modelName || !batchPath) {
-                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與批次測試資料夾皆已設定。' });
+                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與批次測試資料夾皆已填妥。' });
                 return;
             }
 
@@ -329,8 +397,11 @@ export function getWebviewContent() {
                 command: 'startBatchAnalysis',
                 envType, modelName, batchPath,
                 maxLoops: parseInt(document.getElementById('max-loop').value),
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value),
                 timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
-                outputPath: document.getElementById('output-path').value
+                outputPath: document.getElementById('output-path').value,
+                customUrl: document.getElementById('custom-url').value,
+                customKey: document.getElementById('custom-key').value
             });
         };
     </script>
