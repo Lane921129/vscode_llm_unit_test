@@ -3,9 +3,12 @@ import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt } from './promptProvider';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec } from 'child_process';
+import { exec, ChildProcess } from 'child_process';
 
-/** 前端傳入的分析參數介面 */
+let currentAbortController: AbortController | null = null;
+let currentMutpyProcess: ChildProcess | null = null;
+let isAborted = false;
+
 interface AnalysisParams {
     envType: 'local' | 'cloud';
     modelName: string;
@@ -16,7 +19,6 @@ interface AnalysisParams {
     outputPath: string;
 }
 
-/** Python AST 擷取結果介面 */
 interface AstContext {
     name: string;
     args: string[];
@@ -35,283 +37,316 @@ export function activate(context: vscode.ExtensionContext) {
     const runTestCmd = vscode.commands.registerCommand(
         'llm-unit-test.runCaptureAndTest',
         async (params: AnalysisParams) => {
-            const log = (text: string) =>
-                sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
+            isAborted = false;
+            const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
+            await executeSingleFileAnalysis(params, log, sidebarProvider);
+            sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
+        }
+    );
 
-            let currentLoop = 1;
-            let mutationScore = 0;
+    interface BatchAnalysisParams extends Omit<AnalysisParams, 'filePath' | 'funcName'> {
+        batchPath: string;
+    }
 
-            if (!params.filePath || !fs.existsSync(params.filePath)) {
-                log('[錯誤] 找不到目標檔案路徑');
-                return;
-            }
-
-            let survivedMutants = "";
-
-            while (currentLoop <= params.maxLoops && mutationScore < 100) {
-                log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
-
-                // 每輪重新讀取目標程式碼（使用者可能在迴圈執行期間修改了檔案）
-                let targetCode: string;
-                try {
-                    targetCode = fs.readFileSync(params.filePath, 'utf-8');
-                } catch {
-                    log('[錯誤] 讀取檔案失敗');
+    const runBatchCmd = vscode.commands.registerCommand(
+        'llm-unit-test.runBatchAnalysis',
+        async (params: BatchAnalysisParams) => {
+            isAborted = false;
+            const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
+            try {
+                const pyFiles = await findPythonFilesInDir(params.batchPath);
+                if (pyFiles.length === 0) {
+                    log(`[系統] 在目錄 ${params.batchPath} 中找不到任何 Python 檔案。`);
                     return;
                 }
 
-                // 定義路徑
-                const baseDir = params.outputPath || path.dirname(params.filePath);
-                const testPath = path.join(baseDir, `test_loop_${currentLoop}.py`);
-                const reportDir = path.join(baseDir, `report_loop_${currentLoop}`);
-
-                // 呼叫 Python AST 擷取函式特徵與依賴
-                let astContext: AstContext | null = null;
-                if (params.funcName) {
-                    log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
-                    astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
-                }
-
-                // 建立 Prompt
-                const systemPrompt = getSystemPrompt(currentLoop, survivedMutants);
-                const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext);
-
-                try {
-                    // LLM 呼叫分流
-                    let apiUrl = "";
-                    let bodyData = {};
-
-                    if (params.envType === 'local') {
-                        apiUrl = 'http://127.0.0.1:11434/api/generate';
-                        bodyData = {
-                            model: params.modelName,
-                            system: systemPrompt,
-                            prompt: userPrompt,
-                            stream: false
-                        };
-                    } else {
-                        const config = vscode.workspace.getConfiguration('llmUnitTest');
-                        const keys = config.get<Record<string, string>>('apiKeys', {});
-                        const actualKey = keys[params.modelName];
-                        // 使用動態模型名稱而非硬編碼
-                        apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
-                        bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
-                    }
-
-                    log(`[LLM] 正在呼叫模型: ${params.modelName}`);
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(bodyData)
-                    });
-
-                    if (!response.ok) {
-                        const errText = await response.text();
-                        throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
-                    }
-
-                    const resJson = await response.json() as Record<string, unknown>;
-                    let rawCode = "";
-
-                    if (params.envType === 'local') {
-                        rawCode = (resJson as { response?: string }).response || "";
-                    } else {
-                        const candidates = resJson.candidates as Array<{
-                            content?: { parts?: Array<{ text?: string }> };
-                        }> | undefined;
-                        if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
-                            rawCode = candidates[0].content.parts[0].text;
-                        } else if (resJson.error) {
-                            const err = resJson.error as { message?: string };
-                            throw new Error(err.message || "Gemini 呼叫失敗");
-                        } else {
-                            throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
-                        }
-                    }
-
-                    const sanitizedCode = sanitizeLlmResponse(rawCode);
-                    if (!sanitizedCode) {
-                        throw new Error("模型產生的程式碼內容為空");
-                    }
-
-                    fs.writeFileSync(testPath, sanitizedCode, 'utf8');
-                    log(`[系統] 測試腳本已存檔: ${path.basename(testPath)}`);
-
-                    // 呼叫 MutPy 並產生 HTML 報告（路徑加引號防止空白斷裂）
-                    log(`[MutPy] 啟動突變分析 (超時限制: ${params.timeoutSeconds}秒)，報告輸出至: ${reportDir}`);
-
-                    const mutpyResult = await new Promise<string>((resolve, reject) => {
-                        const cmd = `chcp 65001 && python -m mutpy --target "${params.filePath}" --unit-test "${testPath}" --report-html "${reportDir}"`;
-
-                        const child = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
-                            if (error && error.killed) {
-                                reject(new Error(`突變測試超時 (超過 ${params.timeoutSeconds} 秒)`));
-                            } else {
-                                resolve(stdout || stderr || "無輸出內容");
-                            }
-                        });
-                    });
-
-                    log(`[MutPy 執行結果]\n${mutpyResult}`);
-
-                    // 解析分數與存活突變體
-                    const scoreMatch = mutpyResult.match(/Mutation score \[([\d.]+) %\]/);
-                    if (scoreMatch) {
-                        mutationScore = parseFloat(scoreMatch[1]);
-                        log(`[分析] 本輪突變分數：${mutationScore}%`);
-
-                        // 主動將突變分數同步回 Webview 的表格顯示
-                        sidebarProvider.webview?.postMessage({
-                            command: 'updateCoverage',
-                            fileName: path.basename(params.filePath),
-                            score: `${mutationScore}%`
-                        });
-                    }
-
-                    // 更新存活變異體資訊供下一輪使用
-                    survivedMutants = parseSurvivedMutants(mutpyResult);
-                    if (survivedMutants) {
-                        log(`[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n${survivedMutants}`);
-                    } else {
-                        log(`[分析] 本輪無存活變異體，或分析結果已達最優。`);
-                    }
-
-                    // 自動開啟 HTML 報告
-                    if (fs.existsSync(path.join(reportDir, 'index.html'))) {
-                        vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
-                    }
-
-                    if (mutationScore >= 100) {
-                        log(`[優化] 突變分數已達到 100%，自我修復成功！`);
+                log(`[系統] 開始批次測試，共找到 ${pyFiles.length} 個 Python 檔案。`);
+                for (let i = 0; i < pyFiles.length; i++) {
+                    if (isAborted) {
+                        log(`[系統] ⚠️ 批次測試已由使用者強制中止。`);
                         break;
                     }
-
-                } catch (error: unknown) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    log(`[錯誤] 執行中斷: ${message}`);
-                    break;
+                    const file = pyFiles[i];
+                    log(`\n======================================================`);
+                    log(`[系統] 正在處理批次檔案 (${i+1}/${pyFiles.length}): ${file}`);
+                    log(`======================================================`);
+                    const singleParams: AnalysisParams = { ...params, filePath: file, funcName: '' };
+                    await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
                 }
-                currentLoop++;
+                log(`\n[系統] 🎉 批次自動化測試執行完畢！`);
+            } catch (error) {
+                log(`[錯誤] 批次執行發生錯誤: ${error}`);
+            } finally {
+                sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
             }
         }
     );
 
-    // 將指令加入 subscriptions 以便擴充停用時正確清除
-    context.subscriptions.push(runTestCmd);
+    const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
+        if (!isAborted) {
+            isAborted = true;
+            if (currentAbortController) currentAbortController.abort();
+            if (currentMutpyProcess) {
+                exec(`taskkill /pid ${currentMutpyProcess.pid} /T /F`);
+                currentMutpyProcess.kill();
+            }
+        }
+    });
+
+    context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd);
 }
 
-/**
- * 呼叫 Python AST 模組擷取指定函式的參數、docstring、相依呼叫等特徵
- */
 async function extractAstContext(
-    filePath: string,
+    targetPath: string,
     funcName: string,
     baseDir: string
 ): Promise<AstContext | null> {
-    // 透過 JSON.stringify 跳脫路徑和函式名，防止 code injection
-    const safeFilePath = JSON.stringify(filePath);
-    const safeFuncName = JSON.stringify(funcName);
+    return new Promise((resolve) => {
+        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
+        const outputPath = path.join(baseDir, 'ast_context.json');
 
-    const pythonCode = `
-import ast, json, sys
-try:
-    with open(${safeFilePath}, "r", encoding="utf-8") as f:
-        tree = ast.parse(f.read())
-    found = False
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == ${safeFuncName}:
-            args = [arg.arg for arg in node.args.args]
-            calls = []
-            for subnode in ast.walk(node):
-                if isinstance(subnode, ast.Call):
-                    if isinstance(subnode.func, ast.Name):
-                        calls.append(subnode.func.id)
-                    elif isinstance(subnode.func, ast.Attribute):
-                        calls.append(subnode.func.attr)
+        const cmd = `python "${pythonScript}" "${targetPath}" "${funcName}" "${outputPath}"`;
 
-            with open(${safeFilePath}, "r", encoding="utf-8") as f2:
-                lines = f2.readlines()
-            func_code = "".join(lines[node.lineno-1:node.end_lineno])
-
-            print(json.dumps({
-                "name": node.name,
-                "args": args,
-                "docstring": ast.get_docstring(node) or "",
-                "calls": list(set(calls)),
-                "code": func_code
-            }))
-            found = True
-            break
-    if not found:
-        print(json.dumps({"error": "Function not found in AST"}))
-except Exception as e:
-    print(json.dumps({"error": str(e)}))
-`;
-
-    return new Promise<AstContext | null>((resolve) => {
-        const tempScriptPath = path.join(baseDir, `__ast_temp_${Date.now()}.py`);
-        fs.writeFileSync(tempScriptPath, pythonCode, 'utf-8');
-
-        exec(`python "${tempScriptPath}"`, (_error, stdout) => {
-            try {
-                if (fs.existsSync(tempScriptPath)) {
-                    fs.unlinkSync(tempScriptPath);
+        exec(cmd, (error, stdout, stderr) => {
+            if (error) {
+                resolve({ error: stdout || stderr, name: "", args: [], docstring: "", calls: [], code: "" });
+                return;
+            }
+            if (fs.existsSync(outputPath)) {
+                try {
+                    const data = fs.readFileSync(outputPath, 'utf8');
+                    resolve(JSON.parse(data));
+                } catch {
+                    resolve(null);
                 }
-            } catch { /* ignore cleanup errors */ }
-            try {
-                resolve(JSON.parse(stdout.trim()) as AstContext);
-            } catch {
-                resolve({ name: '', args: [], docstring: '', calls: [], code: '', error: "Failed to parse AST script output" });
+            } else {
+                resolve(null);
             }
         });
     });
 }
 
-/** 將 LLM 回傳的程式碼去除 markdown code fence */
-function sanitizeLlmResponse(response: string): string {
-    const pyCodeFenceRegex = /```(?:python)?\s*([\s\S]*?)```/i;
-    const match = response.match(pyCodeFenceRegex);
-    if (match) {
-        return match[1].trim();
+function sanitizeLlmResponse(rawCode: string): string {
+    let cleanCode = rawCode.trim();
+    if (cleanCode.includes("```python")) {
+        const match = cleanCode.match(/\`\`\`python([\s\S]*?)\`\`\`/);
+        if (match) {
+            cleanCode = match[1].trim();
+        }
+    } else if (cleanCode.includes("```")) {
+        const match = cleanCode.match(/\`\`\`([\s\S]*?)\`\`\`/);
+        if (match) {
+            cleanCode = match[1].trim();
+        }
     }
-    return response.trim();
+    return cleanCode;
 }
 
-/** 從 MutPy 輸出解析存活的突變體資訊 */
 function parseSurvivedMutants(mutpyResult: string): string {
-    const mutantMap = new Map<string, string>();
-    const survivedIds: string[] = [];
-
     const lines = mutpyResult.split('\n');
+    let isSurvivedSection = false;
+    const survivedList: string[] = [];
+
     for (const line of lines) {
-        const defMatch = line.match(/^\s*-\s*\[#\s*(\d+)\]\s*(.*)$/);
-        if (defMatch) {
-            mutantMap.set(defMatch[1], defMatch[2].trim());
+        if (line.includes('Survived mutants (')) {
+            isSurvivedSection = true;
             continue;
         }
-
-        const outcomeMatch = line.match(/mutant\s*#\s*(\d+).*survived/i);
-        if (outcomeMatch) {
-            survivedIds.push(outcomeMatch[1]);
+        if (isSurvivedSection) {
+            if (line.trim() === '' || line.startsWith('[-]')) {
+                break;
+            }
+            survivedList.push(line.trim());
         }
     }
+    return survivedList.join('\n');
+}
 
-    if (survivedIds.length === 0) {
-        const backupLines = lines.filter(
-            l => l.toLowerCase().includes('survived') &&
-                !l.includes('mutation score') &&
-                !l.includes('Start testing')
-        );
-        if (backupLines.length > 0) {
-            return backupLines.map(l => l.trim()).join('\n');
-        }
-        return "";
+async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: MutationViewProvider) {
+    let currentLoop = 1;
+    let mutationScore = 0;
+
+    if (!params.filePath || !fs.existsSync(params.filePath)) {
+        log('[錯誤] 找不到目標檔案路徑');
+        return;
     }
 
-    return survivedIds.map(id => {
-        const desc = mutantMap.get(id) || "未知變異操作";
-        return `- 變異體 #${id} 存活: ${desc}`;
-    }).join('\n');
+    let survivedMutants = "";
+
+    while (currentLoop <= params.maxLoops && mutationScore < 100) {
+        if (isAborted) {
+            log(`[系統] ⚠️ 測試已由使用者強制中止。`);
+            break;
+        }
+        log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
+
+        let targetCode: string;
+        try {
+            targetCode = fs.readFileSync(params.filePath, 'utf-8');
+        } catch {
+            log('[錯誤] 讀取檔案失敗');
+            return;
+        }
+
+        const baseDir = params.outputPath || path.dirname(params.filePath);
+        const testPath = path.join(baseDir, `test_loop_${currentLoop}.py`);
+        const reportDir = path.join(baseDir, `report_loop_${currentLoop}`);
+
+        let astContext: AstContext | null = null;
+        if (params.funcName) {
+            log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
+            astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
+            if (astContext && !astContext.error) log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+            else log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);
+        }
+
+        const systemPrompt = getSystemPrompt(currentLoop, survivedMutants);
+        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext);
+
+        try {
+            let apiUrl = "";
+            let bodyData = {};
+
+            if (params.envType === 'local') {
+                apiUrl = 'http://127.0.0.1:11434/api/generate';
+                bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
+            } else {
+                const config = vscode.workspace.getConfiguration('llmUnitTest');
+                const keys = config.get<Record<string, string>>('apiKeys', {});
+                const actualKey = keys[params.modelName];
+                apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
+                bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
+            }
+
+            log(`[LLM] 正在準備呼叫模型: ${params.modelName} ... (網路請求中，請耐心等候)`);
+            
+            currentAbortController = new AbortController();
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bodyData),
+                signal: currentAbortController.signal
+            });
+            currentAbortController = null;
+
+            if (isAborted) throw new Error("使用者強制中止");
+
+            log(`[LLM] 網路請求已返回，正在檢查回應狀態...`);
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+            }
+
+            const resJson = await response.json() as Record<string, unknown>;
+            log(`[LLM] 呼叫成功！正在萃取回傳的程式碼片段...`);
+            let rawCode = "";
+
+            if (params.envType === 'local') {
+                rawCode = (resJson as { response?: string }).response || "";
+            } else {
+                const candidates = resJson.candidates as Array<{ content?: { parts?: Array<{ text?: string }> }; }> | undefined;
+                if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
+                    rawCode = candidates[0].content.parts[0].text;
+                } else if (resJson.error) {
+                    const err = resJson.error as { message?: string };
+                    throw new Error(err.message || "Gemini 呼叫失敗");
+                } else {
+                    throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+                }
+            }
+
+            const sanitizedCode = sanitizeLlmResponse(rawCode);
+            if (!sanitizedCode) throw new Error("模型產生的程式碼內容為空");
+
+            log(`[系統] 準備將生成的測試程式碼存檔...`);
+            fs.writeFileSync(testPath, sanitizedCode, 'utf8');
+            log(`[系統] 測試腳本已存檔至: ${testPath}`);
+
+            log(`[MutPy] 正在建構突變測試指令...`);
+            log(`[MutPy] 正式啟動分析 (超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
+
+            if (isAborted) throw new Error("使用者強制中止");
+
+            const mutpyResult = await new Promise<string>((resolve, reject) => {
+                const cmd = `chcp 65001 && python -m mutpy --target "${params.filePath}" --unit-test "${testPath}" --report-html "${reportDir}"`;
+                currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
+                    currentMutpyProcess = null;
+                    if (isAborted) return reject(new Error("使用者強制中止"));
+                    if (error && error.killed) return reject(new Error(`突變測試超時 (超過 ${params.timeoutSeconds} 秒)`));
+                    resolve(stdout || stderr || "無輸出內容");
+                });
+            });
+
+            log(`[MutPy] 突變分析執行完畢！正在解析報告與分數...`);
+            log(`--- 突變測試原生輸出 --- \n${mutpyResult}\n------------------------`);
+
+            const scoreMatch = mutpyResult.match(/Mutation score \[([\d.]+) %\]/);
+            let reasonStr = "";
+            if (scoreMatch) {
+                mutationScore = parseFloat(scoreMatch[1]);
+                log(`[分析] 本輪突變分數：${mutationScore}%`);
+            } else {
+                log(`[錯誤] 無法解析突變分數！可能 MutPy 執行失敗或環境中未安裝 mutpy。`);
+                reasonStr = "MutPy 解析失敗";
+                if (!fs.existsSync(path.join(reportDir, 'index.html'))) {
+                    vscode.window.showErrorMessage(`⚠️ MutPy 測試報告產生失敗，請確認您的終端機能夠正常執行 python -m mutpy，且程式碼語法正確。`);
+                }
+            }
+
+            survivedMutants = parseSurvivedMutants(mutpyResult);
+            if (survivedMutants) {
+                log(`[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n${survivedMutants}`);
+                reasonStr = survivedMutants.split('\n')[0] + (survivedMutants.split('\n').length > 1 ? "..." : "");
+            } else {
+                log(`[分析] 本輪無存活變異體，或分析結果已達最優。`);
+                if (mutationScore >= 100) reasonStr = "通過";
+            }
+
+            sidebarProvider.webview?.postMessage({
+                command: 'updateCoverage',
+                fileName: path.basename(params.filePath),
+                score: mutationScore ? `${mutationScore}%` : 'N/A',
+                reason: reasonStr
+            });
+
+            if (fs.existsSync(path.join(reportDir, 'index.html'))) {
+                vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
+            }
+
+            if (mutationScore >= 100) {
+                log(`[優化] 突變分數已達到 100%，自我修復成功！`);
+                break;
+            }
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message !== "使用者強制中止") log(`[錯誤] 執行中斷: ${message}`);
+            sidebarProvider.webview?.postMessage({
+                command: 'updateCoverage',
+                fileName: path.basename(params.filePath),
+                score: '失敗',
+                reason: message.includes('CUDA') ? 'VRAM 不足' : '執行異常'
+            });
+            break;
+        }
+        currentLoop++;
+    }
+}
+
+async function findPythonFilesInDir(dir: string): Promise<string[]> {
+    const results: string[] = [];
+    try {
+        const list = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const item of list) {
+            const fullPath = path.join(dir, item.name);
+            if (item.isDirectory()) {
+                if (['.git', 'node_modules', 'env', '.env', 'venv', '.venv', '.pytest_cache', '__pycache__'].includes(item.name)) continue;
+                results.push(...await findPythonFilesInDir(fullPath));
+            } else if (item.name.endsWith('.py')) {
+                results.push(fullPath);
+            }
+        }
+    } catch { }
+    return results;
 }
 
 export function deactivate() {}

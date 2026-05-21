@@ -4,200 +4,135 @@ export function getWebviewContent() {
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM 突變測試</title>
     <style>
-        :root {
-            --primary: #007acc;
-            --primary-hover: #0062a3;
-            --bg-card: #252526;
-            --border-color: #3c3c3c;
-            --text-muted: #cccccc;
-            --success: #4af626;
+        body { font-family: var(--vscode-font-family); padding: 10px; color: var(--vscode-foreground); }
+        h3 { border-bottom: 1px solid var(--vscode-editorGroup-border); padding-bottom: 5px; }
+        
+        /* 摺疊面板樣式 */
+        details {
+            margin-bottom: 10px;
+            border: 1px solid var(--vscode-editorGroup-border);
+            border-radius: 4px;
+            background-color: var(--vscode-editor-background);
         }
-        body { 
-            font-family: var(--vscode-font-family, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif); 
-            padding: 12px; 
-            color: var(--vscode-foreground, #cccccc);
-            background-color: var(--vscode-sideBar-background, #1e1e1e);
-            margin: 0;
-            line-height: 1.4;
-        }
-        details { 
-            border: 1px solid var(--border-color); 
-            border-radius: 6px; 
-            margin-bottom: 12px; 
-            background: var(--bg-card); 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.15);
-            overflow: hidden;
-            transition: border-color 0.2s;
-        }
-        details:hover {
-            border-color: var(--primary);
-        }
-        summary { 
-            padding: 10px 12px; 
-            cursor: pointer; 
-            font-weight: 600; 
-            font-size: 13px; 
-            outline: none; 
-            background: rgba(255,255,255,0.02);
-            user-select: none;
-        }
-        .content { 
-            padding: 12px; 
-            border-top: 1px solid var(--border-color); 
-            background: var(--vscode-sideBar-background);
-        }
-        label {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--text-muted);
+        summary {
+            padding: 8px;
+            cursor: pointer;
             font-weight: bold;
-            display: block;
-            margin-top: 8px;
-        }
-        select, input { 
-            width: 100%; 
-            box-sizing: border-box; 
-            background: var(--vscode-input-background, #2c2c2c); 
-            color: var(--vscode-input-foreground, #cccccc); 
-            border: 1px solid var(--vscode-input-border, #3c3c3c); 
-            border-radius: 4px;
-            padding: 8px; 
-            margin-top: 6px; 
-            font-size: 12px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        select:focus, input:focus {
-            border-color: var(--primary);
+            background-color: var(--vscode-sideBarSectionHeader-background);
+            user-select: none;
             outline: none;
-            box-shadow: 0 0 4px rgba(0, 122, 204, 0.4);
         }
-        .flex-row { 
-            display: flex; 
-            gap: 6px; 
-            margin-top: 8px; 
+        summary:hover {
+            background-color: var(--vscode-list-hoverBackground);
         }
-        button { 
-            cursor: pointer; 
-            padding: 8px 12px; 
-            border: none; 
-            border-radius: 4px; 
-            background: var(--vscode-button-background, #007acc); 
-            color: var(--vscode-button-foreground, #ffffff); 
-            font-weight: 600; 
-            font-size: 12px;
-            transition: background-color 0.2s, transform 0.1s;
+        .content {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
         }
-        button:hover {
-            background: var(--vscode-button-hoverBackground, #0062a3);
+
+        label { margin-top: 5px; font-weight: 500; font-size: 13px; }
+        input, select, textarea {
+            width: 100%;
+            padding: 5px;
+            margin-top: 3px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            box-sizing: border-box;
+            border-radius: 2px;
         }
-        button:active {
-            transform: scale(0.98);
+        button {
+            margin-top: 10px;
+            padding: 6px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            cursor: pointer;
+            border-radius: 2px;
         }
-        #log-area { 
-            width: 100%; 
-            height: 200px; 
-            background: #141414; 
-            color: var(--success); 
-            font-family: 'Consolas', 'Courier New', monospace; 
-            font-size: 11px; 
-            padding: 10px; 
-            margin-top: 6px; 
-            resize: vertical; 
-            border: 1px solid var(--border-color); 
-            border-radius: 4px;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
-            line-height: 1.5;
+        button:hover { background: var(--vscode-button-hoverBackground); }
+        
+        .flex-row {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            width: 100%;
         }
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            font-size: 12px; 
-            margin-top: 8px; 
+        
+        /* 檔案覆蓋率表格 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 5px;
+            font-size: 13px;
+        }
+        th, td {
+            border: 1px solid var(--vscode-editorGroup-border);
+            padding: 5px;
+            text-align: left;
         }
         th {
-            background: rgba(255,255,255,0.03);
-            font-weight: 600;
-            color: var(--text-muted);
-            border-bottom: 2px solid var(--border-color);
-        }
-        th, td { 
-            text-align: left; 
-            padding: 8px 10px; 
-            border-bottom: 1px solid var(--border-color); 
-        }
-        tr:hover {
-            background: rgba(255,255,255,0.01);
-        }
-        .badge {
-            display: inline-block;
-            padding: 2px 6px;
-            font-size: 10px;
-            font-weight: bold;
-            border-radius: 10px;
-            text-align: center;
+            background-color: var(--vscode-sideBarSectionHeader-background);
         }
         .score-badge {
-            background: rgba(74, 246, 38, 0.15);
-            color: var(--success);
-            border: 1px solid rgba(74, 246, 38, 0.3);
+            background: #238636;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
         }
-        /* Modal dialog styling */
-        .modal {
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.6);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            backdrop-filter: blur(4px);
-        }
-        .modal-content {
-            background-color: var(--bg-card);
-            padding: 20px;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            width: 85%;
-            max-width: 300px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-            animation: modalFadeIn 0.2s ease-out;
-        }
-        @keyframes modalFadeIn {
-            from { opacity: 0; transform: scale(0.95); }
-            to { opacity: 1; transform: scale(1); }
+
+        #log-area {
+            height: 150px;
+            resize: vertical;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
         }
     </style>
 </head>
 <body>
+    <h3>🧪 LLM 突變測試與修復</h3>
+    
     <details open>
-        <summary>🤖 模型設定</summary>
+        <summary>🤖 模型與環境設定</summary>
         <div class="content">
-            <label>模型環境</label>
-            <select id="env-type"><option value="local">🖥️ 本地 Ollama</option><option value="cloud">☁️ 雲端 API</option></select>
+            <label>執行環境</label>
+            <select id="env-type">
+                <option value="cloud">雲端 (Gemini API)</option>
+                <option value="local">本地 (Ollama)</option>
+            </select>
             
-            <div id="local-ui" style="margin-top:8px;">
-                <label>本地模型：</label>
-                <select id="model-select"><option>讀取中...</option></select>
-            </div>
-            
-            <div id="cloud-ui" style="display:none; margin-top:8px;">
-                <label>API Key：</label>
+            <div id="cloud-ui">
+                <label>選擇 API Key</label>
                 <div class="flex-row">
-                    <select id="api-key-select"><option value="">-- 選擇 Key --</option></select>
-                    <button id="btn-del-key" style="background:#a82a2a; flex-shrink:0; width:40px;">🗑️</button>
+                    <select id="api-key-select"><option value="">-- 載入中 --</option></select>
                 </div>
-                <button id="btn-edit-key" style="margin-top:8px; width:100%; background:var(--vscode-button-secondaryBackground, #3a3d3e); color:var(--vscode-button-secondaryForeground, #ffffff);">➕ 新增 / ✏️ 編輯密鑰</button>
+                
+                <div class="flex-row" style="margin-top: 5px;">
+                    <input type="text" id="new-key-name" placeholder="標籤 (例: Gemini-Pro)">
+                    <input type="password" id="new-key-value" placeholder="輸入 API Key">
+                    <button id="btn-save-key" style="margin-top:0; width:60px; flex-shrink:0;">儲存</button>
+                    <button id="btn-del-key" style="margin-top:0; width:40px; flex-shrink:0; background:#a82a2a;">刪除</button>
+                </div>
+            </div>
+
+            <div id="local-ui" style="display:none;">
+                <label>本地模型 (Ollama)</label>
+                <select id="model-select"><option value="">-- 載入中 --</option></select>
+                <button id="btn-refresh-models" style="width:100%;">🔄 重新整理模型</button>
             </div>
         </div>
     </details>
 
     <details open>
-        <summary>⚙️ 基礎設定 (資料夾路徑)</summary>
+        <summary>⚙️ 基礎設定</summary>
         <div class="content">
             <label>📂 測試專案資料夾</label>
             <div class="flex-row">
@@ -205,7 +140,7 @@ export function getWebviewContent() {
                 <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
             </div>
             
-            <label style="margin-top:10px;">📂 測試結果輸出資料夾</label>
+            <label>📂 測試結果輸出資料夾</label>
             <div class="flex-row">
                 <input type="text" id="output-path" readonly placeholder="預設與目標檔案同目錄">
                 <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
@@ -225,105 +160,92 @@ export function getWebviewContent() {
             <label style="margin-top:8px;">最大循環次數</label>
             <input type="number" id="max-loop" value="3" min="1">
             
-            <label style="margin-top:8px;">單次執行超時限制 (秒)</label>
-            <input type="number" id="timeout-sec" value="60" min="10">
+            <label>超時限制 (秒)</label>
+            <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
+            
+            <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
+                <button id="btn-run" style="flex:1;">🚀 開始自動化突變測試</button>
+                <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">🛑 中止測試</button>
+            </div>
         </div>
     </details>
 
     <details open>
-        <summary>📊 檔案覆蓋率 explorer</summary>
+        <summary>📊 檔案覆蓋率與結果</summary>
         <div class="content">
-            <table id="coverage-table">
-                <thead>
-                    <tr>
-                        <th>檔案</th>
-                        <th>突變分數</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td colspan="2" style="text-align:center; opacity:0.5; font-style:italic;">尚無數據</td>
-                    </tr>
-                </tbody>
+            <label>📁 批次測試範圍</label>
+            <div class="flex-row">
+                <input type="text" id="batch-path" readonly placeholder="預設: 整個專案">
+                <button id="btn-browse-batch" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+            
+            <button id="btn-batch-run" style="margin-top:10px; width:100%;">▶️ 執行批次自動化測試 (範圍內所有檔案)</button>
+
+            <table id="coverage-table" style="margin-top:15px; width:100%; border-collapse:collapse; text-align:left;">
+                <thead style="border-bottom:1px solid var(--vscode-editorGroup-border);"><tr>
+                    <th style="padding:5px;">資料夾/檔案名稱</th>
+                    <th style="padding:5px;">突變分數</th>
+                    <th style="padding:5px;">狀態 / 原因</th>
+                </tr></thead>
+                <tbody><tr><td colspan="3" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr></tbody>
             </table>
         </div>
     </details>
-
-    <button id="start-test" style="margin-top:10px; width:100%; font-size:13px; padding:10px 0;">🚀 執行自動化測試循環</button>
 
     <details>
         <summary>📝 系統日誌</summary>
         <div class="content">
             <textarea id="log-area" readonly placeholder="系統分析日誌將顯示於此..."></textarea>
+            <button id="btn-clear-log" style="margin-top:5px;">清除日誌</button>
         </div>
     </details>
-
-    <!-- Modal for API Keys -->
-    <div id="key-modal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h3 style="margin-top:0; font-size:15px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">🔑 密鑰管理</h3>
-            <label>模型名稱 (如 gemini-2.0-flash)</label>
-            <input type="text" id="modal-model-name" placeholder="請輸入模型代號">
-            <label style="margin-top:10px; display:block;">API Key</label>
-            <input type="password" id="modal-api-key" placeholder="請輸入 API 金鑰">
-            <div class="flex-row" style="margin-top:16px; justify-content: flex-end;">
-                <button id="modal-cancel" style="background:var(--vscode-button-secondaryBackground, #3a3d3e); color:var(--vscode-button-secondaryForeground, #ffffff);">取消</button>
-                <button id="modal-save" style="background:var(--vscode-button-background, #007acc);">💾 儲存</button>
-            </div>
-        </div>
-    </div>
 
     <script>
         const vscode = acquireVsCodeApi();
         let currentKeys = {};
 
-        window.onload = () => { 
-            vscode.postMessage({ command: 'getInitialData' }); 
-        };
+        // 載入初始資料
+        vscode.postMessage({ command: 'getInitialData' });
 
         window.addEventListener('message', event => {
             const msg = event.data;
-            switch(msg.command) {
-                case 'setModels': 
-                    document.getElementById('model-select').innerHTML = msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join(''); 
-                    break;
-                case 'setApiKeys':
-                    currentKeys = msg.keys;
-                    const keys = Object.keys(msg.keys);
-                    document.getElementById('api-key-select').innerHTML = '<option value="">-- 選擇 Key --</option>' + keys.map(k => \`<option value="\${k}">\${k}</option>\`).join('');
-                    break;
-                case 'setFiles': 
-                    document.getElementById('file-select').innerHTML = '<option value="">-- 選擇檔案 --</option>' + msg.files.map(f => \`<option value="\${f.path}">\${f.name}</option>\`).join(''); 
-                    break;
-                case 'setFunctions': 
-                    document.getElementById('func-select').innerHTML = '<option value="">-- 一鍵測試全部 (此檔案) --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); 
-                    break;
-                case 'setProjectPath': 
-                    document.getElementById('project-path').value = msg.path; 
-                    break;
-                case 'setOutputPath': 
-                    document.getElementById('output-path').value = msg.path; 
-                    break;
-                case 'appendLog':
-                    const log = document.getElementById('log-area');
-                    log.value += (log.value ? '\\n' : '') + msg.text;
-                    log.scrollTop = log.scrollHeight;
-                    break;
+            switch (msg.command) {
+                case 'setModels': document.getElementById('model-select').innerHTML = '<option value="">-- 選擇模型 --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join(''); break;
+                case 'setApiKeys': currentKeys = msg.keys; const keys = Object.keys(msg.keys); document.getElementById('api-key-select').innerHTML = '<option value="">-- 選擇 Key --</option>' + keys.map(k => \`<option value="\${k}">\${k}</option>\`).join(''); break;
+                case 'setFiles': document.getElementById('file-select').innerHTML = '<option value="">-- 選擇檔案 --</option>' + msg.files.map(f => \`<option value="\${f.path}">\${f.name}</option>\`).join(''); break;
+                case 'setFunctions': document.getElementById('func-select').innerHTML = '<option value="">-- 一鍵測試全部 (此檔案) --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); break;
+                case 'setProjectPath': document.getElementById('project-path').value = msg.path; if (!document.getElementById('batch-path').value) document.getElementById('batch-path').value = msg.path; break;
+                case 'setBatchPath': document.getElementById('batch-path').value = msg.path; break;
+                case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
+                case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
                 case 'updateCoverage':
                     const tbody = document.querySelector('#coverage-table tbody');
                     let existingRow = Array.from(tbody.querySelectorAll('tr')).find(row => row.cells[0]?.textContent === msg.fileName);
-                    if (existingRow) {
-                        existingRow.cells[1].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`;
-                    } else {
-                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes('尚無數據')) {
-                            tbody.innerHTML = '';
-                        }
-                        const newRow = tbody.insertRow();
-                        const cellFile = newRow.insertCell(0);
-                        const cellScore = newRow.insertCell(1);
-                        cellFile.textContent = msg.fileName;
-                        cellScore.innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`;
+                    if (existingRow) { 
+                        existingRow.cells[1].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        existingRow.cells[2].textContent = msg.reason || '';
+                    } else { 
+                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes('尚無數據')) tbody.innerHTML = ''; 
+                        const newRow = tbody.insertRow(); 
+                        newRow.insertCell(0).textContent = msg.fileName; 
+                        newRow.insertCell(1).innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        newRow.insertCell(2).textContent = msg.reason || '';
+                        Array.from(newRow.cells).forEach(c => c.style.padding = '5px');
                     }
+                    break;
+                case 'analysisFinished':
+                    const runBtn = document.getElementById('btn-run');
+                    const batchRunBtn = document.getElementById('btn-batch-run');
+                    if (runBtn) {
+                        runBtn.disabled = false;
+                        runBtn.innerText = '🚀 開始自動化突變測試';
+                    }
+                    if (batchRunBtn) {
+                        batchRunBtn.disabled = false;
+                        batchRunBtn.innerText = '▶️ 執行批次自動化測試 (範圍內所有檔案)';
+                    }
+                    const abortBtn = document.getElementById('btn-abort');
+                    if (abortBtn) abortBtn.style.display = 'none';
                     break;
             }
         });
@@ -336,87 +258,76 @@ export function getWebviewContent() {
 
         document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
         document.getElementById('btn-browse-out').onclick = () => vscode.postMessage({ command: 'browseFolder' });
+        document.getElementById('btn-browse-batch').onclick = () => vscode.postMessage({ command: 'browseBatchFolder' });
         
         document.getElementById('file-select').onchange = (e) => { 
-            if(e.target.value) {
-                vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
-            } else {
-                document.getElementById('func-select').innerHTML = '<option value="">-- 一鍵測試全部 (此檔案) --</option>';
-            }
+            if(e.target.value) vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
         };
 
-        // --- 密鑰管理按鈕與 Modal 邏輯 ---
-        const modal = document.getElementById('key-modal');
-        const modalModel = document.getElementById('modal-model-name');
-        const modalKey = document.getElementById('modal-api-key');
-        let editingOldName = null;
-
-        document.getElementById('btn-edit-key').onclick = () => {
-            const select = document.getElementById('api-key-select');
-            const selectedVal = select.value;
-            if (selectedVal) {
-                editingOldName = selectedVal;
-                modalModel.value = selectedVal;
-                modalKey.value = currentKeys[selectedVal] || '';
-            } else {
-                editingOldName = null;
-                modalModel.value = '';
-                modalKey.value = '';
-            }
-            modal.style.display = 'flex';
+        document.getElementById('btn-save-key').onclick = () => {
+            const newName = document.getElementById('new-key-name').value;
+            const newValue = document.getElementById('new-key-value').value;
+            const oldName = document.getElementById('api-key-select').value;
+            if (newName && newValue) vscode.postMessage({ command: 'updateApiKey', oldName, newName, key: newValue });
         };
-
         document.getElementById('btn-del-key').onclick = () => {
-            const select = document.getElementById('api-key-select');
-            const selectedVal = select.value;
-            if (selectedVal) {
-                if (confirm(\`確定要刪除 \${selectedVal} 的密鑰嗎？\`)) {
-                    vscode.postMessage({ command: 'deleteApiKey', name: selectedVal });
-                }
-            } else {
-                alert('請先選擇要刪除的密鑰！');
-            }
+            const name = document.getElementById('api-key-select').value;
+            if (name) vscode.postMessage({ command: 'deleteApiKey', name });
+        };
+        document.getElementById('api-key-select').onchange = (e) => {
+            const name = e.target.value;
+            document.getElementById('new-key-name').value = name || '';
+            document.getElementById('new-key-value').value = currentKeys[name] || '';
         };
 
-        document.getElementById('modal-cancel').onclick = () => {
-            modal.style.display = 'none';
-        };
+        document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });
+        document.getElementById('btn-clear-log').onclick = () => document.getElementById('log-area').value = '';
 
-        document.getElementById('modal-save').onclick = () => {
-            const modelName = modalModel.value.trim();
-            const apiKey = modalKey.value.trim();
-            if (!modelName || !apiKey) {
-                alert('請填寫模型名稱與密鑰內容！');
+        document.getElementById('btn-abort').onclick = () => vscode.postMessage({ command: 'abortTest' });
+        
+        document.getElementById('btn-run').onclick = () => {
+            const envType = document.getElementById('env-type').value;
+            const modelName = envType === 'local' ? document.getElementById('model-select').value : document.getElementById('api-key-select').value;
+            const filePath = document.getElementById('file-select').value;
+            
+            if(!envType || !modelName || !filePath) {
+                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與目標檔案皆已選擇。' });
                 return;
             }
-            vscode.postMessage({
-                command: 'updateApiKey',
-                oldName: editingOldName,
-                newName: modelName,
-                key: apiKey
-            });
-            modal.style.display = 'none';
-        };
 
-        // 點擊 Modal 外部亦可取消
-        window.onclick = (e) => {
-            if (e.target === modal) {
-                modal.style.display = 'none';
-            }
-        };
+            document.getElementById('btn-run').disabled = true;
+            document.getElementById('btn-batch-run').disabled = true;
+            document.getElementById('btn-run').innerText = '⏳ 測試進行中...';
+            document.getElementById('btn-abort').style.display = 'block';
 
-        document.getElementById('start-test').onclick = () => {
-            const fileSelect = document.getElementById('file-select');
-            if (!fileSelect.value) {
-                alert('請先選擇目標 Python 檔案！');
-                return;
-            }
             vscode.postMessage({
                 command: 'startAnalysis',
-                envType: document.getElementById('env-type').value,
-                modelName: document.getElementById('env-type').value === 'local' ? document.getElementById('model-select').value : document.getElementById('api-key-select').value,
-                filePath: fileSelect.value,
+                envType, modelName, filePath,
                 funcName: document.getElementById('func-select').value,
+                maxLoops: parseInt(document.getElementById('max-loop').value),
+                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
+                outputPath: document.getElementById('output-path').value
+            });
+        };
+
+        document.getElementById('btn-batch-run').onclick = () => {
+            const envType = document.getElementById('env-type').value;
+            const modelName = envType === 'local' ? document.getElementById('model-select').value : document.getElementById('api-key-select').value;
+            let batchPath = document.getElementById('batch-path').value || document.getElementById('project-path').value;
+            
+            if(!envType || !modelName || !batchPath) {
+                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與批次測試資料夾皆已設定。' });
+                return;
+            }
+
+            document.getElementById('btn-run').disabled = true;
+            document.getElementById('btn-batch-run').disabled = true;
+            document.getElementById('btn-batch-run').innerText = '⏳ 批次測試進行中...';
+            document.getElementById('btn-abort').style.display = 'block';
+
+            vscode.postMessage({
+                command: 'startBatchAnalysis',
+                envType, modelName, batchPath,
                 maxLoops: parseInt(document.getElementById('max-loop').value),
                 timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
                 outputPath: document.getElementById('output-path').value
@@ -424,6 +335,5 @@ export function getWebviewContent() {
         };
     </script>
 </body>
-</html>
-`;
+</html>`;
 }

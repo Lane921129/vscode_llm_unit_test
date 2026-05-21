@@ -91,6 +91,20 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'browseBatchFolder': {
+                    const options: vscode.OpenDialogOptions = {
+                        canSelectFolders: true,
+                        canSelectFiles: false,
+                        openLabel: '選擇批次測試資料夾'
+                    };
+                    const fileUri = await vscode.window.showOpenDialog(options);
+                    if (fileUri && fileUri[0]) {
+                        const batchPath = fileUri[0].fsPath;
+                        this.webview?.postMessage({ command: 'setBatchPath', path: batchPath });
+                    }
+                    break;
+                }
+
                 case 'getFunctions': {
                     const funcs = await this.findPythonFunctions(message.filePath);
                     this.webview?.postMessage({ command: 'setFunctions', funcs });
@@ -127,6 +141,16 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'startAnalysis': {
                     vscode.commands.executeCommand('llm-unit-test.runCaptureAndTest', message);
+                    break;
+                }
+
+                case 'startBatchAnalysis': {
+                    vscode.commands.executeCommand('llm-unit-test.runBatchAnalysis', message);
+                    break;
+                }
+
+                case 'abortTest': {
+                    vscode.commands.executeCommand('llm-unit-test.abortTest');
                     break;
                 }
             }
