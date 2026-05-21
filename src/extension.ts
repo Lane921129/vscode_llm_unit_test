@@ -301,7 +301,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             const mutpyResult = await new Promise<string>((resolve, reject) => {
                 const timeoutArg = params.mutpyTimeout ? `--timeout ${params.mutpyTimeout}` : '';
-                const cmd = `chcp 65001 && python -m mutpy --target "${params.filePath}" --unit-test "${testPath}" --report-html "${reportDir}" ${timeoutArg}`;
+                const mutpyRunCmd = `python -c "import sys; from mutpy import commandline; sys.argv[0]='mut.py'; commandline.main(sys.argv)"`;
+                const cmd = `chcp 65001 && ${mutpyRunCmd} --target "${params.filePath}" --unit-test "${testPath}" --report-html "${reportDir}" ${timeoutArg}`;
                 currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
                     currentMutpyProcess = null;
                     if (isAborted) {return reject(new Error("使用者強制中止"));}
