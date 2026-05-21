@@ -145,21 +145,26 @@ function sanitizeLlmResponse(rawCode: string): string {
     return cleanCode;
 }
 
-function parseSurvivedMutants(mutpyResult: string): string {
-    const lines = mutpyResult.split('\n');
+function parseSurvivedMutants(mutatestResult: string): string {
+    const lines = mutatestResult.split('\n');
     let isSurvivedSection = false;
     const survivedList: string[] = [];
 
-    for (const line of lines) {
-        if (line.includes('Survived mutants (')) {
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line === 'SURVIVED' && lines[i+1]?.trim() === '--------') {
             isSurvivedSection = true;
+            i++; // skip '--------'
             continue;
         }
         if (isSurvivedSection) {
-            if (line.trim() === '' || line.startsWith('[-]')) {
+            // Stop if we hit an empty line or another section
+            if (line === '' || line.startsWith('2026-') || line.match(/^\d{4}-\d{2}-\d{2}/)) {
                 break;
             }
-            survivedList.push(line.trim());
+            if (line.startsWith('- ')) {
+                survivedList.push(line);
+            }
         }
     }
     return survivedList.join('\n');
@@ -294,22 +299,23 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             fs.writeFileSync(testPath, sanitizedCode, 'utf8');
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
 
-            log(`[MutPy] 正在建構突變測試指令...`);
-            log(`[MutPy] 正式啟動分析 (系統超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
+            log(`[Mutatest] 正在建構突變測試指令...`);
+            log(`[Mutatest] 正式啟動分析 (系統超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
 
             if (isAborted) {throw new Error("使用者強制中止");}
 
             const mutpyResult = await new Promise<string>((resolve, reject) => {
-                const timeoutArg = params.mutpyTimeout ? `--timeout-factor ${params.mutpyTimeout}` : '';
+                const timeoutArg = params.mutpyTimeout ? `--timeout_factor ${params.mutpyTimeout}` : '';
                 
-                // MutPy requires module names, not file paths.
                 const targetDir = path.dirname(params.filePath);
                 const targetModule = path.basename(params.filePath, '.py');
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
 
-                const mutpyRunCmd = `python -c "import sys; from mutpy import commandline; sys.argv[0]='mut.py'; commandline.main(sys.argv)"`;
-                const cmd = `chcp 65001 && ${mutpyRunCmd} --target ${targetModule} --unit-test ${testModule} --path "${targetDir}" --path "${testDir}" --report-html "${reportDir}" ${timeoutArg}`;
+                const mutatestPatch = `import random; orig_sample=random.sample; random.sample=lambda p,k: orig_sample(list(p) if isinstance(p,set) else p,k); import sys; from mutatest.cli import cli_main; sys.argv=['mutatest']; sys.exit(cli_main())`;
+                const mutatestRunCmd = `python -c "${mutatestPatch}"`;
+                // Set PYTHONPATH so unittest can find both target and test files
+                const cmd = `chcp 65001 && set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH% && cd /d "${testDir}" && ${mutatestRunCmd} -s "${params.filePath}" -t "python -m unittest ${testModule}" -o "${reportDir}.rst" ${timeoutArg.replace('-', '_')}`;
                 
                 currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
                     currentMutpyProcess = null;
@@ -317,29 +323,40 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     if (error && error.killed) {return reject(new Error(`系統執行超時 (超過 ${params.timeoutSeconds} 秒)`));}
                     
                     if (error) {
-                        resolve(`[MutPy 系統錯誤訊息]\n${error.message}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
+                        resolve(`[Mutatest 系統錯誤訊息]\n${error.message}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
                     } else {
                         resolve(stdout || stderr || "無輸出內容");
                     }
                 });
             });
 
-            log(`[MutPy] 突變分析執行完畢！正在解析報告與分數...`);
+            log(`[Mutatest] 突變分析執行完畢！正在解析報告與分數...`);
             log(`--- 突變測試原生輸出 ---\n${mutpyResult}\n------------------------`);
             finalReportMarkdown += `### 執行日誌摘要\n\n\`\`\`text\n${mutpyResult.substring(0, 500)}${mutpyResult.length > 500 ? '...' : ''}\n\`\`\`\n\n`;
             
-            const scoreMatch = mutpyResult.match(/Mutation score \[([\d.]+) %\]/);
+            const totalMatch = mutpyResult.match(/TOTAL RUNS: (\d+)/);
+            const survivedMatch = mutpyResult.match(/SURVIVED: (\d+)/);
+            const detectedMatch = mutpyResult.match(/DETECTED: (\d+)/);
+            
             let reasonStr = "";
-            if (scoreMatch) {
-                mutationScore = parseFloat(scoreMatch[1]);
-                log(`[分析] 本輪突變分數：${mutationScore}%`);
+            if (totalMatch) {
+                const total = parseInt(totalMatch[1]);
+                const survived = survivedMatch ? parseInt(survivedMatch[1]) : 0;
+                
+                if (total === 0) {
+                    mutationScore = 0;
+                } else {
+                    mutationScore = Math.round(((total - survived) / total) * 100);
+                }
+                
+                log(`[分析] 本輪突變分數：${mutationScore}% (Total: ${total}, Survived: ${survived})`);
                 finalReportMarkdown += `- **突變分數**: ${mutationScore}%\n`;
             } else {
-                log(`[錯誤] 無法解析突變分數！可能 MutPy 執行失敗或環境中未安裝 mutpy。`);
-                reasonStr = "MutPy 解析失敗";
+                log(`[錯誤] 無法解析突變分數！可能 mutatest 執行失敗或環境中未安裝 mutatest。`);
+                reasonStr = "Mutatest 解析失敗";
                 finalReportMarkdown += `- **突變分數**: 解析失敗\n`;
-                if (!fs.existsSync(path.join(reportDir, 'index.html'))) {
-                    vscode.window.showErrorMessage(`⚠️ MutPy 測試報告產生失敗，請確認您的終端機能夠正常執行 python -m mutpy，並查看日誌中的 stderr 錯誤。`);
+                if (!fs.existsSync(`${reportDir}.rst`)) {
+                    vscode.window.showErrorMessage(`⚠️ Mutatest 測試報告產生失敗，請確認您的終端機已安裝 mutatest，並查看日誌中的 stderr 錯誤。`);
                 }
             }
 
