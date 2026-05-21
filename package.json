@@ -49,6 +49,16 @@
           "type": "object",
           "default": {},
           "description": "請輸入雲端 LLM 的 API Key (例如 Gemini 或 OpenAI)"
+        },
+        "llmUnitTest.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "測試專案資料夾路徑"
+        },
+        "llmUnitTest.outputPath": {
+          "type": "string",
+          "default": "",
+          "description": "測試結果輸出資料夾路徑"
         }
       }
     }

@@ -175,7 +175,7 @@ export function getWebviewContent() {
 </head>
 <body>
     <details open>
-        <summary>⚙️ 基礎與路徑設定</summary>
+        <summary>🤖 模型設定</summary>
         <div class="content">
             <label>模型環境</label>
             <select id="env-type"><option value="local">🖥️ 本地 Ollama</option><option value="cloud">☁️ 雲端 API</option></select>
@@ -193,11 +193,22 @@ export function getWebviewContent() {
                 </div>
                 <button id="btn-edit-key" style="margin-top:8px; width:100%; background:var(--vscode-button-secondaryBackground, #3a3d3e); color:var(--vscode-button-secondaryForeground, #ffffff);">➕ 新增 / ✏️ 編輯密鑰</button>
             </div>
+        </div>
+    </details>
+
+    <details open>
+        <summary>⚙️ 基礎設定 (資料夾路徑)</summary>
+        <div class="content">
+            <label>📂 測試專案資料夾</label>
+            <div class="flex-row">
+                <input type="text" id="project-path" readonly placeholder="請選擇專案目錄">
+                <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
+            </div>
             
-            <label style="margin-top:10px;">📂 輸出資料夾</label>
+            <label style="margin-top:10px;">📂 測試結果輸出資料夾</label>
             <div class="flex-row">
                 <input type="text" id="output-path" readonly placeholder="預設與目標檔案同目錄">
-                <button id="btn-browse" style="width:40px; flex-shrink:0;">...</button>
+                <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
             </div>
         </div>
     </details>
@@ -285,7 +296,10 @@ export function getWebviewContent() {
                     document.getElementById('file-select').innerHTML = '<option value="">-- 選擇檔案 --</option>' + msg.files.map(f => \`<option value="\${f.path}">\${f.name}</option>\`).join(''); 
                     break;
                 case 'setFunctions': 
-                    document.getElementById('func-select').innerHTML = '<option value="">-- 測試整份檔案 --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); 
+                    document.getElementById('func-select').innerHTML = '<option value="">-- 一鍵測試全部 (此檔案) --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); 
+                    break;
+                case 'setProjectPath': 
+                    document.getElementById('project-path').value = msg.path; 
                     break;
                 case 'setOutputPath': 
                     document.getElementById('output-path').value = msg.path; 
@@ -320,13 +334,14 @@ export function getWebviewContent() {
             document.getElementById('cloud-ui').style.display = isLocal ? 'none' : 'block';
         };
 
-        document.getElementById('btn-browse').onclick = () => vscode.postMessage({ command: 'browseFolder' });
+        document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
+        document.getElementById('btn-browse-out').onclick = () => vscode.postMessage({ command: 'browseFolder' });
         
         document.getElementById('file-select').onchange = (e) => { 
             if(e.target.value) {
                 vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
             } else {
-                document.getElementById('func-select').innerHTML = '<option value="">-- 測試整份檔案 --</option>';
+                document.getElementById('func-select').innerHTML = '<option value="">-- 一鍵測試全部 (此檔案) --</option>';
             }
         };
 
