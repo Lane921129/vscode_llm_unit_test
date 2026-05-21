@@ -300,9 +300,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (isAborted) {throw new Error("使用者強制中止");}
 
             const mutpyResult = await new Promise<string>((resolve, reject) => {
-                const timeoutArg = params.mutpyTimeout ? `--timeout ${params.mutpyTimeout}` : '';
+                const timeoutArg = params.mutpyTimeout ? `--timeout-factor ${params.mutpyTimeout}` : '';
+                
+                // MutPy requires module names, not file paths.
+                const targetDir = path.dirname(params.filePath);
+                const targetModule = path.basename(params.filePath, '.py');
+                const testDir = path.dirname(testPath);
+                const testModule = path.basename(testPath, '.py');
+
                 const mutpyRunCmd = `python -c "import sys; from mutpy import commandline; sys.argv[0]='mut.py'; commandline.main(sys.argv)"`;
-                const cmd = `chcp 65001 && ${mutpyRunCmd} --target "${params.filePath}" --unit-test "${testPath}" --report-html "${reportDir}" ${timeoutArg}`;
+                const cmd = `chcp 65001 && ${mutpyRunCmd} --target ${targetModule} --unit-test ${testModule} --path "${targetDir}" --path "${testDir}" --report-html "${reportDir}" ${timeoutArg}`;
+                
                 currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
                     currentMutpyProcess = null;
                     if (isAborted) {return reject(new Error("使用者強制中止"));}
