@@ -6,8 +6,9 @@
   "engines": {
     "vscode": "^1.116.0"
   },
+  "license": "MIT",
   "categories": [
-    "Other"
+    "Testing"
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -24,8 +25,6 @@
     "views": {
       "mutation-test-explorer": [
         {
-          "_comment": "unsolved 還沒有決定icon",
-          "icon": "",
           "type": "webview",
           "id": "mutation-test-view",
           "name": "模型與測試設定"
@@ -34,8 +33,8 @@
     },
     "commands": [
       {
-        "command": "llm-unit-test.helloWorld",
-        "title": "Hello World"
+        "command": "llm-unit-test.runCaptureAndTest",
+        "title": "執行自動化測試循環"
       }
     ],
     "configuration": {

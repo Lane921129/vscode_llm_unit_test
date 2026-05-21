@@ -8,7 +8,25 @@ export function getSystemPrompt(loopCount: number, survivedMutants?: string): st
     return prompt;
 }
 
-export function getUserPrompt(fileName: string, funcName: string, code: string): string {
+export function getUserPrompt(fileName: string, funcName: string, code: string, astContext?: any): string {
     const target = funcName ? `函式 \`${funcName}\`` : `整份檔案`;
-    return `【目標檔案】: ${fileName}\n【目標範圍】: ${target}\n【原始程式碼】:\n\`\`\`python\n${code}\n\`\`\``;
+    let prompt = `【目標檔案】: ${fileName}\n【目標範圍】: ${target}\n`;
+    
+    if (astContext && !astContext.error) {
+        prompt += `【AST 解析特徵】:\n`;
+        prompt += `- 函數名稱: ${astContext.name}\n`;
+        if (astContext.args && astContext.args.length > 0) {
+            prompt += `- 參數清單: ${astContext.args.join(', ')}\n`;
+        }
+        if (astContext.docstring) {
+            prompt += `- 說明文件/註解: ${astContext.docstring.trim()}\n`;
+        }
+        if (astContext.calls && astContext.calls.length > 0) {
+            prompt += `- 內部相依呼叫: ${astContext.calls.join(', ')}\n`;
+        }
+        prompt += `\n【原始程式碼】:\n\`\`\`python\n${astContext.code || code}\n\`\`\``;
+    } else {
+        prompt += `\n【原始程式碼】:\n\`\`\`python\n${code}\n\`\`\``;
+    }
+    return prompt;
 }
