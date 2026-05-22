@@ -259,8 +259,13 @@ function parseMutatestSurvived(mutatestResult: string): string {
     let isSurvivedSection = false;
     const survivedList: string[] = [];
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line === 'SURVIVED' && lines[i+1]?.trim() === '--------') {
+        let line = lines[i].trim();
+        // 移除 ANSI 色碼（如 [91m, [0m）
+        line = line.replace(/\x1B\[\d+m/g, '');
+        // 移除有些情況下沒有 \x1B 但只有 [0m 的殘留字元（這是在日誌中常見的亂碼）
+        line = line.replace(/\[\d+m/g, '');
+
+        if (line === 'SURVIVED' && lines[i+1]?.replace(/\[\d+m/g, '').trim() === '--------') {
             isSurvivedSection = true;
             i++; continue;
         }
@@ -484,8 +489,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const testModule = path.basename(testPath, '.py');
 
                 const setPythonPath = isWin 
-                    ? `set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH%` 
-                    : `export PYTHONPATH="${targetDir}:${testDir}:$PYTHONPATH"`;
+                    ? `set PYTHONIOENCODING=utf8 && set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH%` 
+                    : `export PYTHONIOENCODING=utf8 && export PYTHONPATH="${targetDir}:${testDir}:$PYTHONPATH"`;
                 const chcp = isWin ? `chcp 65001 && ` : ``;
                 const cdCmd = isWin ? `cd /d "${testDir}"` : `cd "${testDir}"`;
 
