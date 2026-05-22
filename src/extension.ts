@@ -293,7 +293,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     }
 
     let survivedMutants = "";
-    let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **日期**: ${new Date().toLocaleString()}\n\n`;
+    const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **日期**: ${reportDateStr}\n\n`;
 
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
         if (isAborted) {
@@ -409,6 +410,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             const sanitizedCode = sanitizeLlmResponse(rawCode);
             if (!sanitizedCode) {throw new Error("模型產生的程式碼內容為空");}
+
+            // 【新增】將 AI 完整思考與輸出記錄到報告中（使用摺疊標籤避免太長）
+            finalReportMarkdown += `### 🤖 AI 原始輸出與思考過程\n\n`;
+            finalReportMarkdown += `<details>\n<summary>點擊展開 AI 完整回應</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
 
             // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
             let finalCode = sanitizedCode;
