@@ -234,8 +234,8 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
             : '';
 
         testMethods.push(
-            `    def test_basic(self):\n        # 自動生成的基本測試（AI 未提供具體測試案例）\n        result = ${resolvedFunc}(${sampleArgs})\n        self.assertIsNotNone(result)`,
-            `    def test_zero(self):\n        result = ${resolvedFunc}(${zeroArgs})\n        self.assertIsNotNone(result)`
+            `    def test_basic(self):\n        # 自動生成的基本測試（AI 未提供具體測試案例）\n        result = ${targetFunc}(${sampleArgs})\n        self.assertIsNotNone(result)`,
+            `    def test_zero(self):\n        result = ${targetFunc}(${zeroArgs})\n        self.assertIsNotNone(result)`
         );
     }
 
@@ -243,7 +243,7 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
 
     return [
         `import unittest`,
-        `from ${moduleName} import ${resolvedFunc}`,
+        `from ${moduleName} import *`,
         ``,
         `class TestAuto(unittest.TestCase):`,
         testMethods.join('\n\n'),
