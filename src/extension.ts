@@ -350,7 +350,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     if (error && error.killed) {return reject(new Error(`系統執行超時 (超過 ${params.timeoutSeconds} 秒)`));}
                     
                     if (error) {
-                        resolve(`[${engine} 系統錯誤訊息]\n${error.message}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
+                        const cleanMsg = error.message.replace(/^Command failed: .*?\n/s, '');
+                        resolve(`[${engine} 系統錯誤訊息]\n${cleanMsg}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
                     } else {
                         resolve(stdout || stderr || "無輸出內容");
                     }
@@ -359,7 +360,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             log(`[${engine}] 突變分析執行完畢！正在解析報告與分數...`);
             log(`--- 突變測試原生輸出 ---\n${mutpyResult}\n------------------------`);
-            finalReportMarkdown += `### 執行日誌摘要\n\n\`\`\`text\n${mutpyResult.substring(0, 500)}${mutpyResult.length > 500 ? '...' : ''}\n\`\`\`\n\n`;
+            
+            // 擷取最後 1000 字元，避免錯誤訊息被截斷
+            const displayLog = mutpyResult.length > 1000 ? '...' + mutpyResult.substring(mutpyResult.length - 1000) : mutpyResult;
+            finalReportMarkdown += `### 執行日誌摘要\n\n\`\`\`text\n${displayLog}\n\`\`\`\n\n`;
             
             let reasonStr = "";
             if (engine === 'mutmut') {
