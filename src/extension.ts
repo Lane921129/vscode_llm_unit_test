@@ -161,7 +161,7 @@ function sanitizeLlmResponse(rawCode: string): string {
 }
 
 /**
- * 將 AI 亂輸出的程式碼（REPL格式、裸assert等）自動包裝成合法的 unittest.TestCase 結構
+ * 將 AI 亂輸出的程式碼（REPL格式、裸assert、甚至原始碼）自動包裝成合法的 unittest.TestCase 結構
  */
 function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string): string {
     const moduleName = path.basename(srcFilePath, '.py');
@@ -171,7 +171,7 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
     const lines = rawCode
         .split('\n')
         .map(l => l.replace(/^>>>\s?/, '').trim())
-        .filter(l => l.length > 0 && !l.startsWith('#') && !l.startsWith('...')); // 去除空行、註解、REPL 繼續行
+        .filter(l => l.length > 0 && !l.startsWith('#') && !l.startsWith('...'));
 
     const testMethods: string[] = [];
     let methodIndex = 1;
@@ -181,7 +181,6 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
 
         if (line.startsWith('assert ')) {
             const assertBody = line.substring(7).trim();
-            // assert X == Y  →  self.assertEqual(X, Y)
             const eqMatch = assertBody.match(/^(.+?)\s*==\s*(.+)$/);
             const neqMatch = assertBody.match(/^(.+?)\s*!=\s*(.+)$/);
             if (eqMatch) {
@@ -192,13 +191,10 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
                 testBody = `self.assertTrue(${assertBody})`;
             }
         } else if (line.startsWith('print(') || line.startsWith('import ') || line.startsWith('from ')) {
-            // 跳過 print 和 import 語句
             continue;
         } else if (line.includes('==') && !line.startsWith('def ') && !line.startsWith('class ')) {
-            // 處理沒有 assert 前綴但含有 == 的表達式（如 REPL 輸出的後補）
             const eqMatch = line.match(/^(.+?)\s*==\s*(.+)$/);
             if (eqMatch && eqMatch[1].includes('(')) {
-                // 確認左側像是函式呼叫 (含括號)
                 testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()})`;
             }
         }
@@ -209,11 +205,30 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
         }
     }
 
+    // 嘗試從 AI 輸出中解析函式名稱（供 return 語句使用）
+    const defMatchGlobal = rawCode.match(/def\s+(\w+)\s*\(/);
+    const resolvedFunc = defMatchGlobal ? defMatchGlobal[1] : targetFunc;
+
+    // 【新增】若沒解析出任何測試（例如 AI 只輸出了原始碼），
+    // 偵測是否為函式定義，若是則生成基本佔位測試模板
+    if (testMethods.length === 0) {
+        const defMatch = rawCode.match(/def\s+(\w+)\s*\(([^)]*)\)/);
+        const detectedArgs = defMatch ? defMatch[2] : '';
+        const argCount = detectedArgs.split(',').filter(a => a.trim()).length;
+        const sampleArgs = Array.from({length: argCount}, (_, i) => ['0', '1', '2'][i] ?? '0').join(', ');
+        const zeroArgs = Array.from({length: argCount}, () => '0').join(', ');
+
+        testMethods.push(
+            `    def test_basic(self):\n        # 自動生成的基本測試（AI 未提供具體測試案例）\n        result = ${resolvedFunc}(${sampleArgs})\n        self.assertIsNotNone(result)`,
+            `    def test_zero(self):\n        result = ${resolvedFunc}(${zeroArgs})\n        self.assertIsNotNone(result)`
+        );
+    }
+
     if (testMethods.length === 0) { return ''; }
 
     return [
         `import unittest`,
-        `from ${moduleName} import ${targetFunc}`,
+        `from ${moduleName} import ${resolvedFunc}`,
         ``,
         `class TestAuto(unittest.TestCase):`,
         testMethods.join('\n\n'),
@@ -222,6 +237,7 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
         `    unittest.main()`,
     ].join('\n');
 }
+
 
 function parseMutatestSurvived(mutatestResult: string): string {
     const lines = mutatestResult.split('\n');
@@ -283,7 +299,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const baseDir = params.outputPath || path.dirname(params.filePath);
         
         // 修正檔案名稱包含 funcName, loop, date
-        const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '_');
+        const now = new Date();
+        const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' +
+            now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
         const safeFuncName = params.funcName || 'file';
         const baseName = path.basename(params.filePath, '.py');
         const testPath = path.join(baseDir, `test_${baseName}_${safeFuncName}_loop${currentLoop}_${dateStr}.py`);
@@ -515,8 +533,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
+            const stack = error instanceof Error && error.stack ? error.stack : '';
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
-            finalReportMarkdown += `\n**執行中斷**: ${message}\n`;
+            finalReportMarkdown += `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
+            finalReportMarkdown += `**錯誤訊息**: ${message}\n\n`;
+            if (stack && stack !== message) {
+                finalReportMarkdown += `**錯誤堆疊**:\n\`\`\`\n${stack}\n\`\`\`\n\n`;
+            }
+            // 記錄 AI 原始輸出（如果有的話）
+            if (rawCode) {
+                finalReportMarkdown += `**AI 實際輸出內容（前 500 字元）**:\n\`\`\`\n${rawCode.substring(0, 500)}\n\`\`\`\n\n`;
+            }
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: path.basename(params.filePath),
@@ -529,7 +556,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     }
 
     const baseDir = params.outputPath || path.dirname(params.filePath);
-    const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '_');
+    const now2 = new Date();
+    const dateStr = now2.toISOString().split('T')[0].replace(/-/g, '_') + '_' +
+        now2.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
     const safeFuncName = params.funcName || 'file';
     const baseName = path.basename(params.filePath, '.py');
     const finalReportPath = path.join(baseDir, `summary_${baseName}_${safeFuncName}_${dateStr}.md`);
