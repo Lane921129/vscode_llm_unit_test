@@ -382,7 +382,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             if (isAborted) {throw new Error("使用者強制中止");}
 
-            log(`[LLM] 網路請求已返回，正在檢查回應狀態...`);
+            log(`[LLM] 模型推論已完成，正在檢查回應狀態...`);
             if (!response.ok) {
                 const errText = await response.text();
                 throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
@@ -424,7 +424,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             let finalCode = sanitizedCode;
             if (!sanitizedCode.includes('unittest.TestCase') || !sanitizedCode.includes('import unittest')) {
                 log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                log(`[警告] AI 原始輸出前 300 字元: ${sanitizedCode.substring(0, 300)}`);
+                log(`[警告] AI 原始輸出前 600 字元: ${sanitizedCode.substring(0, 600)}`);
                 const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
                 if (!rescued) {
                     throw new Error("AI 輸出格式無法解析（無任何 assert 或可用語句），請重試。");
