@@ -109,7 +109,7 @@ async function extractAstContext(
 
         const cmd = `python "${pythonScript}" "${targetPath}" "${funcName}"`;
 
-        exec(cmd, { encoding: 'utf8' }, (error, stdout, stderr) => {
+        exec(cmd, { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout, stderr) => {
             if (error) {
                 resolve({ error: stdout || stderr, name: "", args: [], docstring: "", calls: [], code: "" });
                 return;
@@ -378,12 +378,44 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
                 
                 currentAbortController = new AbortController();
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(bodyData),
-                    signal: currentAbortController.signal
-                });
+                const timeoutId = setTimeout(() => {
+                    if (currentAbortController) {
+                        currentAbortController.abort();
+                        log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
+                    }
+                }, params.timeoutSeconds * 1000);
+
+                let response;
+                try {
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(bodyData),
+                        signal: currentAbortController.signal
+                    });
+                } catch (err: any) {
+                    clearTimeout(timeoutId);
+                    currentAbortController = null;
+                    if (err.name === 'AbortError') {
+                        if (isAborted) throw new Error("使用者強制中止");
+                        if (llmRetry === 0) {
+                            log(`[系統] 請求超時，嘗試自動重試 (1/1)...`);
+                            continue;
+                        } else {
+                            throw new Error(`API 請求超時 (${params.timeoutSeconds} 秒)，請檢查網路或調高超時限制`);
+                        }
+                    } else {
+                        if (llmRetry === 0) {
+                            log(`[警告] 網路請求失敗: ${err.message}`);
+                            log(`[系統] 嘗試自動重試 (1/1)...`);
+                            continue;
+                        } else {
+                            throw new Error(`網路請求連續失敗: ${err.message}`);
+                        }
+                    }
+                }
+                
+                clearTimeout(timeoutId);
                 currentAbortController = null;
 
                 if (isAborted) {throw new Error("使用者強制中止");}
