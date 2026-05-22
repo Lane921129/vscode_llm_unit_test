@@ -155,7 +155,7 @@ export function getWebviewContent() {
     </details>
 
     <details open>
-        <summary>⚙️ 基礎設定</summary>
+        <summary>⚙️ 基礎設定 (含參數)</summary>
         <div class="content">
             <label>📂 測試專案資料夾</label>
             <div class="flex-row">
@@ -168,26 +168,28 @@ export function getWebviewContent() {
                 <input type="text" id="output-path" readonly placeholder="預設與目標檔案同目錄">
                 <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
             </div>
+            
+            <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
+                <label style="margin-top:0;">最大循環次數</label>
+                <input type="number" id="max-loop" value="3" min="1">
+                
+                <label>突變測試時間</label>
+                <input type="number" id="mutpy-timeout" value="5" min="1" style="width:100%;">
+
+                <label>超時限制 (秒)</label>
+                <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
+            </div>
         </div>
     </details>
 
     <details open>
-        <summary>🎯 測試目標</summary>
+        <summary>🎯 單一測試目標</summary>
         <div class="content">
             <label>選擇檔案</label>
             <select id="file-select"><option value="">-- 選擇檔案 --</option></select>
             
             <label style="margin-top:8px;">選擇函式</label>
             <select id="func-select"><option value="">-- 測試整份檔案 --</option></select>
-            
-            <label style="margin-top:8px;">最大循環次數</label>
-            <input type="number" id="max-loop" value="3" min="1">
-            
-            <label>突變測試時間</label>
-            <input type="number" id="mutpy-timeout" value="5" min="1" style="width:100%;">
-
-            <label>超時限制 (秒)</label>
-            <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
             
             <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
                 <button id="btn-run" style="flex:1;">🚀 開始自動化突變測試</button>
@@ -209,12 +211,15 @@ export function getWebviewContent() {
 
             <table id="coverage-table" style="margin-top:15px; width:100%; border-collapse:collapse; text-align:left;">
                 <thead style="border-bottom:1px solid var(--vscode-editorGroup-border);"><tr>
+                    <th style="padding:5px; width:30px; text-align:center;"><input type="checkbox" id="select-all"></th>
                     <th style="padding:5px;">資料夾/檔案名稱</th>
                     <th style="padding:5px;">突變分數</th>
                     <th style="padding:5px;">狀態 / 原因</th>
                 </tr></thead>
-                <tbody><tr><td colspan="3" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr></tbody>
+                <tbody><tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr></tbody>
             </table>
+            
+            <button id="btn-delete-selected" style="margin-top:10px; background:#a82a2a; color:white;">🗑️ 刪除選取項目</button>
         </div>
     </details>
 
@@ -231,9 +236,31 @@ export function getWebviewContent() {
         let currentKeys = {};
 
         let currentCustomKeys = {};
+        let lastTestedProjectPath = '';
 
         // 載入初始資料
         vscode.postMessage({ command: 'getInitialData' });
+
+        // 表格選取全部邏輯
+        document.getElementById('select-all').addEventListener('change', (e) => {
+            const isChecked = e.target.checked;
+            const checkboxes = document.querySelectorAll('#coverage-table tbody .row-sel');
+            checkboxes.forEach(cb => cb.checked = isChecked);
+        });
+
+        // 刪除選取邏輯
+        document.getElementById('btn-delete-selected').addEventListener('click', () => {
+            const tbody = document.querySelector('#coverage-table tbody');
+            const checkboxes = tbody.querySelectorAll('.row-sel:checked');
+            checkboxes.forEach(cb => {
+                const tr = cb.closest('tr');
+                if (tr) tr.remove();
+            });
+            if (tbody.rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr>';
+                document.getElementById('select-all').checked = false;
+            }
+        });
 
         window.addEventListener('message', event => {
             const msg = event.data;
@@ -248,16 +275,19 @@ export function getWebviewContent() {
                 case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
                 case 'updateCoverage':
                     const tbody = document.querySelector('#coverage-table tbody');
-                    let existingRow = Array.from(tbody.querySelectorAll('tr')).find(row => row.cells[0]?.textContent === msg.fileName);
+                    let existingRow = Array.from(tbody.querySelectorAll('tr')).find(row => row.cells[1]?.textContent === msg.fileName);
                     if (existingRow) { 
-                        existingRow.cells[1].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
-                        existingRow.cells[2].textContent = msg.reason || '';
+                        existingRow.cells[2].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        existingRow.cells[3].textContent = msg.reason || '';
                     } else { 
                         if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes('尚無數據')) tbody.innerHTML = ''; 
                         const newRow = tbody.insertRow(); 
-                        newRow.insertCell(0).textContent = msg.fileName; 
-                        newRow.insertCell(1).innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
-                        newRow.insertCell(2).textContent = msg.reason || '';
+                        const cellCheck = newRow.insertCell(0);
+                        cellCheck.style.textAlign = 'center';
+                        cellCheck.innerHTML = '<input type="checkbox" class="row-sel">';
+                        newRow.insertCell(1).textContent = msg.fileName; 
+                        newRow.insertCell(2).innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        newRow.insertCell(3).textContent = msg.reason || '';
                         Array.from(newRow.cells).forEach(c => c.style.padding = '5px');
                     }
                     break;
@@ -366,6 +396,14 @@ export function getWebviewContent() {
             document.getElementById('btn-run').innerText = '⏳ 測試進行中...';
             document.getElementById('btn-abort').style.display = 'block';
 
+            // 跨專案自動清除舊結果
+            const currentProj = document.getElementById('project-path').value;
+            if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
+                const tbody = document.querySelector('#coverage-table tbody');
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr>';
+            }
+            lastTestedProjectPath = currentProj;
+
             vscode.postMessage({
                 command: 'startAnalysis',
                 envType, modelName, filePath,
@@ -392,6 +430,14 @@ export function getWebviewContent() {
             document.getElementById('btn-batch-run').disabled = true;
             document.getElementById('btn-batch-run').innerText = '⏳ 批次測試進行中...';
             document.getElementById('btn-abort').style.display = 'block';
+
+            // 跨專案自動清除舊結果
+            const currentProj = batchPath;
+            if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
+                const tbody = document.querySelector('#coverage-table tbody');
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr>';
+            }
+            lastTestedProjectPath = currentProj;
 
             vscode.postMessage({
                 command: 'startBatchAnalysis',
