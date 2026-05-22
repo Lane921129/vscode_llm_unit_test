@@ -213,25 +213,7 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
     const defMatchGlobal = rawCode.match(/def\s+(\w+)\s*\(/);
     const resolvedFunc = defMatchGlobal ? defMatchGlobal[1] : targetFunc;
 
-    // 【新增】若沒解析出任何測試（例如 AI 只輸出了原始碼），
-    // 偵測是否為函式定義，若是則生成基本佔位測試模板
-    if (testMethods.length === 0) {
-        const defMatch = rawCode.match(/def\s+(\w+)\s*\(([^)]*)\)/);
-        const detectedArgs = defMatch ? defMatch[2] : '';
-        // 得到 argCount：先嘗試從 AI 輸出解析，如果提取不到就用受測原始檔的簽名
-        const argCount = detectedArgs.split(',').filter(a => a.trim() && !a.includes('self')).length || srcArgCount;
-        const sampleArgs = argCount > 0
-            ? Array.from({length: argCount}, (_, i) => ['1', '2', '3'][i] ?? '0').join(', ')
-            : '';
-        const zeroArgs = argCount > 0
-            ? Array.from({length: argCount}, () => '0').join(', ')
-            : '';
 
-        testMethods.push(
-            `    def test_basic(self):\n        # 自動生成的基本測試（AI 未提供具體測試案例）\n        result = ${targetFunc}(${sampleArgs})\n        self.assertIsNotNone(result)`,
-            `    def test_zero(self):\n        result = ${targetFunc}(${zeroArgs})\n        self.assertIsNotNone(result)`
-        );
-    }
 
     if (testMethods.length === 0) { return ''; }
 
@@ -461,6 +443,23 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         throw new Error("模型產生的程式碼內容為空 (已重試失敗)");
                     }
                 }
+
+                // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
+                if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
+                    log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
+                    const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
+                    if (!rescued) {
+                        if (llmRetry === 0) {
+                            log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
+                            log(`[警告] AI 原始輸出前 600 字元: ${sanitizedCode.substring(0, 600)}`);
+                            continue;
+                        } else {
+                            throw new Error("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）");
+                        }
+                    }
+                    log(`[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。`);
+                    sanitizedCode = rescued;
+                }
                 
                 break; // 成功取得 sanitizedCode，跳出 retry 迴圈
             }
@@ -469,18 +468,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             finalReportMarkdown += `### 🤖 AI 原始輸出與思考過程\n\n`;
             finalReportMarkdown += `<details>\n<summary>點擊展開 AI 完整回應</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
 
-            // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
             let finalCode = sanitizedCode;
-            if (!sanitizedCode.includes('unittest.TestCase') || !sanitizedCode.includes('import unittest')) {
-                log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                log(`[警告] AI 原始輸出前 600 字元: ${sanitizedCode.substring(0, 600)}`);
-                const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
-                if (!rescued) {
-                    throw new Error("AI 輸出格式無法解析（無任何 assert 或可用語句），請重試。");
-                }
-                log(`[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。`);
-                finalCode = rescued;
-            }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
             fs.writeFileSync(testPath, finalCode, 'utf8');
