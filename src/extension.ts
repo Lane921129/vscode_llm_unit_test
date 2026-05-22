@@ -131,17 +131,32 @@ async function extractAstContext(
 
 function sanitizeLlmResponse(rawCode: string): string {
     let cleanCode = rawCode.trim();
-    if (cleanCode.includes("```python")) {
-        const match = cleanCode.match(/\`\`\`python([\s\S]*?)\`\`\`/);
-        if (match) {
-            cleanCode = match[1].trim();
-        }
-    } else if (cleanCode.includes("```")) {
-        const match = cleanCode.match(/\`\`\`([\s\S]*?)\`\`\`/);
-        if (match) {
-            cleanCode = match[1].trim();
+    const blocks: string[] = [];
+    
+    const pyRegex = /```python([\s\S]*?)```/g;
+    let match;
+    while ((match = pyRegex.exec(cleanCode)) !== null) {
+        blocks.push(match[1].trim());
+    }
+    
+    if (blocks.length === 0) {
+        const genericRegex = /```([\s\S]*?)```/g;
+        while ((match = genericRegex.exec(cleanCode)) !== null) {
+            blocks.push(match[1].trim());
         }
     }
+    
+    if (blocks.length > 0) {
+        // Find the block that contains unittest
+        for (const block of blocks) {
+            if (block.includes('unittest') || block.includes('TestCase')) {
+                return block;
+            }
+        }
+        // Fallback to the last block
+        return blocks[blocks.length - 1];
+    }
+    
     return cleanCode;
 }
 
@@ -298,6 +313,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             const sanitizedCode = sanitizeLlmResponse(rawCode);
             if (!sanitizedCode) {throw new Error("模型產生的程式碼內容為空");}
+
+            // 驗證 AI 產出的程式碼格式是否符合要求
+            if (!sanitizedCode.includes('unittest.TestCase')) {
+                log(`[警告] AI 輸出的程式碼不包含 unittest.TestCase，已被拒絕！`);
+                log(`[警告] AI 實際輸出的前 300 字元: ${sanitizedCode.substring(0, 300)}`);
+                throw new Error("AI 未按格式產生 unittest.TestCase 測試類別，請重試或更換模型。");
+            }
+            if (!sanitizedCode.includes('import unittest')) {
+                log(`[警告] AI 輸出的程式碼缺少 import unittest，已被拒絕！`);
+                throw new Error("AI 未按格式 import unittest，請重試或更換模型。");
+            }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
             fs.writeFileSync(testPath, sanitizedCode, 'utf8');
