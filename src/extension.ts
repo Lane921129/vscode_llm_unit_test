@@ -205,6 +205,16 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
         }
     }
 
+    // 先對受測原始檔案讀取函式簽名，供決滢乍置用
+    let srcArgCount = 0;
+    try {
+        const srcContent = fs.readFileSync(srcFilePath, 'utf8');
+        const srcDefMatch = srcContent.match(/def\s+(?:${targetFunc}|\w+)\s*\(([^)]*)\)/);
+        if (srcDefMatch) {
+            srcArgCount = srcDefMatch[1].split(',').filter((a: string) => a.trim() && !a.includes('self')).length;
+        }
+    } catch { /* 讀取失敗就用預設字元 */ }
+
     // 嘗試從 AI 輸出中解析函式名稱（供 return 語句使用）
     const defMatchGlobal = rawCode.match(/def\s+(\w+)\s*\(/);
     const resolvedFunc = defMatchGlobal ? defMatchGlobal[1] : targetFunc;
@@ -214,9 +224,14 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
     if (testMethods.length === 0) {
         const defMatch = rawCode.match(/def\s+(\w+)\s*\(([^)]*)\)/);
         const detectedArgs = defMatch ? defMatch[2] : '';
-        const argCount = detectedArgs.split(',').filter(a => a.trim()).length;
-        const sampleArgs = Array.from({length: argCount}, (_, i) => ['0', '1', '2'][i] ?? '0').join(', ');
-        const zeroArgs = Array.from({length: argCount}, () => '0').join(', ');
+        // 得到 argCount：先嘗試從 AI 輸出解析，如果提取不到就用受測原始檔的簽名
+        const argCount = detectedArgs.split(',').filter(a => a.trim() && !a.includes('self')).length || srcArgCount;
+        const sampleArgs = argCount > 0
+            ? Array.from({length: argCount}, (_, i) => ['1', '2', '3'][i] ?? '0').join(', ')
+            : '';
+        const zeroArgs = argCount > 0
+            ? Array.from({length: argCount}, () => '0').join(', ')
+            : '';
 
         testMethods.push(
             `    def test_basic(self):\n        # 自動生成的基本測試（AI 未提供具體測試案例）\n        result = ${resolvedFunc}(${sampleArgs})\n        self.assertIsNotNone(result)`,
@@ -318,6 +333,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const systemPrompt = getSystemPrompt(currentLoop, survivedMutants);
         const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext);
 
+        let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         try {
             let apiUrl = "";
             let bodyData = {};
@@ -368,7 +384,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             const resJson = await response.json() as Record<string, unknown>;
             log(`[LLM] 呼叫成功！正在萃取回傳的程式碼片段...`);
-            let rawCode = "";
 
             if (params.envType === 'local') {
                 rawCode = (resJson as { response?: string }).response || "";
@@ -411,6 +426,33 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             log(`[系統] 準備將生成的測試程式碼存檔...`);
             fs.writeFileSync(testPath, finalCode, 'utf8');
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
+
+            // 【預先驗證】先距行一次 unittest 確認測試檔能跟上
+            await new Promise<void>((resolve, reject) => {
+                const testDir = path.dirname(testPath);
+                const testModule = path.basename(testPath, '.py');
+                const targetDir = path.dirname(params.filePath);
+                const preCheckCmd = `chcp 65001 && set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH% && cd /d "${testDir}" && python -m unittest ${testModule}`;
+                exec(preCheckCmd, { timeout: 30000 }, (err, stdout, stderr) => {
+                    const out = (stdout + stderr).trim();
+                    if (err) {
+                        log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
+                        // 將失敗的測試內容記錄到 summary
+                        finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
+                        reject(new Error(`測試檔預先驗證失敗（unittest 無法執行），誽誷檔已無法通過: ${out.substring(0, 200)}`));
+                    } else {
+                        const ran = out.match(/Ran (\d+) test/);
+                        if (ran && parseInt(ran[1]) > 0) {
+                            log(`[預先驗證通過] 執行了 ${ran[1]} 個測試，即將進行突變測試...`);
+                            resolve();
+                        } else {
+                            const msg = `測試檔都沒有跟 0 個測試（\`Ran 0 tests\`），測試名稱必須以 test_ 開頭`;
+                            finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n${msg}\n\n`;
+                            reject(new Error(msg));
+                        }
+                    }
+                });
+            });
 
             let engine = 'mutatest';
             const isWin = process.platform === 'win32';
