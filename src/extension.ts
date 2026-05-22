@@ -347,81 +347,95 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext, focusContext);
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
+        let sanitizedCode = "";
         try {
-            let apiUrl = "";
-            let bodyData = {};
-            let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
+                let apiUrl = "";
+                let bodyData = {};
+                let headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
-            if (params.envType === 'local') {
-                apiUrl = 'http://127.0.0.1:11434/api/generate';
-                bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
-                log(`[LLM] 正在呼叫本地模型推論中... (模型: ${params.modelName})`);
-            } else if (params.envType === 'custom') {
-                apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
-                bodyData = { 
-                    model: params.modelName, 
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt }
-                    ]
-                };
-                if (params.customKey) {
-                    headers['Authorization'] = `Bearer ${params.customKey}`;
-                }
-                log(`[LLM] 正在透過自訂 API 請求雲端模型... (模型: ${params.modelName})`);
-            } else {
-                const config = vscode.workspace.getConfiguration('llmUnitTest');
-                const keys = config.get<Record<string, string>>('apiKeys', {});
-                const actualKey = keys[params.modelName];
-                apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
-                bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
-                log(`[LLM] 正在透過 API 請求雲端模型... (模型: ${params.modelName})`);
-            }
-            
-            currentAbortController = new AbortController();
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(bodyData),
-                signal: currentAbortController.signal
-            });
-            currentAbortController = null;
-
-            if (isAborted) {throw new Error("使用者強制中止");}
-
-            log(`[LLM] 模型推論已完成，正在檢查回應狀態...`);
-            if (!response.ok) {
-                const errText = await response.text();
-                throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
-            }
-
-            const resJson = await response.json() as Record<string, unknown>;
-            log(`[LLM] 呼叫成功！正在萃取回傳的程式碼片段...`);
-
-            if (params.envType === 'local') {
-                rawCode = (resJson as { response?: string }).response || "";
-            } else if (params.envType === 'custom') {
-                const choices = (resJson as any).choices;
-                if (choices && choices[0]?.message?.content) {
-                    rawCode = choices[0].message.content;
-                } else if ((resJson as any).error) {
-                    throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
+                if (params.envType === 'local') {
+                    apiUrl = 'http://127.0.0.1:11434/api/generate';
+                    bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
+                    if (llmRetry === 0) log(`[LLM] 正在呼叫本地模型推論中... (模型: ${params.modelName})`);
+                } else if (params.envType === 'custom') {
+                    apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
+                    bodyData = { 
+                        model: params.modelName, 
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: userPrompt }
+                        ]
+                    };
+                    if (params.customKey) {
+                        headers['Authorization'] = `Bearer ${params.customKey}`;
+                    }
+                    if (llmRetry === 0) log(`[LLM] 正在透過自訂 API 請求雲端模型... (模型: ${params.modelName})`);
                 } else {
-                    throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+                    const config = vscode.workspace.getConfiguration('llmUnitTest');
+                    const keys = config.get<Record<string, string>>('apiKeys', {});
+                    const actualKey = keys[params.modelName];
+                    apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
+                    bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
+                    if (llmRetry === 0) log(`[LLM] 正在透過 API 請求雲端模型... (模型: ${params.modelName})`);
                 }
-            } else {
-                const candidates = (resJson as any).candidates;
-                if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
-                    rawCode = candidates[0].content.parts[0].text;
-                } else if ((resJson as any).error) {
-                    throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
-                } else {
-                    throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
-                }
-            }
+                
+                currentAbortController = new AbortController();
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(bodyData),
+                    signal: currentAbortController.signal
+                });
+                currentAbortController = null;
 
-            const sanitizedCode = sanitizeLlmResponse(rawCode);
-            if (!sanitizedCode) {throw new Error("模型產生的程式碼內容為空");}
+                if (isAborted) {throw new Error("使用者強制中止");}
+
+                if (llmRetry === 0) log(`[LLM] 模型推論已完成，正在檢查回應狀態...`);
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+                }
+
+                const resJson = await response.json() as Record<string, unknown>;
+                if (llmRetry === 0) log(`[LLM] 呼叫成功！正在萃取回傳的程式碼片段...`);
+
+                if (params.envType === 'local') {
+                    rawCode = (resJson as { response?: string }).response || "";
+                } else if (params.envType === 'custom') {
+                    const choices = (resJson as any).choices;
+                    if (choices && choices[0]?.message?.content) {
+                        rawCode = choices[0].message.content;
+                    } else if ((resJson as any).error) {
+                        throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
+                    } else {
+                        throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+                    }
+                } else {
+                    const candidates = (resJson as any).candidates;
+                    if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
+                        rawCode = candidates[0].content.parts[0].text;
+                    } else if ((resJson as any).error) {
+                        throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
+                    } else {
+                        throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+                    }
+                }
+
+                sanitizedCode = sanitizeLlmResponse(rawCode);
+                
+                if (!sanitizedCode) {
+                    if (llmRetry === 0) {
+                        log(`[警告] 模型回傳的程式碼為空或無法解析。擷取原始回傳前 300 字元:\n${rawCode.substring(0, 300)}`);
+                        log(`[系統] 嘗試自動重試 (1/1)...`);
+                        continue; // 重新執行 API 呼叫
+                    } else {
+                        throw new Error("模型產生的程式碼內容為空 (已重試失敗)");
+                    }
+                }
+                
+                break; // 成功取得 sanitizedCode，跳出 retry 迴圈
+            }
 
             // 【新增】將 AI 完整思考與輸出記錄到報告中（使用摺疊標籤避免太長）
             finalReportMarkdown += `### 🤖 AI 原始輸出與思考過程\n\n`;
