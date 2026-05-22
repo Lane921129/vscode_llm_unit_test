@@ -160,6 +160,69 @@ function sanitizeLlmResponse(rawCode: string): string {
     return cleanCode;
 }
 
+/**
+ * 將 AI 亂輸出的程式碼（REPL格式、裸assert等）自動包裝成合法的 unittest.TestCase 結構
+ */
+function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string): string {
+    const moduleName = path.basename(srcFilePath, '.py');
+    const targetFunc = funcName || moduleName;
+
+    // 去除 >>> 前綴，逐行整理
+    const lines = rawCode
+        .split('\n')
+        .map(l => l.replace(/^>>>\s?/, '').trim())
+        .filter(l => l.length > 0 && !l.startsWith('#') && !l.startsWith('...')); // 去除空行、註解、REPL 繼續行
+
+    const testMethods: string[] = [];
+    let methodIndex = 1;
+
+    for (const line of lines) {
+        let testBody = '';
+
+        if (line.startsWith('assert ')) {
+            const assertBody = line.substring(7).trim();
+            // assert X == Y  →  self.assertEqual(X, Y)
+            const eqMatch = assertBody.match(/^(.+?)\s*==\s*(.+)$/);
+            const neqMatch = assertBody.match(/^(.+?)\s*!=\s*(.+)$/);
+            if (eqMatch) {
+                testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()})`;
+            } else if (neqMatch) {
+                testBody = `self.assertNotEqual(${neqMatch[1].trim()}, ${neqMatch[2].trim()})`;
+            } else {
+                testBody = `self.assertTrue(${assertBody})`;
+            }
+        } else if (line.startsWith('print(') || line.startsWith('import ') || line.startsWith('from ')) {
+            // 跳過 print 和 import 語句
+            continue;
+        } else if (line.includes('==') && !line.startsWith('def ') && !line.startsWith('class ')) {
+            // 處理沒有 assert 前綴但含有 == 的表達式（如 REPL 輸出的後補）
+            const eqMatch = line.match(/^(.+?)\s*==\s*(.+)$/);
+            if (eqMatch && eqMatch[1].includes('(')) {
+                // 確認左側像是函式呼叫 (含括號)
+                testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()})`;
+            }
+        }
+
+        if (testBody) {
+            testMethods.push(`    def test_case_${methodIndex}(self):\n        ${testBody}`);
+            methodIndex++;
+        }
+    }
+
+    if (testMethods.length === 0) { return ''; }
+
+    return [
+        `import unittest`,
+        `from ${moduleName} import ${targetFunc}`,
+        ``,
+        `class TestAuto(unittest.TestCase):`,
+        testMethods.join('\n\n'),
+        ``,
+        `if __name__ == '__main__':`,
+        `    unittest.main()`,
+    ].join('\n');
+}
+
 function parseMutatestSurvived(mutatestResult: string): string {
     const lines = mutatestResult.split('\n');
     let isSurvivedSection = false;
@@ -314,19 +377,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const sanitizedCode = sanitizeLlmResponse(rawCode);
             if (!sanitizedCode) {throw new Error("模型產生的程式碼內容為空");}
 
-            // 驗證 AI 產出的程式碼格式是否符合要求
-            if (!sanitizedCode.includes('unittest.TestCase')) {
-                log(`[警告] AI 輸出的程式碼不包含 unittest.TestCase，已被拒絕！`);
-                log(`[警告] AI 實際輸出的前 300 字元: ${sanitizedCode.substring(0, 300)}`);
-                throw new Error("AI 未按格式產生 unittest.TestCase 測試類別，請重試或更換模型。");
-            }
-            if (!sanitizedCode.includes('import unittest')) {
-                log(`[警告] AI 輸出的程式碼缺少 import unittest，已被拒絕！`);
-                throw new Error("AI 未按格式 import unittest，請重試或更換模型。");
+            // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
+            let finalCode = sanitizedCode;
+            if (!sanitizedCode.includes('unittest.TestCase') || !sanitizedCode.includes('import unittest')) {
+                log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
+                log(`[警告] AI 原始輸出前 300 字元: ${sanitizedCode.substring(0, 300)}`);
+                const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
+                if (!rescued) {
+                    throw new Error("AI 輸出格式無法解析（無任何 assert 或可用語句），請重試。");
+                }
+                log(`[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。`);
+                finalCode = rescued;
             }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
-            fs.writeFileSync(testPath, sanitizedCode, 'utf8');
+            fs.writeFileSync(testPath, finalCode, 'utf8');
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
 
             let engine = 'mutatest';
