@@ -58,7 +58,7 @@ if __name__ == '__main__':
     return prompt;
 }
 
-export function getUserPrompt(fileName: string, funcName: string, code: string, astContext?: any): string {
+export function getUserPrompt(fileName: string, funcName: string, code: string, astContext?: any, focusContexts?: string): string {
     const target = funcName ? `函式 \`${funcName}\`` : `整份檔案`;
     let prompt = `【目標檔案】: ${fileName}\n【目標範圍】: ${target}\n`;
     
@@ -74,9 +74,18 @@ export function getUserPrompt(fileName: string, funcName: string, code: string, 
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- 內部相依呼叫: ${astContext.calls.join(', ')}\n`;
         }
-        prompt += `\n【原始程式碼】:\n\`\`\`python\n${astContext.code || code}\n\`\`\``;
-    } else {
-        prompt += `\n【原始程式碼】:\n\`\`\`python\n${code}\n\`\`\``;
     }
+
+    if (focusContexts) {
+        prompt += `\n【動態焦點分析】\n你的測試目前漏掉了以下變異體的防護，請專注於這些焦點行數：\n\n${focusContexts}\n`;
+        prompt += `\n（註：為保持專注，本輪僅提供焦點周遭程式碼。請在 \`<thinking>\` 中分析為何該突變會發生，並撰寫針對性的 Assert 殺死它。新的 Assert 請加到你原本已經寫好的測試類別中。）\n`;
+    } else {
+        if (astContext && !astContext.error) {
+            prompt += `\n【原始程式碼】:\n\`\`\`python\n${astContext.code || code}\n\`\`\``;
+        } else {
+            prompt += `\n【原始程式碼】:\n\`\`\`python\n${code}\n\`\`\``;
+        }
+    }
+
     return prompt;
 }

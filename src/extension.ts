@@ -337,7 +337,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         }
 
         const systemPrompt = getSystemPrompt(currentLoop, survivedMutants);
-        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext);
+        let focusContext = "";
+        if (currentLoop > 1 && survivedMutants) {
+            focusContext = extractFocusContext(survivedMutants, targetCode);
+            if (focusContext) {
+                log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
+            }
+        }
+        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext, focusContext);
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         try {
@@ -636,6 +643,52 @@ async function findPythonFilesInDir(dir: string): Promise<string[]> {
         }
     } catch { }
     return results;
+}
+
+/**
+ * 動態焦點上下文 (Dynamic Focus Context): 
+ * 從存活突變體日誌中解析出行號，並提取該行前後的程式碼作為焦點切片。
+ */
+function extractFocusContext(survivedMutants: string, targetCode: string): string {
+    if (!survivedMutants) return "";
+    const lines = targetCode.split('\n');
+    const focusSnippets: string[] = [];
+    const mutantLines = survivedMutants.split('\n');
+    
+    let processedCount = 0;
+    for (const mLine of mutantLines) {
+        if (processedCount >= 3) break; // 最多只取前 3 個焦點，避免 Prompt 過載
+        if (!mLine.trim() || !mLine.includes('mutation')) continue;
+        
+        let lineNum = -1;
+        // 優先匹配 mutatest 格式: (l: 5, c: 11)
+        const mutatestMatch = mLine.match(/\(l:\s*(\d+)/);
+        if (mutatestMatch) {
+            lineNum = parseInt(mutatestMatch[1], 10);
+        } else {
+            // fallback
+            const otherMatch = mLine.match(/line\s+(\d+)/i) || mLine.match(/:(\d+)/);
+            if (otherMatch) {
+                lineNum = parseInt(otherMatch[1], 10);
+            }
+        }
+        
+        if (lineNum > 0 && lineNum <= lines.length) {
+            const idx = lineNum - 1;
+            const start = Math.max(0, idx - 2);
+            const end = Math.min(lines.length - 1, idx + 2);
+            
+            let snippet = `【目標變異體】\n${mLine.trim()}\n【發生位置周遭程式碼 (第 ${start+1}~${end+1} 行)】\n\`\`\`python\n`;
+            for (let i = start; i <= end; i++) {
+                const prefix = (i === idx) ? '>> ' : '   ';
+                snippet += `${prefix}${i+1}: ${lines[i]}\n`;
+            }
+            snippet += `\`\`\``;
+            focusSnippets.push(snippet);
+            processedCount++;
+        }
+    }
+    return focusSnippets.join('\n\n');
 }
 
 export function deactivate() {}
