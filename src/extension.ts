@@ -295,6 +295,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **日期**: ${reportDateStr}\n\n`;
 
+    const baseDir = params.outputPath || path.dirname(params.filePath);
+    let astContext: AstContext | null = null;
+    if (params.funcName) {
+        log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
+        astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
+        if (astContext && !astContext.error) {
+            log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+            finalReportMarkdown += `### 🔍 AST 靜態解析結果\n- **函式名稱**: \`${astContext.name}\`\n- **參數列表**: \`${astContext.args.join(', ') || '無'}\`\n- **相依呼叫**: \`${astContext.calls.join(', ') || '無'}\`\n- **文件註解**: \n  \`\`\`text\n  ${astContext.docstring || '無'}\n  \`\`\`\n\n`;
+        }
+        else {log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);}
+    }
+
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
         if (isAborted) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
@@ -311,8 +323,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             return;
         }
 
-        const baseDir = params.outputPath || path.dirname(params.filePath);
-        
         // 修正檔案名稱包含 funcName, loop, date
         const now = new Date();
         const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' +
@@ -321,17 +331,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const baseName = path.basename(params.filePath, '.py');
         const testPath = path.join(baseDir, `test_${baseName}_${safeFuncName}_loop${currentLoop}_${dateStr}.py`);
         const reportDir = path.join(baseDir, `report_${baseName}_${safeFuncName}_loop${currentLoop}_${dateStr}`);
-
-        let astContext: AstContext | null = null;
-        if (params.funcName) {
-            log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
-            astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
-            if (astContext && !astContext.error) {
-                log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
-                finalReportMarkdown += `### 🔍 AST 靜態解析結果\n- **函式名稱**: \`${astContext.name}\`\n- **參數列表**: \`${astContext.args.join(', ') || '無'}\`\n- **相依呼叫**: \`${astContext.calls.join(', ') || '無'}\`\n- **文件註解**: \n  \`\`\`text\n  ${astContext.docstring || '無'}\n  \`\`\`\n\n`;
-            }
-            else {log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);}
-        }
 
         const systemPrompt = getSystemPrompt(currentLoop, survivedMutants);
         let focusContext = "";
@@ -657,7 +656,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         currentLoop++;
     }
 
-    const baseDir = params.outputPath || path.dirname(params.filePath);
     const now2 = new Date();
     const dateStr = now2.toISOString().split('T')[0].replace(/-/g, '_') + '_' +
         now2.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
