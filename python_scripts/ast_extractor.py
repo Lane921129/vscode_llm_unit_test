@@ -2,7 +2,7 @@ import sys
 import ast
 import json
 
-def extract_info(filepath, func_name, output_path):
+def extract_info(filepath, func_name):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             source = f.read()
@@ -22,9 +22,6 @@ def extract_info(filepath, func_name, output_path):
                 
                 # Get code snippet
                 lines = source.split('\n')
-                # node.lineno is 1-indexed
-                # node.end_lineno is 1-indexed
-                # If end_lineno is None, just extract to the end (some older python versions issue)
                 start_idx = getattr(node, 'lineno', 1) - 1
                 end_idx = getattr(node, 'end_lineno', len(lines))
                 code_snippet = '\n'.join(lines[start_idx:end_idx])
@@ -37,18 +34,15 @@ def extract_info(filepath, func_name, output_path):
                     "code": code_snippet
                 }
                 
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    json.dump(res, f, ensure_ascii=False)
+                print(json.dumps(res, ensure_ascii=False))
                 return
                 
         # If not found
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump({"error": "Function not found"}, f)
+        print(json.dumps({"error": "Function not found"}, ensure_ascii=False))
             
     except Exception as e:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump({"error": str(e)}, f)
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
 
 if __name__ == '__main__':
-    if len(sys.argv) == 4:
-        extract_info(sys.argv[1], sys.argv[2], sys.argv[3])
+    if len(sys.argv) == 3:
+        extract_info(sys.argv[1], sys.argv[2])

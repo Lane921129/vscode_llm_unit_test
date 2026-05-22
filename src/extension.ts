@@ -106,23 +106,17 @@ async function extractAstContext(
 ): Promise<AstContext | null> {
     return new Promise((resolve) => {
         const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
-        const outputPath = path.join(baseDir, 'ast_context.json');
 
-        const cmd = `python "${pythonScript}" "${targetPath}" "${funcName}" "${outputPath}"`;
+        const cmd = `python "${pythonScript}" "${targetPath}" "${funcName}"`;
 
-        exec(cmd, (error, stdout, stderr) => {
+        exec(cmd, { encoding: 'utf8' }, (error, stdout, stderr) => {
             if (error) {
                 resolve({ error: stdout || stderr, name: "", args: [], docstring: "", calls: [], code: "" });
                 return;
             }
-            if (fs.existsSync(outputPath)) {
-                try {
-                    const data = fs.readFileSync(outputPath, 'utf8');
-                    resolve(JSON.parse(data));
-                } catch {
-                    resolve(null);
-                }
-            } else {
+            try {
+                resolve(JSON.parse(stdout));
+            } catch {
                 resolve(null);
             }
         });
@@ -332,7 +326,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         if (params.funcName) {
             log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
             astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
-            if (astContext && !astContext.error) {log(`[AST] 解析完成！已擷取函式特徵與依賴。`);}
+            if (astContext && !astContext.error) {
+                log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+                finalReportMarkdown += `### 🔍 AST 靜態解析結果\n- **函式名稱**: \`${astContext.name}\`\n- **參數列表**: \`${astContext.args.join(', ') || '無'}\`\n- **相依呼叫**: \`${astContext.calls.join(', ') || '無'}\`\n- **文件註解**: \n  \`\`\`text\n  ${astContext.docstring || '無'}\n  \`\`\`\n\n`;
+            }
             else {log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);}
         }
 
