@@ -280,7 +280,7 @@ export function getWebviewContent() {
                         existingRow.cells[2].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
                         existingRow.cells[3].textContent = msg.reason || '';
                     } else { 
-                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes('尚無數據')) tbody.innerHTML = ''; 
+                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes('尚無測試數據')) tbody.innerHTML = ''; 
                         const newRow = tbody.insertRow(); 
                         const cellCheck = newRow.insertCell(0);
                         cellCheck.style.textAlign = 'center';
