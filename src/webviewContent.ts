@@ -89,7 +89,7 @@ export function getWebviewContent() {
         }
 
         #log-area {
-            height: 150px;
+            height: 300px;
             resize: vertical;
             font-family: 'Consolas', monospace;
             font-size: 12px;
