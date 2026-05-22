@@ -341,7 +341,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const timeoutArg = params.mutpyTimeout ? `--timeout_factor ${params.mutpyTimeout}` : '';
                     const mutatestPatch = `import random; orig_sample=random.sample; random.sample=lambda p,k: orig_sample(list(p) if isinstance(p,set) else p,k); import sys; from mutatest.cli import cli_main; sys.argv[0]=__name__; sys.exit(cli_main())`;
                     const mutatestRunCmd = `python -c "${mutatestPatch}"`;
-                    cmd = `${chcp}${setPythonPath} && ${cdCmd} && ${mutatestRunCmd} -s "${params.filePath}" -t "python -m unittest ${testModule}" -o "${reportDir}.rst" ${timeoutArg.replace('-', '_')}`;
+                    cmd = `${chcp}${setPythonPath} && ${cdCmd} && ${mutatestRunCmd} -s "${params.filePath}" -t "python -m unittest ${testModule}" -o "${reportDir}.rst" ${timeoutArg}`;
                 }
                 
                 currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
