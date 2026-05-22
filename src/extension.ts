@@ -301,7 +301,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
 
-                const cmd = `chcp 65001 && set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH% && cd /d "${testDir}" && mutmut run --paths-to-mutate "${params.filePath}" --runner "python -m unittest ${testModule}" ${timeoutArg}`;
+                const isWin = process.platform === 'win32';
+                const setPythonPath = isWin 
+                    ? `set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH%` 
+                    : `export PYTHONPATH="${targetDir}:${testDir}:$PYTHONPATH"`;
+                const chcp = isWin ? `chcp 65001 && ` : ``;
+                const cdCmd = isWin ? `cd /d "${testDir}"` : `cd "${testDir}"`;
+
+                const cmd = `${chcp}${setPythonPath} && ${cdCmd} && mutmut run --paths-to-mutate "${params.filePath}" --runner "python -m unittest ${testModule}" ${timeoutArg}`;
                 
                 currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
                     currentMutpyProcess = null;
