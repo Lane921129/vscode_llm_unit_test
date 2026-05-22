@@ -145,17 +145,31 @@ function sanitizeLlmResponse(rawCode: string): string {
     return cleanCode;
 }
 
-function parseSurvivedMutants(mutatestResult: string): string {
+function parseMutatestSurvived(mutatestResult: string): string {
+    const lines = mutatestResult.split('\n');
+    let isSurvivedSection = false;
+    const survivedList: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line === 'SURVIVED' && lines[i+1]?.trim() === '--------') {
+            isSurvivedSection = true;
+            i++; continue;
+        }
+        if (isSurvivedSection) {
+            if (line === '' || line.startsWith('2026-') || line.match(/^\d{4}-\d{2}-\d{2}/)) {break;}
+            if (line.startsWith('- ')) {survivedList.push(line);}
+        }
+    }
+    return survivedList.join('\n');
+}
+
+function parseMutmutSurvived(mutatestResult: string): string {
     const lines = mutatestResult.split('\n');
     const survivedList: string[] = [];
     let capture = false;
     for (const line of lines) {
-        if (line.includes('FAILED:') || line.includes('Survived:') || line.includes('survived')) {
-            capture = true;
-        }
-        if (capture && line.trim() !== '') {
-            survivedList.push(line.trim());
-        }
+        if (line.includes('FAILED:') || line.includes('Survived:') || line.includes('survived')) {capture = true;}
+        if (capture && line.trim() !== '') {survivedList.push(line.trim());}
     }
     return survivedList.join('\n');
 }
@@ -289,26 +303,46 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             fs.writeFileSync(testPath, sanitizedCode, 'utf8');
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
 
-            log(`[Mutmut] 正在建構突變測試指令...`);
-            log(`[Mutmut] 正式啟動分析 (系統超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
+            let engine = 'mutatest';
+            const isWin = process.platform === 'win32';
+            
+            if (!isWin) {
+                try {
+                    require('child_process').execSync('mutmut --version', { stdio: 'ignore' });
+                    engine = 'mutmut';
+                } catch {
+                    log(`[系統] 偵測不到 mutmut，降級使用 mutatest。`);
+                }
+            } else {
+                log(`[系統] 偵測到 Windows 環境，自動降級使用 mutatest 以確保相容性。`);
+            }
+
+            log(`[${engine}] 正在建構突變測試指令...`);
+            log(`[${engine}] 正式啟動分析 (系統超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
 
             if (isAborted) {throw new Error("使用者強制中止");}
 
             const mutpyResult = await new Promise<string>((resolve, reject) => {
-                const timeoutArg = params.mutpyTimeout ? `--test-time-multiplier ${params.mutpyTimeout}` : '';
-                
                 const targetDir = path.dirname(params.filePath);
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
 
-                const isWin = process.platform === 'win32';
                 const setPythonPath = isWin 
                     ? `set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH%` 
                     : `export PYTHONPATH="${targetDir}:${testDir}:$PYTHONPATH"`;
                 const chcp = isWin ? `chcp 65001 && ` : ``;
                 const cdCmd = isWin ? `cd /d "${testDir}"` : `cd "${testDir}"`;
 
-                const cmd = `${chcp}${setPythonPath} && ${cdCmd} && mutmut run --paths-to-mutate "${params.filePath}" --runner "python -m unittest ${testModule}" ${timeoutArg}`;
+                let cmd = "";
+                if (engine === 'mutmut') {
+                    const timeoutArg = params.mutpyTimeout ? `--test-time-multiplier ${params.mutpyTimeout}` : '';
+                    cmd = `${chcp}${setPythonPath} && ${cdCmd} && mutmut run --paths-to-mutate "${params.filePath}" --runner "python -m unittest ${testModule}" ${timeoutArg}`;
+                } else {
+                    const timeoutArg = params.mutpyTimeout ? `--timeout_factor ${params.mutpyTimeout}` : '';
+                    const mutatestPatch = `import random; orig_sample=random.sample; random.sample=lambda p,k: orig_sample(list(p) if isinstance(p,set) else p,k); import sys; from mutatest.cli import cli_main; sys.argv=['mutatest']; sys.exit(cli_main())`;
+                    const mutatestRunCmd = `python -c "${mutatestPatch}"`;
+                    cmd = `${chcp}${setPythonPath} && ${cdCmd} && ${mutatestRunCmd} -s "${params.filePath}" -t "python -m unittest ${testModule}" -o "${reportDir}.rst" ${timeoutArg.replace('-', '_')}`;
+                }
                 
                 currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
                     currentMutpyProcess = null;
@@ -316,45 +350,49 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     if (error && error.killed) {return reject(new Error(`系統執行超時 (超過 ${params.timeoutSeconds} 秒)`));}
                     
                     if (error) {
-                        resolve(`[Mutmut 系統錯誤訊息]\n${error.message}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
+                        resolve(`[${engine} 系統錯誤訊息]\n${error.message}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
                     } else {
                         resolve(stdout || stderr || "無輸出內容");
                     }
                 });
             });
 
-            log(`[Mutmut] 突變分析執行完畢！正在解析報告與分數...`);
+            log(`[${engine}] 突變分析執行完畢！正在解析報告與分數...`);
             log(`--- 突變測試原生輸出 ---\n${mutpyResult}\n------------------------`);
             finalReportMarkdown += `### 執行日誌摘要\n\n\`\`\`text\n${mutpyResult.substring(0, 500)}${mutpyResult.length > 500 ? '...' : ''}\n\`\`\`\n\n`;
             
-            const totalMatch = mutpyResult.match(/(\d+)\s+mutants/i);
-            const survivedMatch = mutpyResult.match(/(\d+)\s+survived/i);
-            
             let reasonStr = "";
-            if (totalMatch || mutpyResult.includes('mutmut')) {
-                const total = totalMatch ? parseInt(totalMatch[1]) : 0;
-                const survived = survivedMatch ? parseInt(survivedMatch[1]) : 0;
-                
-                if (total === 0) {
-                    mutationScore = 0;
+            if (engine === 'mutmut') {
+                const totalMatch = mutpyResult.match(/(\d+)\s+mutants/i);
+                const survivedMatch = mutpyResult.match(/(\d+)\s+survived/i);
+                if (totalMatch || mutpyResult.includes('mutmut')) {
+                    const total = totalMatch ? parseInt(totalMatch[1]) : 0;
+                    const survived = survivedMatch ? parseInt(survivedMatch[1]) : 0;
+                    mutationScore = total === 0 ? 0 : Math.round(((total - survived) / total) * 100);
+                    log(`[分析] 本輪突變分數：${mutationScore}% (Total: ${total}, Survived: ${survived})`);
+                    finalReportMarkdown += `- **突變分數**: ${mutationScore}%\n`;
                 } else {
-                    mutationScore = Math.round(((total - survived) / total) * 100);
+                    log(`[錯誤] 無法解析突變分數！可能 mutmut 執行失敗。`);
+                    reasonStr = "解析失敗";
+                    finalReportMarkdown += `- **突變分數**: 解析失敗\n`;
                 }
-                
-                if (mutpyResult.includes('WSL')) {
-                    vscode.window.showErrorMessage(`⚠️ Mutmut 無法在 Windows 上原生執行，請確認您是在 WSL 環境下運作。`);
-                }
-                
-                log(`[分析] 本輪突變分數：${mutationScore}% (Total: ${total}, Survived: ${survived})`);
-                finalReportMarkdown += `- **突變分數**: ${mutationScore}%\n`;
             } else {
-                log(`[錯誤] 無法解析突變分數！可能 mutmut 執行失敗或環境中未安裝 mutmut。`);
-                reasonStr = "Mutmut 解析失敗";
-                finalReportMarkdown += `- **突變分數**: 解析失敗\n`;
-                vscode.window.showErrorMessage(`⚠️ Mutmut 測試報告產生失敗，請查看日誌中的 stderr 錯誤。`);
+                const totalMatch = mutpyResult.match(/TOTAL RUNS: (\d+)/);
+                const survivedMatch = mutpyResult.match(/SURVIVED: (\d+)/);
+                if (totalMatch) {
+                    const total = parseInt(totalMatch[1]);
+                    const survived = survivedMatch ? parseInt(survivedMatch[1]) : 0;
+                    mutationScore = total === 0 ? 0 : Math.round(((total - survived) / total) * 100);
+                    log(`[分析] 本輪突變分數：${mutationScore}% (Total: ${total}, Survived: ${survived})`);
+                    finalReportMarkdown += `- **突變分數**: ${mutationScore}%\n`;
+                } else {
+                    log(`[錯誤] 無法解析突變分數！可能 mutatest 執行失敗。`);
+                    reasonStr = "解析失敗";
+                    finalReportMarkdown += `- **突變分數**: 解析失敗\n`;
+                }
             }
 
-            survivedMutants = parseSurvivedMutants(mutpyResult);
+            survivedMutants = engine === 'mutmut' ? parseMutmutSurvived(mutpyResult) : parseMutatestSurvived(mutpyResult);
             if (survivedMutants) {
                 log(`[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n${survivedMutants}`);
                 reasonStr = survivedMutants.split('\n')[0] + (survivedMutants.split('\n').length > 1 ? "..." : "");
