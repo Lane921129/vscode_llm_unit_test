@@ -1,0 +1,5 @@
+# VS Code LLM Unit Test Extension - Python Dependencies
+# These are required for the mutation testing engine to work properly.
+
+mutatest>=3.1.0
+mutmut>=2.4.4
