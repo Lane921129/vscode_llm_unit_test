@@ -9,5 +9,7 @@
         "dist": true // set this to false to include "dist" folder in search results
     },
     // Turn off tsc task auto detection since we have the necessary tasks as npm scripts
-    "typescript.tsc.autoDetect": "off"
+    "typescript.tsc.autoDetect": "off",
+    "snyk.advanced.organization": "3cbcaf89-2ad7-484a-b520-7a65a9f39843",
+    "snyk.advanced.autoSelectOrganization": true
 }

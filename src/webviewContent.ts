@@ -4,103 +4,450 @@ export function getWebviewContent() {
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM 突變測試</title>
     <style>
         body { font-family: var(--vscode-font-family); padding: 10px; color: var(--vscode-foreground); }
-        details { border: 1px solid var(--vscode-panel-border); border-radius: 4px; margin-bottom: 8px; background: var(--vscode-sideBar-background); }
-        summary { padding: 8px; cursor: pointer; font-weight: bold; font-size: 12px; outline: none; }
-        .content { padding: 8px; border-top: 1px solid var(--vscode-panel-border); }
-        select, input { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); padding: 5px; margin-top: 4px; }
-        .flex-row { display: flex; gap: 4px; margin-top: 6px; }
-        button { width: 100%; cursor: pointer; padding: 10px; border: none; border-radius: 2px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font-weight: bold; }
-        #log-area { width: 100%; height: 180px; background: #1e1e1e; color: #4af626; font-family: monospace; font-size: 11px; padding: 8px; margin-top: 5px; resize: vertical; border: 1px solid var(--vscode-panel-border); }
-        table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; }
-        th, td { text-align: left; padding: 4px; border-bottom: 1px solid var(--vscode-panel-border); }
+        h3 { border-bottom: 1px solid var(--vscode-editorGroup-border); padding-bottom: 5px; }
+        
+        /* 摺疊面板樣式 */
+        details {
+            margin-bottom: 10px;
+            border: 1px solid var(--vscode-editorGroup-border);
+            border-radius: 4px;
+            background-color: var(--vscode-editor-background);
+        }
+        summary {
+            padding: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            background-color: var(--vscode-sideBarSectionHeader-background);
+            user-select: none;
+            outline: none;
+        }
+        summary:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .content {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        label { margin-top: 5px; font-weight: 500; font-size: 13px; }
+        input, select, textarea {
+            width: 100%;
+            padding: 5px;
+            margin-top: 3px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            box-sizing: border-box;
+            border-radius: 2px;
+        }
+        button {
+            margin-top: 10px;
+            padding: 6px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            cursor: pointer;
+            border-radius: 2px;
+        }
+        button:hover { background: var(--vscode-button-hoverBackground); }
+        
+        .flex-row {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            width: 100%;
+        }
+        
+        /* 檔案覆蓋率表格 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 5px;
+            font-size: 13px;
+        }
+        th, td {
+            border: 1px solid var(--vscode-editorGroup-border);
+            padding: 5px;
+            text-align: left;
+        }
+        th {
+            background-color: var(--vscode-sideBarSectionHeader-background);
+        }
+        .score-badge {
+            background: #238636;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        #log-area {
+            height: 300px;
+            resize: vertical;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
+    <h3>🧪 LLM 突變測試與修復</h3>
+    
     <details open>
-        <summary>⚙️ 基礎與路徑設定</summary>
+        <summary>🤖 模型與環境設定</summary>
         <div class="content">
-            <label>模型環境</label>
-            <select id="env-type"><option value="local">🖥️ 本地 Ollama</option><option value="cloud">☁️ 雲端 API</option></select>
-            <div id="local-ui" style="margin-top:8px;"><label>本地模型：</label><select id="model-select"><option>讀取中...</option></select></div>
-            <div id="cloud-ui" style="display:none; margin-top:8px;">
-                <label>API Key：</label>
-                <div class="flex-row"><select id="api-key-select"><option value="">-- 選擇 Key --</option></select><button id="btn-del-key" style="background:#a82a2a; width:40px;">🗑️</button></div>
-                <button id="btn-edit-key" style="margin-top:5px; background:var(--vscode-button-secondaryBackground); color:var(--vscode-button-secondaryForeground);">➕ 新增 / ✏️ 編輯</button>
+            <label>執行環境</label>
+            <select id="env-type">
+                <option value="cloud">雲端 (Gemini API)</option>
+                <option value="local">本地 (Ollama)</option>
+                <option value="custom">自訂 (OpenAI 相容)</option>
+            </select>
+            
+            <div id="cloud-ui">
+                <label>選擇 API Key</label>
+                <div class="flex-row">
+                    <select id="api-key-select"><option value="">-- 載入中 --</option></select>
+                </div>
+                
+                <div class="flex-row" style="margin-top: 5px;">
+                    <input type="text" id="new-key-name" placeholder="標籤 (例: Gemini-Pro)">
+                    <input type="password" id="new-key-value" placeholder="輸入 API Key">
+                    <button id="btn-save-key" style="margin-top:0; width:60px; flex-shrink:0;">儲存</button>
+                    <button id="btn-del-key" style="margin-top:0; width:40px; flex-shrink:0; background:#a82a2a;">刪除</button>
+                </div>
             </div>
-            <label style="margin-top:10px;">📂 輸出資料夾</label>
-            <div class="flex-row"><input type="text" id="output-path" readonly><button id="btn-browse" style="width:40px;">...</button></div>
+
+            <div id="local-ui" style="display:none;">
+                <label>本地模型 (Ollama)</label>
+                <select id="model-select"><option value="">-- 載入中 --</option></select>
+                <button id="btn-refresh-models" style="width:100%;">🔄 重新整理模型</button>
+            </div>
+
+            <div id="custom-ui" style="display:none;">
+                <label>選擇自訂 API 設定</label>
+                <select id="custom-api-select"><option value="">-- 請選擇或新增 --</option></select>
+                
+                <label style="margin-top:5px;">標籤 (例: GPT-4o 或 實驗室 vLLM)</label>
+                <input type="text" id="custom-name" placeholder="設定標籤名稱">
+                
+                <label>API Base URL</label>
+                <input type="text" id="custom-url" placeholder="例: https://api.openai.com/v1/chat/completions">
+                
+                <label>模型名稱 (Model)</label>
+                <input type="text" id="custom-model" placeholder="例: gpt-4o">
+                
+                <label>API Key (選填)</label>
+                <input type="password" id="custom-key" placeholder="Bearer Token">
+                
+                <div class="flex-row">
+                    <button id="btn-save-custom" style="flex:1;">💾 儲存</button>
+                    <button id="btn-del-custom" style="flex:0.5; background:#a82a2a;">🗑️ 刪除</button>
+                </div>
+            </div>
         </div>
     </details>
 
     <details open>
-        <summary>🎯 測試目標</summary>
+        <summary>⚙️ 基礎設定 (含參數)</summary>
         <div class="content">
-            <label>選擇檔案</label><select id="file-select"><option value="">-- 選擇檔案 --</option></select>
-            <label>選擇函式</label><select id="func-select"><option value="">-- 測試整份檔案 --</option></select>
-            <label style="margin-top:8px;">最大循環次數</label><input type="number" id="max-loop" value="3" min="1">
+            <label>📂 測試專案資料夾</label>
+            <div class="flex-row">
+                <input type="text" id="project-path" readonly placeholder="請選擇專案目錄">
+                <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+            
+            <label>📂 測試結果輸出資料夾</label>
+            <div class="flex-row">
+                <input type="text" id="output-path" readonly placeholder="預設與目標檔案同目錄">
+                <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+            
+            <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
+                <label style="margin-top:0;">最大循環次數</label>
+                <input type="number" id="max-loop" value="3" min="1">
+                
+                <label>突變測試時間</label>
+                <input type="number" id="mutpy-timeout" value="5" min="1" style="width:100%;">
+
+                <label>超時限制 (秒)</label>
+                <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
+            </div>
         </div>
     </details>
 
-    <details>
-        <summary>📊 檔案覆蓋率 explorer</summary>
+    <details open>
+        <summary>🎯 單一測試目標</summary>
         <div class="content">
-            <table id="coverage-table"><thead><tr><th>檔案</th><th>覆蓋率</th></tr></thead><tbody><tr><td colspan="2" style="text-align:center; opacity:0.5;">尚無數據</td></tr></tbody></table>
+            <label>選擇檔案</label>
+            <select id="file-select"><option value="">-- 選擇檔案 --</option></select>
+            
+            <label style="margin-top:8px;">選擇函式</label>
+            <select id="func-select"><option value="">-- 測試整份檔案 --</option></select>
+            
+            <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
+                <button id="btn-run" style="flex:1;">🚀 開始自動化突變測試</button>
+                <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">🛑 中止測試</button>
+            </div>
         </div>
     </details>
 
-    <button id="start-test" style="margin-top:10px;">🚀 執行自動化測試循環</button>
+    <details open>
+        <summary>📊 檔案覆蓋率與結果</summary>
+        <div class="content">
+            <label>📁 批次測試範圍</label>
+            <div class="flex-row">
+                <input type="text" id="batch-path" readonly placeholder="預設: 整個專案">
+                <button id="btn-browse-batch" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+            
+            <button id="btn-batch-run" style="margin-top:10px; width:100%;">▶️ 執行批次自動化測試 (範圍內所有檔案)</button>
+
+            <table id="coverage-table" style="margin-top:15px; width:100%; border-collapse:collapse; text-align:left;">
+                <thead style="border-bottom:1px solid var(--vscode-editorGroup-border);"><tr>
+                    <th style="padding:5px; width:30px; text-align:center;"><input type="checkbox" id="select-all"></th>
+                    <th style="padding:5px;">資料夾/檔案名稱</th>
+                    <th style="padding:5px;">突變分數</th>
+                    <th style="padding:5px;">狀態 / 原因</th>
+                </tr></thead>
+                <tbody><tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr></tbody>
+            </table>
+            
+            <button id="btn-delete-selected" style="margin-top:10px; background:#a82a2a; color:white;">🗑️ 刪除選取項目</button>
+        </div>
+    </details>
 
     <details>
         <summary>📝 系統日誌</summary>
-        <div class="content"><textarea id="log-area" readonly></textarea></div>
+        <div class="content">
+            <textarea id="log-area" readonly placeholder="系統分析日誌將顯示於此..."></textarea>
+            <button id="btn-clear-log" style="margin-top:5px;">清除日誌</button>
+        </div>
     </details>
 
     <script>
         const vscode = acquireVsCodeApi();
         let currentKeys = {};
-        let editingOldName = null; // 修正：只宣告一次
 
-        window.onload = () => { vscode.postMessage({ command: 'getInitialData' }); };
+        let currentCustomKeys = {};
+        let lastTestedProjectPath = '';
+
+        // 載入初始資料
+        vscode.postMessage({ command: 'getInitialData' });
+
+        // 表格選取全部邏輯
+        document.getElementById('select-all').addEventListener('change', (e) => {
+            const isChecked = e.target.checked;
+            const checkboxes = document.querySelectorAll('#coverage-table tbody .row-sel');
+            checkboxes.forEach(cb => cb.checked = isChecked);
+        });
+
+        // 刪除選取邏輯
+        document.getElementById('btn-delete-selected').addEventListener('click', () => {
+            const tbody = document.querySelector('#coverage-table tbody');
+            const checkboxes = tbody.querySelectorAll('.row-sel:checked');
+            checkboxes.forEach(cb => {
+                const tr = cb.closest('tr');
+                if (tr) tr.remove();
+            });
+            if (tbody.rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr>';
+                document.getElementById('select-all').checked = false;
+            }
+        });
 
         window.addEventListener('message', event => {
             const msg = event.data;
-            switch(msg.command) {
-                case 'setModels': document.getElementById('model-select').innerHTML = msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join(''); break;
-                case 'setApiKeys':
-                    currentKeys = msg.keys;
-                    const keys = Object.keys(msg.keys);
-                    document.getElementById('api-key-select').innerHTML = '<option value="">-- 選擇 Key --</option>' + keys.map(k => \`<option value="\${k}">\${k}</option>\`).join('');
-                    break;
+            switch (msg.command) {
+                case 'setModels': document.getElementById('model-select').innerHTML = '<option value="">-- 選擇模型 --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join(''); break;
+                case 'setApiKeys': currentKeys = msg.keys; const keys = Object.keys(msg.keys); document.getElementById('api-key-select').innerHTML = '<option value="">-- 選擇 Key --</option>' + keys.map(k => \`<option value="\${k}">\${k}</option>\`).join(''); break;
                 case 'setFiles': document.getElementById('file-select').innerHTML = '<option value="">-- 選擇檔案 --</option>' + msg.files.map(f => \`<option value="\${f.path}">\${f.name}</option>\`).join(''); break;
-                case 'setFunctions': document.getElementById('func-select').innerHTML = '<option value="">-- 測試整份檔案 --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); break;
+                case 'setFunctions': document.getElementById('func-select').innerHTML = '<option value="">-- 一鍵測試全部 (此檔案) --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); break;
+                case 'setProjectPath': document.getElementById('project-path').value = msg.path; if (!document.getElementById('batch-path').value) document.getElementById('batch-path').value = msg.path; break;
+                case 'setBatchPath': document.getElementById('batch-path').value = msg.path; break;
                 case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
-                case 'appendLog':
-                    const log = document.getElementById('log-area');
-                    log.value += '\\n' + msg.text;
-                    log.scrollTop = log.scrollHeight;
+                case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
+                case 'updateCoverage':
+                    const tbody = document.querySelector('#coverage-table tbody');
+                    let existingRow = Array.from(tbody.querySelectorAll('tr')).find(row => row.cells[1]?.textContent === msg.fileName);
+                    if (existingRow) { 
+                        existingRow.cells[2].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        existingRow.cells[3].textContent = msg.reason || '';
+                    } else { 
+                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes('尚無測試數據')) tbody.innerHTML = ''; 
+                        const newRow = tbody.insertRow(); 
+                        const cellCheck = newRow.insertCell(0);
+                        cellCheck.style.textAlign = 'center';
+                        cellCheck.innerHTML = '<input type="checkbox" class="row-sel">';
+                        newRow.insertCell(1).textContent = msg.fileName; 
+                        newRow.insertCell(2).innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        newRow.insertCell(3).textContent = msg.reason || '';
+                        Array.from(newRow.cells).forEach(c => c.style.padding = '5px');
+                    }
+                    break;
+                case 'setCustomKeys':
+                    currentCustomKeys = msg.keys;
+                    const ckeys = Object.keys(msg.keys);
+                    document.getElementById('custom-api-select').innerHTML = '<option value="">-- 請選擇或新增 --</option>' + ckeys.map(k => '<option value="' + k + '">' + k + '</option>').join('');
+                    break;
+                case 'analysisFinished':
+                    const runBtn = document.getElementById('btn-run');
+                    const batchRunBtn = document.getElementById('btn-batch-run');
+                    if (runBtn) {
+                        runBtn.disabled = false;
+                        runBtn.innerText = '🚀 開始自動化突變測試';
+                    }
+                    if (batchRunBtn) {
+                        batchRunBtn.disabled = false;
+                        batchRunBtn.innerText = '▶️ 執行批次自動化測試 (範圍內所有檔案)';
+                    }
+                    const abortBtn = document.getElementById('btn-abort');
+                    if (abortBtn) abortBtn.style.display = 'none';
                     break;
             }
         });
 
         document.getElementById('env-type').onchange = (e) => {
-            const isLocal = e.target.value === 'local';
-            document.getElementById('local-ui').style.display = isLocal ? 'block' : 'none';
-            document.getElementById('cloud-ui').style.display = isLocal ? 'none' : 'block';
+            const val = e.target.value;
+            document.getElementById('local-ui').style.display = val === 'local' ? 'block' : 'none';
+            document.getElementById('cloud-ui').style.display = val === 'cloud' ? 'block' : 'none';
+            document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
         };
 
-        document.getElementById('btn-browse').onclick = () => vscode.postMessage({ command: 'browseFolder' });
-        document.getElementById('file-select').onchange = (e) => { if(e.target.value) vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); };
-        document.getElementById('start-test').onclick = () => {
+        document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
+        document.getElementById('btn-browse-out').onclick = () => vscode.postMessage({ command: 'browseFolder' });
+        document.getElementById('btn-browse-batch').onclick = () => vscode.postMessage({ command: 'browseBatchFolder' });
+        
+        document.getElementById('file-select').onchange = (e) => { 
+            if(e.target.value) vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
+        };
+
+        document.getElementById('btn-save-key').onclick = () => {
+            const newName = document.getElementById('new-key-name').value;
+            const newValue = document.getElementById('new-key-value').value;
+            const oldName = document.getElementById('api-key-select').value;
+            if (newName && newValue) vscode.postMessage({ command: 'updateApiKey', oldName, newName, key: newValue });
+        };
+        document.getElementById('btn-del-key').onclick = () => {
+            const name = document.getElementById('api-key-select').value;
+            if (name) vscode.postMessage({ command: 'deleteApiKey', name });
+        };
+        document.getElementById('api-key-select').onchange = (e) => {
+            const name = e.target.value;
+            document.getElementById('new-key-name').value = name || '';
+            document.getElementById('new-key-value').value = currentKeys[name] || '';
+        };
+
+        document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });
+        document.getElementById('btn-clear-log').onclick = () => document.getElementById('log-area').value = '';
+
+        document.getElementById('custom-api-select').onchange = (e) => {
+            const name = e.target.value;
+            const data = currentCustomKeys[name] || {url: '', model: '', key: ''};
+            document.getElementById('custom-name').value = name || '';
+            document.getElementById('custom-url').value = data.url || '';
+            document.getElementById('custom-model').value = data.model || '';
+            document.getElementById('custom-key').value = data.key || '';
+        };
+
+        document.getElementById('btn-save-custom').onclick = () => {
+            const newName = document.getElementById('custom-name').value;
+            const url = document.getElementById('custom-url').value;
+            const model = document.getElementById('custom-model').value;
+            const key = document.getElementById('custom-key').value;
+            const oldName = document.getElementById('custom-api-select').value;
+            if (newName && url && model) vscode.postMessage({ command: 'updateCustomKey', oldName, newName, url, model, key });
+        };
+
+        document.getElementById('btn-del-custom').onclick = () => {
+            const name = document.getElementById('custom-api-select').value;
+            if (name) vscode.postMessage({ command: 'deleteCustomKey', name });
+        };
+
+        document.getElementById('btn-abort').onclick = () => vscode.postMessage({ command: 'abortTest' });
+        
+        const getStartParams = () => {
+            const envType = document.getElementById('env-type').value;
+            let modelName = '';
+            if (envType === 'local') modelName = document.getElementById('model-select').value;
+            else if (envType === 'cloud') modelName = document.getElementById('api-key-select').value;
+            else if (envType === 'custom') modelName = document.getElementById('custom-model').value;
+
+            return { envType, modelName };
+        };
+
+        document.getElementById('btn-run').onclick = () => {
+            const { envType, modelName } = getStartParams();
+            const filePath = document.getElementById('file-select').value;
+            
+            if(!envType || !modelName || !filePath) {
+                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與目標檔案皆已填妥。' });
+                return;
+            }
+
+            document.getElementById('btn-run').disabled = true;
+            document.getElementById('btn-batch-run').disabled = true;
+            document.getElementById('btn-run').innerText = '⏳ 測試進行中...';
+            document.getElementById('btn-abort').style.display = 'block';
+
+            // 跨專案自動清除舊結果
+            const currentProj = document.getElementById('project-path').value;
+            if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
+                const tbody = document.querySelector('#coverage-table tbody');
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr>';
+            }
+            lastTestedProjectPath = currentProj;
+
             vscode.postMessage({
                 command: 'startAnalysis',
-                envType: document.getElementById('env-type').value,
-                modelName: document.getElementById('env-type').value === 'local' ? document.getElementById('model-select').value : document.getElementById('api-key-select').value,
-                filePath: document.getElementById('file-select').value,
+                envType, modelName, filePath,
                 funcName: document.getElementById('func-select').value,
                 maxLoops: parseInt(document.getElementById('max-loop').value),
-                outputPath: document.getElementById('output-path').value
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value),
+                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
+                outputPath: document.getElementById('output-path').value,
+                customUrl: document.getElementById('custom-url').value,
+                customKey: document.getElementById('custom-key').value
+            });
+        };
+
+        document.getElementById('btn-batch-run').onclick = () => {
+            const { envType, modelName } = getStartParams();
+            let batchPath = document.getElementById('batch-path').value || document.getElementById('project-path').value;
+            
+            if(!envType || !modelName || !batchPath) {
+                vscode.postMessage({ command: 'appendLog', text: '[錯誤] 請確認環境、模型與批次測試資料夾皆已填妥。' });
+                return;
+            }
+
+            document.getElementById('btn-run').disabled = true;
+            document.getElementById('btn-batch-run').disabled = true;
+            document.getElementById('btn-batch-run').innerText = '⏳ 批次測試進行中...';
+            document.getElementById('btn-abort').style.display = 'block';
+
+            // 跨專案自動清除舊結果
+            const currentProj = batchPath;
+            if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
+                const tbody = document.querySelector('#coverage-table tbody');
+                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">尚無測試數據</td></tr>';
+            }
+            lastTestedProjectPath = currentProj;
+
+            vscode.postMessage({
+                command: 'startBatchAnalysis',
+                envType, modelName, batchPath,
+                maxLoops: parseInt(document.getElementById('max-loop').value),
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value),
+                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
+                outputPath: document.getElementById('output-path').value,
+                customUrl: document.getElementById('custom-url').value,
+                customKey: document.getElementById('custom-key').value
             });
         };
     </script>
