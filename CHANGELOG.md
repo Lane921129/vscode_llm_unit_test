@@ -2,6 +2,22 @@
 
 This file documents all notable changes to the `llm-unit-test` extension.
 
+## [0.0.2] - 2026-07-15
+
+### Added
+- Few-Shot prompt examples for improved LLM generation quality.
+- Unit test suite for core functions.
+- Comprehensive project documentation in `target/` directory.
+- API connection test button in sidebar UI.
+
+### Fixed
+- Dead code cleanup: removed unused `srcArgCount` and `resolvedFunc` variables.
+- README now accurately reflects actual tools used (mutatest/mutmut instead of MutPy, unittest instead of pytest).
+- System prompt now includes multiple Few-Shot examples to prevent small models from hallucinating.
+
+### Changed
+- Refactored prompt system with dedicated `fewShotExamples.ts` module.
+
 ## [0.0.1] - 2026-05-21
 
 ### Added
@@ -30,6 +46,22 @@ This file documents all notable changes to the `llm-unit-test` extension.
 # 更新日誌
 
 本文件記錄 `llm-unit-test` 擴充功能的所有重要更新。
+
+## [0.0.2] - 2026-07-15
+
+### 新增
+- 新增 Few-Shot 提示詞範例以提升 LLM 生成品質。
+- 新增核心函式的自動化單元測試套件。
+- 新增完整的專案說明文件於 `target/` 目錄。
+- 新增 API 連線測試按鈕。
+
+### 修正
+- 清理死碼：移除未使用的 `srcArgCount` 和 `resolvedFunc` 變數。
+- README 現已正確反映實際使用的工具（mutatest/mutmut 取代 MutPy，unittest 取代 pytest）。
+- 系統提示詞新增多組 Few-Shot 範例，防止小模型產生幻覺。
+
+### 變更
+- 重構提示詞系統，獨立出 `fewShotExamples.ts` 模組。
 
 ## [0.0.1] - 2026-05-21
 
