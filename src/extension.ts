@@ -14,12 +14,16 @@ interface AnalysisParams {
     modelName: string;
     filePath: string;
     funcName: string;
+    promptStrategy?: string;
+    ollamaUrl?: string;
     maxLoops: number;
     mutpyTimeout?: number;
     timeoutSeconds: number;
     outputPath: string;
     customUrl?: string;
     customKey?: string;
+    projectName?: string;
+    sessionDate?: string;
 }
 
 interface AstContext {
@@ -42,7 +46,33 @@ export function activate(context: vscode.ExtensionContext) {
         async (params: AnalysisParams) => {
             isAborted = false;
             const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
-            await executeSingleFileAnalysis(params, log, sidebarProvider);
+            
+            const now = new Date();
+            const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
+            params.sessionDate = dateStr;
+
+            if (!params.funcName) {
+                // 全檔案模式：萃取所有函式並依序測試
+                const funcs = extractFunctionsFromFile(params.filePath);
+                if (funcs.length === 0) {
+                    log(`[系統] 在檔案 ${path.basename(params.filePath)} 中找不到任何函式，無法進行全檔案測試。`);
+                } else {
+                    log(`[系統] 開啟「全檔案掃描模式」！共找到 ${funcs.length} 個函式，準備依序進行 AST 解析與測試...`);
+                    for (let i = 0; i < funcs.length; i++) {
+                        if (isAborted) break;
+                        const fName = funcs[i];
+                        log(`\n======================================================`);
+                        log(`[系統] 正在處理函式 (${i+1}/${funcs.length}): ${fName}`);
+                        log(`======================================================`);
+                        const singleParams: AnalysisParams = { ...params, funcName: fName };
+                        await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                    }
+                    log(`\n[系統] 🎉 全檔案掃描與測試執行完畢！`);
+                }
+            } else {
+                await executeSingleFileAnalysis(params, log, sidebarProvider);
+            }
+            
             sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
         }
     );
@@ -57,6 +87,9 @@ export function activate(context: vscode.ExtensionContext) {
             isAborted = false;
             const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
             try {
+                const now = new Date();
+                const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
+                
                 const pyFiles = await findPythonFilesInDir(params.batchPath);
                 if (pyFiles.length === 0) {
                     log(`[系統] 在目錄 ${params.batchPath} 中找不到任何 Python 檔案。`);
@@ -64,6 +97,7 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 log(`[系統] 開始批次測試，共找到 ${pyFiles.length} 個 Python 檔案。`);
+                const projectName = path.basename(params.batchPath);
                 for (let i = 0; i < pyFiles.length; i++) {
                     if (isAborted) {
                         log(`[系統] ⚠️ 批次測試已由使用者強制中止。`);
@@ -73,8 +107,22 @@ export function activate(context: vscode.ExtensionContext) {
                     log(`\n======================================================`);
                     log(`[系統] 正在處理批次檔案 (${i+1}/${pyFiles.length}): ${file}`);
                     log(`======================================================`);
-                    const singleParams: AnalysisParams = { ...params, filePath: file, funcName: '' };
-                    await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                    
+                    const funcs = extractFunctionsFromFile(file);
+                    if (funcs.length === 0) {
+                        log(`[系統] 檔案 ${path.basename(file)} 中無可測試的函式，跳過。`);
+                        continue;
+                    }
+                    
+                    log(`[系統] 該檔案包含 ${funcs.length} 個函式，準備逐一測試...`);
+                    for (let j = 0; j < funcs.length; j++) {
+                        if (isAborted) break;
+                        const fName = funcs[j];
+                        log(`\n--- 批次任務進度: 檔案 ${i+1}/${pyFiles.length}, 函式 ${j+1}/${funcs.length} ---`);
+                        log(`[系統] 目標函式: ${fName}`);
+                        const singleParams: AnalysisParams = { ...params, filePath: file, funcName: fName, projectName: projectName, sessionDate: dateStr };
+                        await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                    }
                 }
                 log(`\n[系統] 🎉 批次自動化測試執行完畢！`);
             } catch (error) {
@@ -97,6 +145,20 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd);
+}
+
+function extractFunctionsFromFile(filePath: string): string[] {
+    if (!fs.existsSync(filePath)) {
+        return [];
+    }
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const regex = /^def\s+([a-zA-Z0-9_]+)\s*\(/gm;
+    let match: RegExpExecArray | null;
+    const funcs: string[] = [];
+    while ((match = regex.exec(content)) !== null) {
+        funcs.push(match[1]);
+    }
+    return funcs;
 }
 
 async function extractAstContext(
@@ -169,49 +231,53 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
 
     const testMethods: string[] = [];
     let methodIndex = 1;
+    let currentContext: string[] = [];
 
     for (const line of lines) {
         let testBody = '';
 
         if (line.startsWith('assert ')) {
             const assertBody = line.substring(7).trim();
-            const eqMatch = assertBody.match(/^(.+?)\s*==\s*(.+)$/);
-            const neqMatch = assertBody.match(/^(.+?)\s*!=\s*(.+)$/);
+            // Handle assert with messages: assert x == y, "message"
+            const parts = assertBody.split(',');
+            const expr = parts[0].trim();
+            const msg = parts.length > 1 ? `, ${parts.slice(1).join(',').trim()}` : '';
+
+            const eqMatch = expr.match(/^(.+?)\s*==\s*(.+)$/);
+            const neqMatch = expr.match(/^(.+?)\s*!=\s*(.+)$/);
+            
             if (eqMatch) {
-                testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()})`;
+                testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()}${msg})`;
             } else if (neqMatch) {
-                testBody = `self.assertNotEqual(${neqMatch[1].trim()}, ${neqMatch[2].trim()})`;
+                testBody = `self.assertNotEqual(${neqMatch[1].trim()}, ${neqMatch[2].trim()}${msg})`;
             } else {
-                testBody = `self.assertTrue(${assertBody})`;
+                testBody = `self.assertTrue(${expr}${msg})`;
             }
         } else if (line.startsWith('print(') || line.startsWith('import ') || line.startsWith('from ')) {
             continue;
-        } else if (line.includes('==') && !line.startsWith('def ') && !line.startsWith('class ')) {
+        } else if (line.startsWith('def ') || line.startsWith('class ') || line.startsWith('@')) {
+            continue;
+        } else if (line.includes('==') && !line.includes('(')) {
+            // Ignore bare == without function calls to prevent bad parsing
             const eqMatch = line.match(/^(.+?)\s*==\s*(.+)$/);
             if (eqMatch && eqMatch[1].includes('(')) {
                 testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()})`;
+            } else {
+                currentContext.push(line);
+                continue;
             }
+        } else {
+            currentContext.push(line);
+            continue;
         }
 
         if (testBody) {
-            testMethods.push(`    def test_case_${methodIndex}(self):\n        ${testBody}`);
+            const bodyLines = [...currentContext, testBody].map(l => `        ${l}`).join('\n');
+            testMethods.push(`    def test_case_${methodIndex}(self):\n${bodyLines}`);
             methodIndex++;
+            currentContext = []; // Reset for next assert
         }
     }
-
-    // 先對受測原始檔案讀取函式簽名，供決滢乍置用
-    let srcArgCount = 0;
-    try {
-        const srcContent = fs.readFileSync(srcFilePath, 'utf8');
-        const srcDefMatch = srcContent.match(/def\s+(?:${targetFunc}|\w+)\s*\(([^)]*)\)/);
-        if (srcDefMatch) {
-            srcArgCount = srcDefMatch[1].split(',').filter((a: string) => a.trim() && !a.includes('self')).length;
-        }
-    } catch { /* 讀取失敗就用預設字元 */ }
-
-    // 嘗試從 AI 輸出中解析函式名稱（供 return 語句使用）
-    const defMatchGlobal = rawCode.match(/def\s+(\w+)\s*\(/);
-    const resolvedFunc = defMatchGlobal ? defMatchGlobal[1] : targetFunc;
 
 
 
@@ -268,6 +334,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let currentLoop = 1;
     let mutationScore = 0;
 
+    let evalStrategy = params.promptStrategy || 'auto';
+    if (evalStrategy === 'auto') {
+        const nameLower = params.modelName.toLowerCase();
+        if (nameLower.includes('gpt-4') || nameLower.includes('claude-3') || nameLower.includes('gemini-1.5') || nameLower.includes('pro') || nameLower.includes('opus')) {
+            evalStrategy = 'large';
+        } else {
+            evalStrategy = 'small';
+        }
+    }
+    log(`[系統] 模型策略判定為: ${evalStrategy === 'large' ? 'Large Model (Advanced)' : 'Small Model (Strict)'}`);
+
     if (!params.filePath || !fs.existsSync(params.filePath)) {
         log('[錯誤] 找不到目標檔案路徑');
         return;
@@ -278,6 +355,26 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **日期**: ${reportDateStr}\n\n`;
 
     const baseDir = params.outputPath || path.dirname(params.filePath);
+    
+    // 建立本次測試的專屬資料夾
+    const now = new Date();
+    const dateStr = params.sessionDate || (now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_'));
+    const safeFuncName = params.funcName || 'file';
+    const baseName = path.basename(params.filePath, '.py');
+    
+    let sessionDir = "";
+    if (params.projectName) {
+        // 批次測試： baseDir / ProjectName_Date / FileName / FunctionName
+        sessionDir = path.join(baseDir, `${params.projectName}_${dateStr}`, baseName, safeFuncName);
+    } else {
+        // 單檔測試： baseDir / FileName_Date / FunctionName
+        sessionDir = path.join(baseDir, `${baseName}_${dateStr}`, safeFuncName);
+    }
+    
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
     let astContext: AstContext | null = null;
     if (params.funcName) {
         log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
@@ -305,16 +402,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             return;
         }
 
-        // 修正檔案名稱包含 funcName, loop, date
-        const now = new Date();
-        const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' +
-            now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
-        const safeFuncName = params.funcName || 'file';
-        const baseName = path.basename(params.filePath, '.py');
-        const testPath = path.join(baseDir, `test_${baseName}_${safeFuncName}_loop${currentLoop}_${dateStr}.py`);
-        const reportDir = path.join(baseDir, `report_${baseName}_${safeFuncName}_loop${currentLoop}_${dateStr}`);
+        // 測試結果全部放入 sessionDir
+        const testPath = path.join(sessionDir, `loop${currentLoop}_test.py`);
+        const reportDir = path.join(sessionDir, `loop${currentLoop}_report`);
 
-        const systemPrompt = getSystemPrompt(currentLoop, survivedMutants);
+        const systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants);
         let focusContext = "";
         if (currentLoop > 1 && survivedMutants) {
             focusContext = extractFocusContext(survivedMutants, targetCode);
@@ -322,7 +414,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
             }
         }
-        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, astContext, focusContext);
+        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, evalStrategy as 'small' | 'large', astContext, focusContext);
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
@@ -333,9 +425,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 let headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
                 if (params.envType === 'local') {
-                    apiUrl = 'http://127.0.0.1:11434/api/generate';
+                    const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
+                    apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
                     bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
-                    if (llmRetry === 0) log(`[LLM] 正在呼叫本地模型推論中... (模型: ${params.modelName})`);
+                    if (llmRetry === 0) log(`[LLM] 正在呼叫 Ollama 模型推論中... (模型: ${params.modelName}, URL: ${apiUrl})`);
                 } else if (params.envType === 'custom') {
                     apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
                     bodyData = { 
@@ -469,6 +562,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             finalReportMarkdown += `<details>\n<summary>點擊展開 AI 完整回應</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
 
             let finalCode = sanitizedCode;
+            
+            // 強制檢查並補齊 import
+            const baseName = path.basename(params.filePath, '.py');
+            if (!finalCode.includes(`from ${baseName} import`)) {
+                log(`[警告] AI 遺漏了 import 目標模組的語句，系統自動補齊...`);
+                if (finalCode.includes('import unittest')) {
+                    finalCode = finalCode.replace('import unittest', `import unittest\nfrom ${baseName} import *`);
+                } else {
+                    finalCode = `import unittest\nfrom ${baseName} import *\n\n` + finalCode;
+                }
+            }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
             fs.writeFileSync(testPath, finalCode, 'utf8');
@@ -479,7 +583,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
                 const targetDir = path.dirname(params.filePath);
-                const preCheckCmd = `chcp 65001 && set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH% && cd /d "${testDir}" && python -m unittest ${testModule}`;
+                const parentDir = path.dirname(targetDir);
+                const grandParentDir = path.dirname(parentDir);
+                const pythonPath = `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`;
+                const preCheckCmd = `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
                 exec(preCheckCmd, { timeout: 30000 }, (err, stdout, stderr) => {
                     const out = (stdout + stderr).trim();
                     if (err) {
@@ -522,12 +629,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             const mutpyResult = await new Promise<string>((resolve, reject) => {
                 const targetDir = path.dirname(params.filePath);
+                const parentDir = path.dirname(targetDir);
+                const grandParentDir = path.dirname(parentDir);
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
+                
+                const pythonPath = isWin
+                    ? `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`
+                    : `${targetDir}:${parentDir}:${grandParentDir}:${testDir}:$PYTHONPATH`;
 
                 const setPythonPath = isWin 
-                    ? `set PYTHONIOENCODING=utf8 && set PYTHONPATH=${targetDir};${testDir};%PYTHONPATH%` 
-                    : `export PYTHONIOENCODING=utf8 && export PYTHONPATH="${targetDir}:${testDir}:$PYTHONPATH"`;
+                    ? `set PYTHONIOENCODING=utf8 && set PYTHONPATH=${pythonPath}` 
+                    : `export PYTHONIOENCODING=utf8 && export PYTHONPATH="${pythonPath}"`;
                 const chcp = isWin ? `chcp 65001 && ` : ``;
                 const cdCmd = isWin ? `cd /d "${testDir}"` : `cd "${testDir}"`;
 
@@ -644,14 +757,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         currentLoop++;
     }
 
-    const now2 = new Date();
-    const dateStr = now2.toISOString().split('T')[0].replace(/-/g, '_') + '_' +
-        now2.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
-    const safeFuncName = params.funcName || 'file';
-    const baseName = path.basename(params.filePath, '.py');
-    const finalReportPath = path.join(baseDir, `summary_${baseName}_${safeFuncName}_${dateStr}.md`);
+    const finalReportPath = path.join(sessionDir, `final_report.md`);
     fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');
-    log(`[系統] 測試彙整報告已產出: ${finalReportPath}`);
+    log(`[系統] 分析結束！測試檔與最終報告已儲存至:\n${sessionDir}`);
     
     const doc = await vscode.workspace.openTextDocument(finalReportPath);
     await vscode.window.showTextDocument(doc, { preview: false });

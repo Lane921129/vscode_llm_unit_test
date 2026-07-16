@@ -2,16 +2,22 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
+import { initI18n, t } from './i18n';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
     public webview?: vscode.Webview;
 
     public resolveWebviewView(webviewView: vscode.WebviewView) {
+        initI18n();
         this.webview = webviewView.webview;
         this.webview.options = { enableScripts: true };
 
-        this.webview.html = getWebviewContent();
+        const config = vscode.workspace.getConfiguration('llmUnitTest');
+        const lang = config.get<string>('language', 'auto');
+        const strategy = config.get<string>('promptStrategy', 'auto');
+        const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
+        this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl);
 
         this.webview.onDidReceiveMessage(async (message) => {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -37,6 +43,35 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     }
 
                     // Background fetch for local models
+                    this.fetchLocalModels().then(models => {
+                        this.webview?.postMessage({ command: 'setModels', models });
+                    });
+                    break;
+                }
+
+                case 'setLanguage': {
+                    await config.update('language', message.lang, true);
+                    initI18n();
+                    if (this.webview) {
+                        const strategy = config.get<string>('promptStrategy', 'auto');
+                        this.webview.html = getWebviewContent(t, message.lang, strategy);
+                    }
+                    break;
+                }
+                
+                case 'setPromptStrategy': {
+                    await config.update('promptStrategy', message.strategy, true);
+                    if (this.webview) {
+                        const lang = config.get<string>('language', 'auto');
+                        const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
+                        this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl);
+                    }
+                    break;
+                }
+
+                case 'saveOllamaUrl': {
+                    await config.update('ollamaBaseUrl', message.url, true);
+                    vscode.window.showInformationMessage(`✅ 已儲存 Ollama URL：${message.url}`);
                     this.fetchLocalModels().then(models => {
                         this.webview?.postMessage({ command: 'setModels', models });
                     });
@@ -176,10 +211,72 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'testConnection': {
+                    vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: "正在測試 API 連線...",
+                        cancellable: false
+                    }, async () => {
+                        try {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                            if (message.envType === 'local') {
+                                const config = vscode.workspace.getConfiguration('llmUnitTest');
+                                const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
+                                const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal as any });
+                                clearTimeout(timeoutId);
+                                if (response.ok) vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                else throw new Error(`HTTP ${response.status}`);
+                            } else if (message.envType === 'cloud') {
+                                const config = vscode.workspace.getConfiguration('llmUnitTest');
+                                const keys = config.get<Record<string, string>>('apiKeys', {});
+                                const key = keys[message.modelName];
+                                if (!key) {
+                                    clearTimeout(timeoutId);
+                                    throw new Error("找不到對應的 API Key");
+                                }
+                                
+                                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+                                const response = await fetch(url, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ contents: [{ parts: [{ text: "hi" }] }] }),
+                                    signal: controller.signal as any
+                                });
+                                clearTimeout(timeoutId);
+                                if (response.ok) vscode.window.showInformationMessage(`✅ Cloud Gemini 連線成功！`);
+                                else throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                            } else if (message.envType === 'custom') {
+                                const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                                if (message.customKey) headers['Authorization'] = `Bearer ${message.customKey}`;
+                                
+                                const response = await fetch(message.customUrl, {
+                                    method: 'POST',
+                                    headers: headers,
+                                    body: JSON.stringify({
+                                        model: message.modelName,
+                                        messages: [{ role: 'user', content: 'hi' }]
+                                    }),
+                                    signal: controller.signal as any
+                                });
+                                clearTimeout(timeoutId);
+                                if (response.ok) vscode.window.showInformationMessage(`✅ Custom API 連線成功！`);
+                                else throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                            }
+                        } catch (error: any) {
+                            vscode.window.showErrorMessage(`❌ 連線失敗: ${error.message}`);
+                            this.webview?.postMessage({ command: 'appendLog', text: `[錯誤] 連線測試失敗: ${error.message}` });
+                        }
+                    });
+                    break;
+                }
+
                 case 'abortTest': {
                     vscode.commands.executeCommand('llm-unit-test.abortTest');
                     break;
                 }
+
             }
         });
     }
@@ -249,17 +346,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
     private async fetchLocalModels(): Promise<string[]> {
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 1000);
-
-            const res = await fetch('http://127.0.0.1:11434/api/tags', { signal: controller.signal });
-            clearTimeout(timeoutId);
-
-            const data = await res.json() as { models?: Array<{ name: string }> };
-            return (data.models || []).map(m => m.name);
+            const config = vscode.workspace.getConfiguration('llmUnitTest');
+            const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
+            const response = await fetch(`${baseUrl}/api/tags`);
+            if (response.ok) {
+                const data = await response.json() as any;
+                if (data && data.models) {
+                    return data.models.map((m: any) => m.name);
+                }
+            }
         } catch (e) {
-            console.error('Ollama 讀取失敗', e);
-            return ['Ollama連線失敗 (請確認已啟動)'];
+            console.warn('Ollama not running or unreachable');
         }
+        return [];
     }
 }
