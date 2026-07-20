@@ -31,6 +31,8 @@ interface AstContext {
     args: string[];
     docstring: string;
     calls: string[];
+    dependencies?: { name: string, module: string }[];
+    dependencyContexts?: AstContext[];
     code: string;
     error?: string;
 }
@@ -381,6 +383,26 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
         if (astContext && !astContext.error) {
             log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+            
+            // 深度跨檔案 AST 解析 (Deep Dependency Resolution)
+            if (astContext.dependencies && astContext.dependencies.length > 0) {
+                log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
+                astContext.dependencyContexts = [];
+                for (const dep of astContext.dependencies) {
+                    const moduleParts = dep.module.split('.');
+                    const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || baseDir;
+                    const depFilePath = path.join(rootPath, ...moduleParts) + '.py';
+                    
+                    if (fs.existsSync(depFilePath)) {
+                        const depAst = await extractAstContext(depFilePath, dep.name, rootPath);
+                        if (depAst && !depAst.error) {
+                            astContext.dependencyContexts.push(depAst);
+                            log(`[AST] 成功擷取外部依賴: ${dep.module}.${dep.name}`);
+                        }
+                    }
+                }
+            }
+
             finalReportMarkdown += `### 🔍 AST 靜態解析結果\n- **函式名稱**: \`${astContext.name}\`\n- **參數列表**: \`${astContext.args.join(', ') || '無'}\`\n- **相依呼叫**: \`${astContext.calls.join(', ') || '無'}\`\n- **文件註解**: \n  \`\`\`text\n  ${astContext.docstring || '無'}\n  \`\`\`\n\n`;
         }
         else {log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);}

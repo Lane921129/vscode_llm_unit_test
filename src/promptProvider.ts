@@ -75,6 +75,16 @@ export function getUserPrompt(fileName: string, funcName: string, code: string, 
             prompt += `- Internal Dependencies (Calls): ${astContext.calls.join(', ')}\n`;
         }
 
+        if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
+            prompt += `\n【Cross-File Dependencies Reference (External Implementations)】\n`;
+            prompt += `The target function relies on the following external functions. Here are their implementations and docstrings to help you understand what they do and return:\n`;
+            for (const dep of astContext.dependencyContexts) {
+                prompt += `--- Function: ${dep.name} ---\n`;
+                if (dep.docstring) { prompt += `Docstring:\n${dep.docstring}\n`; }
+                prompt += `Source Code:\n\`\`\`python\n${dep.code}\n\`\`\`\n\n`;
+            }
+        }
+
         const dynamicExamples = getDynamicFewShotExamples(astContext, astContext.code || code);
         if (dynamicExamples.length > 0) {
             prompt += `\n【Dynamic Reference Examples for Current AST Features】\n${formatFewShotForPrompt(dynamicExamples)}\n`;

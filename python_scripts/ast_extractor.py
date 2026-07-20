@@ -9,6 +9,12 @@ def extract_info(filepath, func_name):
         
         tree = ast.parse(source)
         
+        imports = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                for alias in node.names:
+                    imports[alias.name] = node.module
+        
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == func_name:
                 args = [arg.arg for arg in node.args.args]
@@ -20,6 +26,12 @@ def extract_info(filepath, func_name):
                     if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
                         calls.append(child.func.id)
                 
+                unique_calls = list(set(calls))
+                dependencies = []
+                for c in unique_calls:
+                    if c in imports:
+                        dependencies.append({"name": c, "module": imports[c]})
+                
                 # Get code snippet
                 lines = source.split('\n')
                 start_idx = getattr(node, 'lineno', 1) - 1
@@ -30,7 +42,8 @@ def extract_info(filepath, func_name):
                     "name": node.name,
                     "args": args,
                     "docstring": docstring,
-                    "calls": list(set(calls)),
+                    "calls": unique_calls,
+                    "dependencies": dependencies,
                     "code": code_snippet
                 }
                 
