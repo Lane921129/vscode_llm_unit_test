@@ -9,6 +9,39 @@ let currentAbortController: AbortController | null = null;
 let currentMutpyProcess: ChildProcess | null = null;
 let isAborted = false;
 
+interface ModelProfile {
+    paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
+    contextLength: number;  // max context tokens from model
+    budgetTokens: number;   // calculated usable budget
+}
+
+let currentModelProfile: ModelProfile = {
+    paramSize: 'unknown',
+    contextLength: 4096,
+    budgetTokens: 2000  // safe default
+};
+
+function estimateTokens(text: string): number {
+    // 快速估算：平均 4 字元 ≈ 1 token（英文）；中文約 1.5 字元 ≈ 1 token
+    return Math.ceil(text.length / 3.5);
+}
+
+function getContextBudget(profile: ModelProfile): number {
+    const ctx = profile.contextLength;
+    // 保留 30% 給模型回應輸出，70% 用於 prompt input
+    const usable = Math.floor(ctx * 0.7);
+    // 根據參數量再限制：小模型即使 ctx 大也不要塞太多
+    const paramBillion = parseFloat(profile.paramSize);
+    if (!isNaN(paramBillion)) {
+        if (paramBillion <= 2)  return Math.min(usable, 1800);
+        if (paramBillion <= 7)  return Math.min(usable, 3500);
+        if (paramBillion <= 13) return Math.min(usable, 6000);
+        return Math.min(usable, 12000);
+    }
+    // Cloud / unknown -> 充裕 budget
+    return Math.min(usable, 20000);
+}
+
 interface AnalysisParams {
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
@@ -146,7 +179,15 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd);
+    const updateModelProfileCmd = vscode.commands.registerCommand('llm-unit-test.updateModelProfile', (profile: { paramSize: string; contextLength: number }) => {
+        currentModelProfile = {
+            paramSize: profile.paramSize,
+            contextLength: profile.contextLength,
+            budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 })
+        };
+    });
+
+    context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd, updateModelProfileCmd);
 }
 
 function extractFunctionsFromFile(filePath: string): string[] {
@@ -436,7 +477,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
             }
         }
-        const userPrompt = getUserPrompt(params.filePath, params.funcName, targetCode, evalStrategy as 'small' | 'large', astContext, focusContext);
+        const userPrompt = getUserPrompt(
+            params.filePath,
+            params.funcName,
+            targetCode,
+            evalStrategy as 'small' | 'large',
+            astContext,
+            focusContext,
+            currentModelProfile.budgetTokens
+        );
+        const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
+        log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${currentModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${currentModelProfile.paramSize}, Context: ${currentModelProfile.contextLength.toLocaleString()})`);
+
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";

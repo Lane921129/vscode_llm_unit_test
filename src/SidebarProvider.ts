@@ -226,8 +226,53 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
                                 const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal as any });
                                 clearTimeout(timeoutId);
-                                if (response.ok) vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
-                                else throw new Error(`HTTP ${response.status}`);
+                                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                                // 🔍 Model Probe: 查詢模型詳細資訊
+                                if (message.modelName) {
+                                    try {
+                                        const probeController = new AbortController();
+                                        const probeTimeout = setTimeout(() => probeController.abort(), 10000);
+                                        const showResponse = await fetch(`${baseUrl}/api/show`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ model: message.modelName }),
+                                            signal: probeController.signal as any
+                                        });
+                                        clearTimeout(probeTimeout);
+
+                                        if (showResponse.ok) {
+                                            const modelData = await showResponse.json() as any;
+                                            const paramSize: string = modelData?.details?.parameter_size ?? 'unknown';
+                                            
+                                            // 嘗試從 model_info 取得 context_length（key 不固定，需搜尋）
+                                            let contextLength = 4096; // 預設值
+                                            if (modelData?.model_info) {
+                                                const infoKeys = Object.keys(modelData.model_info);
+                                                const ctxKey = infoKeys.find(k => k.endsWith('.context_length'));
+                                                if (ctxKey) {
+                                                    contextLength = modelData.model_info[ctxKey];
+                                                }
+                                            }
+
+                                            const profile = { paramSize, contextLength };
+                                            // 傳送探針結果給 webview 顯示
+                                            this.webview?.postMessage({ command: 'modelProbeResult', profile });
+                                            // 同時傳給 extension 主程式
+                                            vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
+                                            vscode.window.showInformationMessage(
+                                                `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens`
+                                            );
+                                        } else {
+                                            vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                        }
+                                    } catch {
+                                        // 探針失敗不影響主流程
+                                        vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                    }
+                                } else {
+                                    vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                }
                             } else if (message.envType === 'cloud') {
                                 const config = vscode.workspace.getConfiguration('llmUnitTest');
                                 const keys = config.get<Record<string, string>>('apiKeys', {});
@@ -245,8 +290,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     signal: controller.signal as any
                                 });
                                 clearTimeout(timeoutId);
-                                if (response.ok) vscode.window.showInformationMessage(`✅ Cloud Gemini 連線成功！`);
-                                else throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                                if (response.ok) {
+                                    // Cloud Gemini: 使用已知 context window 大小
+                                    const profile = { paramSize: 'Cloud (Gemini)', contextLength: 1000000 };
+                                    this.webview?.postMessage({ command: 'modelProbeResult', profile });
+                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
+                                    vscode.window.showInformationMessage(`✅ Cloud Gemini 連線成功！Context：1M tokens`);
+                                } else {
+                                    throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                                }
                             } else if (message.envType === 'custom') {
                                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
                                 if (message.customKey) headers['Authorization'] = `Bearer ${message.customKey}`;
@@ -261,8 +313,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     signal: controller.signal as any
                                 });
                                 clearTimeout(timeoutId);
-                                if (response.ok) vscode.window.showInformationMessage(`✅ Custom API 連線成功！`);
-                                else throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                                if (response.ok) {
+                                    vscode.window.showInformationMessage(`✅ Custom API 連線成功！`);
+                                } else {
+                                    throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                                }
                             }
                         } catch (error: any) {
                             vscode.window.showErrorMessage(`❌ 連線失敗: ${error.message}`);
