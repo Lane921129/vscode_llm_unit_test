@@ -499,9 +499,43 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
-            finalReportMarkdown += `### 🔍 AST 靜態解析結果\n- **函式名稱**: \`${astContext.name}\`\n- **參數列表**: \`${astContext.args.join(', ') || '無'}\`\n- **相依呼叫**: \`${astContext.calls.join(', ') || '無'}\`\n- **文件註解**: \n  \`\`\`text\n  ${astContext.docstring || '無'}\n  \`\`\`\n\n`;
+            // 寫入 AST 分析結果到報告（包含呼叫站語境）
+            let astReport = `### AST 靜態解析結果\n`;
+            astReport += `- 函式名稱: \`${astContext.name}\`\n`;
+            astReport += `- 參數列表: \`${astContext.args.join(', ') || '無'}\`\n`;
+            astReport += `- 相依呼叫: \`${astContext.calls.join(', ') || '無'}\`\n`;
+            if (astContext.docstring) {
+                astReport += `- 文件註解: \`${astContext.docstring.trim().replace(/\n/g, ' ')}\`\n`;
+            }
+            if (astContext.dependencies && astContext.dependencies.length > 0) {
+                astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${d.module}.${d.name}\``).join(', ')}\n`;
+            }
+            if (astContext.callerContexts && astContext.callerContexts.length > 0) {
+                astReport += `- 呼叫站語境 (${astContext.callerContexts.length} 個):\n`;
+                for (const ctx of astContext.callerContexts) {
+                    const argsStr = ctx.args.join(', ');
+                    const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
+                    const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
+                    astReport += `  - \`${ctx.caller_file}\` / \`${ctx.caller_func}()\`: \`${astContext.name}(${callSig})\`\n`;
+                }
+            }
+            if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
+                for (const dep of astContext.dependencyContexts) {
+                    if (dep.callerContexts && dep.callerContexts.length > 0) {
+                        astReport += `- \`${dep.name}\` 的呼叫站語境 (${dep.callerContexts.length} 個):\n`;
+                        for (const ctx of dep.callerContexts) {
+                            const argsStr = ctx.args.join(', ');
+                            const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
+                            const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
+                            astReport += `  - \`${ctx.caller_file}\` / \`${ctx.caller_func}()\`: \`${dep.name}(${callSig})\`\n`;
+                        }
+                    }
+                }
+            }
+            astReport += `\n`;
+            finalReportMarkdown += astReport;
         }
-        else {log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);}
+        else { log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`); }
     }
 
 
