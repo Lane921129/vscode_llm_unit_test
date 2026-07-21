@@ -4,56 +4,67 @@ import { getPromptLanguageName } from './i18n';
 export function getSystemPrompt(loopCount: number, strategy: 'small' | 'large', survivedMutants?: string): string {
     const langName = getPromptLanguageName();
 
-    let prompt = `You are an expert Python Unit Testing Engineer and Mutation Testing specialist. Your ONLY task is to write a highly-covering \`unittest\` test case suite for the target code to kill all potential mutants.
-
-【OUTPUT RULES】
-1. <thinking> block: Analyze boundary conditions and test design. You MUST write this thinking section entirely in ${langName.toUpperCase()}.
-2. Code block: Output EXACTLY ONE Python code block containing the complete unittest suite.
-`;
-
+    // Small model: lean, no emoji, no decorative brackets, minimal rules
     if (strategy === 'small') {
-        prompt += `
-The format MUST be exactly as follows:
+        let prompt = `You are a Python unit test writer. Write a unittest.TestCase for the given function.
+
+Output format:
 <thinking>
-(Write your analysis IN ${langName.toUpperCase()})
+(brief analysis in ${langName.toUpperCase()})
 </thinking>
 
 \`\`\`python
-(Your unittest code here)
+import unittest
+from MODULE_NAME import FUNCTION_NAME
+
+class TestFUNCTION_NAME(unittest.TestCase):
+    def test_case_1(self):
+        result = FUNCTION_NAME(INPUT)
+        self.assertEqual(result, EXPECTED)
+
+if __name__ == '__main__':
+    unittest.main()
 \`\`\`
 
-【CODE CONTENT RULES - ANY VIOLATION CAUSES SYSTEM FAILURE】
-1. The first line MUST be \`import unittest\`
-2. You MUST define a test class that inherits from \`unittest.TestCase\`
-3. Test methods MUST be inside the class, start with \`test_\`, and use \`self.assert*()\` methods
-4. The final lines MUST be \`if __name__ == '__main__': unittest.main()\`
-5. You MUST import the target function using \`from <module_name> import <function_name>\`
-6. STRICTLY NO pytest, nose, or other third-party test frameworks
-7. STRICTLY NO Python REPL format (lines starting with >>>)
-8. STRICTLY NO top-level assert statements (asserts must be within self.assert*())
-9. STRICTLY NO rewriting, modifying, or offering implementations for the target source code! You are ONLY allowed to output test code!`;
-    } else {
-        prompt += `
-【ADVANCED TESTING GUIDELINES】
-- Use advanced \`unittest.mock\` techniques (like \`patch\`, \`MagicMock\`) for external dependencies if necessary.
-- Consider edge cases involving unexpected types, None values, and extreme inputs.
-- You do not need to strictly follow a rigid format, but ensure your code block is standard Python \`unittest\`.`;
+Rules:
+1. Start with import unittest. Import the target function from its module (not relative import, not module_name placeholder).
+2. Each test method starts with test_ and uses self.assert*().
+3. Do NOT copy or redefine the source function. Write test methods only.
+4. No pytest. No top-level assert.`;
+
+        if (loopCount > 1 && survivedMutants) {
+            prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
+            const hints = getMutationOperatorHints(survivedMutants);
+            if (hints) { prompt += `\n${hints}`; }
+        }
+        return prompt;
     }
 
-    prompt += `\n\n【FOUNDATION FEW-SHOT EXAMPLES】
-Below are examples of the correct thought process and formatting. Please study them carefully:
+    // Large model: full guidelines
+    let prompt = `You are an expert Python Unit Testing Engineer and Mutation Testing specialist. Your ONLY task is to write a highly-covering unittest test case suite to kill all potential mutants.
 
-${formatFewShotForPrompt(getBaseFewShotExamples())}
+Output format:
+<thinking>
+(analysis in ${langName.toUpperCase()})
+</thinking>
 
-You must consider boundary conditions and ensure the Mutation Testing score reaches 100%.
+\`\`\`python
+(complete unittest code)
+\`\`\`
+
+Guidelines:
+- Use unittest.TestCase. Import the function using absolute import (e.g. from service_auth import login_user).
+- Use unittest.mock (patch, MagicMock) for external dependencies.
+- Cover edge cases: None, empty, boundary values, exception paths.
+- Do NOT copy the source code into your output.
 `;
 
+    prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples())}\n`;
+
     if (loopCount > 1 && survivedMutants) {
-        prompt += `\n⚠️ ATTENTION: After the previous test run, the following mutants SURVIVED. Please analyze why they survived in your <thinking> block (in ${langName}), and strengthen your Assert logic to KILL them:\n${survivedMutants}`;
+        prompt += `\nSome mutants survived. Analyze and kill them:\n${survivedMutants}`;
         const hints = getMutationOperatorHints(survivedMutants);
-        if (hints) {
-            prompt += `\n${hints}`;
-        }
+        if (hints) { prompt += `\n${hints}`; }
     }
     return prompt;
 }
@@ -62,20 +73,13 @@ function estimateTokens(text: string): number {
     return Math.ceil(text.length / 3.5);
 }
 
-/**
- * 依蒸餾等級壓縮依賴資訊
- * Level 0: 完整原始碼 + docstring
- * Level 1: 只保留 return/raise 行 + docstring
- * Level 2: 只保留函式簽名 + docstring
- * Level 3: 完全放棄（標記需要手動 Mock）
- */
 function distillDependency(dep: any, level: 0 | 1 | 2 | 3): string {
     if (level === 3) {
-        return `--- Function: ${dep.name} (需自行 Mock，原始碼過長已省略) ---\n`;
+        return `Dependency: ${dep.name} (code too long, mock it)\n`;
     }
     if (level === 2) {
         const sig = dep.code?.split('\n')[0] || `def ${dep.name}(...)`;
-        return `--- Function: ${dep.name} ---\nSignature: ${sig}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}\n`;
+        return `Dependency: ${dep.name}\nSignature: ${sig}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}\n`;
     }
     if (level === 1) {
         const lines = (dep.code || '').split('\n');
@@ -83,90 +87,103 @@ function distillDependency(dep: any, level: 0 | 1 | 2 | 3): string {
             const t = l.trim();
             return t.startsWith('def ') || t.startsWith('return ') || t.startsWith('raise ');
         });
-        const compressed = keyLines.join('\n');
-        return `--- Function: ${dep.name} ---\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}Key Lines:\n\`\`\`python\n${compressed}\n\`\`\`\n\n`;
+        return `Dependency: ${dep.name}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}Key lines:\n\`\`\`python\n${keyLines.join('\n')}\n\`\`\`\n\n`;
     }
-    // Level 0: 完整資訊
-    return `--- Function: ${dep.name} ---\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}Source Code:\n\`\`\`python\n${dep.code}\n\`\`\`\n\n`;
+    return `Dependency: ${dep.name}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}Source:\n\`\`\`python\n${dep.code}\n\`\`\`\n\n`;
 }
 
-export function getUserPrompt(fileName: string, funcName: string, code: string, strategy: 'small' | 'large', astContext?: any, focusContexts?: string, budgetTokens: number = 20000): string {
-    const target = funcName ? `function \`${funcName}\`` : `entire file`;
-    let prompt = `【Target File】: ${fileName}\n【Target Scope】: ${target}\n`;
-    
+export function getUserPrompt(
+    fileName: string,
+    funcName: string,
+    code: string,
+    strategy: 'small' | 'large',
+    astContext?: any,
+    focusContexts?: string,
+    budgetTokens: number = 20000
+): string {
+    const moduleName = fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
+    let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;
+
     if (astContext && !astContext.error) {
-        prompt += `【AST Parsed Features】:\n`;
-        prompt += `- Function Name: ${astContext.name}\n`;
+        prompt += `\nFunction info:\n`;
+        prompt += `- Name: ${astContext.name}\n`;
         if (astContext.args && astContext.args.length > 0) {
-            prompt += `- Parameter List: ${astContext.args.join(', ')}\n`;
+            prompt += `- Parameters: ${astContext.args.join(', ')}\n`;
         }
         if (astContext.docstring) {
             prompt += `- Docstring: ${astContext.docstring.trim()}\n`;
         }
         if (astContext.calls && astContext.calls.length > 0) {
-            prompt += `- Internal Dependencies (Calls): ${astContext.calls.join(', ')}\n`;
+            prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
 
-        // Budget-aware 依賴蒸餾
+        // Dependency contexts (budget-aware distillation)
         if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
-            prompt += `\n【Cross-File Dependencies Reference (External Implementations)】\n`;
-            prompt += `The target function relies on the following external functions. Here are their implementations and docstrings to help you understand what they do and return:\n`;
-
-            // 計算目前 prompt 使用量，決定每個依賴的蒸餾等級
-            const baseTokens = estimateTokens(prompt);
-            const codeTokens = estimateTokens(astContext.code || code);
-            const remainingForDeps = budgetTokens - baseTokens - codeTokens - 400; // 400 保留給格式與 few-shot
-
+            prompt += `\nExternal dependencies (for understanding return types and behavior):\n`;
             for (const dep of astContext.dependencyContexts) {
-                const fullText = distillDependency(dep, 0);
-                const level1Text = distillDependency(dep, 1);
-                const level2Text = distillDependency(dep, 2);
-                const currentUsed = estimateTokens(prompt);
-                const remaining = budgetTokens - currentUsed;
-
+                const remaining = budgetTokens - estimateTokens(prompt);
                 let level: 0 | 1 | 2 | 3;
-                if (remaining > estimateTokens(fullText) + 300) {
-                    level = 0;
-                } else if (remaining > estimateTokens(level1Text) + 200) {
-                    level = 1;
-                } else if (remaining > estimateTokens(level2Text) + 100) {
-                    level = 2;
-                } else {
-                    level = 3;
-                }
+                const full = distillDependency(dep, 0);
+                const l1   = distillDependency(dep, 1);
+                const l2   = distillDependency(dep, 2);
+                if (remaining > estimateTokens(full) + 300) level = 0;
+                else if (remaining > estimateTokens(l1) + 200) level = 1;
+                else if (remaining > estimateTokens(l2) + 100) level = 2;
+                else level = 3;
                 prompt += distillDependency(dep, level);
+
+                // Caller contexts for this dependency
+                if (dep.callerContexts && dep.callerContexts.length > 0 && (budgetTokens - estimateTokens(prompt)) > 150) {
+                    prompt += `Call sites for ${dep.name} (test all of these):\n`;
+                    for (const ctx of dep.callerContexts) {
+                        const argsStr = ctx.args.join(', ');
+                        const kwargsStr = Object.entries(ctx.kwargs).map(([k, v]) => `${k}=${v}`).join(', ');
+                        const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
+                        prompt += `  ${ctx.caller_file} / ${ctx.caller_func}: ${dep.name}(${callSig})\n`;
+                    }
+                    prompt += `\n`;
+                }
             }
         }
 
-        // Budget-aware Few-Shot 動態範例
-        const currentUsedBeforeFewShot = estimateTokens(prompt);
-        const remainingForFewShot = budgetTokens - currentUsedBeforeFewShot - estimateTokens(astContext.code || code) - 200;
-        if (remainingForFewShot > 300) {
-            const dynamicExamples = getDynamicFewShotExamples(astContext, astContext.code || code);
-            if (dynamicExamples.length > 0) {
-                // 大 budget 才放多個範例
-                const examplesForBudget = remainingForFewShot > 800 ? dynamicExamples : dynamicExamples.slice(0, 1);
-                prompt += `\n【Dynamic Reference Examples for Current AST Features】\n${formatFewShotForPrompt(examplesForBudget)}\n`;
+        // Caller contexts for the target function itself
+        if (astContext.callerContexts && astContext.callerContexts.length > 0 && (budgetTokens - estimateTokens(prompt)) > 150) {
+            prompt += `\nThis function is called from multiple places. Cover all call contexts:\n`;
+            for (const ctx of astContext.callerContexts) {
+                const argsStr = ctx.args.join(', ');
+                const kwargsStr = Object.entries(ctx.kwargs).map(([k, v]) => `${k}=${v}`).join(', ');
+                const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
+                prompt += `  ${ctx.caller_file} / ${ctx.caller_func}: ${astContext.name}(${callSig})\n`;
+            }
+            prompt += `\n`;
+        }
+
+        // Dynamic few-shot only for large models
+        if (strategy === 'large') {
+            const remaining = budgetTokens - estimateTokens(prompt) - estimateTokens(astContext.code || code) - 200;
+            if (remaining > 300) {
+                const examples = getDynamicFewShotExamples(astContext, astContext.code || code);
+                if (examples.length > 0) {
+                    const subset = remaining > 800 ? examples : examples.slice(0, 1);
+                    prompt += `\nExamples:\n${formatFewShotForPrompt(subset)}\n`;
+                }
             }
         }
     }
 
     if (focusContexts) {
-        prompt += `\n【Dynamic Focus Analysis】\nYour tests missed the following mutants. Please focus on these target lines:\n\n${focusContexts}\n`;
-        prompt += `\n(Note: To keep you focused, only the code snippets surrounding the surviving mutants are provided. Please analyze why the mutation survived in \`<thinking>\`, and write targeted Asserts to kill them. Add the new Asserts to your previously written test class.)\n`;
+        prompt += `\nFailed mutants to kill:\n${focusContexts}\n`;
+        prompt += `(Add targeted asserts to kill each mutant. Do not rewrite the whole test file.)\n`;
     } else {
-        if (astContext && !astContext.error) {
-            prompt += `\n【Original Source Code】:\n\`\`\`python\n${astContext.code || code}\n\`\`\``;
-        } else {
-            prompt += `\n【Original Source Code】:\n\`\`\`python\n${code}\n\`\`\``;
-        }
+        const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
+        prompt += `\nSource code (write tests for this, do not copy it):\n\`\`\`python\n${src}\n\`\`\``;
     }
 
     if (strategy === 'small') {
-        prompt += `\n\nNow, based on the above information, you MUST immediately generate the test suite following the strict output format rules.\n\n[Expected AI Response]\n(You MUST start your output directly with <thinking> and do NOT output any other headings!)\n<thinking>\n`;
+        prompt += `\n\nImport from: from ${moduleName} import ${funcName}\n\nWrite the test file now:\n<thinking>\n`;
     } else {
-        prompt += `\n\nNow, please generate the test suite considering the advanced guidelines.\n`;
+        prompt += `\n\nWrite the complete unittest test file now.\n`;
     }
-    
+
     return prompt;
 }

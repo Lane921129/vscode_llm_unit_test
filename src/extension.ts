@@ -59,6 +59,14 @@ interface AnalysisParams {
     sessionDate?: string;
 }
 
+interface CallerContext {
+    caller_file: string;
+    caller_func: string;
+    line: number;
+    args: string[];
+    kwargs: Record<string, string>;
+}
+
 interface AstContext {
     name: string;
     args: string[];
@@ -66,6 +74,7 @@ interface AstContext {
     calls: string[];
     dependencies?: { name: string, module: string }[];
     dependencyContexts?: AstContext[];
+    callerContexts?: CallerContext[];
     code: string;
     error?: string;
 }
@@ -223,6 +232,29 @@ async function extractAstContext(
                 resolve(JSON.parse(stdout));
             } catch {
                 resolve(null);
+            }
+        });
+    });
+}
+
+async function findCallerContexts(
+    funcName: string,
+    projectRoot: string
+): Promise<CallerContext[]> {
+    return new Promise((resolve) => {
+        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
+        const cmd = `python "${pythonScript}" "${funcName}" "${projectRoot}"`;
+        exec(cmd, { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout) => {
+            if (error) { resolve([]); return; }
+            try {
+                const parsed = JSON.parse(stdout);
+                if (Array.isArray(parsed)) {
+                    resolve(parsed as CallerContext[]);
+                } else {
+                    resolve([]);
+                }
+            } catch {
+                resolve([]);
             }
         });
     });
@@ -429,14 +461,25 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (astContext.dependencies && astContext.dependencies.length > 0) {
                 log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
                 astContext.dependencyContexts = [];
+                // 取得專案根目錄（優先用 workspace，其次用 batchPath 或檔案父目錄）
+                const projectRoot = (params as any).batchPath
+                    ? path.dirname((params as any).batchPath)
+                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || baseDir;
+
                 for (const dep of astContext.dependencies) {
                     const moduleParts = dep.module.split('.');
-                    const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || baseDir;
-                    const depFilePath = path.join(rootPath, ...moduleParts) + '.py';
+                    const depFilePath = path.join(projectRoot, ...moduleParts) + '.py';
                     
                     if (fs.existsSync(depFilePath)) {
-                        const depAst = await extractAstContext(depFilePath, dep.name, rootPath);
+                        const depAst = await extractAstContext(depFilePath, dep.name, projectRoot);
                         if (depAst && !depAst.error) {
+                            // 🔍 呼叫站掃描：找出這個依賴函式在全專案的所有呼叫點
+                            log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
+                            const callers = await findCallerContexts(dep.name, projectRoot);
+                            if (callers.length > 0) {
+                                depAst.callerContexts = callers;
+                                log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
+                            }
                             astContext.dependencyContexts.push(depAst);
                             log(`[AST] 成功擷取外部依賴: ${dep.module}.${dep.name}`);
                         }
@@ -444,10 +487,23 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
+            // 同時也掃描目標函式本身的呼叫站（在大專案中作為被呼叫者時使用）
+            {
+                const projectRoot = (params as any).batchPath
+                    ? path.dirname((params as any).batchPath)
+                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || baseDir;
+                const selfCallers = await findCallerContexts(params.funcName, projectRoot);
+                if (selfCallers.length > 0) {
+                    astContext.callerContexts = selfCallers;
+                    log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
+                }
+            }
+
             finalReportMarkdown += `### 🔍 AST 靜態解析結果\n- **函式名稱**: \`${astContext.name}\`\n- **參數列表**: \`${astContext.args.join(', ') || '無'}\`\n- **相依呼叫**: \`${astContext.calls.join(', ') || '無'}\`\n- **文件註解**: \n  \`\`\`text\n  ${astContext.docstring || '無'}\n  \`\`\`\n\n`;
         }
         else {log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);}
     }
+
 
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
         if (isAborted) {
@@ -605,9 +661,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     if (llmRetry === 0) {
                         log(`[警告] 模型回傳的程式碼為空或無法解析。擷取原始回傳前 300 字元:\n${rawCode.substring(0, 300)}`);
                         log(`[系統] 嘗試自動重試 (1/1)...`);
-                        continue; // 重新執行 API 呼叫
+                        continue;
                     } else {
                         throw new Error("模型產生的程式碼內容為空 (已重試失敗)");
+                    }
+                }
+
+                // 🚨 偵測 AI 是否在複製原始碼（小模型常見的注意力崩潰）
+                const hasTestMethods = sanitizedCode.includes('def test_') || sanitizedCode.includes('self.assert');
+                const looksLikeSourceCopy = !hasTestMethods && params.funcName && sanitizedCode.includes(`def ${params.funcName}`);
+                if (looksLikeSourceCopy) {
+                    if (llmRetry === 0) {
+                        log(`[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試...`);
+                        continue;
+                    } else {
+                        throw new Error("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試");
                     }
                 }
 
@@ -637,8 +705,23 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             let finalCode = sanitizedCode;
             
-            // 強制檢查並補齊 import
+            // 強制檢查並補齊 import，同時移除 LLM 可能寫的假 placeholder
             const baseName = path.basename(params.filePath, '.py');
+            finalCode = finalCode
+                .split('\n')
+                .filter(line => {
+                    const t = line.trim();
+                    if (!t.startsWith('from ') && !t.startsWith('import ')) return true;
+                    // 移除 placeholder imports
+                    if (t.includes('module_name') || t.includes('MODULE_NAME') ||
+                        t.includes('<module>') || t.includes('your_module') ||
+                        t.includes('FUNCTION_NAME')) return false;
+                    // 移除相對 import（from .. import, from .x import）
+                    if (/^from\s+\./.test(t)) return false;
+                    return true;
+                })
+                .join('\n');
+
             if (!finalCode.includes(`from ${baseName} import`)) {
                 log(`[警告] AI 遺漏了 import 目標模組的語句，系統自動補齊...`);
                 if (finalCode.includes('import unittest')) {
