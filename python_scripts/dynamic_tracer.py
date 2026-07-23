@@ -36,7 +36,7 @@ def infer_boundary_inputs(func_args: list) -> list:
     """
     # 常見邊界值策略
     scalar_candidates = [0, 1, -1, 100, -100, 0.0, 1.5]
-    str_candidates = ["", "a", "hello", "test_string", "abc123"]
+    str_candidates = ["", "a", "hello", "1234567890", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"]
     bool_candidates = [True, False]
     none_candidate = [None]
 
@@ -45,7 +45,7 @@ def infer_boundary_inputs(func_args: list) -> list:
     for arg_name in func_args:
         name_lower = arg_name.lower()
         if any(kw in name_lower for kw in ['token', 'key', 'password', 'secret', 'str', 'name', 'path', 'url', 'text', 'msg']):
-            per_arg_candidates.append(str_candidates[:3] + none_candidate)
+            per_arg_candidates.append(str_candidates + none_candidate)
         elif any(kw in name_lower for kw in ['num', 'count', 'amount', 'size', 'len', 'int', 'price', 'qty', 'index']):
             per_arg_candidates.append(scalar_candidates[:4] + none_candidate)
         elif any(kw in name_lower for kw in ['flag', 'enable', 'active', 'is_', 'has_', 'bool']):
