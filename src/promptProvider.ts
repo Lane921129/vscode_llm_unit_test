@@ -1,33 +1,40 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
 import { getPromptLanguageName } from './i18n';
 
-export function getSystemPrompt(loopCount: number, strategy: 'small' | 'large', survivedMutants?: string): string {
-    const langName = getPromptLanguageName();
+/**
+ * 某些小模型（Qwen、llama 系列等）對 <thinking> 標籤有副作用（無限迴圈輸出）
+ * 這些模型不使用 thinking 標籤，改成直接輸出 code block
+ */
+function useThinkingTag(modelName: string): boolean {
+    const m = modelName.toLowerCase();
+    // 已知對 thinking 標籤有副作用的模型家族
+    const noThinkingModels = ['qwen', 'llama', 'phi', 'tinyllama', 'gemma', 'mistral'];
+    for (const bad of noThinkingModels) {
+        if (m.includes(bad)) return false;
+    }
+    return true;
+}
 
-    // Small model: lean, no emoji, no decorative brackets, minimal rules
+export function getSystemPrompt(
+    loopCount: number,
+    strategy: 'small' | 'large',
+    survivedMutants?: string,
+    modelName: string = ''
+): string {
+    const langName = getPromptLanguageName();
+    const thinking = useThinkingTag(modelName);
+
     if (strategy === 'small') {
+        const formatBlock = thinking
+            ? `Output format:\n<thinking>\n(brief analysis in ${langName.toUpperCase()})\n</thinking>\n\n\`\`\`python\n(your unittest code)\n\`\`\``
+            : `Output format:\n\`\`\`python\n(your unittest code)\n\`\`\``;
+
         let prompt = `You are a Python unit test writer. Write a unittest.TestCase for the given function.
 
-Output format:
-<thinking>
-(brief analysis in ${langName.toUpperCase()})
-</thinking>
-
-\`\`\`python
-import unittest
-from MODULE_NAME import FUNCTION_NAME
-
-class TestFUNCTION_NAME(unittest.TestCase):
-    def test_case_1(self):
-        result = FUNCTION_NAME(INPUT)
-        self.assertEqual(result, EXPECTED)
-
-if __name__ == '__main__':
-    unittest.main()
-\`\`\`
+${formatBlock}
 
 Rules:
-1. Start with import unittest. Import the target function from its module (not relative import, not module_name placeholder).
+1. Start with import unittest. Import the function using: from MODULE import FUNCTION (absolute, not relative).
 2. Each test method starts with test_ and uses self.assert*().
 3. Do NOT copy or redefine the source function. Write test methods only.
 4. No pytest. No top-level assert.`;
@@ -41,7 +48,7 @@ Rules:
     }
 
     // Large model: full guidelines
-    let prompt = `You are an expert Python Unit Testing Engineer and Mutation Testing specialist. Your ONLY task is to write a highly-covering unittest test case suite to kill all potential mutants.
+    let prompt = `You are an expert Python Unit Testing Engineer. Write a comprehensive unittest.TestCase to kill all mutation testing survivors.
 
 Output format:
 <thinking>
@@ -53,13 +60,13 @@ Output format:
 \`\`\`
 
 Guidelines:
-- Use unittest.TestCase. Import the function using absolute import (e.g. from service_auth import login_user).
+- Use absolute import (e.g. from service_auth import login_user).
 - Use unittest.mock (patch, MagicMock) for external dependencies.
 - Cover edge cases: None, empty, boundary values, exception paths.
 - Do NOT copy the source code into your output.
 `;
 
-    prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples())}\n`;
+    prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), thinking)}\n`;
 
     if (loopCount > 1 && survivedMutants) {
         prompt += `\nSome mutants survived. Analyze and kill them:\n${survivedMutants}`;
@@ -99,9 +106,12 @@ export function getUserPrompt(
     strategy: 'small' | 'large',
     astContext?: any,
     focusContexts?: string,
-    budgetTokens: number = 20000
+    budgetTokens: number = 20000,
+    modelName: string = ''
 ): string {
     const moduleName = fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
+    const thinking = useThinkingTag(modelName);
+
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;
 
     if (astContext && !astContext.error) {
@@ -117,9 +127,22 @@ export function getUserPrompt(
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
 
+        // 動態執行追蹤結果（真實 input→output 範例，讓 LLM 不用猜 assert 值）
+        const trace = astContext.traceResult;
+        if (trace && !trace.load_error && (trace.examples.length > 0 || trace.errors.length > 0)) {
+            prompt += `\nReal execution examples (use these EXACT values in your assert statements):\n`;
+            for (const ex of trace.examples.slice(0, 5)) {
+                prompt += `  Input: ${ex.args.join(', ')} => Returns: ${ex.result}\n`;
+            }
+            for (const er of trace.errors.slice(0, 5)) {
+                prompt += `  Input: ${er.args.join(', ')} => Raises: ${er.exception}("${er.message}")\n`;
+            }
+            prompt += `\n`;
+        }
+
         // Dependency contexts (budget-aware distillation)
         if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
-            prompt += `\nExternal dependencies (for understanding return types and behavior):\n`;
+            prompt += `\nExternal dependencies:\n`;
             for (const dep of astContext.dependencyContexts) {
                 const remaining = budgetTokens - estimateTokens(prompt);
                 let level: 0 | 1 | 2 | 3;
@@ -148,7 +171,7 @@ export function getUserPrompt(
 
         // Caller contexts for the target function itself
         if (astContext.callerContexts && astContext.callerContexts.length > 0 && (budgetTokens - estimateTokens(prompt)) > 150) {
-            prompt += `\nThis function is called from multiple places. Cover all call contexts:\n`;
+            prompt += `\nThis function is called with different arguments in the project. Cover all:\n`;
             for (const ctx of astContext.callerContexts) {
                 const argsStr = ctx.args.join(', ');
                 const kwargsStr = Object.entries(ctx.kwargs).map(([k, v]) => `${k}=${v}`).join(', ');
@@ -165,7 +188,7 @@ export function getUserPrompt(
                 const examples = getDynamicFewShotExamples(astContext, astContext.code || code);
                 if (examples.length > 0) {
                     const subset = remaining > 800 ? examples : examples.slice(0, 1);
-                    prompt += `\nExamples:\n${formatFewShotForPrompt(subset)}\n`;
+                    prompt += `\nExamples:\n${formatFewShotForPrompt(subset, thinking)}\n`;
                 }
             }
         }
@@ -180,7 +203,10 @@ export function getUserPrompt(
     }
 
     if (strategy === 'small') {
-        prompt += `\n\nImport from: from ${moduleName} import ${funcName}\n\nWrite the test file now:\n<thinking>\n`;
+        const trigger = thinking
+            ? `\n\nImport from: from ${moduleName} import ${funcName}\n\nWrite the test file now:\n<thinking>\n`
+            : `\n\nImport from: from ${moduleName} import ${funcName}\n\nWrite the test file now:\n\`\`\`python\n`;
+        prompt += trigger;
     } else {
         prompt += `\n\nWrite the complete unittest test file now.\n`;
     }

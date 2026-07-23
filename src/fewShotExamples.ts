@@ -194,28 +194,26 @@ export function getMutationOperatorHints(survivedMutants: string): string {
 
 /**
  * Formats Few-Shot examples into strict Input/Output markers
+ * @param useThinking - if false, omit <thinking> blocks (for models that loop on the tag)
  */
-export function formatFewShotForPrompt(examples: FewShotExample[]): string {
+export function formatFewShotForPrompt(examples: FewShotExample[], useThinking: boolean = true): string {
     return examples.map((ex, i) => {
-        return `==== 【Example ${i + 1}: ${ex.label}】 ====
+        const thinkingBlock = useThinking
+            ? `(You MUST start your output directly with <thinking> and do NOT output any other headings!)\n<thinking>\n${ex.thinking}\n</thinking>\n\n`
+            : `(Analyze the boundary conditions, then write the test code directly)\n`;
+
+        return `==== Example ${i + 1}: ${ex.label} ====
 
 [Simulated System Input (User Prompt)]
-【Target File】: example_${i + 1}.py
-【Target Scope】: function \`example_func\`
-【Original Source Code】:
+Target file: example_${i + 1}.py
+Target function: example_func
+Source code:
 \`\`\`python
 ${ex.sourceCode}
 \`\`\`
 
-Now, based on the above information, you MUST immediately generate the test suite following the strict output format rules.
-
 [Expected AI Response]
-(You MUST start your output directly with <thinking> and do NOT output any other headings!)
-<thinking>
-${ex.thinking}
-</thinking>
-
-\`\`\`python
+${thinkingBlock}\`\`\`python
 ${ex.testCode}
 \`\`\``;
     }).join('\n\n\n');
