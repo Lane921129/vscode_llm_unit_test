@@ -37,7 +37,8 @@ Rules:
 1. Start with import unittest. Import the function using: from MODULE import FUNCTION (absolute, not relative).
 2. Each test method starts with test_ and uses self.assert*().
 3. Do NOT copy or redefine the source function. Write test methods only.
-4. No pytest. No top-level assert.`;
+4. No pytest. No top-level assert.
+5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -130,12 +131,12 @@ export function getUserPrompt(
         // 動態執行追蹤結果（真實 input→output 範例，讓 LLM 不用猜 assert 值）
         const trace = astContext.traceResult;
         if (trace && !trace.load_error && (trace.examples.length > 0 || trace.errors.length > 0)) {
-            prompt += `\nReal execution examples (use these EXACT values in your assert statements):\n`;
+            prompt += `\nVerified Real Execution Results (Use these EXACT values in your test assertions):\n`;
             for (const ex of trace.examples.slice(0, 5)) {
-                prompt += `  Input: ${ex.args.join(', ')} => Returns: ${ex.result}\n`;
+                prompt += `  - Input: (${ex.args.join(', ')}) => Returns: ${ex.result} (Use: self.assertEqual(...))\n`;
             }
             for (const er of trace.errors.slice(0, 5)) {
-                prompt += `  Input: ${er.args.join(', ')} => Raises: ${er.exception}("${er.message}")\n`;
+                prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}("${er.message}") (MUST Use: with self.assertRaises(${er.exception}): ...)\n`;
             }
             prompt += `\n`;
         }
