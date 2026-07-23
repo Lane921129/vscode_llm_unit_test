@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
+import { extractFunctionsFromFile } from './utils';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -386,17 +387,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {
-        if (!fs.existsSync(filePath)) {
-            return [];
-        }
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const regex = /^def\s+([a-zA-Z0-9_]+)\s*\(/gm;
-        let match: RegExpExecArray | null;
-        const funcs: string[] = [];
-        while ((match = regex.exec(content)) !== null) {
-            funcs.push(match[1]);
-        }
-        return funcs;
+        return extractFunctionsFromFile(filePath);
     }
 
     private async fetchLocalModels(): Promise<string[]> {

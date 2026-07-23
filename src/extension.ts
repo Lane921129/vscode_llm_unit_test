@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt } from './promptProvider';
+import { extractFunctionsFromFile, findPythonFilesInDir, detectMutationEngine } from './utils';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec, ChildProcess } from 'child_process';
+import { exec, execSync, ChildProcess } from 'child_process';
 
 let currentAbortController: AbortController | null = null;
 let currentMutpyProcess: ChildProcess | null = null;
@@ -199,24 +200,10 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd, updateModelProfileCmd);
 }
 
-function extractFunctionsFromFile(filePath: string): string[] {
-    if (!fs.existsSync(filePath)) {
-        return [];
-    }
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const regex = /^def\s+([a-zA-Z0-9_]+)\s*\(/gm;
-    let match: RegExpExecArray | null;
-    const funcs: string[] = [];
-    while ((match = regex.exec(content)) !== null) {
-        funcs.push(match[1]);
-    }
-    return funcs;
-}
 
 async function extractAstContext(
     targetPath: string,
-    funcName: string,
-    baseDir: string
+    funcName: string
 ): Promise<AstContext | null> {
     return new Promise((resolve) => {
         const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
@@ -260,8 +247,64 @@ async function findCallerContexts(
     });
 }
 
+interface TraceExample {
+    args: string[];
+    result?: string;
+    result_type?: string;
+    exception?: string;
+    message?: string;
+}
+
+interface DynamicTraceResult {
+    func_name: string;
+    args: string[];
+    examples: TraceExample[];
+    errors: TraceExample[];
+    load_error: string | null;
+}
+
+/**
+ * 執行動態追蹤：呼叫 dynamic_tracer.py 取得真實的 input→output 範例
+ * callerArgs: 從呼叫站語境中提取的已知真實參數（可選）
+ */
+async function runDynamicTrace(
+    filePath: string,
+    funcName: string,
+    callerArgs?: CallerContext[]
+): Promise<DynamicTraceResult | null> {
+    return new Promise((resolve) => {
+        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
+        
+        // 如果有呼叫站語境，把已知的真實參數傳入
+        let inputsArg = '';
+        if (callerArgs && callerArgs.length > 0) {
+            const knownInputs = callerArgs.map(ctx => ctx.args);  // 只取 positional args
+            inputsArg = ` "${JSON.stringify(knownInputs).replace(/"/g, '\\"')}"`;
+        }
+
+        const cmd = `python "${pythonScript}" "${filePath}" "${funcName}"${inputsArg}`;
+        exec(cmd, { encoding: 'utf8', timeout: 15000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout) => {
+            if (error) { resolve(null); return; }
+            try {
+                const parsed = JSON.parse(stdout.trim());
+                resolve(parsed as DynamicTraceResult);
+            } catch {
+                resolve(null);
+            }
+        });
+    });
+}
+
 function sanitizeLlmResponse(rawCode: string): string {
     let cleanCode = rawCode.trim();
+
+    // 偵測無限 thinking 迴圈（小模型常見問題）
+    // 如果 <thinking> 出現 3 次以上，或同一 emoji 連續重複 8 次以上 → 視為垃圾輸出
+    const thinkingCount = (cleanCode.match(/<thinking>/g) || []).length;
+    if (thinkingCount >= 3) { return ''; }
+    const emojiLoopMatch = cleanCode.match(/([\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF])\1{7,}/u);
+    if (emojiLoopMatch) { return ''; }
+
     const blocks: string[] = [];
     
     const pyRegex = /```python([\s\S]*?)```/g;
@@ -278,13 +321,11 @@ function sanitizeLlmResponse(rawCode: string): string {
     }
     
     if (blocks.length > 0) {
-        // Find the block that contains unittest
         for (const block of blocks) {
             if (block.includes('unittest') || block.includes('TestCase')) {
                 return block;
             }
         }
-        // Fallback to the last block
         return blocks[blocks.length - 1];
     }
     
@@ -453,7 +494,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let astContext: AstContext | null = null;
     if (params.funcName) {
         log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
-        astContext = await extractAstContext(params.filePath, params.funcName, baseDir);
+        astContext = await extractAstContext(params.filePath, params.funcName);
         if (astContext && !astContext.error) {
             log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
             
@@ -461,17 +502,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (astContext.dependencies && astContext.dependencies.length > 0) {
                 log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
                 astContext.dependencyContexts = [];
-                // 取得專案根目錄（優先用 workspace，其次用 batchPath 或檔案父目錄）
+                // 取得專案根目錄（batchPath 本身就是資料夾；否則用 workspace 根目錄）
                 const projectRoot = (params as any).batchPath
-                    ? path.dirname((params as any).batchPath)
-                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || baseDir;
+                    ? (params as any).batchPath
+                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
 
                 for (const dep of astContext.dependencies) {
                     const moduleParts = dep.module.split('.');
                     const depFilePath = path.join(projectRoot, ...moduleParts) + '.py';
                     
                     if (fs.existsSync(depFilePath)) {
-                        const depAst = await extractAstContext(depFilePath, dep.name, projectRoot);
+                        const depAst = await extractAstContext(depFilePath, dep.name);
                         if (depAst && !depAst.error) {
                             // 🔍 呼叫站掃描：找出這個依賴函式在全專案的所有呼叫點
                             log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
@@ -490,14 +531,27 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             // 同時也掃描目標函式本身的呼叫站（在大專案中作為被呼叫者時使用）
             {
                 const projectRoot = (params as any).batchPath
-                    ? path.dirname((params as any).batchPath)
-                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || baseDir;
+                    ? (params as any).batchPath
+                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
                 const selfCallers = await findCallerContexts(params.funcName, projectRoot);
                 if (selfCallers.length > 0) {
                     astContext.callerContexts = selfCallers;
                     log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
                 }
             }
+
+            // 動態執行追蹤：取得真實的 input→output 範例，讓 LLM 的 assert 值不再是猜的
+            log(`[Trace] 正在動態執行函式以取得真實輸入輸出範例...`);
+            const traceResult = await runDynamicTrace(params.filePath, params.funcName, astContext.callerContexts);
+            if (traceResult && !traceResult.load_error) {
+                (astContext as any).traceResult = traceResult;
+                const exCount = traceResult.examples.length;
+                const errCount = traceResult.errors.length;
+                log(`[Trace] 完成！取得 ${exCount} 個成功範例、${errCount} 個預期例外範例。`);
+            } else if (traceResult?.load_error) {
+                log(`[Trace] 動態追蹤失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
+            }
+
 
             // 寫入 AST 分析結果到報告（包含呼叫站語境）
             let astReport = `### AST 靜態解析結果\n`;
@@ -559,7 +613,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const testPath = path.join(sessionDir, `loop${currentLoop}_test.py`);
         const reportDir = path.join(sessionDir, `loop${currentLoop}_report`);
 
-        const systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants);
+        const systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
         let focusContext = "";
         if (currentLoop > 1 && survivedMutants) {
             focusContext = extractFocusContext(survivedMutants, targetCode);
@@ -574,7 +628,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             evalStrategy as 'small' | 'large',
             astContext,
             focusContext,
-            currentModelProfile.budgetTokens
+            currentModelProfile.budgetTokens,
+            params.modelName
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
         log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${currentModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${currentModelProfile.paramSize}, Context: ${currentModelProfile.contextLength.toLocaleString()})`);
@@ -799,18 +854,45 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 });
             });
 
+            // 動態偵測 mutation engine（不再依賴 isWin，改用 Python 版本 + 工具可用性）
             let engine = 'mutatest';
             const isWin = process.platform === 'win32';
-            
-            if (!isWin) {
-                try {
-                    require('child_process').execSync('mutmut --version', { stdio: 'ignore' });
-                    engine = 'mutmut';
-                } catch {
-                    log(`[系統] 偵測不到 mutmut，降級使用 mutatest。`);
+            try {
+                // 取得 Python 版本
+                const pyVerRaw = execSync('python --version 2>&1', { encoding: 'utf8' }).trim();
+                const pyVer = pyVerRaw.replace('Python ', '');
+                const preferredEngine = detectMutationEngine(pyVer);
+                log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
+
+                if (preferredEngine === 'mutmut') {
+                    // 先嘗試 mutmut（Python 3.12+ 首選）
+                    try {
+                        execSync('mutmut --version', { stdio: 'ignore' });
+                        engine = 'mutmut';
+                        log(`[系統] mutmut 可用，使用 mutmut 進行突變測試。`);
+                    } catch {
+                        // mutmut 不可用，退回 mutatest
+                        log(`[系統] mutmut 不可用，退回使用 mutatest（注意：mutatest 在 Python 3.12+ 可能不穩定）。`);
+                        engine = 'mutatest';
+                    }
+                } else {
+                    // Python < 3.12，優先 mutatest；若不可用則用 mutmut
+                    try {
+                        execSync('python -c "import mutatest"', { stdio: 'ignore' });
+                        engine = 'mutatest';
+                        log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
+                    } catch {
+                        try {
+                            execSync('mutmut --version', { stdio: 'ignore' });
+                            engine = 'mutmut';
+                            log(`[系統] mutatest 不可用，改用 mutmut。`);
+                        } catch {
+                            log(`[系統] 警告：mutatest 與 mutmut 均不可用，請執行 pip install -r requirements.txt`);
+                        }
+                    }
                 }
-            } else {
-                log(`[系統] 偵測到 Windows 環境，自動降級使用 mutatest 以確保相容性。`);
+            } catch (e) {
+                log(`[系統] 無法取得 Python 版本，使用預設引擎 mutatest。`);
             }
 
             log(`[${engine}] 正在建構突變測試指令...`);
@@ -956,22 +1038,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     await vscode.window.showTextDocument(doc, { preview: false });
 }
 
-async function findPythonFilesInDir(dir: string): Promise<string[]> {
-    const results: string[] = [];
-    try {
-        const list = await fs.promises.readdir(dir, { withFileTypes: true });
-        for (const item of list) {
-            const fullPath = path.join(dir, item.name);
-            if (item.isDirectory()) {
-                if (['.git', 'node_modules', 'env', '.env', 'venv', '.venv', '.pytest_cache', '__pycache__'].includes(item.name)) {continue;}
-                results.push(...await findPythonFilesInDir(fullPath));
-            } else if (item.name.endsWith('.py')) {
-                results.push(fullPath);
-            }
-        }
-    } catch { }
-    return results;
-}
 
 /**
  * 動態焦點上下文 (Dynamic Focus Context): 
