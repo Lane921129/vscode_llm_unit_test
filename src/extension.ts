@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt } from './promptProvider';
 import { extractFunctionsFromFile, findPythonFilesInDir, detectMutationEngine } from './utils';
+import { mergeTestSnippets } from './testMerger';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, execSync, ChildProcess } from 'child_process';
@@ -293,6 +294,92 @@ async function runDynamicTrace(
             }
         });
     });
+}
+
+async function requestLlmApi(
+    params: AnalysisParams,
+    systemPrompt: string,
+    userPrompt: string,
+    log: (text: string) => void
+): Promise<string> {
+    let apiUrl = "";
+    let bodyData = {};
+    let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+    if (params.envType === 'local') {
+        const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
+        apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
+        bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
+    } else if (params.envType === 'custom') {
+        apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
+        bodyData = {
+            model: params.modelName,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ]
+        };
+        if (params.customKey) {
+            headers['Authorization'] = `Bearer ${params.customKey}`;
+        }
+    } else {
+        const config = vscode.workspace.getConfiguration('llmUnitTest');
+        const keys = config.get<Record<string, string>>('apiKeys', {});
+        const actualKey = keys[params.modelName];
+        apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
+        bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
+    }
+
+    currentAbortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+        if (currentAbortController) {
+            currentAbortController.abort();
+            log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
+        }
+    }, params.timeoutSeconds * 1000);
+
+    let response;
+    try {
+        response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(bodyData),
+            signal: currentAbortController.signal
+        });
+    } finally {
+        clearTimeout(timeoutId);
+        currentAbortController = null;
+    }
+
+    if (isAborted) throw new Error("使用者強制中止");
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+    }
+
+    const resJson = await response.json() as Record<string, unknown>;
+
+    if (params.envType === 'local') {
+        return (resJson as { response?: string }).response || "";
+    } else if (params.envType === 'custom') {
+        const choices = (resJson as any).choices;
+        if (choices && choices[0]?.message?.content) {
+            return choices[0].message.content;
+        } else if ((resJson as any).error) {
+            throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
+        } else {
+            throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+        }
+    } else {
+        const candidates = (resJson as any).candidates;
+        if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
+            return candidates[0].content.parts[0].text;
+        } else if ((resJson as any).error) {
+            throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
+        } else {
+            throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+        }
+    }
 }
 
 function sanitizeLlmResponse(rawCode: string): string {
@@ -638,154 +725,113 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
         try {
-            for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
-                let apiUrl = "";
-                let bodyData = {};
-                let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            // 🔍 分治合流法 (Divide & Conquer):
+            // 若為小模型策略，且目標函式有多個呼叫站 (Caller Contexts > 1)
+            // 分拆為多個極簡任務單獨呼叫 LLM，再由系統 (testMerger) 進行程式碼機械式合併
+            const callerContextsCount = astContext?.callerContexts?.length || 0;
+            const useDivideAndConquer = (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
 
-                if (params.envType === 'local') {
-                    const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
-                    apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
-                    bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
-                    if (llmRetry === 0) log(`[LLM] 正在呼叫 Ollama 模型推論中... (模型: ${params.modelName}, URL: ${apiUrl})`);
-                } else if (params.envType === 'custom') {
-                    apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
-                    bodyData = { 
-                        model: params.modelName, 
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: userPrompt }
-                        ]
-                    };
-                    if (params.customKey) {
-                        headers['Authorization'] = `Bearer ${params.customKey}`;
-                    }
-                    if (llmRetry === 0) log(`[LLM] 正在透過自訂 API 請求雲端模型... (模型: ${params.modelName})`);
-                } else {
-                    const config = vscode.workspace.getConfiguration('llmUnitTest');
-                    const keys = config.get<Record<string, string>>('apiKeys', {});
-                    const actualKey = keys[params.modelName];
-                    apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
-                    bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
-                    if (llmRetry === 0) log(`[LLM] 正在透過 API 請求雲端模型... (模型: ${params.modelName})`);
-                }
-                
-                currentAbortController = new AbortController();
-                const timeoutId = setTimeout(() => {
-                    if (currentAbortController) {
-                        currentAbortController.abort();
-                        log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
-                    }
-                }, params.timeoutSeconds * 1000);
+            if (useDivideAndConquer && astContext && astContext.callerContexts) {
+                log(`[分治合流] 💡 偵測到 ${callerContextsCount} 個呼叫站，開啟分治合流模式（單一小 Task 多次請求，避免失焦與失憶）...`);
+                const subSnippets: string[] = [];
 
-                let response;
-                try {
-                    response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: headers,
-                        body: JSON.stringify(bodyData),
-                        signal: currentAbortController.signal
-                    });
-                } catch (err: any) {
-                    clearTimeout(timeoutId);
-                    currentAbortController = null;
-                    if (err.name === 'AbortError') {
-                        if (isAborted) throw new Error("使用者強制中止");
-                        if (llmRetry === 0) {
-                            log(`[系統] 請求超時，嘗試自動重試 (1/1)...`);
-                            continue;
-                        } else {
-                            throw new Error(`API 請求超時 (${params.timeoutSeconds} 秒)，請檢查網路或調高超時限制`);
-                        }
-                    } else {
-                        if (llmRetry === 0) {
-                            log(`[警告] 網路請求失敗: ${err.message}`);
-                            log(`[系統] 嘗試自動重試 (1/1)...`);
-                            continue;
-                        } else {
-                            throw new Error(`網路請求連續失敗: ${err.message}`);
+                for (let cIdx = 0; cIdx < astContext.callerContexts.length; cIdx++) {
+                    const ctx = astContext.callerContexts[cIdx];
+                    log(`[分治合流] 正在生成第 ${cIdx + 1}/${callerContextsCount} 個呼叫點測試: \`${ctx.caller_file}\` -> \`${ctx.caller_func}()\``);
+
+                    // 打造微型 astContext，只包含這 1 個呼叫站
+                    const subAstContext = { ...astContext, callerContexts: [ctx] };
+                    const subUserPrompt = getUserPrompt(
+                        params.filePath,
+                        params.funcName,
+                        targetCode,
+                        'small',
+                        subAstContext,
+                        focusContext,
+                        currentModelProfile.budgetTokens,
+                        params.modelName
+                    );
+
+                    let subRaw = "";
+                    for (let retry = 0; retry < 2; retry++) {
+                        try {
+                            subRaw = await requestLlmApi(params, systemPrompt, subUserPrompt, log);
+                            const subClean = sanitizeLlmResponse(subRaw);
+                            if (subClean) {
+                                subSnippets.push(subClean);
+                                break;
+                            }
+                        } catch (err: any) {
+                            if (retry === 1) log(`[警告] 呼叫點 ${cIdx + 1} 生成失敗: ${err.message}`);
                         }
                     }
-                }
-                
-                clearTimeout(timeoutId);
-                currentAbortController = null;
-
-                if (isAborted) {throw new Error("使用者強制中止");}
-
-                if (llmRetry === 0) log(`[LLM] 模型推論已完成，正在檢查回應狀態...`);
-                if (!response.ok) {
-                    const errText = await response.text();
-                    throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+                    rawCode += `\n--- [Call Site ${cIdx + 1}: ${ctx.caller_func}] ---\n` + subRaw;
                 }
 
-                const resJson = await response.json() as Record<string, unknown>;
-                if (llmRetry === 0) log(`[LLM] 呼叫成功！正在萃取回傳的程式碼片段...`);
-
-                if (params.envType === 'local') {
-                    rawCode = (resJson as { response?: string }).response || "";
-                } else if (params.envType === 'custom') {
-                    const choices = (resJson as any).choices;
-                    if (choices && choices[0]?.message?.content) {
-                        rawCode = choices[0].message.content;
-                    } else if ((resJson as any).error) {
-                        throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
-                    } else {
-                        throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
-                    }
-                } else {
-                    const candidates = (resJson as any).candidates;
-                    if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
-                        rawCode = candidates[0].content.parts[0].text;
-                    } else if ((resJson as any).error) {
-                        throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
-                    } else {
-                        throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
-                    }
+                if (subSnippets.length > 0) {
+                    log(`[分治合流] 成功取得 ${subSnippets.length} 個單一呼叫點測試，正在進行 AST/正則機械式合併...`);
+                    const mergeRes = mergeTestSnippets(subSnippets, `Test${params.funcName || 'Merged'}`);
+                    sanitizedCode = mergeRes.mergedCode;
+                    log(`[分治合流] 🎉 成功重組為單一類別，共包含 ${mergeRes.totalMethodsCount} 個獨立測試方法！`);
                 }
+            }
 
-                sanitizedCode = sanitizeLlmResponse(rawCode);
-                
-                if (!sanitizedCode) {
-                    if (llmRetry === 0) {
-                        log(`[警告] 模型回傳的程式碼為空或無法解析。擷取原始回傳前 300 字元:\n${rawCode.substring(0, 300)}`);
-                        log(`[系統] 嘗試自動重試 (1/1)...`);
-                        continue;
-                    } else {
-                        throw new Error("模型產生的程式碼內容為空 (已重試失敗)");
-                    }
-                }
-
-                // 🚨 偵測 AI 是否在複製原始碼（小模型常見的注意力崩潰）
-                const hasTestMethods = sanitizedCode.includes('def test_') || sanitizedCode.includes('self.assert');
-                const looksLikeSourceCopy = !hasTestMethods && params.funcName && sanitizedCode.includes(`def ${params.funcName}`);
-                if (looksLikeSourceCopy) {
-                    if (llmRetry === 0) {
-                        log(`[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試...`);
-                        continue;
-                    } else {
-                        throw new Error("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試");
-                    }
-                }
-
-                // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
-                if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
-                    log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                    const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
-                    if (!rescued) {
+            // 若非分治合流模式，或分治合流未取得結果，走標準 Single-Pass 流程
+            if (!sanitizedCode) {
+                for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
+                    if (llmRetry === 0) log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);
+                    try {
+                        rawCode = await requestLlmApi(params, systemPrompt, userPrompt, log);
+                    } catch (err: any) {
                         if (llmRetry === 0) {
-                            log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
-                            log(`[警告] AI 原始輸出前 600 字元: ${sanitizedCode.substring(0, 600)}`);
+                            log(`[警告] 網路或 API 請求失敗: ${err.message}，嘗試自動重試 (1/1)...`);
                             continue;
                         } else {
-                            throw new Error("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）");
+                            throw err;
                         }
                     }
-                    log(`[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。`);
-                    sanitizedCode = rescued;
+
+                    sanitizedCode = sanitizeLlmResponse(rawCode);
+
+                    if (!sanitizedCode) {
+                        if (llmRetry === 0) {
+                            log(`[警告] 模型回傳程式碼為空或包含無效標籤，嘗試自動重試...`);
+                            continue;
+                        } else {
+                            throw new Error("模型產生的程式碼內容為空 (已重試失敗)");
+                        }
+                    }
+
+                    // 🚨 偵測 AI 是否在複製原始碼（小模型常見的注意力崩潰）
+                    const hasTestMethods = sanitizedCode.includes('def test_') || sanitizedCode.includes('self.assert');
+                    const looksLikeSourceCopy = !hasTestMethods && params.funcName && sanitizedCode.includes(`def ${params.funcName}`);
+                    if (looksLikeSourceCopy) {
+                        if (llmRetry === 0) {
+                            log(`[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試...`);
+                            continue;
+                        } else {
+                            throw new Error("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試");
+                        }
+                    }
+
+                    // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
+                    if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
+                        log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
+                        const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
+                        if (!rescued) {
+                            if (llmRetry === 0) {
+                                log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
+                                continue;
+                            } else {
+                                throw new Error("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）");
+                            }
+                        }
+                        log(`[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。`);
+                        sanitizedCode = rescued;
+                    }
+
+                    break; // 成功跳出 retry
                 }
-                
-                break; // 成功取得 sanitizedCode，跳出 retry 迴圈
             }
 
             // 【新增】將 AI 完整思考與輸出記錄到報告中（使用摺疊標籤避免太長）
@@ -818,6 +864,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else {
                     finalCode = `import unittest\nfrom ${baseName} import *\n\n` + finalCode;
                 }
+            }
+
+            // 🚨 自動補齊 mock / patch import (小模型常見遺漏)
+            if ((finalCode.includes('patch(') || finalCode.includes('MagicMock')) && !finalCode.includes('unittest.mock')) {
+                log(`[警告] 偵測到程式碼使用 patch/MagicMock 但遺漏 import，系統自動補齊 unittest.mock...`);
+                finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
             }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
