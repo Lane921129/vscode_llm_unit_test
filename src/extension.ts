@@ -399,6 +399,13 @@ function sanitizeLlmResponse(rawCode: string): string {
     while ((match = pyRegex.exec(cleanCode)) !== null) {
         blocks.push(match[1].trim());
     }
+
+    if (blocks.length === 0) {
+        const bracketPyRegex = /\[PYTHON\]([\s\S]*?)\[\/PYTHON\]/gi;
+        while ((match = bracketPyRegex.exec(cleanCode)) !== null) {
+            blocks.push(match[1].trim());
+        }
+    }
     
     if (blocks.length === 0) {
         const genericRegex = /```([\s\S]*?)```/g;
@@ -415,6 +422,9 @@ function sanitizeLlmResponse(rawCode: string): string {
         }
         return blocks[blocks.length - 1];
     }
+
+    // 移除殘留的 [PYTHON] 和 [/PYTHON] 標籤
+    cleanCode = cleanCode.replace(/\[\/?PYTHON\]/gi, '').trim();
     
     return cleanCode;
 }

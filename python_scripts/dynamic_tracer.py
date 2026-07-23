@@ -21,8 +21,13 @@ def load_module_from_file(file_path: str):
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
-    # 讓模組能找到同目錄的其他模組
-    sys.path.insert(0, os.path.dirname(file_path))
+    # 讓模組能找到同目錄以及上一層目錄（專案根目錄）的其他模組
+    target_dir = os.path.dirname(file_path)
+    parent_dir = os.path.dirname(target_dir)
+    if target_dir not in sys.path:
+        sys.path.insert(0, target_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
     try:
         spec.loader.exec_module(module)  # type: ignore
     except Exception as e:
