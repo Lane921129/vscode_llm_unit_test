@@ -1,11 +1,86 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
-import { getSystemPrompt, getUserPrompt } from './promptProvider';
+import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './promptProvider';
 import { extractFunctionsFromFile, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, execSync, ChildProcess } from 'child_process';
+
+// ─────────────────────────────────────────────────────────────
+// Tier 系統：複雜度評估 + 路由
+// ─────────────────────────────────────────────────────────────
+
+interface ComplexityResult {
+    score: number;
+    level: string;
+    reasons: string[];
+}
+
+/** 呼叫 complexity_assessor.py，回傳複雜度分數 */
+async function assessFunctionComplexity(
+    filePath: string,
+    funcName: string
+): Promise<ComplexityResult> {
+    return new Promise((resolve) => {
+        const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
+        exec(`python "${script}" "${filePath}" "${funcName}"`,
+            { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
+            (err, stdout) => {
+                try {
+                    resolve(JSON.parse(stdout.trim()) as ComplexityResult);
+                } catch {
+                    resolve({ score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] });
+                }
+            });
+    });
+}
+
+/**
+ * Tier Router：依使用者設定或自動路由到 1~4
+ * @param modelParamBillion 模型參數量（B），NaN 代表 Cloud/未知
+ * @param complexity 複雜度分數 0~100
+ * @param userTier 使用者設定的 tier 字串（'auto'|'tier1'|'tier2'|'tier3'|'tier4'）
+ */
+function resolveTier(modelParamBillion: number, complexity: number, userTier: string): 1 | 2 | 3 | 4 {
+    if (userTier && userTier !== 'auto') {
+        const n = parseInt(userTier.replace('tier', ''));
+        if (n >= 1 && n <= 4) return n as 1 | 2 | 3 | 4;
+    }
+    // Cloud / 未知大模型 → Tier 4
+    if (isNaN(modelParamBillion)) return 4;
+    // 極小模型（≤ 4B）→ Tier 1
+    if (modelParamBillion <= 4) return 1;
+    // 小模型（4–20B）
+    if (modelParamBillion <= 20) return complexity > 65 ? 1 : 2;
+    // 中型模型（20–60B）
+    if (modelParamBillion <= 60) return complexity <= 40 ? 2 : 3;
+    // 大型模型（60B+）
+    return complexity <= 60 ? 3 : 4;
+}
+
+/** 呼叫 mock_scaffold_generator.py，回傳 mock 骨架 */
+async function runMockScaffold(
+    filePath: string,
+    funcName: string,
+    traceResult: any
+): Promise<{ scaffold: string; patches: string[]; mock_names: string[] } | null> {
+    return new Promise((resolve) => {
+        const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
+        const traceArg = traceResult ? `"${JSON.stringify(traceResult).replace(/"/g, '\\"')}"` : '';
+        exec(`python "${script}" "${filePath}" "${funcName}" ${traceArg}`,
+            { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
+            (err, stdout) => {
+                try {
+                    const parsed = JSON.parse(stdout.trim());
+                    if (parsed.scaffold) resolve(parsed);
+                    else resolve(null);
+                } catch {
+                    resolve(null);
+                }
+            });
+    });
+}
 
 let currentAbortController: AbortController | null = null;
 let currentMutpyProcess: ChildProcess | null = null;
@@ -547,16 +622,27 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let currentLoop = 1;
     let mutationScore = 0;
 
-    let evalStrategy = params.promptStrategy || 'auto';
-    if (evalStrategy === 'auto') {
+    // ─── Tier 路由：依使用者設定或自動路由 ───
+    const userTierSetting = params.promptStrategy || 'auto';
+    // evalStrategy 仇用於舊版 Tier 2 內部的 small/large 分流，不再暴露給使用者
+    let evalStrategy: 'small' | 'large' = 'small';
+    {
         const nameLower = params.modelName.toLowerCase();
-        if (nameLower.includes('gpt-4') || nameLower.includes('claude-3') || nameLower.includes('gemini-1.5') || nameLower.includes('pro') || nameLower.includes('opus')) {
+        if (nameLower.includes('gpt-4') || nameLower.includes('claude') || nameLower.includes('gemini') || nameLower.includes('pro') || nameLower.includes('opus')) {
             evalStrategy = 'large';
-        } else {
-            evalStrategy = 'small';
         }
     }
-    log(`[系統] 模型策略判定為: ${evalStrategy === 'large' ? 'Large Model (Advanced)' : 'Small Model (Strict)'}`);
+    // 複雜度評估（對無選擇函式時用預設分數）
+    let complexityScore = 30;
+    if (params.funcName) {
+        const comp = await assessFunctionComplexity(params.filePath, params.funcName);
+        complexityScore = comp.score;
+        log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
+    }
+    const modelParamBillion = parseFloat(currentModelProfile.paramSize);
+    const resolvedTier = resolveTier(modelParamBillion, complexityScore, userTierSetting);
+    log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
+
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {
         log('[錯誤] 找不到目標檔案路徑');
@@ -739,7 +825,121 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             // 若為小模型策略，且目標函式有多個呼叫站 (Caller Contexts > 1)
             // 分拆為多個極簡任務單獨呼叫 LLM，再由系統 (testMerger) 進行程式碼機械式合併
             const callerContextsCount = astContext?.callerContexts?.length || 0;
-            const useDivideAndConquer = (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
+            const useDivideAndConquer = (resolvedTier === 2) && (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
+
+            // ─── Tier 1：填空法（2–3B 模型） ───
+            if (resolvedTier === 1 && !survivedMutants) {
+                const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
+                if (!traceResult || traceResult.load_error || (traceResult.examples.length === 0 && traceResult.errors.length === 0)) {
+                    log(`[Tier 1 退回] 動態追蹤失敗，已自動切換至 Tier 2。建議：請在策略選單改選 Tier 2 以符合此函式的複雜度。`);
+                    // 退回 Tier 2：繼續下方的標準流程
+                } else {
+                    log(`[Tier 1] 開啟填空法，將為 ${traceResult.examples.length} 個成功範例 + ${traceResult.errors.length} 個例外範例分別詢問 AI…`);
+                    const moduleName = path.basename(params.filePath, '.py');
+                    const tier1Methods: string[] = [];
+
+                    // 成功範例
+                    for (let i = 0; i < traceResult.examples.length; i++) {
+                        const ex = traceResult.examples[i];
+                        const funcCall = `${params.funcName}(${ex.args.join(', ')})`;
+                        const sysP = getTier1SystemPrompt();
+                        const usrP = getTier1UserPrompt(funcCall, ex.result, false);
+                        try {
+                            const raw = await requestLlmApi(params, sysP, usrP, log);
+                            // 取出第一行有效的 self.assert 行
+                            const assertLine = raw.split('\n').map(l => l.trim()).find(l => l.startsWith('self.assert') || l.startsWith('with self.assert'));
+                            if (assertLine) {
+                                tier1Methods.push(
+                                    `    def test_case_${i + 1}(self):\n` +
+                                    `        result = ${funcCall}\n` +
+                                    `        ${assertLine}`
+                                );
+                            }
+                        } catch (e: any) {
+                            log(`[Tier 1] 範例 ${i + 1} 詢問失敗: ${e.message}`);
+                        }
+                    }
+
+                    // 例外範例
+                    for (let i = 0; i < traceResult.errors.length; i++) {
+                        const er = traceResult.errors[i];
+                        const funcCall = `${params.funcName}(${er.args.join(', ')})`;
+                        const sysP = getTier1SystemPrompt();
+                        const usrP = getTier1UserPrompt(funcCall, er.message, true, er.exception);
+                        try {
+                            const raw = await requestLlmApi(params, sysP, usrP, log);
+                            const methodIdx = traceResult.examples.length + i + 1;
+                            tier1Methods.push(
+                                `    def test_case_${methodIdx}(self):\n` +
+                                `        with self.assertRaises(${er.exception}):\n` +
+                                `            ${funcCall}`
+                            );
+                        } catch (e: any) {
+                            log(`[Tier 1] 例外範例 ${i + 1} 詢問失敗: ${e.message}`);
+                        }
+                    }
+
+                    if (tier1Methods.length > 0) {
+                        sanitizedCode = [
+                            `import unittest`,
+                            `from ${moduleName} import *`,
+                            ``,
+                            `class TestTier1${params.funcName || 'Auto'}(unittest.TestCase):`,
+                            tier1Methods.join('\n\n'),
+                            ``,
+                            `if __name__ == '__main__':`,
+                            `    unittest.main()`,
+                        ].join('\n');
+                        rawCode = `[Tier 1] Generated ${tier1Methods.length} fill-in test methods`;
+                        log(`[Tier 1] 填空法完成！共產出 ${tier1Methods.length} 個測試方法。`);
+                    }
+                }
+            }
+
+            // ─── Tier 3：Mock Scaffold（34–70B 模型） ───
+            if (resolvedTier === 3 && !sanitizedCode && !survivedMutants) {
+                log(`[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…`);
+                const traceResult = (astContext as any)?.traceResult;
+                const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult);
+                if (scaffoldResult && scaffoldResult.scaffold) {
+                    log(`[Tier 3] 骨架產生完成！patches: ${scaffoldResult.patches.join(', ') || '(無外部依賴)'}`);
+                    const moduleName = path.basename(params.filePath, '.py');
+                    const traceExamples = traceResult?.examples || [];
+                    const sysP = getTier3SystemPrompt();
+                    const usrP = getTier3UserPrompt(params.funcName, scaffoldResult.scaffold, moduleName, traceExamples);
+                    try {
+                        const raw = await requestLlmApi(params, sysP, usrP, log);
+                        rawCode = raw;
+                        const extracted = sanitizeLlmResponse(raw);
+                        if (extracted) {
+                            // 將 AI 補全的方法裹入完整類別
+                            const patchImport = scaffoldResult.patches.length > 0 ? `from unittest.mock import patch, MagicMock\n` : '';
+                            sanitizedCode = [
+                                `import unittest`,
+                                `from ${moduleName} import *`,
+                                patchImport.trim(),
+                                ``,
+                                `class TestTier3${params.funcName || 'Auto'}(unittest.TestCase):`,
+                                extracted.split('\n').map(l => '    ' + l).join('\n'),
+                                ``,
+                                `if __name__ == '__main__':`,
+                                `    unittest.main()`,
+                            ].filter(Boolean).join('\n');
+                            log(`[Tier 3] 模型補充完成！`);
+                        }
+                    } catch (e: any) {
+                        log(`[Tier 3] 模型詢問失敗: ${e.message}，退回標準流程`);
+                    }
+                } else {
+                    log(`[Tier 3] Mock 骨架產生失敗，退回標準 Tier 2/4 流程`);
+                }
+            }
+
+            // ─── Tier 4：全自主（由下方標準流程處理，Self-repair 在預先驗證失敗後觸發）
+            if (resolvedTier === 4 && !sanitizedCode) {
+                evalStrategy = 'large'; // 強制使用 large 模型 prompt
+            }
+
 
             if (useDivideAndConquer && astContext && astContext.callerContexts) {
                 log(`[分治合流] 💡 偵測到 ${callerContextsCount} 個呼叫站，開啟分治合流模式（單一小 Task 多次請求，避免失焦與失憶）...`);
@@ -895,13 +1095,52 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const grandParentDir = path.dirname(parentDir);
                 const pythonPath = `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`;
                 const preCheckCmd = `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
-                exec(preCheckCmd, { timeout: 30000 }, (err, stdout, stderr) => {
+                exec(preCheckCmd, { timeout: 30000 }, async (err, stdout, stderr) => {
                     const out = (stdout + stderr).trim();
                     if (err) {
                         log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
-                        // 將失敗的測試內容記錄到 summary
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
-                        reject(new Error(`測試檔預先驗證失敗（unittest 無法執行），誽誷檔已無法通過: ${out.substring(0, 200)}`));
+
+                        // ─── Tier 4 Self-repair Loop ───
+                        if (resolvedTier === 4) {
+                            log(`[Tier 4 Self-repair] 偵測到預先驗證失敗，嘗試讓模型自我修正（最多 2 次）...`);
+                            let repaired = false;
+                            for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
+                                if (isAborted) break;
+                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
+                                try {
+                                    const repairSys = getTier4SystemPrompt();
+                                    const repairUsr = getTier4SelfRepairPrompt(out);
+                                    const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log);
+                                    const repairCode = sanitizeLlmResponse(repairRaw);
+                                    if (repairCode && (repairCode.includes('def test_') || repairCode.includes('unittest'))) {
+                                        fs.writeFileSync(testPath, repairCode, 'utf8');
+                                        // 再次驗證
+                                        const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {
+                                            exec(preCheckCmd, { timeout: 30000 }, (err2, out2a, out2b) => {
+                                                res2({ ok: !err2, out: (out2a + out2b).trim() });
+                                            });
+                                        });
+                                        if (result2.ok) {
+                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
+                                            finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
+                                            repaired = true;
+                                            resolve();
+                                            break;
+                                        } else {
+                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${result2.out.substring(0, 200)}`);
+                                        }
+                                    }
+                                } catch (repairErr: any) {
+                                    log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);
+                                }
+                            }
+                            if (!repaired) {
+                                reject(new Error(`測試檔預先驗證失敗（Tier 4 Self-repair 共 2 次均無法修正）: ${out.substring(0, 200)}`));
+                            }
+                        } else {
+                            reject(new Error(`測試檔預先驗證失敗（unittest 無法執行），誽誷檔已無法通過: ${out.substring(0, 200)}`));
+                        }
                     } else {
                         const ran = out.match(/Ran (\d+) test/);
                         if (ran && parseInt(ran[1]) > 0) {
@@ -915,6 +1154,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 });
             });
+
 
             // 動態偵測 mutation engine（不再依賴 isWin，改用 Python 版本 + 工具可用性）
             let engine = 'mutatest';

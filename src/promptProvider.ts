@@ -1,6 +1,115 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
 import { getPromptLanguageName } from './i18n';
 
+// ─────────────────────────────────────────────────────────────
+// Tier 1：填空法 Prompt（2–3B 極小模型）
+// 每次只問 AI 填寫一個斷言行，Prompt 上限 ~80 tokens
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Tier 1 System Prompt：告知模型只需補全一行斷言，不要輸出其他內容
+ */
+export function getTier1SystemPrompt(): string {
+    return `Complete ONE assertion line. Output ONLY the completed line. No explanation. No other code.`;
+}
+
+/**
+ * Tier 1 User Prompt：給定函式呼叫與真實回傳值，讓 AI 補全斷言
+ * @param funcCall  已產生的函式呼叫字串，e.g. "func('abc', 'jwt')"
+ * @param returnVal 真實回傳值的 repr，e.g. "{'valid': True, 'type': 'user'}"
+ * @param isError   若為 True，表示這個輸入會 raise，需要填 assertRaises
+ * @param errorType 例外類型，e.g. "ValueError"
+ */
+export function getTier1UserPrompt(
+    funcCall: string,
+    returnVal: string,
+    isError: boolean = false,
+    errorType: string = 'Exception'
+): string {
+    if (isError) {
+        return `Input raises ${errorType}("${returnVal}").
+Complete: with self.assertRaises(${errorType}):
+              ___`;
+    }
+    return `Return value: ${returnVal}
+Complete ONE line: self.assertEqual(result, ___)`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tier 3：Mock Scaffold 策略（34–70B 中大模型）
+// ─────────────────────────────────────────────────────────────
+
+export function getTier3SystemPrompt(): string {
+    const langName = getPromptLanguageName();
+    return `You are an expert Python unit test engineer.
+You will receive a pre-built test scaffold with @patch mock decorators already configured.
+Your task: fill in the TODO sections only.
+- Set meaningful input values for the parameters.
+- Call the target function.
+- Write assertions using real return values provided.
+- Do NOT modify @patch decorators or mock.return_value lines.
+- Do NOT add new imports.
+Output format:
+\`\`\`python
+(completed test method body only, no class wrapper)
+\`\`\``;
+}
+
+export function getTier3UserPrompt(
+    funcName: string,
+    scaffold: string,
+    moduleName: string,
+    traceExamples: Array<{args: string[], result: string}> = []
+): string {
+    let prompt = `Target function: ${funcName} (from module: ${moduleName})\n\n`;
+    if (traceExamples.length > 0) {
+        prompt += `Verified real return values to use in assertions:\n`;
+        for (const ex of traceExamples.slice(0, 3)) {
+            prompt += `  - Input(${ex.args.join(', ')}) => ${ex.result}\n`;
+        }
+        prompt += `\n`;
+    }
+    prompt += `Test scaffold (fill in the TODO sections):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nFill in the TODO sections now:`;
+    return prompt;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tier 4：全自主 + Self-repair（100B+/Cloud）
+// ─────────────────────────────────────────────────────────────
+
+export function getTier4SystemPrompt(): string {
+    const langName = getPromptLanguageName();
+    return `You are an expert Python unit test engineer. Write a complete, production-quality unittest.TestCase.
+
+Output format:
+<thinking>
+(analysis in ${langName.toUpperCase()})
+</thinking>
+
+\`\`\`python
+(complete unittest file)
+\`\`\`
+
+Guidelines:
+- Use absolute imports (e.g. from service_auth import login_user).
+- Use unittest.mock (patch, MagicMock) for all external dependencies.
+- Cover all edge cases: None, empty, boundary values, all exception paths.
+- Every test method name must start with test_.
+- Do NOT copy the source code.`;
+}
+
+export function getTier4SelfRepairPrompt(stderr: string): string {
+    return `Your test file failed pre-verification with these errors:
+
+\`\`\`
+${stderr.substring(0, 2000)}
+\`\`\`
+
+Fix ONLY the failing test methods. Output the complete corrected test file.`;
+}
+
+
+
 /**
  * 某些小模型（Qwen、llama 系列等）對 <thinking> 標籤有副作用（無限迴圈輸出）
  * 這些模型不使用 thinking 標籤，改成直接輸出 code block

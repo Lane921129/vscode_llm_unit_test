@@ -175,9 +175,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         <div class="content">
             <label>🧠 ${t('ui.promptStrategy')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
-                <option value="auto" ${currentStrategy === 'auto' ? 'selected' : ''}>${t('ui.stratAuto')}</option>
-                <option value="small" ${currentStrategy === 'small' ? 'selected' : ''}>${t('ui.stratSmall')}</option>
-                <option value="large" ${currentStrategy === 'large' ? 'selected' : ''}>${t('ui.stratLarge')}</option>
+                <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>Auto — 依模型自動路由</option>
+                <option value="tier1"    ${currentStrategy === 'tier1' ? 'selected' : ''}>Tier 1 — 2–3B (填空法)</option>
+                <option value="tier2"    ${currentStrategy === 'tier2' ? 'selected' : ''}>Tier 2 — 7–13B (Ground-Truth)</option>
+                <option value="tier3"    ${currentStrategy === 'tier3' ? 'selected' : ''}>Tier 3 — 34–70B (Mock Scaffold)</option>
+                <option value="tier4"    ${currentStrategy === 'tier4' ? 'selected' : ''}>Tier 4 — 100B+/Cloud (全自主)</option>
             </select>
 
             <label>📂 ${t('ui.projectPath')}</label>
