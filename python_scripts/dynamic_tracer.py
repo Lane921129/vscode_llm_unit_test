@@ -42,6 +42,8 @@ def infer_boundary_inputs(func_args: list) -> list:
     # 常見邊界值策略
     scalar_candidates = [0, 1, -1, 100, -100, 0.0, 1.5]
     str_candidates = ["", "a", "hello", "1234567890", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"]
+    # 邊界穿越字串：精確定位 len-based 驗證的臨界點
+    str_boundary_short = ["", "abc", "123456789", "1234567890", "12345678901", "not a valid token"]
     bool_candidates = [True, False]
     none_candidate = [None]
 
@@ -49,7 +51,10 @@ def infer_boundary_inputs(func_args: list) -> list:
     per_arg_candidates = []
     for arg_name in func_args:
         name_lower = arg_name.lower()
-        if any(kw in name_lower for kw in ['token', 'key', 'password', 'secret', 'str', 'name', 'path', 'url', 'text', 'msg']):
+        if any(kw in name_lower for kw in ['token', 'key', 'password', 'secret']):
+            # token/key 類參數：強制加入短字串邊界值，確保 len<10 的邊界被測試到
+            per_arg_candidates.append(str_boundary_short + str_candidates[3:] + none_candidate)
+        elif any(kw in name_lower for kw in ['str', 'name', 'path', 'url', 'text', 'msg']):
             per_arg_candidates.append(str_candidates + none_candidate)
         elif any(kw in name_lower for kw in ['num', 'count', 'amount', 'size', 'len', 'int', 'price', 'qty', 'index']):
             per_arg_candidates.append(scalar_candidates[:4] + none_candidate)

@@ -147,7 +147,8 @@ Rules:
 2. Each test method starts with test_ and uses self.assert*().
 3. Do NOT copy or redefine the source function. Write test methods only.
 4. No pytest. No top-level assert.
-5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.`;
+5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.
+6. Inputs are validated by LENGTH and STRUCTURE, NOT English meaning. "not a valid token" has len=17 which may PASS length checks. ALWAYS use Verified Real Execution Results to determine behavior.`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -247,7 +248,39 @@ export function getUserPrompt(
             for (const er of trace.errors.slice(0, 5)) {
                 prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}("${er.message}") (MUST Use: with self.assertRaises(${er.exception}): ...)\n`;
             }
-            prompt += `\n`;
+
+            // 自動推導邊界規則：分析 trace results，推導出哪些條件觸發 Exception vs 正常回傳
+            if (trace.errors.length > 0 && trace.examples.length > 0) {
+                prompt += `\nCRITICAL BOUNDARY RULES (auto-derived from execution):\n`;
+                // 找出 error 與 success 的差異（以字串長度為例）
+                const errorLens = trace.errors.map((e: any) => {
+                    const firstArg = e.args[0] || '';
+                    const match = firstArg.match(/^['"](.*)['"]/); // 提取字串值
+                    return match ? match[1].length : -1;
+                }).filter((l: number) => l >= 0);
+                const successLens = trace.examples.map((e: any) => {
+                    const firstArg = e.args[0] || '';
+                    const match = firstArg.match(/^['"](.*)['"]/); 
+                    return match ? match[1].length : -1;
+                }).filter((l: number) => l >= 0);
+
+                if (errorLens.length > 0 && successLens.length > 0) {
+                    const maxErrLen = Math.max(...errorLens);
+                    const minSuccLen = Math.min(...successLens);
+                    if (maxErrLen < minSuccLen) {
+                        prompt += `  - First arg len <= ${maxErrLen}: ALWAYS raises ${trace.errors[0].exception}. Do NOT use assertEqual.\n`;
+                        prompt += `  - First arg len >= ${minSuccLen}: ALWAYS returns normally. Do NOT use assertRaises.\n`;
+                    }
+                }
+                // 針對每個 error 類型做明確提示
+                const errorTypes = [...new Set(trace.errors.map((e: any) => e.exception))];
+                for (const et of errorTypes) {
+                    const matchingErrors = trace.errors.filter((e: any) => e.exception === et);
+                    const inputExamples = matchingErrors.slice(0, 2).map((e: any) => `(${e.args.join(', ')})`).join(', ');
+                    prompt += `  - Inputs like ${inputExamples} ALWAYS raise ${et}. MUST use: with self.assertRaises(${et}):\n`;
+                }
+                prompt += `\n`;
+            }
         }
 
         // Dependency contexts (budget-aware distillation)
