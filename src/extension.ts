@@ -678,7 +678,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     let survivedMutants = "";
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **日期**: ${reportDateStr}\n\n`;
+    let currentTier = resolvedTier;
+    let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **使用的策略**: Tier ${currentTier} (${userTierSetting === 'auto' ? 'Auto 自動路由' : '使用者指定 Tier ' + currentTier})\n- **日期**: ${reportDateStr}\n\n`;
 
     const baseDir = params.outputPath || path.dirname(params.filePath);
     
@@ -848,14 +849,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
         try {
-            // 🔍 分治合流法 (Divide & Conquer):
-            // 若為小模型策略，且目標函式有多個呼叫站 (Caller Contexts > 1)
-            // 分拆為多個極簡任務單獨呼叫 LLM，再由系統 (testMerger) 進行程式碼機械式合併
-            const callerContextsCount = astContext?.callerContexts?.length || 0;
-            const useDivideAndConquer = (resolvedTier === 2) && (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
+            // ─── Tier 降階修復迴圈 ───
+            let tierSuccess = false;
+            while (currentTier >= 1 && !tierSuccess && !isAborted) {
+                try {
+                log(`[Tier 執行] 目前使用策略：Tier ${currentTier}`);
+                sanitizedCode = "";
+                rawCode = "";
 
-            // ─── Tier 1：填空法（2–3B 模型） ───
-            if (resolvedTier === 1 && !survivedMutants) {
+                const callerContextsCount = astContext?.callerContexts?.length || 0;
+                const useDivideAndConquer = (currentTier === 2) && (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
+
+                // ─── Tier 1：填空法（2–3B 模型） ───
+                if (currentTier === 1 && !survivedMutants) {
                 const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
                 if (!traceResult || traceResult.load_error || (traceResult.examples.length === 0 && traceResult.errors.length === 0)) {
                     log(`[Tier 1 退回] 動態追蹤失敗，已自動切換至 Tier 2。建議：請在策略選單改選 Tier 2 以符合此函式的複雜度。`);
@@ -923,8 +929,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
-            // ─── Tier 3：Mock Scaffold（34–70B 模型） ───
-            if (resolvedTier === 3 && !sanitizedCode && !survivedMutants) {
+                // ─── Tier 3：Mock Scaffold（34–70B 模型） ───
+                if (currentTier === 3 && !sanitizedCode && !survivedMutants) {
                 log(`[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…`);
                 const traceResult = (astContext as any)?.traceResult;
                 const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult);
@@ -962,8 +968,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
-            // ─── Tier 4：全自主（由下方標準流程處理，Self-repair 在預先驗證失敗後觸發）
-            if (resolvedTier === 4 && !sanitizedCode) {
+                // ─── Tier 4：全自主（由下方標準流程處理，Self-repair 在預先驗證失敗後觸發）
+                if (currentTier === 4 && !sanitizedCode) {
                 evalStrategy = 'large'; // 強制使用 large 模型 prompt
             }
 
@@ -1129,7 +1135,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
                         // ─── Tier 4 Self-repair Loop ───
-                        if (resolvedTier === 4) {
+                        if (currentTier === 4) {
                             log(`[Tier 4 Self-repair] 偵測到預先驗證失敗，嘗試讓模型自我修正（最多 2 次）...`);
                             let repaired = false;
                             for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
@@ -1166,7 +1172,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 reject(new Error(`測試檔預先驗證失敗（Tier 4 Self-repair 共 2 次均無法修正）: ${out.substring(0, 200)}`));
                             }
                         } else {
-                            reject(new Error(`測試檔預先驗證失敗（unittest 無法執行），誽誷檔已無法通過: ${out.substring(0, 200)}`));
+                            reject(new Error(`測試檔預先驗證失敗（unittest 無法執行）: ${out.substring(0, 200)}`));
                         }
                     } else {
                         const ran = out.match(/Ran (\d+) test/);
@@ -1181,6 +1187,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 });
             });
+
+            tierSuccess = true;
+            break; // 預先驗證成功，跳出 Tier 降階迴圈
+        } catch (tierErr: any) {
+            if (currentTier > 1) {
+                const prevTier = currentTier;
+                currentTier--;
+                log(`[Tier 降階] ⚠️ Tier ${prevTier} 驗證失敗，自動觸發策略降階：Tier ${prevTier} → Tier ${currentTier} 重試...`);
+                finalReportMarkdown += `\n> [!WARNING]\n> ⚠️ **策略自動降階**: Tier ${prevTier} 驗證失敗，系統已自動切換降階至 **Tier ${currentTier}** 思考模式重試。\n\n`;
+            } else {
+                // Tier 1 也失敗，向上拋出錯誤
+                throw tierErr;
+            }
+        }
+    } // end while (currentTier >= 1)
 
 
             // 動態偵測 mutation engine（不再依賴 isWin，改用 Python 版本 + 工具可用性）
