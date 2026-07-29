@@ -498,8 +498,9 @@ function sanitizeLlmResponse(rawCode: string): string {
         return stripUniformIndent(blocks[blocks.length - 1]);
     }
 
-    // 移除殘留的 [PYTHON] 和 [/PYTHON] 標籤
-    cleanCode = cleanCode.replace(/\[\/?\s*PYTHON\s*\]/gi, '').trim();
+    // 移除殘留的 [PYTHON] 和 [/PYTHON] 標籤與首尾 markdown 語法 fence (```)
+    cleanCode = cleanCode.replace(/\[\/?\s*PYTHON\s*\]/gi, '');
+    cleanCode = cleanCode.replace(/^```[a-z]*\n?/i, '').replace(/```\s*$/g, '').trim();
 
     // P2：移除統一前導空格（小模型常見的 markdown 殘留縮排）
     cleanCode = stripUniformIndent(cleanCode);
