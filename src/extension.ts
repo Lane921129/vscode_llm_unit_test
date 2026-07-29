@@ -869,7 +869,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const ex = traceResult.examples[i];
                         const funcCall = `${params.funcName}(${ex.args.join(', ')})`;
                         const sysP = getTier1SystemPrompt();
-                        const usrP = getTier1UserPrompt(funcCall, ex.result, false);
+                        const usrP = getTier1UserPrompt(funcCall, String(ex.result ?? ''), false);
                         try {
                             const raw = await requestLlmApi(params, sysP, usrP, log);
                             // 取出第一行有效的 self.assert 行
@@ -891,7 +891,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const er = traceResult.errors[i];
                         const funcCall = `${params.funcName}(${er.args.join(', ')})`;
                         const sysP = getTier1SystemPrompt();
-                        const usrP = getTier1UserPrompt(funcCall, er.message, true, er.exception);
+                        const usrP = getTier1UserPrompt(funcCall, String(er.message ?? ''), true, er.exception);
                         try {
                             const raw = await requestLlmApi(params, sysP, usrP, log);
                             const methodIdx = traceResult.examples.length + i + 1;
