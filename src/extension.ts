@@ -457,11 +457,24 @@ async function requestLlmApi(
     }
 }
 
+function cleanCodeBlock(code: string): string {
+    let clean = stripUniformIndent(code);
+    clean = clean.replace(/\[\/?\s*PYTHON\s*\]/gi, '');
+    clean = clean.replace(/^```[a-z]*\n?/i, '').replace(/```\s*$/g, '').trim();
+
+    // 截斷 unittest.main() 之後的文字說明 (Explanation/Note)
+    const mainMatch = clean.match(/if\s+__name__\s*==\s*['"]__main__['"]\s*:\s*\n?\s*unittest\.main\(\)/);
+    if (mainMatch && mainMatch.index !== undefined) {
+        const endIdx = mainMatch.index + mainMatch[0].length;
+        clean = clean.substring(0, endIdx);
+    }
+    return clean.trim();
+}
+
 function sanitizeLlmResponse(rawCode: string): string {
     let cleanCode = rawCode.trim();
 
     // 偵測無限 thinking 迴圈（小模型常見問題）
-    // 如果 <thinking> 出現 3 次以上，或同一 emoji 連續重複 8 次以上 → 視為垃圾輸出
     const thinkingCount = (cleanCode.match(/<thinking>/g) || []).length;
     if (thinkingCount >= 3) { return ''; }
     const emojiLoopMatch = cleanCode.match(/([\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF])\1{7,}/u);
@@ -492,20 +505,13 @@ function sanitizeLlmResponse(rawCode: string): string {
     if (blocks.length > 0) {
         for (const block of blocks) {
             if (block.includes('unittest') || block.includes('TestCase')) {
-                return stripUniformIndent(block);
+                return cleanCodeBlock(block);
             }
         }
-        return stripUniformIndent(blocks[blocks.length - 1]);
+        return cleanCodeBlock(blocks[blocks.length - 1]);
     }
 
-    // 移除殘留的 [PYTHON] 和 [/PYTHON] 標籤與首尾 markdown 語法 fence (```)
-    cleanCode = cleanCode.replace(/\[\/?\s*PYTHON\s*\]/gi, '');
-    cleanCode = cleanCode.replace(/^```[a-z]*\n?/i, '').replace(/```\s*$/g, '').trim();
-
-    // P2：移除統一前導空格（小模型常見的 markdown 殘留縮排）
-    cleanCode = stripUniformIndent(cleanCode);
-    
-    return cleanCode;
+    return cleanCodeBlock(cleanCode);
 }
 
 /**
@@ -810,6 +816,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             break;
         }
         log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
+        currentTier = resolvedTier;
         finalReportMarkdown += `## 第 ${currentLoop} 輪測試\n`;
 
         let targetCode: string;
