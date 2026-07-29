@@ -1344,8 +1344,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: path.basename(params.filePath),
-                score: mutationScore ? `${mutationScore}%` : 'N/A',
-                reason: reasonStr
+                score: typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A',
+                reason: reasonStr || '分析中'
             });
 
             if (fs.existsSync(path.join(reportDir, 'index.html'))) {
