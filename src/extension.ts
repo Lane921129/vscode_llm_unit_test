@@ -1228,7 +1228,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else {
                     // Python < 3.12，優先 mutatest；若不可用則用 mutmut
                     try {
-                        execSync('python -c "import mutatest"', { stdio: 'ignore' });
+                        execSync('python -c "from mutatest.cli import cli_main"', { stdio: 'ignore' });
                         engine = 'mutatest';
                         log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
                     } catch {
@@ -1237,7 +1237,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
                         } catch {
-                            log(`[系統] 警告：mutatest 與 mutmut 均不可用，請執行 pip install -r requirements.txt`);
+                            log(`[系統] 警告：mutatest 與 mutmut 均不可用（或缺少 setuptools），請執行 pip install setuptools mutatest mutmut`);
                         }
                     }
                 }
