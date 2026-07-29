@@ -230,6 +230,10 @@ export function getUserPrompt(
         prompt += `- Name: ${astContext.name}\n`;
         if (astContext.args && astContext.args.length > 0) {
             prompt += `- Parameters: ${astContext.args.join(', ')}\n`;
+            prompt += `- EXACT signature: ${astContext.name}(${astContext.args.join(', ')}). Call with EXACTLY ${astContext.args.length} argument(s).\n`;
+        } else {
+            prompt += `- Parameters: NONE. This function takes ZERO arguments.\n`;
+            prompt += `- CRITICAL: ${astContext.name}() takes 0 arguments. ANY call like ${astContext.name}(x) WILL crash with TypeError. ONLY call as ${astContext.name}().\n`;
         }
         if (astContext.docstring) {
             prompt += `- Docstring: ${astContext.docstring.trim()}\n`;
@@ -280,6 +284,19 @@ export function getUserPrompt(
                     prompt += `  - Inputs like ${inputExamples} ALWAYS raise ${et}. MUST use: with self.assertRaises(${et}):\n`;
                 }
                 prompt += `\n`;
+            }
+        }
+
+        // Void/None 函式提示：當所有 trace 都回傳 None 且無 error 時
+        const trace2 = astContext.traceResult;
+        if (trace2 && !trace2.load_error) {
+            const allNone = trace2.examples.length > 0 && trace2.examples.every((e: any) => e.result === 'None' || e.result === 'null');
+            const noErrors = trace2.errors.length === 0;
+            if (allNone && noErrors) {
+                prompt += `\nIMPORTANT: This function ALWAYS returns None. Verified by real execution.\n`;
+                prompt += `- Do NOT use self.assertIsNotNone(). It WILL fail.\n`;
+                prompt += `- Do NOT use self.assertRaises(). No exceptions are raised.\n`;
+                prompt += `- ONLY valid assertions: self.assertIsNone(result) or self.assertEqual(result, None)\n\n`;
             }
         }
 

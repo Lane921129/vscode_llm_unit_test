@@ -492,16 +492,42 @@ function sanitizeLlmResponse(rawCode: string): string {
     if (blocks.length > 0) {
         for (const block of blocks) {
             if (block.includes('unittest') || block.includes('TestCase')) {
-                return block;
+                return stripUniformIndent(block);
             }
         }
-        return blocks[blocks.length - 1];
+        return stripUniformIndent(blocks[blocks.length - 1]);
     }
 
     // 移除殘留的 [PYTHON] 和 [/PYTHON] 標籤
-    cleanCode = cleanCode.replace(/\[\/?PYTHON\]/gi, '').trim();
+    cleanCode = cleanCode.replace(/\[\/?\s*PYTHON\s*\]/gi, '').trim();
+
+    // P2：移除統一前導空格（小模型常見的 markdown 殘留縮排）
+    cleanCode = stripUniformIndent(cleanCode);
     
     return cleanCode;
+}
+
+/**
+ * 移除所有行共有的前導空格（統一縮排）
+ * 例：所有行都以 4 個空格開頭 → 全部去掉 4 格
+ */
+function stripUniformIndent(code: string): string {
+    const lines = code.split('\n');
+    const nonEmptyLines = lines.filter(l => l.trim().length > 0);
+    if (nonEmptyLines.length === 0) return code;
+
+    // 計算所有非空行最小的前導空格數
+    let minIndent = Infinity;
+    for (const line of nonEmptyLines) {
+        const leadingSpaces = line.match(/^( *)/)?.[1].length || 0;
+        if (leadingSpaces < minIndent) minIndent = leadingSpaces;
+    }
+
+    // 只有大於 0 才有意義
+    if (minIndent > 0 && minIndent < Infinity) {
+        return lines.map(l => l.substring(minIndent)).join('\n');
+    }
+    return code;
 }
 
 /**
