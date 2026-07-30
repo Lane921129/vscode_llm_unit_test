@@ -70,12 +70,23 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
     except SyntaxError as e:
         return {"scaffold": "", "patches": [], "mock_names": [], "error": str(e)}
 
-    # 找目標函式
+    # 找目標函式（優先頂層，後並對 class method）
     target_func = None
-    for node in ast.walk(tree):
+    class_name = None
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
             target_func = node
             break
+    if target_func is None:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
+                        target_func = item
+                        class_name = node.name
+                        break
+            if target_func:
+                break
 
     if not target_func:
         return {"scaffold": "", "patches": [], "mock_names": [], "error": f"Function '{func_name}' not found"}
@@ -86,8 +97,9 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
     # 找外部呼叫
     external_calls = find_external_calls(target_func, imports)
 
-    # 取得函式參數名稱
-    func_params = [arg.arg for arg in target_func.args.args]
+    # 取得函式參數名稱（如果在 class 內，去除 self/cls）
+    all_params = [arg.arg for arg in target_func.args.args]
+    func_params = [p for p in all_params if p not in ('self', 'cls')] if class_name else all_params
 
     # 建立 patch decorator 列表
     patches = [ec["patch_path"] for ec in external_calls]

@@ -882,8 +882,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     for (let i = 0; i < traceResult.examples.length; i++) {
                         const ex = traceResult.examples[i];
                         const funcCall = `${params.funcName}(${ex.args.join(', ')})`;
+                        const resultRepr = String(ex.result ?? '');
+
+                        // 若回傳值已知為 None，直接生成 assertIsNone，不詢問 LLM（避免 AI 猜錯值）
+                        if (resultRepr === 'None' || ex.result_type === 'NoneType') {
+                            tier1Methods.push(
+                                `    def test_case_${i + 1}(self):\n` +
+                                `        result = ${funcCall}\n` +
+                                `        self.assertIsNone(result)`
+                            );
+                            log(`[Tier 1] 範例 ${i + 1} 回傳 None，已直接生成 assertIsNone。`);
+                            continue;
+                        }
+
                         const sysP = getTier1SystemPrompt();
-                        const usrP = getTier1UserPrompt(funcCall, String(ex.result ?? ''), false);
+                        const usrP = getTier1UserPrompt(funcCall, resultRepr, false);
                         try {
                             const raw = await requestLlmApi(params, sysP, usrP, log);
                             // 取出第一行有效的 self.assert 行

@@ -34,16 +34,30 @@ def assess_complexity(file_path: str, func_name: str) -> dict:
         return {"score": 0, "level": "Unknown", "reasons": [f"Syntax error: {e}"]}
 
     target_func = None
-    for node in ast.walk(tree):
+    class_name = None
+
+    # 優先找頂層函式，再找 class method
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
             target_func = node
             break
-
+    if target_func is None:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
+                        target_func = item
+                        class_name = node.name
+                        break
+            if target_func:
+                break
     if target_func is None:
         return {"score": 0, "level": "Unknown", "reasons": [f"Function '{func_name}' not found"]}
 
-    # --- 1. 參數數量 ---
-    n_args = len(target_func.args.args)
+    # --- 1. 參數數量（去除 self/cls）---
+    all_args = [arg.arg for arg in target_func.args.args]
+    effective_args = [a for a in all_args if a not in ('self', 'cls')] if class_name else all_args
+    n_args = len(effective_args)
     if n_args > 0:
         pts = n_args * 5
         score += pts

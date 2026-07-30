@@ -117,17 +117,34 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         result["load_error"] = f"Failed to load module from {file_path}"
         return result
 
-    # 取得函式
+    # 取得函式（支援頂層函式與 class method）
     func = getattr(module, func_name, None)
+    func_is_method = False
+    method_class_name = None
+
+    if func is None or not callable(func):
+        # 在模組中找 class method
+        for attr_name in dir(module):
+            cls_obj = getattr(module, attr_name, None)
+            if isinstance(cls_obj, type):
+                method = getattr(cls_obj, func_name, None)
+                if method and callable(method):
+                    func = method
+                    func_is_method = True
+                    method_class_name = attr_name
+                    break
+
     if func is None or not callable(func):
         result["load_error"] = f"Function '{func_name}' not found or not callable"
         return result
 
-    # 取得參數名稱
+    # 取得參數名稱（class method 去除 self/cls）
     try:
         import inspect
         sig = inspect.signature(func)
-        result["args"] = list(sig.parameters.keys())
+        all_params = list(sig.parameters.keys())
+        # 未綁定 method 可能包含 self，將其去除
+        result["args"] = [p for p in all_params if p not in ('self', 'cls')]
     except Exception:
         pass
 
@@ -140,7 +157,16 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         if not isinstance(inp, (list, tuple)):
             inp = (inp,)
         try:
-            ret = func(*inp)
+            if func_is_method:
+                # 將 class 實例化後呼叫 method
+                cls_obj = getattr(module, method_class_name)
+                try:
+                    instance = cls_obj()
+                except Exception:
+                    instance = object.__new__(cls_obj)
+                ret = getattr(instance, func_name)(*inp)
+            else:
+                ret = func(*inp)
             result["examples"].append({
                 "args": [safe_repr(a) for a in inp],
                 "result": safe_repr(ret),
