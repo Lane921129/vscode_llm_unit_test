@@ -5,15 +5,27 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** 從 .py 檔案中以 regex 萃取所有 top-level def 函式名稱 */
+/** 從 .py 檔案中以 regex 萃取所有 def 函式名稱（含 class method） */
 export function extractFunctionsFromFile(filePath: string): string[] {
     if (!fs.existsSync(filePath)) { return []; }
     const content = fs.readFileSync(filePath, 'utf-8');
-    const regex = /^def\s+([a-zA-Z0-9_]+)\s*\(/gm;
+    const lines = content.split('\n');
     const funcs: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(content)) !== null) {
-        funcs.push(match[1]);
+    const seen = new Set<string>();
+
+    for (const line of lines) {
+        const match = line.match(/^(\s*)def\s+([a-zA-Z0-9_]+)\s*\(/);
+        if (!match) { continue; }
+        const name = match[1] ? match[1] : ''; // indentation
+        const funcName = match[2];
+
+        // 跳過私有、dunder、測試方法（以 test_ 開頭或 __ 包圍）
+        if (funcName.startsWith('__') || funcName.startsWith('test_')) { continue; }
+
+        if (!seen.has(funcName)) {
+            seen.add(funcName);
+            funcs.push(funcName);
+        }
     }
     return funcs;
 }
