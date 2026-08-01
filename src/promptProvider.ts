@@ -238,6 +238,13 @@ export function getUserPrompt(
         if (astContext.docstring) {
             prompt += `- Docstring: ${astContext.docstring.trim()}\n`;
         }
+        // Class method hint
+        if (astContext.class_name) {
+            prompt += `- IMPORTANT: This is a METHOD of class \`${astContext.class_name}\`.\n`;
+            prompt += `  - Import: from ${moduleName} import ${astContext.class_name}\n`;
+            prompt += `  - Instantiate in setUp: self._obj = ${astContext.class_name}()\n`;
+            prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
+        }
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
@@ -363,9 +370,13 @@ export function getUserPrompt(
     }
 
     if (strategy === 'small') {
+        const className = astContext?.class_name as string | null | undefined;
+        const importHint = className
+            ? `from ${moduleName} import ${className}  # class method — use self._obj = ${className}(); self._obj.${funcName}(...)`
+            : `from ${moduleName} import ${funcName}`;
         const trigger = thinking
-            ? `\n\nImport from: from ${moduleName} import ${funcName}\n\nWrite the test file now:\n<thinking>\n`
-            : `\n\nImport from: from ${moduleName} import ${funcName}\n\nWrite the test file now:\n\`\`\`python\n`;
+            ? `\n\nImport from: ${importHint}\n\nWrite the test file now:\n<thinking>\n`
+            : `\n\nImport from: ${importHint}\n\nWrite the test file now:\n\`\`\`python\n`;
         prompt += trigger;
     } else {
         prompt += `\n\nWrite the complete unittest test file now.\n`;
