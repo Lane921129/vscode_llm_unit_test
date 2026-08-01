@@ -909,15 +909,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             log(`[Tier 1] 範例 ${i + 1} 詢問失敗: ${e.message}`);
                         }
 
-                        // 若 LLM 未回傳安全有效的斷言行，自動根據 ex.result 生成精確斷言
+                        // 若 LLM 未回傳安全有效的斷言行，自動根據 ex.result 與 ex.result_type 生成精確斷言
                         if (!assertLine) {
-                            let literalVal = resultRepr;
-                            if (typeof ex.result === 'string') {
-                                literalVal = JSON.stringify(ex.result);
-                            } else if (ex.result === true) {
-                                literalVal = 'True';
-                            } else if (ex.result === false) {
-                                literalVal = 'False';
+                            let literalVal = String(ex.result ?? '');
+                            const resType = ex.result_type || typeof ex.result;
+                            if (resType === 'str' || resType === 'string') {
+                                literalVal = JSON.stringify(String(ex.result));
+                            } else if (resType === 'bool' || typeof ex.result === 'boolean') {
+                                literalVal = ex.result ? 'True' : 'False';
+                            } else if (resType === 'NoneType' || ex.result === null || ex.result === undefined) {
+                                literalVal = 'None';
+                            } else if (resType === 'int' || resType === 'float' || typeof ex.result === 'number') {
+                                literalVal = String(ex.result);
                             }
                             assertLine = `self.assertEqual(result, ${literalVal})`;
                             log(`[Tier 1] 範例 ${i + 1} LLM 回應無效，已使用精確回傳值代入斷言: ${assertLine}`);
