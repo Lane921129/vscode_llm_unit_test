@@ -933,18 +933,43 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
 
                     if (tier1Methods.length > 0) {
-                        sanitizedCode = [
-                            `import unittest`,
-                            `from ${moduleName} import *`,
-                            ``,
-                            `class TestTier1${params.funcName || 'Auto'}(unittest.TestCase):`,
-                            tier1Methods.join('\n\n'),
-                            ``,
-                            `if __name__ == '__main__':`,
-                            `    unittest.main()`,
-                        ].join('\n');
+                        const className = (astContext as any)?.class_name as string | null;
+                        if (className) {
+                            // Class method：需要建立 instance
+                            const setupBlock = [
+                                `    def setUp(self):`,
+                                `        self._instance = ${className}()`,
+                            ].join('\n');
+                            // 把所有 funcCall 中的 `funcName(` 替換成 `self._instance.funcName(`
+                            const classMethodsMapped = tier1Methods.map(m =>
+                                m.replace(new RegExp(`(?<![._])\\b${params.funcName}\\(`, 'g'), `self._instance.${params.funcName}(`)
+                            );
+                            sanitizedCode = [
+                                `import unittest`,
+                                `from ${moduleName} import ${className}`,
+                                ``,
+                                `class TestTier1${params.funcName || 'Auto'}(unittest.TestCase):`,
+                                setupBlock,
+                                ``,
+                                classMethodsMapped.join('\n\n'),
+                                ``,
+                                `if __name__ == '__main__':`,
+                                `    unittest.main()`,
+                            ].join('\n');
+                        } else {
+                            sanitizedCode = [
+                                `import unittest`,
+                                `from ${moduleName} import *`,
+                                ``,
+                                `class TestTier1${params.funcName || 'Auto'}(unittest.TestCase):`,
+                                tier1Methods.join('\n\n'),
+                                ``,
+                                `if __name__ == '__main__':`,
+                                `    unittest.main()`,
+                            ].join('\n');
+                        }
                         rawCode = `[Tier 1] Generated ${tier1Methods.length} fill-in test methods`;
-                        log(`[Tier 1] 填空法完成！共產出 ${tier1Methods.length} 個測試方法。`);
+                        log(`[Tier 1] 填空法完成！共產出 ${tier1Methods.length} 個測試方法。${className ? ` (Class method: ${className}.${params.funcName})` : ''}`);
                     }
                 }
             }
@@ -966,10 +991,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
                             // 將 AI 補全的方法裹入完整類別
+                    const moduleName2 = path.basename(params.filePath, '.py');
+                            const className3 = (astContext as any)?.class_name as string | null;
+                            const importLine3 = className3 ? `from ${moduleName2} import ${className3}` : `from ${moduleName2} import *`;
                             const patchImport = scaffoldResult.patches.length > 0 ? `from unittest.mock import patch, MagicMock\n` : '';
                             sanitizedCode = [
                                 `import unittest`,
-                                `from ${moduleName} import *`,
+                                importLine3,
                                 patchImport.trim(),
                                 ``,
                                 `class TestTier3${params.funcName || 'Auto'}(unittest.TestCase):`,
