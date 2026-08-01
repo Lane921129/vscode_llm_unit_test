@@ -897,20 +897,37 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                         const sysP = getTier1SystemPrompt();
                         const usrP = getTier1UserPrompt(funcCall, resultRepr, false);
+                        let assertLine = '';
                         try {
                             const raw = await requestLlmApi(params, sysP, usrP, log);
-                            // 取出第一行有效的 self.assert 行
-                            const assertLine = raw.split('\n').map(l => l.trim()).find(l => l.startsWith('self.assert') || l.startsWith('with self.assert'));
-                            if (assertLine) {
-                                tier1Methods.push(
-                                    `    def test_case_${i + 1}(self):\n` +
-                                    `        result = ${funcCall}\n` +
-                                    `        ${assertLine}`
-                                );
+                            const extracted = raw.split('\n').map(l => l.trim()).find(l => l.startsWith('self.assert') || l.startsWith('with self.assert'));
+                            // 檢查 extracted 是否包含未定義變數名稱 (如 expected_value, expected_output, expected_result, ___)
+                            if (extracted && !/\b(expected_|expected_value|expected_output|expected_result|___|\.\.\.)\b/i.test(extracted)) {
+                                assertLine = extracted;
                             }
                         } catch (e: any) {
                             log(`[Tier 1] 範例 ${i + 1} 詢問失敗: ${e.message}`);
                         }
+
+                        // 若 LLM 未回傳安全有效的斷言行，自動根據 ex.result 生成精確斷言
+                        if (!assertLine) {
+                            let literalVal = resultRepr;
+                            if (typeof ex.result === 'string') {
+                                literalVal = JSON.stringify(ex.result);
+                            } else if (ex.result === true) {
+                                literalVal = 'True';
+                            } else if (ex.result === false) {
+                                literalVal = 'False';
+                            }
+                            assertLine = `self.assertEqual(result, ${literalVal})`;
+                            log(`[Tier 1] 範例 ${i + 1} LLM 回應無效，已使用精確回傳值代入斷言: ${assertLine}`);
+                        }
+
+                        tier1Methods.push(
+                            `    def test_case_${i + 1}(self):\n` +
+                            `        result = ${funcCall}\n` +
+                            `        ${assertLine}`
+                        );
                     }
 
                     // 例外範例

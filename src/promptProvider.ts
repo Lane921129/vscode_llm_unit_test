@@ -245,6 +245,8 @@ export function getUserPrompt(
             prompt += `  - Instantiate in setUp: self._obj = ${astContext.class_name}()\n`;
             prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
         }
+        prompt += `- CRITICAL: Do NOT invent keyword arguments like total=... or payment_token=... that are not in the function signature.\n`;
+        prompt += `- TOKEN RULE: If passing a token string, valid tokens must be AT LEAST 10 characters long (e.g. '123456789012'). Short strings like 'abc123' will fail token length validation.\n`;
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
