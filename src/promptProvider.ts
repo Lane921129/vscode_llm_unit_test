@@ -311,6 +311,27 @@ export function getUserPrompt(
 
         // Dependency contexts (budget-aware distillation)
         if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
+            // ── Fix A: 禁用列表 ──
+            // 收集所有相依函式的參數名稱，找出「不屬於目標函式」的部分加入禁用列表
+            const ownArgSet = new Set<string>(astContext.args || []);
+            const forbiddenKwargs: string[] = [];
+            for (const dep of astContext.dependencyContexts) {
+                if (dep.args && Array.isArray(dep.args)) {
+                    for (const depArg of dep.args) {
+                        const cleanArg = depArg.replace(/[:\s].*/g, '').trim(); // remove type annotation
+                        if (cleanArg && cleanArg !== 'self' && !ownArgSet.has(cleanArg)) {
+                            forbiddenKwargs.push(cleanArg);
+                        }
+                    }
+                }
+            }
+            if (forbiddenKwargs.length > 0) {
+                const fb = [...new Set(forbiddenKwargs)];
+                prompt += `\n⚠️ FORBIDDEN KWARGS: The following params belong to DEPENDENCY functions, NOT to ${funcName}:\n`;
+                prompt += `  - Do NOT pass: ${fb.map(k => `${k}=...`).join(', ')} to ${funcName}(...)\n`;
+                prompt += `  - ${funcName}() ONLY accepts: (${(astContext.args || []).join(', ')})\n\n`;
+            }
+
             prompt += `\nExternal dependencies:\n`;
             for (const dep of astContext.dependencyContexts) {
                 const remaining = budgetTokens - estimateTokens(prompt);
@@ -326,12 +347,12 @@ export function getUserPrompt(
 
                 // Caller contexts for this dependency
                 if (dep.callerContexts && dep.callerContexts.length > 0 && (budgetTokens - estimateTokens(prompt)) > 150) {
-                    prompt += `Call sites for ${dep.name} (test all of these):\n`;
+                    prompt += `Call sites for ${dep.name} (these are how the DEPENDENCY is called internally, NOT parameters of ${funcName}):\n`;
                     for (const ctx of dep.callerContexts) {
                         const argsStr = ctx.args.join(', ');
                         const kwargsStr = Object.entries(ctx.kwargs).map(([k, v]) => `${k}=${v}`).join(', ');
                         const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
-                        prompt += `  ${ctx.caller_file} / ${ctx.caller_func}: ${dep.name}(${callSig})\n`;
+                        prompt += `  ${ctx.caller_file} / ${ctx.caller_func}: ${dep.name}(${callSig})  \u2190 internal call, NOT an argument of ${funcName}\n`;
                     }
                     prompt += `\n`;
                 }
@@ -369,6 +390,32 @@ export function getUserPrompt(
     } else {
         const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
         prompt += `\nSource code (write tests for this, do not copy it):\n\`\`\`python\n${src}\n\`\`\``;
+
+        // ── Fix B+C: 靜態 AST 補充：從 source code 讀取 raise + return 結構 ──
+        const srcLines = src.split('\n');
+        // Fix B: 從程式碼中偵測 raise 行
+        const raiseLines = srcLines.filter((l: string) => /^\s*raise\s+/.test(l));
+        if (raiseLines.length > 0) {
+            prompt += `\n\n⚠️ RAISE DETECTION (from static analysis):\n`;
+            for (const rl of raiseLines) {
+                const m = rl.trim().match(/^raise\s+(\w+)\s*\(([^)]*)\)/);
+                if (m) {
+                    prompt += `  - This function can raise ${m[1]}("${m[2].trim().replace(/["']/g,'')}")\n`;
+                    prompt += `    → MUST test with: with self.assertRaises(${m[1]}): ${funcName}(...)\n`;
+                    prompt += `    → Do NOT call assertEqual or assertIsNone on an input that triggers this raise.\n`;
+                }
+            }
+        }
+        // Fix C: 從程式碼中取得 return 結構提示
+        const returnLines = srcLines.filter((l: string) => /^\s*return\s+/.test(l) && !/^\s*return\s*$/.test(l));
+        if (returnLines.length > 0 && returnLines.length <= 8) {
+            prompt += `\nℹ️ RETURN VALUE STRUCTURE (from static analysis):\n`;
+            for (const rl of returnLines) {
+                const cleaned = rl.trim().replace(/^return\s+/, '');
+                prompt += `  - Possible return value: ${cleaned}\n`;
+            }
+            prompt += `  → Use ONLY the above structures in assertEqual. Do NOT invent new dict keys or types.\n`;
+        }
     }
 
     if (strategy === 'small') {
