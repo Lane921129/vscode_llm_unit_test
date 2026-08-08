@@ -59,6 +59,45 @@ function resolveTier(modelParamBillion: number, complexity: number, userTier: st
     return complexity <= 60 ? 3 : 4;
 }
 
+/**
+ * 並行限速執行器：同時最多執行 limit 個 task，所有結果按原順序回傳。
+ * 用於全檔案掃描 & 批次模式，控制 LLM API Rate Limit。
+ */
+async function runWithConcurrencyLimit<T>(
+    tasks: (() => Promise<T>)[],
+    limit: number
+): Promise<T[]> {
+    const results: T[] = new Array(tasks.length);
+    let idx = 0;
+    async function worker() {
+        while (idx < tasks.length) {
+            const i = idx++;
+            results[i] = await tasks[i]();
+        }
+    }
+    const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
+    await Promise.all(workers);
+    return results;
+}
+
+/**
+ * 判斷函式是否為 Stub/Dummy（無實際業務邏輯）。
+ * 觸發條件：複雜度分數 == 0，或函式本體僅包含 pass / return None / return <literal>
+ */
+function isStubFunction(complexityScore: number, astContext: any | null): boolean {
+    if (complexityScore === 0) return true;
+    if (!astContext || astContext.error) return false;
+    const code: string = (astContext.code || '').trim();
+    // 移除 docstring 後只剩 pass 或 return None / return 數字/字串
+    const bodyOnly = code
+        .replace(/^def\s+[^:]+:[\s\S]*?(?=\n[ \t]|$)/, '')  // 去掉 def 行
+        .replace(/^[\s"']{3}[\s\S]*?["']{3}/m, '')           // 去掉 docstring
+        .trim();
+    if (/^pass$/m.test(bodyOnly)) return true;
+    if (/^return\s+(None|True|False|\d+(\.\d+)?|['"][^'"]*['"])$/m.test(bodyOnly)) return true;
+    return false;
+}
+
 /** 呼叫 mock_scaffold_generator.py，回傳 mock 骨架 */
 async function runMockScaffold(
     filePath: string,
@@ -173,21 +212,22 @@ export function activate(context: vscode.ExtensionContext) {
             params.sessionDate = dateStr;
 
             if (!params.funcName) {
-                // 全檔案模式：萃取所有函式並依序測試
+                // 全檔案模式：萃取所有函式，並行處理（最多 3 個同時執行）
                 const funcs = extractFunctionsFromFile(params.filePath);
                 if (funcs.length === 0) {
                     log(`[系統] 在檔案 ${path.basename(params.filePath)} 中找不到任何函式，無法進行全檔案測試。`);
                 } else {
-                    log(`[系統] 開啟「全檔案掃描模式」！共找到 ${funcs.length} 個函式，準備依序進行 AST 解析與測試...`);
-                    for (let i = 0; i < funcs.length; i++) {
-                        if (isAborted) break;
-                        const fName = funcs[i];
+                    const PARALLEL_LIMIT = 3;
+                    log(`[系統] 開啟「全檔案掃描模式」！共找到 ${funcs.length} 個函式，準備以最多 ${PARALLEL_LIMIT} 個並行作業進行處理...`);
+                    const tasks = funcs.map((fName, i) => async () => {
+                        if (isAborted) return;
                         log(`\n======================================================`);
                         log(`[系統] 正在處理函式 (${i+1}/${funcs.length}): ${fName}`);
                         log(`======================================================`);
                         const singleParams: AnalysisParams = { ...params, funcName: fName };
                         await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
-                    }
+                    });
+                    await runWithConcurrencyLimit(tasks, PARALLEL_LIMIT);
                     log(`\n[系統] 🎉 全檔案掃描與測試執行完畢！`);
                 }
             } else {
@@ -219,32 +259,30 @@ export function activate(context: vscode.ExtensionContext) {
 
                 log(`[系統] 開始批次測試，共找到 ${pyFiles.length} 個 Python 檔案。`);
                 const projectName = path.basename(params.batchPath);
+                const PARALLEL_LIMIT = 3;
+                // 收集所有 (file, funcName) 對
+                const allTasks: Array<{ file: string; fName: string; fileIdx: number; funcIdx: number; totalFuncs: number }> = [];
                 for (let i = 0; i < pyFiles.length; i++) {
-                    if (isAborted) {
-                        log(`[系統] ⚠️ 批次測試已由使用者強制中止。`);
-                        break;
-                    }
+                    if (isAborted) break;
                     const file = pyFiles[i];
-                    log(`\n======================================================`);
-                    log(`[系統] 正在處理批次檔案 (${i+1}/${pyFiles.length}): ${file}`);
-                    log(`======================================================`);
-                    
                     const funcs = extractFunctionsFromFile(file);
                     if (funcs.length === 0) {
                         log(`[系統] 檔案 ${path.basename(file)} 中無可測試的函式，跳過。`);
                         continue;
                     }
-                    
-                    log(`[系統] 該檔案包含 ${funcs.length} 個函式，準備逐一測試...`);
                     for (let j = 0; j < funcs.length; j++) {
-                        if (isAborted) break;
-                        const fName = funcs[j];
-                        log(`\n--- 批次任務進度: 檔案 ${i+1}/${pyFiles.length}, 函式 ${j+1}/${funcs.length} ---`);
-                        log(`[系統] 目標函式: ${fName}`);
-                        const singleParams: AnalysisParams = { ...params, filePath: file, funcName: fName, projectName: projectName, sessionDate: dateStr };
-                        await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                        allTasks.push({ file, fName: funcs[j], fileIdx: i, funcIdx: j, totalFuncs: funcs.length });
                     }
                 }
+                log(`[系統] 批次掃描完成，共 ${allTasks.length} 個函式任務，以最多 ${PARALLEL_LIMIT} 個並行作業處理...`);
+                const batchTaskFns = allTasks.map(({ file, fName, fileIdx, funcIdx, totalFuncs }) => async () => {
+                    if (isAborted) return;
+                    log(`\n--- 批次任務進度: 檔案 ${fileIdx+1}/${pyFiles.length}, 函式 ${funcIdx+1}/${totalFuncs} ---`);
+                    log(`[系統] 目標函式: ${fName}`);
+                    const singleParams: AnalysisParams = { ...params, filePath: file, funcName: fName, projectName: projectName, sessionDate: dateStr };
+                    await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                });
+                await runWithConcurrencyLimit(batchTaskFns, PARALLEL_LIMIT);
                 log(`\n[系統] 🎉 批次自動化測試執行完畢！`);
             } catch (error) {
                 log(`[錯誤] 批次執行發生錯誤: ${error}`);
@@ -708,6 +746,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         fs.mkdirSync(sessionDir, { recursive: true });
     }
 
+    // ─── 優化三：斷點續跑 - 若 final_report.md 已存在，直接跳過 ───
+    const existingReport = path.join(sessionDir, 'final_report.md');
+    if (fs.existsSync(existingReport)) {
+        log(`[系統] ⏭️ 跳過 ${params.funcName}：已有完成的分析結果（${existingReport}）。`);
+        return;
+    }
+
     let astContext: AstContext | null = null;
     if (params.funcName) {
         log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
@@ -809,6 +854,53 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         else { log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`); }
     }
 
+    // ─── 優化一：Stub/Dummy 函式快速通道 ───
+    // 若函式為純 Stub（pass/return None/return <literal>），跳過 LLM + 突變測試
+    if (params.funcName && isStubFunction(complexityScore, astContext)) {
+        log(`[快速通道] 🚀 偵測到 Stub/Dummy 函式（複雜度 ${complexityScore}/100），直接生成最小 Smoke Test，跳過 LLM 呼叫與突變測試。`);
+        const moduleName = path.basename(params.filePath, '.py');
+        const className = (astContext as any)?.class_name as string | undefined;
+        const args: string[] = (astContext as any)?.args || [];
+        // 生成呼叫用的引數預設值
+        const defaultArgs = args.map((_a: string, i: number) => i === 0 && className ? 'None' : 'None');
+        const importLine = className
+            ? `from ${moduleName} import ${className}`
+            : `from ${moduleName} import ${params.funcName}`;
+        const callLine = className
+            ? `self._obj = ${className}()\n        result = self._obj.${params.funcName}(${defaultArgs.join(', ')})`
+            : `result = ${params.funcName}(${defaultArgs.join(', ')})`;
+        const setupClass = className ? `\n    def setUp(self):\n        self._obj = ${className}()\n` : '';
+
+        const smokeTest = [
+            `import unittest`,
+            importLine,
+            ``,
+            `class TestStub${params.funcName}(unittest.TestCase):`,
+            setupClass,
+            `    def test_smoke_no_exception(self):`,
+            `        """Stub function smoke test: verifies calling it does not raise an exception."""`,
+            `        try:`,
+            `            ${callLine}`,
+            `        except Exception as e:`,
+            `            self.fail(f"Stub function raised an exception: {e}")`,
+            ``,
+            `if __name__ == '__main__':`,
+            `    unittest.main()`,
+        ].join('\n');
+
+        const testPath = path.join(sessionDir, 'loop1_test.py');
+        fs.writeFileSync(testPath, smokeTest, 'utf-8');
+
+        finalReportMarkdown += `## 🚀 快速通道結果\n\n`;
+        finalReportMarkdown += `> [!NOTE]\n> 此函式為 Stub/Dummy 函式（複雜度 ${complexityScore}/100），已跳過 LLM 生成與突變測試，直接產出最小 Smoke Test。\n\n`;
+        finalReportMarkdown += `- **突變分數**: N/A（函式無可突變的業務邏輯）\n`;
+        finalReportMarkdown += `- **生成測試**: \`${testPath}\`\n\n`;
+        finalReportMarkdown += `\`\`\`python\n${smokeTest}\n\`\`\`\n`;
+
+        fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
+        log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
+        return;
+    }
 
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
         if (isAborted) {
