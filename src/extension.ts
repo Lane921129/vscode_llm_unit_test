@@ -81,22 +81,61 @@ async function runWithConcurrencyLimit<T>(
 }
 
 /**
- * 判斷函式是否為 Stub/Dummy（無實際業務邏輯）。
- * 觸發條件：複雜度分數 == 0，或函式本體僅包含 pass / return None / return <literal>
+ * 判斷函式是否為 Stub/Dummy（無實際業務邏輯），可走快速通道。
+ * 觸發條件：
+ *   1. 複雜度分數 == 0
+ *   2. 函式本體僅包含 pass / return None / return <literal>
+ *   3. 函式本體無條件分支、無迴圈、無外部函式呼叫（純算術/賦值）
  */
 function isStubFunction(complexityScore: number, astContext: any | null): boolean {
     if (complexityScore === 0) return true;
     if (!astContext || astContext.error) return false;
     const code: string = (astContext.code || '').trim();
-    // 移除 docstring 後只剩 pass 或 return None / return 數字/字串
-    const bodyOnly = code
-        .replace(/^def\s+[^:]+:[\s\S]*?(?=\n[ \t]|$)/, '')  // 去掉 def 行
-        .replace(/^[\s"']{3}[\s\S]*?["']{3}/m, '')           // 去掉 docstring
-        .trim();
-    if (/^pass$/m.test(bodyOnly)) return true;
-    if (/^return\s+(None|True|False|\d+(\.\d+)?|['"][^'"]*['"])$/m.test(bodyOnly)) return true;
+    const allLines = code.split('\n');
+
+    // 跳過 def 行，收集 body 行（排除空行與純注釋）
+    const bodyLines = allLines.slice(1)
+        .map((l: string) => l.trim())
+        .filter((l: string) => l && !l.startsWith('#'));
+
+    // 移除 docstring（三引號）
+    const codeLines: string[] = [];
+    let inDocstring = false;
+    for (const l of bodyLines) {
+        const tripleDouble = (l.match(/"""/g) || []).length;
+        const tripleSingle = (l.match(/'''/g) || []).length;
+        if (!inDocstring && (l.startsWith('"""') || l.startsWith("'''"))) {
+            // 單行 docstring（開頭結尾都是三引號）
+            if (tripleDouble >= 2 || tripleSingle >= 2) continue;
+            inDocstring = true; continue;
+        }
+        if (inDocstring) {
+            if (l.includes('"""') || l.includes("'''")) inDocstring = false;
+            continue;
+        }
+        codeLines.push(l);
+    }
+
+    // 條件 2：只有 pass / return <literal>
+    if (codeLines.length === 0) return true; // 空函式
+    if (codeLines.length === 1 && /^pass$/.test(codeLines[0])) return true;
+    if (codeLines.length === 1 && /^return\s+(None|True|False|-?\d+(\.\d+)?|['"]{1}[^'"]*['"]{1})$/.test(codeLines[0])) return true;
+
+    // 條件 3：無分支、無迴圈、無外部呼叫（純賦值 + return）
+    const hasBranch = codeLines.some((l: string) => /^(if|elif|else:|for\s|while\s|try:|except|with\s|raise\s|yield\s)/.test(l));
+    // 外部呼叫：排除 raise/print 等，但任何 word( 都視為外部呼叫
+    const hasExternalCall = codeLines.some((l: string) => {
+        // 只有 return / assignment / pass，且無函式呼叫
+        const stripped = l.replace(/^return\s+/, '').replace(/^[a-zA-Z_]\w*\s*=\s*/, '');
+        return /[a-zA-Z_]\w*\s*\(/.test(stripped);
+    });
+    const shortBody = codeLines.length <= 6;
+
+    if (!hasBranch && !hasExternalCall && shortBody) return true;
+
     return false;
 }
+
 
 /** 呼叫 mock_scaffold_generator.py，回傳 mock 骨架 */
 async function runMockScaffold(
