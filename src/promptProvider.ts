@@ -384,17 +384,14 @@ export function getUserPrompt(
         }
     }
 
-    if (focusContexts) {
-        prompt += `\nFailed mutants to kill:\n${focusContexts}\n`;
-        prompt += `(Add targeted asserts to kill each mutant. Do not rewrite the whole test file.)\n`;
-    } else {
+    // ── 共用段：Fix B/C + Trace 重申，Loop 1 和 Loop 2+ 都執行 ──
+    {
         const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
-        prompt += `\nSource code (write tests for this, do not copy it):\n\`\`\`python\n${src}\n\`\`\``;
-
-        // ── Fix B+C: 靜態 AST 補充：從 source code 讀取 raise + return 結構 ──
         const srcLines = src.split('\n');
-        // Fix B: 從程式碼中偵測 raise 行
+
+        // Fix B：偵測 raise 行 vs try/except 攔截
         const raiseLines = srcLines.filter((l: string) => /^\s*raise\s+/.test(l));
+        const exceptLines = srcLines.filter((l: string) => /^\s*except[\s:]/.test(l));
         if (raiseLines.length > 0) {
             prompt += `\n\n⚠️ RAISE DETECTION (from static analysis):\n`;
             for (const rl of raiseLines) {
@@ -405,8 +402,15 @@ export function getUserPrompt(
                     prompt += `    → Do NOT call assertEqual or assertIsNone on an input that triggers this raise.\n`;
                 }
             }
+        } else if (exceptLines.length > 0) {
+            // 函式有 try/except 但自身不 raise → 永遠不拋例外給 caller
+            prompt += `\n\n✅ EXCEPTION HANDLING NOTE (from static analysis):\n`;
+            prompt += `  - ${funcName}() catches exceptions internally via try/except.\n`;
+            prompt += `  - This function NEVER raises exceptions to the caller.\n`;
+            prompt += `  - Do NOT use assertRaises() — always use assertEqual() to check return values.\n`;
         }
-        // Fix C: 從程式碼中取得 return 結構提示
+
+        // Fix C：return 結構提示（Loop 1 & Loop 2+ 都提示）
         const returnLines = srcLines.filter((l: string) => /^\s*return\s+/.test(l) && !/^\s*return\s*$/.test(l));
         if (returnLines.length > 0 && returnLines.length <= 8) {
             prompt += `\nℹ️ RETURN VALUE STRUCTURE (from static analysis):\n`;
@@ -416,7 +420,32 @@ export function getUserPrompt(
             }
             prompt += `  → Use ONLY the above structures in assertEqual. Do NOT invent new dict keys or types.\n`;
         }
+
+        // Trace 重申：Loop 2+ 強制再次列出 Verified Real Execution Results，防止 AI 使用假輸入
+        if (focusContexts && astContext) {
+            const traceRemind = astContext.traceResult;
+            if (traceRemind && !traceRemind.load_error &&
+                (traceRemind.examples.length > 0 || traceRemind.errors.length > 0)) {
+                prompt += `\n⚠️ REMINDER — Verified Real Execution Results (MUST use these EXACT values in ALL new assertions):\n`;
+                for (const ex of (traceRemind.examples as any[]).slice(0, 5)) {
+                    prompt += `  - Input: (${ex.args.join(', ')}) => Returns: ${ex.result}  ← use assertEqual\n`;
+                }
+                for (const er of (traceRemind.errors as any[]).slice(0, 5)) {
+                    prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}  ← use assertRaises\n`;
+                }
+                prompt += `  ← Do NOT invent inputs. Do NOT guess return values. Use ONLY the above.\n`;
+            }
+        }
     }
+
+    if (focusContexts) {
+        prompt += `\nFailed mutants to kill:\n${focusContexts}\n`;
+        prompt += `(Add targeted asserts to kill each mutant. Do not rewrite the whole test file.)\n`;
+    } else {
+        const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
+        prompt += `\nSource code (write tests for this, do not copy it):\n\`\`\`python\n${src}\n\`\`\``;
+    }
+
 
     if (strategy === 'small') {
         const className = astContext?.class_name as string | null | undefined;
