@@ -311,24 +311,38 @@ export function getUserPrompt(
 
         // Dependency contexts (budget-aware distillation)
         if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
-            // ── Fix A: 禁用列表 ──
-            // 收集所有相依函式的參數名稱，找出「不屬於目標函式」的部分加入禁用列表
+        // ── Fix A: 禁用列表（args + return dict keys）──
             const ownArgSet = new Set<string>(astContext.args || []);
             const forbiddenKwargs: string[] = [];
             for (const dep of astContext.dependencyContexts) {
+                // (A-1) dependency 的 parameter 名稱
                 if (dep.args && Array.isArray(dep.args)) {
                     for (const depArg of dep.args) {
-                        const cleanArg = depArg.replace(/[:\s].*/g, '').trim(); // remove type annotation
+                        const cleanArg = depArg.replace(/[:\s].*/g, '').trim();
                         if (cleanArg && cleanArg !== 'self' && !ownArgSet.has(cleanArg)) {
                             forbiddenKwargs.push(cleanArg);
+                        }
+                    }
+                }
+                // (A-2) dependency return dict 的 key 名稱
+                if (dep.code) {
+                    const returnMatches = (dep.code as string).matchAll(/return\s*\{([^}]+)\}/g);
+                    for (const match of returnMatches) {
+                        const keyMatches = match[1].matchAll(/['"]([a-zA-Z_]\w*)['"]/g);
+                        for (const km of keyMatches) {
+                            const key = km[1];
+                            if (key && !ownArgSet.has(key) && !['true','false','none'].includes(key.toLowerCase())) {
+                                forbiddenKwargs.push(key);
+                            }
                         }
                     }
                 }
             }
             if (forbiddenKwargs.length > 0) {
                 const fb = [...new Set(forbiddenKwargs)];
-                prompt += `\n⚠️ FORBIDDEN KWARGS: The following params belong to DEPENDENCY functions, NOT to ${funcName}:\n`;
+                prompt += `\n⚠️ FORBIDDEN KWARGS: The following names belong to DEPENDENCY functions (as params or return dict keys), NOT to ${funcName}:\n`;
                 prompt += `  - Do NOT pass: ${fb.map(k => `${k}=...`).join(', ')} to ${funcName}(...)\n`;
+                prompt += `  - Some of these (e.g. 'partner', 'claims') are RETURN VALUE KEYS from a dependency, NOT parameters of ${funcName}.\n`;
                 prompt += `  - ${funcName}() ONLY accepts: (${(astContext.args || []).join(', ')})\n\n`;
             }
 
@@ -423,14 +437,45 @@ export function getUserPrompt(
 
         // Trace 重申：Loop 2+ 強制再次列出 Verified Real Execution Results，防止 AI 使用假輸入
         if (focusContexts && astContext) {
+            // 重申 Forbidden Kwargs（在 mutant focus 模式下再強調一次）
+            if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
+                const ownArgs: string[] = astContext.args || [];
+                const ownArgSet2 = new Set<string>(ownArgs);
+                const fb2: string[] = [];
+                for (const dep of astContext.dependencyContexts) {
+                    if (dep.args && Array.isArray(dep.args)) {
+                        for (const a of dep.args) {
+                            const ca = a.replace(/[:\s].*/g, '').trim();
+                            if (ca && ca !== 'self' && !ownArgSet2.has(ca)) { fb2.push(ca); }
+                        }
+                    }
+                    if (dep.code) {
+                        const rms = (dep.code as string).matchAll(/return\s*\{([^}]+)\}/g);
+                        for (const rm of rms) {
+                            const kms = rm[1].matchAll(/['"]([a-zA-Z_]\w*)['"]/g);
+                            for (const km of kms) {
+                                const k = km[1];
+                                if (k && !ownArgSet2.has(k) && !['true','false','none'].includes(k.toLowerCase())) { fb2.push(k); }
+                            }
+                        }
+                    }
+                }
+                const fbUniq2 = [...new Set(fb2)];
+                if (fbUniq2.length > 0) {
+                    prompt += `\n🚫 REMINDER — FORBIDDEN KWARGS (do NOT pass these to ${funcName}):\n`;
+                    prompt += `  ${fbUniq2.map(k => `${k}=...`).join(', ')} are DEPENDENCY params/keys, NOT ${funcName}() params.\n`;
+                    prompt += `  ${funcName}() ONLY accepts: (${ownArgs.join(', ')})\n`;
+                }
+            }
+            // Trace data reminder
             const traceRemind = astContext.traceResult;
             if (traceRemind && !traceRemind.load_error &&
-                (traceRemind.examples.length > 0 || traceRemind.errors.length > 0)) {
+                ((traceRemind.examples && traceRemind.examples.length > 0) || (traceRemind.errors && traceRemind.errors.length > 0))) {
                 prompt += `\n⚠️ REMINDER — Verified Real Execution Results (MUST use these EXACT values in ALL new assertions):\n`;
-                for (const ex of (traceRemind.examples as any[]).slice(0, 5)) {
+                for (const ex of ((traceRemind.examples || []) as any[]).slice(0, 5)) {
                     prompt += `  - Input: (${ex.args.join(', ')}) => Returns: ${ex.result}  ← use assertEqual\n`;
                 }
-                for (const er of (traceRemind.errors as any[]).slice(0, 5)) {
+                for (const er of ((traceRemind.errors || []) as any[]).slice(0, 5)) {
                     prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}  ← use assertRaises\n`;
                 }
                 prompt += `  ← Do NOT invent inputs. Do NOT guess return values. Use ONLY the above.\n`;
