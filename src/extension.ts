@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './promptProvider';
+import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt, getReviewerSystemPrompt, getReviewerUserPrompt } from './promptProvider';
 import { extractFunctionsFromFile, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import * as path from 'path';
@@ -1349,45 +1349,85 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
-                        // ─── Tier 4 Self-repair Loop ───
-                        if (currentTier === 4) {
-                            log(`[Tier 4 Self-repair] 偵測到預先驗證失敗，嘗試讓模型自我修正（最多 2 次）...`);
-                            let repaired = false;
-                            for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
-                                if (isAborted) break;
-                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
-                                try {
-                                    const repairSys = getTier4SystemPrompt();
-                                    const repairUsr = getTier4SelfRepairPrompt(out);
-                                    const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log);
-                                    const repairCode = sanitizeLlmResponse(repairRaw);
-                                    if (repairCode && (repairCode.includes('def test_') || repairCode.includes('unittest'))) {
-                                        fs.writeFileSync(testPath, repairCode, 'utf8');
-                                        // 再次驗證
-                                        const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {
-                                            exec(preCheckCmd, { timeout: 30000 }, (err2, out2a, out2b) => {
-                                                res2({ ok: !err2, out: (out2a + out2b).trim() });
-                                            });
+                        // ─── Reviewer LLM 修復（適用所有 Tier）───
+                        log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行外科式修復（最多 2 次）...`);
+                        let reviewerFixed = false;
+                        const funcArgs: string[] = (astContext as any)?.args || [];
+                        for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
+                            if (isAborted) break;
+                            log(`[Reviewer] 第 ${reviewAttempt} 次修復嘗試...`);
+                            try {
+                                const brokenCode = fs.readFileSync(testPath, 'utf8');
+                                const revSys = getReviewerSystemPrompt();
+                                const revUsr = getReviewerUserPrompt(brokenCode, out, params.funcName || '', funcArgs);
+                                const revRaw = await requestLlmApi(params, revSys, revUsr, log);
+                                const revCode = sanitizeLlmResponse(revRaw);
+                                if (revCode && (revCode.includes('def test_') || revCode.includes('unittest'))) {
+                                    fs.writeFileSync(testPath, revCode, 'utf8');
+                                    const revCheck = await new Promise<{ ok: boolean; out: string }>((res2) => {
+                                        exec(preCheckCmd, { timeout: 30000 }, (e2, o2a, o2b) => {
+                                            res2({ ok: !e2, out: (o2a + o2b).trim() });
                                         });
-                                        if (result2.ok) {
-                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
-                                            finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
-                                            repaired = true;
-                                            resolve();
-                                            break;
-                                        } else {
-                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${result2.out.substring(0, 200)}`);
-                                        }
+                                    });
+                                    if (revCheck.ok) {
+                                        log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
+                                        finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
+                                        reviewerFixed = true;
+                                        resolve();
+                                        break;
+                                    } else {
+                                        log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${revCheck.out.substring(0, 300)}`);
+                                        // 把最新錯誤回饋給下一輪
+                                        finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次仍失敗: ${revCheck.out.substring(0, 150)}\n\n`;
                                     }
-                                } catch (repairErr: any) {
-                                    log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);
+                                } else {
+                                    log(`[Reviewer] 第 ${reviewAttempt} 次回應無法解析為有效測試碼。`);
                                 }
+                            } catch (revErr: any) {
+                                log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);
                             }
-                            if (!repaired) {
-                                reject(new Error(`測試檔預先驗證失敗（Tier 4 Self-repair 共 2 次均無法修正）: ${out.substring(0, 200)}`));
+                        }
+
+                        if (!reviewerFixed) {
+                            // ─── Tier 4 Self-repair（Reviewer 失敗後的最後防線）───
+                            if (currentTier === 4) {
+                                log(`[Tier 4 Self-repair] Reviewer 無法修復，嘗試 Tier 4 自我修正（最多 2 次）...`);
+                                let repaired = false;
+                                for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
+                                    if (isAborted) break;
+                                    log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
+                                    try {
+                                        const repairSys = getTier4SystemPrompt();
+                                        const repairUsr = getTier4SelfRepairPrompt(out);
+                                        const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log);
+                                        const repairCode = sanitizeLlmResponse(repairRaw);
+                                        if (repairCode && (repairCode.includes('def test_') || repairCode.includes('unittest'))) {
+                                            fs.writeFileSync(testPath, repairCode, 'utf8');
+                                            const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {
+                                                exec(preCheckCmd, { timeout: 30000 }, (err2, out2a, out2b) => {
+                                                    res2({ ok: !err2, out: (out2a + out2b).trim() });
+                                                });
+                                            });
+                                            if (result2.ok) {
+                                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
+                                                finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
+                                                repaired = true;
+                                                resolve();
+                                                break;
+                                            } else {
+                                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${result2.out.substring(0, 200)}`);
+                                            }
+                                        }
+                                    } catch (repairErr: any) {
+                                        log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);
+                                    }
+                                }
+                                if (!repaired) {
+                                    reject(new Error(`測試檔預先驗證失敗（Reviewer + Tier 4 Self-repair 均無法修正）: ${out.substring(0, 200)}`));
+                                }
+                            } else {
+                                reject(new Error(`測試檔預先驗證失敗（Reviewer 無法修正）: ${out.substring(0, 200)}`));
                             }
-                        } else {
-                            reject(new Error(`測試檔預先驗證失敗（unittest 無法執行）: ${out.substring(0, 200)}`));
                         }
                     } else {
                         const ran = out.match(/Ran (\d+) test/);
