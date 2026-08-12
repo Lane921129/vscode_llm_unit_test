@@ -979,11 +979,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (focusContext) {
                 log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
             }
-            // Golden Test 錨定：將黃金版本的測試嵌入到 focusContext，明確禁止 LLM 刪除修改
+            // 最優解錨定：將歷史最高分的測試嵌入到 focusContext，明確禁止 LLM 刪除修改
             if (bestCode) {
-                const goldenBlock = `=== EXISTING VERIFIED TESTS (DO NOT DELETE OR MODIFY THESE METHODS) ===\n${bestCode}\n=== END OF EXISTING TESTS ===\n\n`;
-                focusContext = goldenBlock + focusContext;
-                log(`[Golden Test] 已將黃金測試集（${bestScore}%）嵌入到 Prompt，防止 LLM 改壞舊斷言。`);
+                const bestBlock = `=== EXISTING VERIFIED TESTS (DO NOT DELETE OR MODIFY THESE METHODS) ===\n${bestCode}\n=== END OF EXISTING TESTS ===\n\n`;
+                focusContext = bestBlock + focusContext;
+                log(`[最優解錨定] 已將歷史最優測試集（${bestScore}%）嵌入到 Prompt，防止 LLM 改壞舊斷言。`);
             }
         }
 
@@ -1597,20 +1597,20 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalReportMarkdown += `- **存活變異體**: 無\n`;
             }
 
-            // ── Rollback 保底：更新或回滾黃金測試集 ──
+            // ── Rollback 保底：更新或回滾至歷史最優解 ──
             if (mutationScore > bestScore) {
                 bestScore = mutationScore;
                 bestCode = fs.readFileSync(testPath, 'utf8');
                 bestTestPath = testPath;
-                log(`[Rollback] 💾 新最高分！已將第 ${currentLoop} 輪測試檔記錄為黃金版本（${mutationScore}%）。`);
-                finalReportMarkdown += `> [!NOTE]\n> 💾 本輪為目前最高分（${mutationScore}%），已存為黃金版本。\n\n`;
+                log(`[Rollback] 💾 新最高分！已將第 ${currentLoop} 輪測試檔記錄為歷史最優解（${mutationScore}%）。`);
+                finalReportMarkdown += `> [!NOTE]\n> 💾 本輪為目前最高分（${mutationScore}%），已存為歷史最優解。\n\n`;
             } else if (currentLoop > 1 && mutationScore < bestScore && bestCode) {
-                // 分數下降：自動回滾至黃金版本
+                // 分數下降：自動回滾至歷史最優解
                 const droppedScore = mutationScore;
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore; // 維持最高分不歸零
-                log(`[Rollback] ⚠️ 第 ${currentLoop} 輪分數（${droppedScore}%）低於黃金版本（${bestScore}%），已自動回滾至黃金版本。`);
-                finalReportMarkdown += `> [!WARNING]\n> ⚠️ 本輪分數（${droppedScore}%）低於黃金版本（${bestScore}%），已自動回滾至黃金版本測試集。\n\n`;
+                log(`[Rollback] ⚠️ 第 ${currentLoop} 輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解。`);
+                finalReportMarkdown += `> [!WARNING]\n> ⚠️ 本輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解測試集。\n\n`;
             }
 
             sidebarProvider.webview?.postMessage({
