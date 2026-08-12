@@ -160,7 +160,7 @@ async function runMockScaffold(
     });
 }
 
-let currentAbortController: AbortController | null = null;
+const activeAbortControllers = new Set<AbortController>();
 let currentMutpyProcess: ChildProcess | null = null;
 let isAborted = false;
 
@@ -334,7 +334,11 @@ export function activate(context: vscode.ExtensionContext) {
     const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
         if (!isAborted) {
             isAborted = true;
-            if (currentAbortController) {currentAbortController.abort();}
+            // 立刻中止所有進行中的 API 請求
+            for (const ctrl of activeAbortControllers) {
+                ctrl.abort();
+            }
+            activeAbortControllers.clear();
             if (currentMutpyProcess) {
                 exec(`taskkill /pid ${currentMutpyProcess.pid} /T /F`);
                 currentMutpyProcess.kill();
@@ -482,10 +486,11 @@ async function requestLlmApi(
         bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
     }
 
-    currentAbortController = new AbortController();
+    const controller = new AbortController();
+    activeAbortControllers.add(controller);
     const timeoutId = setTimeout(() => {
-        if (currentAbortController) {
-            currentAbortController.abort();
+        if (activeAbortControllers.has(controller)) {
+            controller.abort();
             log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
         }
     }, params.timeoutSeconds * 1000);
@@ -496,11 +501,11 @@ async function requestLlmApi(
             method: 'POST',
             headers: headers,
             body: JSON.stringify(bodyData),
-            signal: currentAbortController.signal
+            signal: controller.signal
         });
     } finally {
         clearTimeout(timeoutId);
-        currentAbortController = null;
+        activeAbortControllers.delete(controller);
     }
 
     if (isAborted) throw new Error("使用者強制中止");
@@ -731,6 +736,10 @@ function parseMutmutSurvived(mutatestResult: string): string {
 async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: MutationViewProvider) {
     let currentLoop = 1;
     let mutationScore = 0;
+    // Rollback 保底：記錄歷史最高分的測試檔，防止後輪 LLM 改壞舊測試
+    let bestScore = -1;
+    let bestCode = '';
+    let bestTestPath = '';
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
     const userTierSetting = params.promptStrategy || 'auto';
@@ -969,7 +978,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (focusContext) {
                 log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
             }
+            // Golden Test 錨定：將黃金版本的測試嵌入到 focusContext，明確禁止 LLM 刪除修改
+            if (bestCode) {
+                const goldenBlock = `=== EXISTING VERIFIED TESTS (DO NOT DELETE OR MODIFY THESE METHODS) ===\n${bestCode}\n=== END OF EXISTING TESTS ===\n\n`;
+                focusContext = goldenBlock + focusContext;
+                log(`[Golden Test] 已將黃金測試集（${bestScore}%）嵌入到 Prompt，防止 LLM 改壞舊斷言。`);
+            }
         }
+
         const userPrompt = getUserPrompt(
             params.filePath,
             params.funcName,
@@ -1538,6 +1554,22 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 log(`[分析] 本輪無存活變異體，或分析結果已達最優。`);
                 if (mutationScore >= 100) {reasonStr = "通過";}
                 finalReportMarkdown += `- **存活變異體**: 無\n`;
+            }
+
+            // ── Rollback 保底：更新或回滾黃金測試集 ──
+            if (mutationScore > bestScore) {
+                bestScore = mutationScore;
+                bestCode = fs.readFileSync(testPath, 'utf8');
+                bestTestPath = testPath;
+                log(`[Rollback] 💾 新最高分！已將第 ${currentLoop} 輪測試檔記錄為黃金版本（${mutationScore}%）。`);
+                finalReportMarkdown += `> [!NOTE]\n> 💾 本輪為目前最高分（${mutationScore}%），已存為黃金版本。\n\n`;
+            } else if (currentLoop > 1 && mutationScore < bestScore && bestCode) {
+                // 分數下降：自動回滾至黃金版本
+                const droppedScore = mutationScore;
+                fs.writeFileSync(testPath, bestCode, 'utf8');
+                mutationScore = bestScore; // 維持最高分不歸零
+                log(`[Rollback] ⚠️ 第 ${currentLoop} 輪分數（${droppedScore}%）低於黃金版本（${bestScore}%），已自動回滾至黃金版本。`);
+                finalReportMarkdown += `> [!WARNING]\n> ⚠️ 本輪分數（${droppedScore}%）低於黃金版本（${bestScore}%），已自動回滾至黃金版本測試集。\n\n`;
             }
 
             sidebarProvider.webview?.postMessage({

@@ -81,10 +81,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
 
                 case 'browseProjectFolder': {
+                    const existingProject = config.get<string>('projectPath', '');
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
-                        openLabel: '選擇專案資料夾'
+                        openLabel: '選擇專案資料夾',
+                        defaultUri: existingProject ? vscode.Uri.file(existingProject) : undefined
                     };
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
@@ -113,10 +115,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'browseFolder': {
+                    const existingOutput = config.get<string>('outputPath', '');
+                    const existingProject2 = config.get<string>('projectPath', '');
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
-                        openLabel: '選擇輸出資料夾'
+                        openLabel: '選擇輸出資料夾',
+                        defaultUri: existingOutput
+                            ? vscode.Uri.file(existingOutput)
+                            : existingProject2 ? vscode.Uri.file(existingProject2) : undefined
                     };
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
@@ -132,10 +139,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'browseBatchFolder': {
+                    const existingProject3 = config.get<string>('projectPath', '');
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
-                        openLabel: '選擇批次測試資料夾'
+                        openLabel: '選擇批次測試資料夾',
+                        defaultUri: existingProject3 ? vscode.Uri.file(existingProject3) : undefined
                     };
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
