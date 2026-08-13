@@ -59,6 +59,23 @@
           "type": "string",
           "default": "",
           "description": "測試結果輸出資料夾路徑"
+        },
+        "llmUnitTest.language": {
+          "type": "string",
+          "enum": ["auto", "en", "zh-tw"],
+          "default": "auto",
+          "description": "UI and output language (auto will follow VS Code language)"
+        },
+        "llmUnitTest.promptStrategy": {
+          "type": "string",
+          "enum": ["auto", "small", "large"],
+          "default": "auto",
+          "description": "Prompt strategy: small (strict formatting) vs large (advanced reasoning)"
+        },
+        "llmUnitTest.ollamaBaseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Base URL for Ollama API"
         }
       }
     }
