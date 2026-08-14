@@ -699,6 +699,25 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
     ].join('\n');
 }
 
+function extractCoverage(output: string, targetFile: string): { coverageText: string, missingLines: string } {
+    let coverageText = "N/A";
+    let missingLines = "無";
+    const targetBaseName = path.basename(targetFile);
+    const lines = output.split('\n');
+    for (const line of lines) {
+        if (line.includes(targetBaseName)) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 4) {
+                coverageText = parts[3];
+                if (parts.length >= 5) {
+                    missingLines = parts.slice(4).join('');
+                }
+            }
+            break;
+        }
+    }
+    return { coverageText, missingLines };
+}
 
 function parseMutatestSurvived(mutatestResult: string): string {
     const lines = mutatestResult.split('\n');
@@ -1003,6 +1022,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
+        let loopCoverage: { coverageText: string, missingLines: string } | null = null;
         try {
             // ─── Tier 降階修復迴圈 ───
             let tierSuccess = false;
@@ -1343,7 +1363,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const parentDir = path.dirname(targetDir);
                 const grandParentDir = path.dirname(parentDir);
                 const pythonPath = `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`;
-                const preCheckCmd = `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
+                const preCheckCmd = `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`;
                 exec(preCheckCmd, { timeout: 30000 }, async (err, stdout, stderr) => {
                     const out = (stdout + stderr).trim();
                     if (err) {
@@ -1373,6 +1393,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     if (revCheck.ok) {
                                         log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
                                         finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
+                                        loopCoverage = extractCoverage(revCheck.out, params.filePath);
                                         reviewerFixed = true;
                                         resolve();
                                         break;
@@ -1412,6 +1433,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             if (result2.ok) {
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
                                                 finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
+                                                loopCoverage = extractCoverage(result2.out, params.filePath);
                                                 repaired = true;
                                                 resolve();
                                                 break;
@@ -1434,6 +1456,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const ran = out.match(/Ran (\d+) test/);
                         if (ran && parseInt(ran[1]) > 0) {
                             log(`[預先驗證通過] 執行了 ${ran[1]} 個測試，即將進行突變測試...`);
+                            loopCoverage = extractCoverage(out, params.filePath);
                             resolve();
                         } else {
                             const msg = `測試檔都沒有跟 0 個測試（\`Ran 0 tests\`），測試名稱必須以 test_ 開頭`;
@@ -1554,6 +1577,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             // 擷取最後 1000 字元，避免錯誤訊息被截斷
             const displayLog = mutpyResult.length > 1000 ? '...' + mutpyResult.substring(mutpyResult.length - 1000) : mutpyResult;
             finalReportMarkdown += `### 執行日誌摘要\n\n\`\`\`text\n${displayLog}\n\`\`\`\n\n`;
+            
+            if (loopCoverage) {
+                finalReportMarkdown += `- **覆蓋率**: ${loopCoverage.coverageText} (未覆蓋行號: ${loopCoverage.missingLines})\n`;
+            }
             
             let reasonStr = "";
             if (engine === 'mutmut') {
