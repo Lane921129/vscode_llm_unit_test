@@ -9,14 +9,14 @@
 | Phase | Function | Description |
 |------|------|------|
 | **Phase 1** | Context Extraction | Uses VS Code API to get the target file, and Python AST to parse function signatures, arguments, and dependencies. |
-| **Phase 2** | Smart Generation | Calls LLM (Local Ollama or Cloud Gemini) to automatically generate Pytest test scripts. |
-| **Phase 3** | Vulnerability Analysis | Executes mutation testing via MutPy to identify surviving mutants and pinpoint code weaknesses. |
+| **Phase 2** | Smart Generation | Calls LLM (Local Ollama or Cloud Gemini) to automatically generate unittest test scripts. |
+| **Phase 3** | Vulnerability Analysis | Executes mutation testing via mutatest / mutmut to identify surviving mutants and pinpoint code weaknesses. |
 | **Phase 4** | Iterative Optimization | Feeds surviving mutant data back to the LLM to strengthen Assert logic until the mutation score reaches the target. |
 
 ### 🖥️ User Interface
 
 - **Sidebar Control Panel**: Toggle model environments, manage API Keys, and select target files/functions.
-- **Real-time Logs**: Fully tracks the execution status of every LLM call and MutPy run.
+- **Real-time Logs**: Fully tracks the execution status of every LLM call and mutation testing run.
 - **Coverage Dashboard**: Dynamically displays the Mutation Score for each file.
 
 ## 📦 Tech Stack
@@ -25,8 +25,8 @@
 |------|------|
 | Extension Framework | VS Code Extension API |
 | LLM Engine | Ollama (Local) / Google Gemini (Cloud) |
-| Test Framework | Pytest |
-| Mutation Testing | MutPy |
+| Test Framework | unittest |
+| Mutation Testing | mutatest (primary) / mutmut (fallback) |
 | Semantic Analysis | Python `ast` Module |
 | Build Tools | esbuild + TypeScript |
 
@@ -36,7 +36,7 @@
 
 - [Node.js](https://nodejs.org/) v18+
 - [Python](https://www.python.org/) 3.8+
-- `pip install pytest mutpy`
+- `pip install -r requirements.txt`
 - (Optional) [Ollama](https://ollama.com/) — For local model inference
 
 ### Development Setup
@@ -77,14 +77,14 @@ MIT License
 | 階段 | 功能 | 說明 |
 |------|------|------|
 | **Phase 1** | 上下文擷取 | 透過 VS Code API 取得目標檔案，使用 Python AST 解析函式特徵、參數、相依呼叫。 |
-| **Phase 2** | 智慧生成 | 呼叫 LLM（本地 Ollama 或雲端 Gemini）自動生成 Pytest 測試腳本。 |
-| **Phase 3** | 弱點分析 | 以 MutPy 執行突變測試，辨識存活的突變體並定義程式碼弱點。 |
+| **Phase 2** | 智慧生成 | 呼叫 LLM（本地 Ollama 或雲端 Gemini）自動生成 unittest 測試腳本。 |
+| **Phase 3** | 弱點分析 | 以 mutatest / mutmut 執行突變測試，辨識存活的突變體並定義程式碼弱點。 |
 | **Phase 4** | 迭代優化 | 將存活突變體資訊回饋至 LLM，強化 Assert 邏輯，直到突變分數達標。 |
 
 ### 🖥️ 使用者介面
 
 - **Sidebar 控制面板**：模型環境切換、API Key 管理、目標檔案與函式選擇。
-- **即時日誌**：完整顯示每輪 LLM 呼叫與 MutPy 執行結果。
+- **即時日誌**：完整顯示每輪 LLM 呼叫與突變測試執行結果。
 - **覆蓋率看板**：動態顯示每個檔案的突變分數 (Mutation Score)。
 
 ## 📦 技術架構
@@ -93,8 +93,8 @@ MIT License
 |------|------|
 | 擴充框架 | VS Code Extension API |
 | LLM 引擎 | Ollama (本地) / Google Gemini (雲端) |
-| 測試框架 | Pytest |
-| 突變測試 | MutPy |
+| 測試框架 | unittest |
+| 突變測試 | mutatest（主要）/ mutmut（備援） |
 | 語意分析 | Python `ast` 模組 |
 | 建置工具 | esbuild + TypeScript |
 
@@ -104,7 +104,7 @@ MIT License
 
 - [Node.js](https://nodejs.org/) v18+
 - [Python](https://www.python.org/) 3.8+
-- `pip install pytest mutpy`
+- `pip install -r requirements.txt`
 - （選用）[Ollama](https://ollama.com/) — 本地模型推理
 
 ### 開發環境啟動
