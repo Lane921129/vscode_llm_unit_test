@@ -239,7 +239,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <thead style="border-bottom:1px solid var(--vscode-editorGroup-border);"><tr>
                     <th style="padding:5px; width:30px; text-align:center;"><input type="checkbox" id="select-all"></th>
                     <th style="padding:5px;">${t('ui.columnFile')}</th>
-                    <th style="padding:5px;">${t('ui.columnScore')}</th>
+                    <th style="padding:5px;">突變分數 / 覆蓋率</th>
                     <th style="padding:5px;">Status</th>
                 </tr></thead>
                 <tbody><tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">${t('ui.noCoverageData')}</td></tr></tbody>
@@ -301,24 +301,36 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'setBatchPath': document.getElementById('batch-path').value = msg.path; break;
                 case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
                 case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
-                case 'updateCoverage':
+                case 'updateCoverage': {
                     const tbody = document.querySelector('#coverage-table tbody');
+                    const scoreNum = parseFloat(msg.score);
+                    const scoreColor = msg.score === '失敗' ? '#c75050'
+                        : isNaN(scoreNum) ? '#888'
+                        : scoreNum >= 80 ? '#2ea043'
+                        : scoreNum >= 50 ? '#d29922'
+                        : '#c75050';
+                    const scoreBadge = '<span class="badge score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600;">' + msg.score + '</span>';
+                    const covBadge = msg.coverage
+                        ? '<br><span style="background:#1565c0; color:#fff; padding:1px 6px; border-radius:4px; font-size:10px; margin-top:3px; display:inline-block;">\uD83D\uDCCA ' + msg.coverage + '</span>'
+                        : '';
+                    const cellHtml = scoreBadge + covBadge;
                     let existingRow = Array.from(tbody.querySelectorAll('tr')).find(row => row.cells[1]?.textContent === msg.fileName);
-                    if (existingRow) { 
-                        existingRow.cells[2].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                    if (existingRow) {
+                        existingRow.cells[2].innerHTML = cellHtml;
                         existingRow.cells[3].textContent = msg.reason || '';
-                    } else { 
-                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes(i18n.noCoverageData)) tbody.innerHTML = ''; 
-                        const newRow = tbody.insertRow(); 
+                    } else {
+                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes(i18n.noCoverageData)) tbody.innerHTML = '';
+                        const newRow = tbody.insertRow();
                         const cellCheck = newRow.insertCell(0);
                         cellCheck.style.textAlign = 'center';
                         cellCheck.innerHTML = '<input type="checkbox" class="row-sel">';
-                        newRow.insertCell(1).textContent = msg.fileName; 
-                        newRow.insertCell(2).innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
+                        newRow.insertCell(1).textContent = msg.fileName;
+                        newRow.insertCell(2).innerHTML = cellHtml;
                         newRow.insertCell(3).textContent = msg.reason || '';
                         Array.from(newRow.cells).forEach(c => c.style.padding = '5px');
                     }
                     break;
+                }
                 case 'setCustomKeys':
                     currentCustomKeys = msg.keys;
                     const ckeys = Object.keys(msg.keys);

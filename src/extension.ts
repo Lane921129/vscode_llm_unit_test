@@ -1644,6 +1644,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 command: 'updateCoverage',
                 fileName: path.basename(params.filePath),
                 score: typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A',
+                coverage: (loopCoverage as { coverageText: string; missingLines: string } | null)?.coverageText ?? null,
                 reason: reasonStr || '分析中'
             });
 
@@ -1672,6 +1673,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 command: 'updateCoverage',
                 fileName: path.basename(params.filePath),
                 score: '失敗',
+                coverage: null,
                 reason: message.includes('CUDA') ? 'VRAM 不足' : '執行異常'
             });
             break;
