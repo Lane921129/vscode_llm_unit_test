@@ -1371,7 +1371,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
                         // ─── Reviewer LLM 修復（適用所有 Tier）───
-                        log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行外科式修復（最多 2 次）...`);
+                        log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行修復及補充測資（最多 2 次）...`);
                         let reviewerFixed = false;
                         const funcArgs: string[] = (astContext as any)?.args || [];
                         for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
@@ -1393,17 +1393,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     if (revCheck.ok) {
                                         log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
                                         finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
+                                        finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
                                         loopCoverage = extractCoverage(revCheck.out, params.filePath);
                                         reviewerFixed = true;
                                         resolve();
                                         break;
                                     } else {
                                         log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${revCheck.out.substring(0, 300)}`);
-                                        // 把最新錯誤回饋給下一輪
-                                        finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次仍失敗: ${revCheck.out.substring(0, 150)}\n\n`;
+                                        finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
                                     }
                                 } else {
                                     log(`[Reviewer] 第 ${reviewAttempt} 次回應無法解析為有效測試碼。`);
+                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應無法解析為有效測試碼\n\n`;
                                 }
                             } catch (revErr: any) {
                                 log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);
