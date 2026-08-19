@@ -173,6 +173,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.testConfig')}</summary>
         <div class="content">
+            <label>⚡ 並行執行緒數 (Concurrency Workers)</label>
+            <select id="concurrency-select" style="margin-bottom: 8px;">
+                <option value="auto" selected>Auto（依模型規模自動調配）</option>
+                <option value="1">1（串行模式 - 適合小顯存 Local 模型）</option>
+                <option value="2">2 Workers</option>
+                <option value="3">3 Workers</option>
+                <option value="4">4 Workers</option>
+            </select>
             <label>🧠 ${t('ui.promptStrategy')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
                 <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>Auto — 依模型自動路由</option>
