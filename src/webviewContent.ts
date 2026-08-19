@@ -322,6 +322,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 </div>
             </div>
 
+            <!-- 指標與符號說明列 (Legend) -->
+            <div style="font-size:11px; opacity:0.85; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--vscode-editor-inactiveSelectionBackground); padding:4px 8px; border-radius:3px; margin-bottom:6px;" title="突變分數代表變異體殺死率，覆蓋率代表程式碼執行涵蓋行數比例">
+                <span title="🧬 突變分數 (Mutation Score)：測試套件殺死程式碼變異體的百分比，分數越高代表測試抓錯能力越強">🧬 <strong>突變分數</strong>: 變異體殺死率</span>
+                <span style="opacity:0.3;">|</span>
+                <span title="📊 行覆蓋率 (Line Coverage)：測試執行過程中所涵蓋到的原始程式碼行數比例">📊 <strong>覆蓋率</strong>: 程式碼行覆蓋</span>
+            </div>
+
             <!-- 全選與控制列 -->
             <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
                 <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
@@ -401,9 +408,15 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 : scoreNum >= 80 ? '#2ea043'
                 : scoreNum >= 50 ? '#d29922'
                 : '#c75050';
-            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;">' + escapeHtml(score) + '</span>';
+
+            const scoreTitle = score === '測試中' ? '狀態: 測試中 (正在執行突變測試與分析)'
+                : score === '失敗' ? '狀態: 執行中斷或驗證失敗'
+                : '🧬 突變分數 (Mutation Score): ' + score + ' (測試殺死變異體的百分比，越高越能抓出潛在 Bug)';
+            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;" title="' + escapeHtml(scoreTitle) + '">🧬 ' + escapeHtml(score) + '</span>';
+
+            const covTitle = '📊 行覆蓋率 (Line Coverage): ' + (coverage || 'N/A') + ' (測試所涵蓋執行的原始程式碼行數比例)';
             const covBadge = coverage
-                ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;">📊 ' + escapeHtml(coverage) + '</span>'
+                ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
                 : '';
             return '<div class="result-badges">' + scoreBadge + covBadge + '</div>';
         }
@@ -434,10 +447,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
             const label = document.createElement('span');
             if (showFileName) {
-                label.innerHTML = '<span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
-                                  (item.func ? '<span style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
+                label.innerHTML = '<span title="目標檔案: ' + escapeHtml(item.file) + '" style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
+                                  (item.func ? '<span title="目標函式: ' + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
             } else {
-                label.innerHTML = '<span style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
+                label.innerHTML = '<span title="目標函式: ' + escapeHtml(item.func || item.fileName) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
             }
             titleBox.appendChild(label);
             header.appendChild(titleBox);
