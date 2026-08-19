@@ -6,7 +6,7 @@ import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } f
 import { mergeTestSnippets } from './testMerger';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec, execSync, ChildProcess } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 系統：複雜度評估 + 路由
@@ -23,18 +23,15 @@ async function assessFunctionComplexity(
     filePath: string,
     funcName: string
 ): Promise<ComplexityResult> {
-    return new Promise((resolve) => {
-        const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
-        exec(`python "${script}" "${filePath}" "${funcName}"`,
-            { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-            (err, stdout) => {
-                try {
-                    resolve(JSON.parse(stdout.trim()) as ComplexityResult);
-                } catch {
-                    resolve({ score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] });
-                }
-            });
-    });
+    const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
+    try {
+        const { stdout } = await runSpawn('python', [script, filePath, funcName], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+        return JSON.parse(stdout.trim()) as ComplexityResult;
+    } catch {
+        return { score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] };
+    }
 }
 
 /**
@@ -67,13 +64,19 @@ function resolveTier(modelParamBillion: number, complexity: number, userTier: st
 async function runWithConcurrencyLimit<T>(
     tasks: (() => Promise<T>)[],
     limit: number
-): Promise<T[]> {
-    const results: T[] = new Array(tasks.length);
+): Promise<(T | undefined)[]> {
+    const results: (T | undefined)[] = new Array(tasks.length);
     let idx = 0;
     async function worker() {
         while (idx < tasks.length) {
+            if (isAborted) break;
             const i = idx++;
-            results[i] = await tasks[i]();
+            try {
+                results[i] = await tasks[i]();
+            } catch (err: any) {
+                // 任一 task 失敗不影響其他 worker 繼續執行
+                console.error(`[並行] 任務 ${i} 執行失敗: ${err?.message ?? err}`);
+            }
         }
     }
     const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
@@ -144,26 +147,88 @@ async function runMockScaffold(
     funcName: string,
     traceResult: any
 ): Promise<{ scaffold: string; patches: string[]; mock_names: string[] } | null> {
-    return new Promise((resolve) => {
-        const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
-        const traceArg = traceResult ? `"${JSON.stringify(traceResult).replace(/"/g, '\\"')}"` : '';
-        exec(`python "${script}" "${filePath}" "${funcName}" ${traceArg}`,
-            { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-            (err, stdout) => {
-                try {
-                    const parsed = JSON.parse(stdout.trim());
-                    if (parsed.scaffold) resolve(parsed);
-                    else resolve(null);
-                } catch {
-                    resolve(null);
-                }
-            });
-    });
+    const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
+    const args = ['python', script, filePath, funcName];
+    if (traceResult) args.push(JSON.stringify(traceResult));
+    try {
+        const { stdout } = await runSpawn('python',
+            traceResult ? [script, filePath, funcName, JSON.stringify(traceResult)] : [script, filePath, funcName],
+            { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }
+        );
+        const parsed = JSON.parse(stdout.trim());
+        return parsed.scaffold ? parsed : null;
+    } catch {
+        return null;
+    }
 }
 
+// ── 並行與 Process 管理 ──────────────────────────────────────
 const activeAbortControllers = new Set<AbortController>();
+const activeProcesses = new Set<ChildProcess>();
 let currentMutpyProcess: ChildProcess | null = null;
 let isAborted = false;
+
+/** 跨平台安全終止 Process Tree（含子行程） */
+function killProcessTree(proc: ChildProcess) {
+    if (!proc.pid) return;
+    if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', proc.pid.toString(), '/T', '/F']);
+    } else {
+        try {
+            process.kill(-proc.pid, 'SIGKILL'); // Unix: 殺整個 process group
+        } catch {
+            proc.kill('SIGKILL');
+        }
+    }
+}
+
+/**
+ * spawn 封裝：以引數陣列執行外部命令，自動追蹤到 activeProcesses。
+ * 比 exec() 更安全——路徑中有空格也不會崩潰。
+ */
+function runSpawn(
+    command: string,
+    args: string[],
+    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number }
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    return new Promise((resolve, reject) => {
+        if (isAborted) return reject(new Error('使用者強制中止'));
+
+        const proc = spawn(command, args, {
+            cwd: options.cwd,
+            env: options.env ?? process.env,
+            detached: process.platform !== 'win32',
+            shell: false
+        });
+
+        activeProcesses.add(proc);
+        let stdout = '';
+        let stderr = '';
+
+        let timer: NodeJS.Timeout | null = null;
+        if (options.timeout) {
+            timer = setTimeout(() => {
+                killProcessTree(proc);
+                reject(new Error(`執行超時 (超過 ${options.timeout! / 1000} 秒)`));
+            }, options.timeout);
+        }
+
+        proc.stdout?.on('data', (d) => { stdout += d.toString(); });
+        proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+
+        proc.on('close', (code) => {
+            if (timer) clearTimeout(timer);
+            activeProcesses.delete(proc);
+            resolve({ stdout, stderr, code });
+        });
+
+        proc.on('error', (err) => {
+            if (timer) clearTimeout(timer);
+            activeProcesses.delete(proc);
+            reject(err);
+        });
+    });
+}
 
 interface ModelProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
@@ -236,7 +301,7 @@ interface AstContext {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    const sidebarProvider = new MutationViewProvider();
+    const sidebarProvider = new MutationViewProvider(context.secrets);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(MutationViewProvider.viewType, sidebarProvider)
     );
@@ -337,15 +402,13 @@ export function activate(context: vscode.ExtensionContext) {
     const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
         if (!isAborted) {
             isAborted = true;
-            // 立刻中止所有進行中的 API 請求
-            for (const ctrl of activeAbortControllers) {
-                ctrl.abort();
-            }
+            // 立刻中止所有進行中的 LLM API 請求
+            for (const ctrl of activeAbortControllers) ctrl.abort();
             activeAbortControllers.clear();
-            if (currentMutpyProcess) {
-                exec(`taskkill /pid ${currentMutpyProcess.pid} /T /F`);
-                currentMutpyProcess.kill();
-            }
+            // 跨平台終止所有追蹤中的 Python 子行程
+            if (currentMutpyProcess) killProcessTree(currentMutpyProcess);
+            for (const proc of activeProcesses) killProcessTree(proc);
+            activeProcesses.clear();
         }
     });
 
@@ -365,46 +428,34 @@ async function extractAstContext(
     targetPath: string,
     funcName: string
 ): Promise<AstContext | null> {
-    return new Promise((resolve) => {
-        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
-
-        const cmd = `python "${pythonScript}" "${targetPath}" "${funcName}"`;
-
-        exec(cmd, { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout, stderr) => {
-            if (error) {
-                resolve({ error: stdout || stderr, name: "", args: [], docstring: "", calls: [], code: "" });
-                return;
-            }
-            try {
-                resolve(JSON.parse(stdout));
-            } catch {
-                resolve(null);
-            }
+    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
+    try {
+        const { stdout, stderr, code } = await runSpawn('python', [pythonScript, targetPath, funcName], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
-    });
+        if (code !== 0) {
+            return { error: stdout || stderr, name: '', args: [], docstring: '', calls: [], code: '' };
+        }
+        return JSON.parse(stdout);
+    } catch {
+        return null;
+    }
 }
 
 async function findCallerContexts(
     funcName: string,
     projectRoot: string
 ): Promise<CallerContext[]> {
-    return new Promise((resolve) => {
-        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
-        const cmd = `python "${pythonScript}" "${funcName}" "${projectRoot}"`;
-        exec(cmd, { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout) => {
-            if (error) { resolve([]); return; }
-            try {
-                const parsed = JSON.parse(stdout);
-                if (Array.isArray(parsed)) {
-                    resolve(parsed as CallerContext[]);
-                } else {
-                    resolve([]);
-                }
-            } catch {
-                resolve([]);
-            }
+    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
+    try {
+        const { stdout } = await runSpawn('python', [pythonScript, funcName, projectRoot], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
-    });
+        const parsed = JSON.parse(stdout);
+        return Array.isArray(parsed) ? (parsed as CallerContext[]) : [];
+    } catch {
+        return [];
+    }
 }
 
 interface TraceExample {
@@ -432,27 +483,21 @@ async function runDynamicTrace(
     funcName: string,
     callerArgs?: CallerContext[]
 ): Promise<DynamicTraceResult | null> {
-    return new Promise((resolve) => {
-        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
-        
-        // 如果有呼叫站語境，把已知的真實參數傳入
-        let inputsArg = '';
-        if (callerArgs && callerArgs.length > 0) {
-            const knownInputs = callerArgs.map(ctx => ctx.args);  // 只取 positional args
-            inputsArg = ` "${JSON.stringify(knownInputs).replace(/"/g, '\\"')}"`;
-        }
-
-        const cmd = `python "${pythonScript}" "${filePath}" "${funcName}"${inputsArg}`;
-        exec(cmd, { encoding: 'utf8', timeout: 15000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout) => {
-            if (error) { resolve(null); return; }
-            try {
-                const parsed = JSON.parse(stdout.trim());
-                resolve(parsed as DynamicTraceResult);
-            } catch {
-                resolve(null);
-            }
+    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
+    const args = [pythonScript, filePath, funcName];
+    if (callerArgs && callerArgs.length > 0) {
+        const knownInputs = callerArgs.map(ctx => ctx.args);
+        args.push(JSON.stringify(knownInputs));
+    }
+    try {
+        const { stdout } = await runSpawn('python', args, {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            timeout: 15000
         });
-    });
+        return JSON.parse(stdout.trim()) as DynamicTraceResult;
+    } catch {
+        return null;
+    }
 }
 
 async function requestLlmApi(
@@ -1491,15 +1536,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const isWin = process.platform === 'win32';
             try {
                 // 取得 Python 版本
-                const pyVerRaw = execSync('python --version 2>&1', { encoding: 'utf8' }).trim();
-                const pyVer = pyVerRaw.replace('Python ', '');
+                const { stdout: pyVerRaw } = await runSpawn('python', ['--version'], {
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+                });
+                const pyVer = pyVerRaw.trim().replace('Python ', '');
                 const preferredEngine = detectMutationEngine(pyVer);
                 log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
 
                 if (preferredEngine === 'mutmut') {
                     // 先嘗試 mutmut（Python 3.12+ 首選）
                     try {
-                        execSync('mutmut --version', { stdio: 'ignore' });
+                        await runSpawn('mutmut', ['--version'], {});
                         engine = 'mutmut';
                         log(`[系統] mutmut 可用，使用 mutmut 進行突變測試。`);
                     } catch {
@@ -1510,12 +1557,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else {
                     // Python < 3.12，優先 mutatest；若不可用則用 mutmut
                     try {
-                        execSync('python -c "from mutatest.cli import cli_main"', { stdio: 'ignore' });
+                        await runSpawn('python', ['-c', 'from mutatest.cli import cli_main'], {});
                         engine = 'mutatest';
                         log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
                     } catch {
                         try {
-                            execSync('mutmut --version', { stdio: 'ignore' });
+                            await runSpawn('mutmut', ['--version'], {});
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
                         } catch {
