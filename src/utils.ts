@@ -109,6 +109,10 @@ export async function findPythonFilesInDir(dir: string): Promise<string[]> {
 
 /** 偵測突變引擎 */
 export function detectMutationEngine(pythonVersion: string): 'mutatest' | 'mutmut' {
+    // Windows 下 mutmut 在 Python 3.12+ 經常因缺少 Unix resource 模組而報錯，強制優先使用 mutatest
+    if (process.platform === 'win32') {
+        return 'mutatest';
+    }
     const versionMatch = pythonVersion.match(/(\d+)\.(\d+)/);
     const major = versionMatch ? parseInt(versionMatch[1]) : 3;
     const minor = versionMatch ? parseInt(versionMatch[2]) : 0;

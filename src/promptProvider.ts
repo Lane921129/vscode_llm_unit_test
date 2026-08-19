@@ -143,7 +143,7 @@ export function getSystemPrompt(
 ${formatBlock}
 
 Rules:
-1. Start with import unittest. Import the function using: from MODULE import FUNCTION (absolute, not relative).
+1. Start with import unittest. Import the target function using its actual module name (e.g. from my_module import target_func). NEVER write literal "from MODULE import FUNCTION".
 2. Each test method starts with test_ and uses self.assert*().
 3. Do NOT copy or redefine the source function. Write test methods only.
 4. No pytest. No top-level assert.

@@ -313,6 +313,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     const tbody = document.querySelector('#coverage-table tbody');
                     const scoreNum = parseFloat(msg.score);
                     const scoreColor = msg.score === '失敗' ? '#c75050'
+                        : msg.score === '測試中' ? '#1f6feb'
                         : isNaN(scoreNum) ? '#888'
                         : scoreNum >= 80 ? '#2ea043'
                         : scoreNum >= 50 ? '#d29922'

@@ -810,7 +810,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
     const userTierSetting = params.promptStrategy || 'auto';
-    // evalStrategy 仇用於舊版 Tier 2 內部的 small/large 分流，不再暴露給使用者
+    // evalStrategy 僅用於舊版 Tier 2 內部的 small/large 分流，不再暴露給使用者
     let evalStrategy: 'small' | 'large' = 'small';
     {
         const nameLower = params.modelName.toLowerCase();
@@ -829,7 +829,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const resolvedTier = resolveTier(modelParamBillion, complexityScore, userTierSetting);
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 
-
     if (!params.filePath || !fs.existsSync(params.filePath)) {
         log('[錯誤] 找不到目標檔案路徑');
         return;
@@ -847,6 +846,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const dateStr = params.sessionDate || (now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_'));
     const safeFuncName = params.funcName || 'file';
     const baseName = path.basename(params.filePath, '.py');
+    const displayName = params.funcName ? `${path.basename(params.filePath)}:${params.funcName}` : path.basename(params.filePath);
     
     let sessionDir = "";
     if (params.projectName) {
@@ -865,6 +865,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const existingReport = path.join(sessionDir, 'final_report.md');
     if (fs.existsSync(existingReport)) {
         log(`[系統] ⏭️ 跳過 ${params.funcName}：已有完成的分析結果（${existingReport}）。`);
+        try {
+            const content = fs.readFileSync(existingReport, 'utf8');
+            const scoreMatch = content.match(/\*\*突變分數\*\*:\s*([^\n]+)/);
+            const covMatch = content.match(/\*\*覆蓋率\*\*:\s*([^\n]+)/);
+            sidebarProvider.webview?.postMessage({
+                command: 'updateCoverage',
+                fileName: displayName,
+                score: scoreMatch ? scoreMatch[1].trim() : '已完成',
+                coverage: covMatch ? covMatch[1].trim() : null,
+                reason: '跳過 (已存在報告)'
+            });
+        } catch {}
         return;
     }
 
@@ -1014,10 +1026,27 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
         log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
+        sidebarProvider.webview?.postMessage({
+            command: 'updateCoverage',
+            fileName: displayName,
+            score: 'N/A',
+            coverage: null,
+            reason: '快速通道 (Stub)'
+        });
         return;
     }
 
+    // 發送開始測試狀態給 Webview
+    sidebarProvider.webview?.postMessage({
+        command: 'updateCoverage',
+        fileName: displayName,
+        score: '測試中',
+        coverage: null,
+        reason: '分析中...'
+    });
+
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
+
         if (isAborted) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
             break;
@@ -1531,8 +1560,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     } // end while (currentTier >= 1)
 
 
-            // 動態偵測 mutation engine（不再依賴 isWin，改用 Python 版本 + 工具可用性）
-            let engine = 'mutatest';
+            // 動態偵測 mutation engine（Windows 強制使用 mutatest）
+            let engine: 'mutatest' | 'mutmut' = 'mutatest';
             const isWin = process.platform === 'win32';
             try {
                 // 取得 Python 版本
@@ -1543,30 +1572,30 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const preferredEngine = detectMutationEngine(pyVer);
                 log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
 
-                if (preferredEngine === 'mutmut') {
-                    // 先嘗試 mutmut（Python 3.12+ 首選）
-                    try {
-                        await runSpawn('mutmut', ['--version'], {});
+                if (preferredEngine === 'mutmut' && !isWin) {
+                    // 非 Windows 且建議 mutmut
+                    const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
+                    if (mutmutCheck.code === 0) {
                         engine = 'mutmut';
                         log(`[系統] mutmut 可用，使用 mutmut 進行突變測試。`);
-                    } catch {
-                        // mutmut 不可用，退回 mutatest
-                        log(`[系統] mutmut 不可用，退回使用 mutatest（注意：mutatest 在 Python 3.12+ 可能不穩定）。`);
+                    } else {
                         engine = 'mutatest';
+                        log(`[系統] mutmut 不可用，退回使用 mutatest。`);
                     }
                 } else {
-                    // Python < 3.12，優先 mutatest；若不可用則用 mutmut
-                    try {
-                        await runSpawn('python', ['-c', 'from mutatest.cli import cli_main'], {});
+                    // Windows 或 Python < 3.12 優先使用 mutatest
+                    const mutatestCheck = await runSpawn('python', ['-c', 'from mutatest.cli import cli_main'], {});
+                    if (mutatestCheck.code === 0) {
                         engine = 'mutatest';
                         log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
-                    } catch {
-                        try {
-                            await runSpawn('mutmut', ['--version'], {});
+                    } else {
+                        const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
+                        if (mutmutCheck.code === 0 && !isWin) {
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
-                        } catch {
-                            log(`[系統] 警告：mutatest 與 mutmut 均不可用（或缺少 setuptools），請執行 pip install setuptools mutatest mutmut`);
+                        } else {
+                            log(`[系統] 警告：mutatest 不可用（可能缺少 setuptools），請執行 pip install setuptools mutatest`);
+                            engine = 'mutatest';
                         }
                     }
                 }
@@ -1690,12 +1719,31 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalReportMarkdown += `> [!WARNING]\n> ⚠️ 本輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解測試集。\n\n`;
             }
 
+            let finalReason = reasonStr;
+            if (!finalReason) {
+                if (typeof mutationScore === 'number') {
+                    if (mutationScore >= 100) {
+                        finalReason = '通過 (100%)';
+                    } else if (mutationScore >= 80) {
+                        finalReason = `高覆蓋 (${mutationScore}%)`;
+                    } else if (mutationScore >= 50) {
+                        finalReason = `部分通過 (${mutationScore}%)`;
+                    } else if (mutationScore > 0) {
+                        finalReason = `低分 (${mutationScore}%)`;
+                    } else {
+                        finalReason = '已完成 (無突變點/0%)';
+                    }
+                } else {
+                    finalReason = '已完成';
+                }
+            }
+
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
-                fileName: path.basename(params.filePath),
+                fileName: displayName,
                 score: typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A',
                 coverage: (loopCoverage as { coverageText: string; missingLines: string } | null)?.coverageText ?? null,
-                reason: reasonStr || '分析中'
+                reason: finalReason
             });
 
             if (fs.existsSync(path.join(reportDir, 'index.html'))) {
@@ -1721,10 +1769,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
-                fileName: path.basename(params.filePath),
+                fileName: displayName,
                 score: '失敗',
                 coverage: null,
-                reason: message.includes('CUDA') ? 'VRAM 不足' : '執行異常'
+                reason: message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
             });
             break;
         }
