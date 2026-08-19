@@ -86,6 +86,73 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             font-weight: bold;
         }
 
+        .result-card {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-editorGroup-border);
+            border-radius: 4px;
+            padding: 7px 9px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-sizing: border-box;
+            transition: background 0.15s ease;
+        }
+        .result-card:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .result-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            min-width: 0;
+            flex: 1;
+            word-break: break-all;
+        }
+        .result-badges {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .result-status {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin-left: 22px;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+        details.file-group summary {
+            background: var(--vscode-sideBarSectionHeader-background);
+            border-radius: 4px;
+            padding: 7px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+        }
+        details.file-group summary:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        details.file-group .group-content {
+            padding: 6px 4px 4px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
         #log-area {
             height: 300px;
             resize: vertical;
@@ -243,38 +310,32 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.coverageDashboard')}</summary>
         <div class="content">
-            <!-- 顯示模式切換按鈕 -->
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <div style="display:inline-flex; border:1px solid var(--vscode-editorGroup-border); border-radius:3px; overflow:hidden;">
-                    <button type="button" id="btn-mode-flat" style="margin:0; padding:3px 8px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">📄 平鋪模式</button>
-                    <button type="button" id="btn-mode-grouped" style="margin:0; padding:3px 8px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">📁 檔案分組</button>
+            <!-- 顯示模式切換工具列 -->
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="display:inline-flex; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; overflow:hidden;">
+                    <button type="button" id="btn-mode-flat" style="margin:0; padding:4px 10px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">📄 平鋪模式</button>
+                    <button type="button" id="btn-mode-grouped" style="margin:0; padding:4px 10px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">📁 檔案分組</button>
                 </div>
                 <div id="grouped-tools" style="display:none; gap:4px;">
-                    <button type="button" style="margin:0; padding:2px 6px; font-size:10px;" onclick="setAllGroupsOpen(true)">全部展開</button>
-                    <button type="button" style="margin:0; padding:2px 6px; font-size:10px;" onclick="setAllGroupsOpen(false)">全部折疊</button>
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(true)">全部展開</button>
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(false)">全部折疊</button>
                 </div>
             </div>
 
-            <!-- 平鋪模式表格 -->
-            <table id="coverage-table" style="width:100%; border-collapse:collapse; text-align:left;">
-                <thead style="border-bottom:1px solid var(--vscode-editorGroup-border);"><tr>
-                    <th style="padding:5px; width:30px; text-align:center;"><input type="checkbox" id="select-all"></th>
-                    <th style="padding:5px;">${t('ui.columnFile')}</th>
-                    <th style="padding:5px;">突變分數 / 覆蓋率</th>
-                    <th style="padding:5px;">Status</th>
-                </tr></thead>
-                <tbody id="coverage-tbody">
-                    <tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">${t('ui.noCoverageData')}</td></tr>
-                </tbody>
-            </table>
-
-            <!-- 分組模式容器 -->
-            <div id="grouped-container" style="display:none; flex-direction:column; gap:6px;"></div>
-            
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-                <button id="btn-delete-selected" style="background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
-                <span id="results-count" style="font-size:11px; opacity:0.7;">0 項結果</span>
+            <!-- 全選與控制列 -->
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
+                <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
+                    <input type="checkbox" id="select-all" style="margin:0; width:auto;"> 全選
+                </label>
+                <span id="results-count" style="font-size:11px; opacity:0.75;">0 項結果</span>
             </div>
+
+            <!-- 響應式卡片容器 (平鋪 / 分組共用) -->
+            <div id="dashboard-container" style="display:flex; flex-direction:column; gap:6px; min-height:40px;">
+                <div id="empty-state" style="padding:15px; text-align:center; opacity:0.5; font-size:12px;">${t('ui.noCoverageData')}</div>
+            </div>
+            
+            <button id="btn-delete-selected" style="margin-top:8px; background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
         </div>
     </details>
 
@@ -307,8 +368,6 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const btnFlat = document.getElementById('btn-mode-flat');
             const btnGrouped = document.getElementById('btn-mode-grouped');
             const groupedTools = document.getElementById('grouped-tools');
-            const table = document.getElementById('coverage-table');
-            const groupedContainer = document.getElementById('grouped-container');
 
             if (mode === 'flat') {
                 btnFlat.style.background = 'var(--vscode-button-background)';
@@ -316,22 +375,18 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 btnGrouped.style.background = 'transparent';
                 btnGrouped.style.color = 'var(--vscode-foreground)';
                 if (groupedTools) groupedTools.style.display = 'none';
-                if (table) table.style.display = 'table';
-                if (groupedContainer) groupedContainer.style.display = 'none';
             } else {
                 btnGrouped.style.background = 'var(--vscode-button-background)';
                 btnGrouped.style.color = 'var(--vscode-button-foreground)';
                 btnFlat.style.background = 'transparent';
                 btnFlat.style.color = 'var(--vscode-foreground)';
                 if (groupedTools) groupedTools.style.display = 'flex';
-                if (table) table.style.display = 'none';
-                if (groupedContainer) groupedContainer.style.display = 'flex';
             }
             renderDashboard();
         }
 
         function setAllGroupsOpen(open) {
-            document.querySelectorAll('#grouped-container details.file-group').forEach(d => d.open = open);
+            document.querySelectorAll('#dashboard-container details.file-group').forEach(d => d.open = open);
         }
 
         function escapeHtml(text) {
@@ -346,11 +401,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 : scoreNum >= 80 ? '#2ea043'
                 : scoreNum >= 50 ? '#d29922'
                 : '#c75050';
-            const scoreBadge = '<span class="badge score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600;">' + score + '</span>';
+            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;">' + escapeHtml(score) + '</span>';
             const covBadge = coverage
-                ? '<br><span style="background:#1565c0; color:#fff; padding:1px 6px; border-radius:4px; font-size:10px; margin-top:3px; display:inline-block;">\uD83D\uDCCA ' + coverage + '</span>'
+                ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;">📊 ' + escapeHtml(coverage) + '</span>'
                 : '';
-            return scoreBadge + covBadge;
+            return '<div class="result-badges">' + scoreBadge + covBadge + '</div>';
         }
 
         function toggleItemCheck(id, checked) {
@@ -358,108 +413,100 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (item) item.checked = checked;
         }
 
+        function createResultCard(item, showFileName = true) {
+            const card = document.createElement('div');
+            card.className = 'result-card';
+
+            const header = document.createElement('div');
+            header.className = 'result-header';
+
+            const titleBox = document.createElement('div');
+            titleBox.className = 'result-title';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.style.width = 'auto';
+            cb.style.margin = '0';
+            cb.className = 'row-sel';
+            cb.checked = !!item.checked;
+            cb.onchange = () => toggleItemCheck(item.id, cb.checked);
+            titleBox.appendChild(cb);
+
+            const label = document.createElement('span');
+            if (showFileName) {
+                label.innerHTML = '<span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
+                                  (item.func ? '<span style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
+            } else {
+                label.innerHTML = '<span style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
+            }
+            titleBox.appendChild(label);
+            header.appendChild(titleBox);
+
+            const badgesDiv = document.createElement('div');
+            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage);
+            header.appendChild(badgesDiv);
+            card.appendChild(header);
+
+            if (item.reason) {
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'result-status';
+                statusDiv.textContent = item.reason;
+                card.appendChild(statusDiv);
+            }
+
+            return card;
+        }
+
         function renderDashboard() {
             const countSpan = document.getElementById('results-count');
             if (countSpan) countSpan.textContent = resultsMap.size + ' 項結果';
 
-            if (currentViewMode === 'flat') {
-                renderFlatView();
-            } else {
-                renderGroupedView();
-            }
-        }
-
-        function renderFlatView() {
-            const tbody = document.getElementById('coverage-tbody') || document.querySelector('#coverage-table tbody');
-            if (!tbody) return;
-            if (resultsMap.size === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">' + i18n.noCoverageData + '</td></tr>';
-                return;
-            }
-            tbody.innerHTML = '';
-            resultsMap.forEach(item => {
-                const tr = tbody.insertRow();
-                const cellCheck = tr.insertCell(0);
-                cellCheck.style.textAlign = 'center';
-                cellCheck.innerHTML = '<input type="checkbox" class="row-sel" ' + (item.checked ? 'checked' : '') + ' onchange="toggleItemCheck(\\'' + item.id + '\\', this.checked)">';
-
-                const cellFile = tr.insertCell(1);
-                cellFile.innerHTML = '<strong>' + escapeHtml(item.fileName) + '</strong>';
-
-                const cellScore = tr.insertCell(2);
-                cellScore.innerHTML = getScoreBadge(item.score, item.coverage);
-
-                const cellStatus = tr.insertCell(3);
-                cellStatus.textContent = item.reason || '';
-
-                Array.from(tr.cells).forEach(c => c.style.padding = '5px');
-            });
-        }
-
-        function renderGroupedView() {
-            const container = document.getElementById('grouped-container');
+            const container = document.getElementById('dashboard-container');
             if (!container) return;
+
             if (resultsMap.size === 0) {
-                container.innerHTML = '<div style="padding:10px; text-align:center; opacity:0.5;">' + i18n.noCoverageData + '</div>';
+                container.innerHTML = '<div style="padding:15px; text-align:center; opacity:0.5; font-size:12px;">' + i18n.noCoverageData + '</div>';
                 return;
             }
-
-            // 按檔案分組
-            const groups = new Map();
-            resultsMap.forEach(item => {
-                const f = item.file || '其他';
-                if (!groups.has(f)) groups.set(f, []);
-                groups.get(f).push(item);
-            });
 
             container.innerHTML = '';
-            groups.forEach((items, fileName) => {
-                const details = document.createElement('details');
-                details.className = 'file-group';
-                details.open = true;
-                details.style.marginBottom = '6px';
-                details.style.border = '1px solid var(--vscode-editorGroup-border)';
-                details.style.borderRadius = '4px';
 
-                const summary = document.createElement('summary');
-                summary.style.display = 'flex';
-                summary.style.justifyContent = 'space-between';
-                summary.style.alignItems = 'center';
-                summary.style.padding = '6px 8px';
-                summary.style.cursor = 'pointer';
-                summary.style.background = 'var(--vscode-sideBarSectionHeader-background)';
-                summary.innerHTML = '<span style="font-weight:600;">📁 ' + escapeHtml(fileName) + ' <small style="opacity:0.7; font-weight:normal;">(' + items.length + ' 個函式)</small></span>';
-                details.appendChild(summary);
-
-                const subTable = document.createElement('table');
-                subTable.style.width = '100%';
-                subTable.style.borderCollapse = 'collapse';
-                subTable.style.fontSize = '12px';
-
-                items.forEach(item => {
-                    const tr = subTable.insertRow();
-                    const cCheck = tr.insertCell(0);
-                    cCheck.style.width = '30px';
-                    cCheck.style.textAlign = 'center';
-                    cCheck.innerHTML = '<input type="checkbox" class="row-sel" ' + (item.checked ? 'checked' : '') + ' onchange="toggleItemCheck(\\'' + item.id + '\\', this.checked)">';
-
-                    const cFunc = tr.insertCell(1);
-                    cFunc.style.padding = '5px';
-                    const displayFuncName = item.func ? item.func + '()' : item.fileName;
-                    cFunc.innerHTML = '<span style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:500;">🔹 ' + escapeHtml(displayFuncName) + '</span>';
-
-                    const cScore = tr.insertCell(2);
-                    cScore.style.padding = '5px';
-                    cScore.innerHTML = getScoreBadge(item.score, item.coverage);
-
-                    const cStatus = tr.insertCell(3);
-                    cStatus.style.padding = '5px';
-                    cStatus.textContent = item.reason || '';
+            if (currentViewMode === 'flat') {
+                resultsMap.forEach(item => {
+                    container.appendChild(createResultCard(item, true));
+                });
+            } else {
+                // 檔案分組模式
+                const groups = new Map();
+                resultsMap.forEach(item => {
+                    const f = item.file || '其他';
+                    if (!groups.has(f)) groups.set(f, []);
+                    groups.get(f).push(item);
                 });
 
-                details.appendChild(subTable);
-                container.appendChild(details);
-            });
+                groups.forEach((items, fileName) => {
+                    const details = document.createElement('details');
+                    details.className = 'file-group';
+                    details.open = true;
+                    details.style.marginBottom = '6px';
+                    details.style.border = '1px solid var(--vscode-editorGroup-border)';
+                    details.style.borderRadius = '4px';
+
+                    const summary = document.createElement('summary');
+                    summary.innerHTML = '<span style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + items.length + ' 個函式)</small></span>';
+                    details.appendChild(summary);
+
+                    const groupContent = document.createElement('div');
+                    groupContent.className = 'group-content';
+
+                    items.forEach(item => {
+                        groupContent.appendChild(createResultCard(item, false));
+                    });
+
+                    details.appendChild(groupContent);
+                    container.appendChild(details);
+                });
+            }
         }
 
         document.getElementById('select-all').addEventListener('change', (e) => {
@@ -477,6 +524,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('select-all').checked = false;
             renderDashboard();
         });
+
 
         window.addEventListener('message', event => {
             const msg = event.data;
