@@ -867,11 +867,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         log(`[系統] ⏭️ 跳過 ${params.funcName}：已有完成的分析結果（${existingReport}）。`);
         try {
             const content = fs.readFileSync(existingReport, 'utf8');
+            // 若為 Stub/Dummy 函式，依需求不在 UI 列表中顯示
+            if (content.includes('此函式為 Stub/Dummy 函式') || content.includes('快速通道結果')) {
+                return;
+            }
             const scoreMatch = content.match(/\*\*突變分數\*\*:\s*([^\n]+)/);
             const covMatch = content.match(/\*\*覆蓋率\*\*:\s*([^\n]+)/);
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
+                file: path.basename(params.filePath),
+                func: params.funcName || '',
                 score: scoreMatch ? scoreMatch[1].trim() : '已完成',
                 coverage: covMatch ? covMatch[1].trim() : null,
                 reason: '跳過 (已存在報告)'
@@ -1026,13 +1032,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
         log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
-        sidebarProvider.webview?.postMessage({
-            command: 'updateCoverage',
-            fileName: displayName,
-            score: 'N/A',
-            coverage: null,
-            reason: '快速通道 (Stub)'
-        });
+        // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
         return;
     }
 
@@ -1040,6 +1040,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     sidebarProvider.webview?.postMessage({
         command: 'updateCoverage',
         fileName: displayName,
+        file: path.basename(params.filePath),
+        func: params.funcName || '',
         score: '測試中',
         coverage: null,
         reason: '分析中...'
@@ -1741,6 +1743,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
+                file: path.basename(params.filePath),
+                func: params.funcName || '',
                 score: typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A',
                 coverage: (loopCoverage as { coverageText: string; missingLines: string } | null)?.coverageText ?? null,
                 reason: finalReason
@@ -1770,6 +1774,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
+                file: path.basename(params.filePath),
+                func: params.funcName || '',
                 score: '失敗',
                 coverage: null,
                 reason: message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
