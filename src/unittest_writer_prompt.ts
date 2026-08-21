@@ -1,4 +1,4 @@
-import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
+﻿import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './few_shot_examples';
 import { getPromptLanguageName } from './i18n';
 
 // ─────────────────────────────────────────────────────────────

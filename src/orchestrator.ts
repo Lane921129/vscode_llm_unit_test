@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './promptProvider';
-import { getReviewerSystemPrompt, getReviewerUserPrompt } from './reviewerPromptProvider';
+import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
+import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
+import { getSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
+import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
+
 
 // ─────────────────────────────────────────────────────────────
 // Tier 系統：複雜度評估 + 路由
@@ -1047,12 +1050,50 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         reason: '分析中...'
     });
 
+    // ─── 語意分析師（Semantic Analyzer）───────────────────────────
+    // 目標函式有跨檔案相依時，先讓語意分析師計算各相依函式在此呼叫情境的固定行為，
+    // 避免後續 LLM 猜測回傳值或誤判不可達路徑。
+    let semanticContext: string | undefined;
+    const hasDependencies = astContext?.dependencyContexts && astContext.dependencyContexts.length > 0;
+    if (hasDependencies) {
+        log(`[語意分析師] 偵測到跨檔案相依，啟動語意前置分析...`);
+        try {
+            const semSys = getSemanticAnalyzerSystemPrompt();
+            const semDeps = ((astContext!.dependencyContexts) as any[])
+                .filter((d: any) => d.code)
+                .map((d: any) => ({ name: d.name as string, code: d.code as string }));
+            // 從 AST 的 callerContexts 擷取呼叫表達式
+            const semCallSites = ((astContext!.callerContexts) as any[] | undefined)
+                ?.map((c: any) => ({
+                    caller_func: c.caller_func as string || '',
+                    call_expr: c.call_expr as string || ''
+                })) || [];
+            const semUsr = getSemanticAnalyzerUserPrompt(
+                (astContext as any).code || '',
+                semDeps,
+                semCallSites
+            );
+            const semRaw = await requestLlmApi(params, semSys, semUsr, log);
+            const semResult = parseSemanticAnalysis(semRaw);
+            if (semResult) {
+                semanticContext = formatSemanticContextForPrompt(semResult);
+                log(`[語意分析師] ✅ 分析完成！找到 ${semResult.dependency_behaviors.length} 個相依行為、${semResult.unreachable_paths.length} 個不可達路徑、${semResult.equivalent_mutant_candidates.length} 個等效變異體候選。`);
+                finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
+            } else {
+                log(`[語意分析師] ⚠️ 無法解析 JSON 回應，跳過語意分析（不影響主流程）。`);
+            }
+        } catch (semErr: any) {
+            log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
+        }
+    }
+
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
 
         if (isAborted) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
             break;
         }
+
         log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
         currentTier = resolvedTier;
         finalReportMarkdown += `## 第 ${currentLoop} 輪測試\n`;
@@ -1792,8 +1833,60 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             });
             break;
         }
+
+        // ─── 變異體分流師（Mutant Triage）───────────────────────────
+        // 從 Loop 2 起，若仍有存活變異體，呼叫分流師判斷：
+        //   EQUIVALENT → 標記為不可殺，停止重試該變異體
+        //   KILLABLE   → 提取 kill_test 程式碼，注入下一輪 focusContext
+        if (currentLoop >= 2 && survivedMutants) {
+            log(`[變異體分流師] 啟動分流分析，判斷 ${survivedMutants.split('mutation').length - 1} 個存活變異體...`);
+            try {
+                const triageSys = getMutantTriageSystemPrompt();
+                const currentTestCode = fs.existsSync(testPath) ? fs.readFileSync(testPath, 'utf8') : '';
+                const moduleName = path.basename(params.filePath, '.py');
+                const triageUsr = getMutantTriageUserPrompt(
+                    survivedMutants,
+                    (astContext as any)?.code || '',
+                    currentTestCode,
+                    moduleName,
+                    params.funcName || '',
+                    semanticContext
+                );
+                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log);
+                const triageResult = parseMutantTriageResult(triageRaw);
+                if (triageResult) {
+                    log(`[變異體分流師] ✅ 分流完成：${triageResult.equivalent_count} 個等效、${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個可殺。`);
+                    // 等效變異體報告加入最終報告
+                    const eqReport = formatEquivalentMutantsReport(triageResult);
+                    if (eqReport) {
+                        finalReportMarkdown += eqReport;
+                        log(`[變異體分流師] 等效變異體已記錄於報告，下輪將跳過重試。`);
+                    }
+                    // KILLABLE：把 kill_test 提示注入 survivedMutants，讓下一輪 LLM 直接看到
+                    if (triageResult.has_killable) {
+                        const killMethods = extractKillTestMethods(triageResult);
+                        if (killMethods) {
+                            survivedMutants += `\n\n[Triage Hint] The following test methods are suggested to kill the KILLABLE mutants above:\n\`\`\`python\n${killMethods}\n\`\`\``;
+                            log(`[變異體分流師] 已將 ${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個 kill_test 注入下一輪 Prompt。`);
+                        }
+                    }
+                    // 若所有存活變異體均為等效，不再繼續循環
+                    if (!triageResult.has_killable && triageResult.equivalent_count > 0) {
+                        log(`[變異體分流師] 所有存活變異體均為等效變異體，無需繼續重試，結束循環。`);
+                        finalReportMarkdown += `\n> [!NOTE]\n> 🔵 所有剩餘存活變異體已被判定為等效變異體，不計入突變分數分母。\n\n`;
+                        currentLoop = params.maxLoops + 1; // 強制結束 while 迴圈
+                    }
+                } else {
+                    log(`[變異體分流師] ⚠️ 無法解析 JSON 回應，跳過分流（不影響主流程）。`);
+                }
+            } catch (triageErr: any) {
+                log(`[變異體分流師] ⚠️ 分流呼叫失敗: ${triageErr.message}，繼續主流程。`);
+            }
+        }
+
         currentLoop++;
     }
+
 
     const finalReportPath = path.join(sessionDir, `final_report.md`);
     fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');
