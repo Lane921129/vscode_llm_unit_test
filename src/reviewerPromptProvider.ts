@@ -1,47 +1,87 @@
 /**
  * Reviewer LLM 專用提示詞模組
- * 預先驗證失敗後，由第二個 LLM 角色進行修復及補充測資。
- * 角色定位：修正錯誤、補充測試，不得刪除已通過的測試方法。
+ * 預先驗證失敗後，由 Reviewer LLM 進行精準修復及補充測資。
+ * 角色定位：依據目標原始碼與錯誤日誌，修復語意斷言、切片邊界、例外斷言與引數問題，不得刪除已通過的測試方法。
  */
 
 export function getReviewerSystemPrompt(): string {
-    return `You are a Python unittest REVIEWER. Your job is to fix errors and improve test coverage.
+    return `You are an expert Python unittest REVIEWER and DEBUGGER.
+Your job is to fix errors and assertion failures in the provided test file by comparing it against the ACTUAL TARGET SOURCE CODE and ERROR TRACEBACK.
 
-Rules:
-1. Do NOT delete or modify test methods that are already passing (no errors, no failures).
-2. Fix test methods that cause errors or assertion failures.
-3. You MAY add new test methods if the existing tests are insufficient to cover the function.
-4. CRITICAL: import must use module name ONLY. NEVER use a filesystem path in import.
-   - CORRECT: from service_order import checkout_order
-   - WRONG:   from c:\\Users\\...\\service_order import checkout_order
-5. If the error is "unexpected keyword argument 'X'", remove that kwarg from the call.
-6. If the error is "TypeError: func() takes N positional arguments but M were given", fix the argument count.
-7. If the error is "AssertionError: X not raised", change assertRaises to the correct assertion type based on the actual behavior.
-8. If the error is "AssertionError: X != Y", correct the expected value to match actual execution.
-9. Output the complete corrected and improved test file in a \`\`\`python block.`;
+CORE RULES:
+1. PRESERVE PASSING TESTS: Do NOT delete or modify test methods that are already passing without errors.
+2. FIX SEMANTIC ASSERTIONS: Look at the TARGET SOURCE CODE to find the true expected return value:
+   - If the code returns a string (e.g. "Login Failed: Token too short"), use: self.assertEqual(result, "Login Failed: Token too short")
+   - Do NOT guess or hallucinate return values. Check the return statements in the source code directly!
+3. EXCEPTION HANDLING RULES:
+   - If the target function (or an unhandled dependency) explicitly executes \`raise SomeError("...")\`, use:
+     \`\`\`python
+     with self.assertRaises(SomeError):
+         func_under_test(...)
+     \`\`\`
+   - NEVER write \`self.assertRaises(SomeError, result)\` — this is a syntax/runtime error in unittest.
+   - If the target function catches exceptions internally with \`try...except\` and returns an error message string, DO NOT use assertRaises! Use self.assertEqual(result, "expected string").
+4. STRING SLICING & MATH:
+   - Check exact slice indexing in source code:
+     - \`token[:5]\` takes the FIRST 5 characters (e.g., '123456789012'[:5] == '12345').
+     - \`token[-5:]\` takes the LAST 5 characters (e.g., '123456789012'[-5:] == '89012').
+5. FUNCTION SIGNATURE & CALLS:
+   - Call the target function ONLY with its valid declared parameters.
+   - Do NOT pass undeclared keyword arguments (e.g., if func takes (order_id, token), do NOT pass provider="jwt").
+6. IMPORTS:
+   - Use clean module imports: \`from <module_name> import <target_func>\`.
+   - NEVER use filesystem paths in imports (e.g., NO \`from c:\\... import ...\`).
+7. OUTPUT FORMAT:
+   - Output the COMPLETE, corrected, runnable test file in a single \`\`\`python ... \`\`\` code block.`;
 }
 
 export function getReviewerUserPrompt(
     brokenCode: string,
     errorOutput: string,
     funcName: string,
-    funcArgs: string[]
+    funcArgs: string[],
+    sourceCode?: string,
+    astContext?: any,
+    moduleName: string = 'module_name'
 ): string {
     const sigLine = funcArgs.length > 0
-        ? `${funcName}(${funcArgs.join(', ')})  ← ONLY these args are valid`
-        : `${funcName}()  ← This function takes ZERO arguments`;
-    return `=== BROKEN TEST CODE ===
-\`\`\`python
-${brokenCode}
-\`\`\`
+        ? `${funcName}(${funcArgs.join(', ')})`
+        : `${funcName}()  ← Takes ZERO arguments`;
 
-=== ERROR MESSAGE ===
-\`\`\`
-${errorOutput.substring(0, 1500)}
-\`\`\`
+    let prompt = `=== BROKEN TEST CODE ===\n\`\`\`python\n${brokenCode}\n\`\`\`\n\n`;
+    prompt += `=== PRE-VERIFICATION ERROR LOG ===\n\`\`\`text\n${errorOutput.substring(0, 2000)}\n\`\`\`\n\n`;
+    prompt += `=== TARGET FUNCTION INFO ===\n`;
+    prompt += `- Module Name: ${moduleName}\n`;
+    prompt += `- Import Statement: from ${moduleName} import ${funcName}\n`;
+    prompt += `- Exact Signature: ${sigLine}\n\n`;
 
-=== TARGET FUNCTION SIGNATURE ===
-${sigLine}
+    if (sourceCode) {
+        prompt += `=== TARGET SOURCE CODE (Check return values and raises here) ===\n\`\`\`python\n${sourceCode.trim()}\n\`\`\`\n\n`;
+    }
 
-Fix errors and improve the test file. Return the complete corrected test file.`;
+    if (astContext?.dependencyContexts && astContext.dependencyContexts.length > 0) {
+        prompt += `=== DEPENDENCY SOURCE CODE ===\n`;
+        for (const dep of astContext.dependencyContexts.slice(0, 3)) {
+            if (dep.code) {
+                prompt += `\`\`\`python\n# Dependency: ${dep.name}\n${dep.code.trim()}\n\`\`\`\n`;
+            }
+        }
+        prompt += `\n`;
+    }
+
+    const trace = astContext?.traceResult;
+    if (trace && !trace.load_error && (trace.examples?.length > 0 || trace.errors?.length > 0)) {
+        prompt += `=== VERIFIED REAL EXECUTION TRACE ===\n`;
+        for (const ex of (trace.examples || []).slice(0, 5)) {
+            prompt += `  - Input: (${ex.args.join(', ')}) => Returned: ${ex.result}\n`;
+        }
+        for (const er of (trace.errors || []).slice(0, 5)) {
+            prompt += `  - Input: (${er.args.join(', ')}) => Raised: ${er.exception}("${er.message}")\n`;
+        }
+        prompt += `\n`;
+    }
+
+    prompt += `INSTRUCTION:\nCarefully read the error log and the target source code. Fix all failures and errors, verify slices and assertions, and output the complete corrected test file in a \`\`\`python code block.`;
+    return prompt;
 }
+

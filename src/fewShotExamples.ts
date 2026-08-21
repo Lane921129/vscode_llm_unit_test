@@ -101,6 +101,89 @@ class TestIsPalindrome(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()`
+        },
+        {
+            label: 'String Slicing, Dictionary Return & Direct Exception',
+            sourceCode: `def validate_and_format_token(token, provider):\n    if len(token) < 10:\n        raise ValueError("Invalid token length")\n    if provider == 'jwt':\n        return {'valid': True, 'type': 'user', 'claims': token[:5]}\n    elif provider == 'payment_gateway':\n        return {'valid': True, 'type': 'finance', 'partner': token[-5:]}\n    return {'valid': False, 'reason': 'Unknown provider'}`,
+            thinking: `The \`validate_and_format_token\` function validates token length and returns structured dicts with slices:
+1. If token length < 10, raises ValueError("Invalid token length").
+2. If provider == 'jwt', returns dict where 'claims' is token[:5] (FIRST 5 chars: '123456789012'[:5] == '12345').
+3. If provider == 'payment_gateway', returns dict where 'partner' is token[-5:] (LAST 5 chars: '123456789012'[-5:] == '89012').
+4. If provider is unknown, returns dict {'valid': False, 'reason': 'Unknown provider'}.`,
+            testCode: `import unittest
+from core_utils import validate_and_format_token
+
+class TestValidateAndFormatToken(unittest.TestCase):
+    def test_short_token_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            validate_and_format_token("abc123", provider="jwt")
+            
+    def test_valid_jwt_token_slice(self):
+        token = "123456789012"
+        result = validate_and_format_token(token, provider="jwt")
+        self.assertEqual(result, {"valid": True, "type": "user", "claims": "12345"})
+        
+    def test_valid_payment_gateway_token_slice(self):
+        token = "123456789012"
+        result = validate_and_format_token(token, provider="payment_gateway")
+        self.assertEqual(result, {"valid": True, "type": "finance", "partner": "89012"})
+        
+    def test_unknown_provider(self):
+        token = "123456789012"
+        result = validate_and_format_token(token, provider="other")
+        self.assertEqual(result, {"valid": False, "reason": "Unknown provider"})
+
+if __name__ == '__main__':
+    unittest.main()`
+        },
+        {
+            label: 'Caller with Internal Exception Catching (String Return)',
+            sourceCode: `def login_user(user_input_token):\n    try:\n        token_info = validate_and_format_token(user_input_token, provider='jwt')\n        if token_info.get('valid') and token_info.get('type') == 'user':\n            return f"Welcome User (ID: {token_info.get('claims')})"\n        return "Login Failed: Invalid Token"\n    except ValueError as e:\n        return "Login Failed: Token too short"`,
+            thinking: `The \`login_user\` function catches ValueError internally using try...except and returns error strings.
+CRITICAL: Because it catches exceptions internally, it NEVER raises ValueError to the caller!
+I must use self.assertEqual with the exact return strings:
+1. Valid 10+ char token -> "Welcome User (ID: 12345)"
+2. Short token (< 10 chars) -> "Login Failed: Token too short" (Use assertEqual, NOT assertRaises!)`,
+            testCode: `import unittest
+from service_auth import login_user
+
+class TestLoginUser(unittest.TestCase):
+    def test_login_success(self):
+        result = login_user("123456789012")
+        self.assertEqual(result, "Welcome User (ID: 12345)")
+        
+    def test_short_token_returns_error_string(self):
+        result = login_user("abc")
+        self.assertEqual(result, "Login Failed: Token too short")
+        
+    def test_empty_token_returns_error_string(self):
+        result = login_user("")
+        self.assertEqual(result, "Login Failed: Token too short")
+
+if __name__ == '__main__':
+    unittest.main()`
+        },
+        {
+            label: 'Caller with Uncaught Exception Propagation',
+            sourceCode: `def checkout_order(order_id, payment_token):\n    token_info = validate_and_format_token(payment_token, provider='payment_gateway')\n    if token_info.get('valid') and token_info.get('type') == 'finance':\n        print(f"Routing to partner: {token_info.get('partner')}")\n        return True\n    return False`,
+            thinking: `The \`checkout_order\` function takes (order_id, payment_token) and does NOT catch exceptions from validate_and_format_token:
+1. If payment_token is valid (>= 10 chars), returns True.
+2. If payment_token is too short (< 10 chars), validate_and_format_token raises ValueError and it is NOT caught -> MUST use with self.assertRaises(ValueError):
+3. Notice: checkout_order takes ONLY 2 positional arguments (order_id, payment_token). Do NOT pass provider=... keyword argument!`,
+            testCode: `import unittest
+from service_order import checkout_order
+
+class TestCheckoutOrder(unittest.TestCase):
+    def test_checkout_success(self):
+        result = checkout_order("order_1001", "123456789012")
+        self.assertTrue(result)
+        
+    def test_checkout_short_token_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            checkout_order("order_1001", "abc123")
+
+if __name__ == '__main__':
+    unittest.main()`
         }
     ];
 }

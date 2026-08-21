@@ -1458,7 +1458,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             try {
                                 const brokenCode = fs.readFileSync(testPath, 'utf8');
                                 const revSys = getReviewerSystemPrompt();
-                                const revUsr = getReviewerUserPrompt(brokenCode, out, params.funcName || '', funcArgs);
+                                const moduleName = path.basename(params.filePath, '.py');
+                                const targetSource = (astContext as any)?.code || targetCode;
+                                const revUsr = getReviewerUserPrompt(
+                                    brokenCode,
+                                    out,
+                                    params.funcName || '',
+                                    funcArgs,
+                                    targetSource,
+                                    astContext,
+                                    moduleName
+                                );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log);
                                 const revCode = sanitizeLlmResponse(revRaw);
                                 if (revCode && (revCode.includes('def test_') || revCode.includes('unittest'))) {

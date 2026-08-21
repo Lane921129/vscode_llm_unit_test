@@ -27,12 +27,16 @@ export function getTier1UserPrompt(
     errorType: string = 'Exception'
 ): string {
     if (isError) {
-        return `Input raises ${errorType}("${returnVal}").
+        return `Target call \`${funcCall}\` raises ${errorType}("${returnVal}").
 Complete: with self.assertRaises(${errorType}):
-              ___`;
+              ${funcCall}`;
     }
-    return `Return value: ${returnVal}
-Complete ONE line: self.assertEqual(result, ___)`;
+    const valRepr = (returnVal.startsWith('"') || returnVal.startsWith("'") || returnVal.startsWith("{") || returnVal.startsWith("[") || returnVal === 'True' || returnVal === 'False' || returnVal === 'None' || !isNaN(Number(returnVal)))
+        ? returnVal
+        : JSON.stringify(returnVal);
+    return `Target call: \`result = ${funcCall}\`
+Exact Return Value: ${valRepr}
+Complete ONE line: self.assertEqual(result, ${valRepr})`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -346,6 +350,23 @@ export function getUserPrompt(
                 prompt += `  - ${funcName}() ONLY accepts: (${(astContext.args || []).join(', ')})\n\n`;
             }
 
+            // ── Fix A-3: 目標函式 vs 相依函式回傳型別區分 ──
+            prompt += `\n🎯 TARGET RETURN TYPE VS DEPENDENCY RETURN TYPE:\n`;
+            prompt += `  - Target \`${funcName}()\` returns its OWN value (inspect return statements in source code), NOT the raw dependency dictionary.\n`;
+            prompt += `  - If \`${funcName}()\` returns a string (e.g. "Welcome User ..."), assert a string, do NOT treat \`result\` as a dict.\n`;
+
+            // ── Fix A-4: 未捕獲的相依函式例外提示 ──
+            const targetHasTry = /^\s*try\s*:/m.test(astContext.code || code);
+            for (const dep of astContext.dependencyContexts) {
+                if (dep.code && /^\s*raise\s+/m.test(dep.code) && !targetHasTry) {
+                    prompt += `\n⚠️ UNCAUGHT DEPENDENCY EXCEPTION WARNING:\n`;
+                    prompt += `  - Dependency \`${dep.name}()\` raises exceptions for invalid inputs (e.g. ValueError("Invalid token length")).\n`;
+                    prompt += `  - Because \`${funcName}()\` does NOT use try/except to catch it, the exception propagates directly to caller!\n`;
+                    prompt += `  - For invalid/short token tests, you MUST use \`with self.assertRaises(ValueError):\`.\n`;
+                    prompt += `  - Do NOT assert that \`${funcName}()\` returns False or an error string on invalid inputs.\n`;
+                }
+            }
+
             prompt += `\nExternal dependencies:\n`;
             for (const dep of astContext.dependencyContexts) {
                 const remaining = budgetTokens - estimateTokens(prompt);
@@ -398,10 +419,37 @@ export function getUserPrompt(
         }
     }
 
-    // ── 共用段：Fix B/C + Trace 重申，Loop 1 和 Loop 2+ 都執行 ──
+    // ── 共用段：Fix B/C + Slicing + Trace 重申，Loop 1 和 Loop 2+ 都執行 ──
     {
         const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
         const srcLines = src.split('\n');
+
+        // 字串切片提示（防止 LLM 算錯 [:5] 和 [-5:]）
+        const sliceMatches = Array.from(src.matchAll(/(\w+)\[(-?\d*):(-?\d*)\]/g));
+        if (sliceMatches.length > 0) {
+            const sliceHints: string[] = [];
+            for (const sm of sliceMatches as RegExpMatchArray[]) {
+                const varName = sm[1];
+                const start = sm[2];
+                const end = sm[3];
+                if (!start && end) {
+                    const n = parseInt(end, 10);
+                    if (!isNaN(n) && n > 0) {
+                        sliceHints.push(`\`${varName}[:${n}]\` takes the FIRST ${n} characters (e.g., '123456789012'[:${n}] == '${"123456789012".substring(0, n)}')`);
+                    }
+                } else if (start && start.startsWith('-') && !end) {
+                    const n = Math.abs(parseInt(start, 10));
+                    sliceHints.push(`\`${varName}[-${n}:]\` takes the LAST ${n} characters (e.g., '123456789012'[-${n}:] == '${"123456789012".slice(-n)}')`);
+                }
+            }
+            if (sliceHints.length > 0) {
+                prompt += `\n🔪 STRING SLICE CALCULATION HINTS (from source code):\n`;
+                for (const sh of [...new Set(sliceHints)]) {
+                    prompt += `  - ${sh}\n`;
+                }
+                prompt += `  → Compute slice values EXACTLY as specified in the source code.\n`;
+            }
+        }
 
         // Fix B：偵測 raise 行 vs try/except 攔截
         const raiseLines = srcLines.filter((l: string) => /^\s*raise\s+/.test(l));
