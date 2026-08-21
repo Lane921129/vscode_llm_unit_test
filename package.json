@@ -10,7 +10,9 @@
   "categories": [
     "Testing"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:mutation-test-view"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {

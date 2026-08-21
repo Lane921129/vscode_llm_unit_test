@@ -407,7 +407,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         try {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
             const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-            const response = await fetch(`${baseUrl}/api/tags`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal as any });
+            clearTimeout(timeoutId);
             if (response.ok) {
                 const data = await response.json() as any;
                 if (data && data.models) {
@@ -415,7 +418,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
             }
         } catch (e) {
-            console.warn('Ollama not running or unreachable');
+            // Ollama not running or unreachable
         }
         return [];
     }
