@@ -28,10 +28,21 @@ CORE RULES:
 5. FUNCTION SIGNATURE & CALLS:
    - Call the target function ONLY with its valid declared parameters.
    - Do NOT pass undeclared keyword arguments (e.g., if func takes (order_id, token), do NOT pass provider="jwt").
-6. IMPORTS:
-   - Use clean module imports: \`from <module_name> import <target_func>\`.
-   - NEVER use filesystem paths in imports (e.g., NO \`from c:\\... import ...\`).
-7. OUTPUT FORMAT:
+6. IMPORTS — CRITICAL:
+   - The MODULE NAME is provided in "=== TARGET FUNCTION INFO ===" below. Use EXACTLY that module name.
+   - Correct: \`from core_utils import validate_and_format_token\`
+   - WRONG: \`from validate_and_format_token import validate_and_format_token\` ← NEVER name import after the function!
+   - WRONG: \`from c:\\Users\\... import ...\` ← NEVER use filesystem paths.
+7. assertRaises SYNTAX — CRITICAL:
+   - ONLY valid form: \`with self.assertRaises(ValueError):\` followed by the call on the next line.
+   - NEVER pass a message string: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError, FORBIDDEN!
+8. TOKEN LENGTH BOUNDARY — CRITICAL:
+   - \`len(token) < 10\` raises ValueError. Token length MUST be STRICTLY LESS THAN 10 to trigger the error.
+   - A token of length 9 ("123456789") → raises ValueError.
+   - A token of length 10 ("1234567890") → DOES NOT raise, processes normally.
+   - A token of length 71 (any long string) → DOES NOT raise. Do NOT use [:-1] on a long string expecting ValueError!
+   - Use short, explicit invalid tokens like "abc" (len=3) or "123456789" (len=9).
+9. OUTPUT FORMAT:
    - Output the COMPLETE, corrected, runnable test file in a single \`\`\`python ... \`\`\` code block.`;
 }
 

@@ -152,7 +152,9 @@ Rules:
 3. Do NOT copy or redefine the source function. Write test methods only.
 4. No pytest. No top-level assert.
 5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.
-6. Inputs are validated by LENGTH and STRUCTURE, NOT English meaning. "not a valid token" has len=17 which may PASS length checks. ALWAYS use Verified Real Execution Results to determine behavior.`;
+   - WRONG: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError — NEVER pass a string as second arg to assertRaises!
+6. TOKEN LENGTH BOUNDARY: The check is \`len(token) < 10\`. Use 'abc' (len=3) or '123456789' (len=9) as INVALID tokens. Use '1234567890' (len=10) or '123456789012' (len=12) as VALID tokens. Do NOT do long_string[:-1] expecting ValueError — it still has len >> 10!
+7. Inputs are validated by LENGTH and STRUCTURE, NOT English meaning. "not a valid token" has len=17 which may PASS length checks. ALWAYS use Verified Real Execution Results to determine behavior.`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -179,6 +181,8 @@ Guidelines:
 - Use unittest.mock (patch, MagicMock) for external dependencies.
 - Cover edge cases: None, empty, boundary values, exception paths.
 - Do NOT copy the source code into your output.
+- assertRaises syntax: ONLY \`with self.assertRaises(ValueError):\` — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!
+- TOKEN LENGTH BOUNDARY: \`len(token) < 10\` raises ValueError. Use 'abc' or '123456789' (len=9) as invalid; '1234567890' (len=10+) as valid.
 `;
 
     prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), thinking)}\n`;
@@ -250,7 +254,10 @@ export function getUserPrompt(
             prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
         }
         prompt += `- CRITICAL: Do NOT invent keyword arguments like total=... or payment_token=... that are not in the function signature.\n`;
-        prompt += `- TOKEN RULE: If passing a token string, valid tokens must be AT LEAST 10 characters long (e.g. '123456789012'). Short strings like 'abc123' will fail token length validation.\n`;
+        prompt += `- TOKEN LENGTH RULE: The validation check is \`len(token) < 10\`.\n`;
+        prompt += `  - INVALID token (raises ValueError): len < 10. Examples: '' (len=0), 'abc' (len=3), '123456789' (len=9).\n`;
+        prompt += `  - VALID token (no error): len >= 10. Examples: '1234567890' (len=10), '123456789012' (len=12).\n`;
+        prompt += `  - DANGER: Do NOT slice a long token with [:-1] expecting ValueError — e.g. 'abcdefghijklm'[:-1] is still 12 chars, still VALID!\n`;
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
