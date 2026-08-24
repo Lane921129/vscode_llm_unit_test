@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './promptProvider';
-import { getReviewerSystemPrompt, getReviewerUserPrompt } from './reviewerPromptProvider';
-import { extractFunctionsFromFile, findPythonFilesInDir, detectMutationEngine } from './utils';
+import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
+import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
+import { getSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
+import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
+import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec, execSync, ChildProcess } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
+
 
 // ─────────────────────────────────────────────────────────────
 // Tier 系統：複雜度評估 + 路由
@@ -23,18 +26,15 @@ async function assessFunctionComplexity(
     filePath: string,
     funcName: string
 ): Promise<ComplexityResult> {
-    return new Promise((resolve) => {
-        const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
-        exec(`python "${script}" "${filePath}" "${funcName}"`,
-            { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-            (err, stdout) => {
-                try {
-                    resolve(JSON.parse(stdout.trim()) as ComplexityResult);
-                } catch {
-                    resolve({ score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] });
-                }
-            });
-    });
+    const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
+    try {
+        const { stdout } = await runSpawn('python', [script, filePath, funcName], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+        return JSON.parse(stdout.trim()) as ComplexityResult;
+    } catch {
+        return { score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] };
+    }
 }
 
 /**
@@ -67,13 +67,19 @@ function resolveTier(modelParamBillion: number, complexity: number, userTier: st
 async function runWithConcurrencyLimit<T>(
     tasks: (() => Promise<T>)[],
     limit: number
-): Promise<T[]> {
-    const results: T[] = new Array(tasks.length);
+): Promise<(T | undefined)[]> {
+    const results: (T | undefined)[] = new Array(tasks.length);
     let idx = 0;
     async function worker() {
         while (idx < tasks.length) {
+            if (isAborted) break;
             const i = idx++;
-            results[i] = await tasks[i]();
+            try {
+                results[i] = await tasks[i]();
+            } catch (err: any) {
+                // 任一 task 失敗不影響其他 worker 繼續執行
+                console.error(`[並行] 任務 ${i} 執行失敗: ${err?.message ?? err}`);
+            }
         }
     }
     const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
@@ -144,26 +150,88 @@ async function runMockScaffold(
     funcName: string,
     traceResult: any
 ): Promise<{ scaffold: string; patches: string[]; mock_names: string[] } | null> {
-    return new Promise((resolve) => {
-        const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
-        const traceArg = traceResult ? `"${JSON.stringify(traceResult).replace(/"/g, '\\"')}"` : '';
-        exec(`python "${script}" "${filePath}" "${funcName}" ${traceArg}`,
-            { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-            (err, stdout) => {
-                try {
-                    const parsed = JSON.parse(stdout.trim());
-                    if (parsed.scaffold) resolve(parsed);
-                    else resolve(null);
-                } catch {
-                    resolve(null);
-                }
-            });
-    });
+    const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
+    const args = ['python', script, filePath, funcName];
+    if (traceResult) args.push(JSON.stringify(traceResult));
+    try {
+        const { stdout } = await runSpawn('python',
+            traceResult ? [script, filePath, funcName, JSON.stringify(traceResult)] : [script, filePath, funcName],
+            { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }
+        );
+        const parsed = JSON.parse(stdout.trim());
+        return parsed.scaffold ? parsed : null;
+    } catch {
+        return null;
+    }
 }
 
+// ── 並行與 Process 管理 ──────────────────────────────────────
 const activeAbortControllers = new Set<AbortController>();
+const activeProcesses = new Set<ChildProcess>();
 let currentMutpyProcess: ChildProcess | null = null;
 let isAborted = false;
+
+/** 跨平台安全終止 Process Tree（含子行程） */
+function killProcessTree(proc: ChildProcess) {
+    if (!proc.pid) return;
+    if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', proc.pid.toString(), '/T', '/F']);
+    } else {
+        try {
+            process.kill(-proc.pid, 'SIGKILL'); // Unix: 殺整個 process group
+        } catch {
+            proc.kill('SIGKILL');
+        }
+    }
+}
+
+/**
+ * spawn 封裝：以引數陣列執行外部命令，自動追蹤到 activeProcesses。
+ * 比 exec() 更安全——路徑中有空格也不會崩潰。
+ */
+function runSpawn(
+    command: string,
+    args: string[],
+    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number }
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    return new Promise((resolve, reject) => {
+        if (isAborted) return reject(new Error('使用者強制中止'));
+
+        const proc = spawn(command, args, {
+            cwd: options.cwd,
+            env: options.env ?? process.env,
+            detached: process.platform !== 'win32',
+            shell: false
+        });
+
+        activeProcesses.add(proc);
+        let stdout = '';
+        let stderr = '';
+
+        let timer: NodeJS.Timeout | null = null;
+        if (options.timeout) {
+            timer = setTimeout(() => {
+                killProcessTree(proc);
+                reject(new Error(`執行超時 (超過 ${options.timeout! / 1000} 秒)`));
+            }, options.timeout);
+        }
+
+        proc.stdout?.on('data', (d) => { stdout += d.toString(); });
+        proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+
+        proc.on('close', (code) => {
+            if (timer) clearTimeout(timer);
+            activeProcesses.delete(proc);
+            resolve({ stdout, stderr, code });
+        });
+
+        proc.on('error', (err) => {
+            if (timer) clearTimeout(timer);
+            activeProcesses.delete(proc);
+            reject(err);
+        });
+    });
+}
 
 interface ModelProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
@@ -236,7 +304,7 @@ interface AstContext {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    const sidebarProvider = new MutationViewProvider();
+    const sidebarProvider = new MutationViewProvider(context.secrets);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(MutationViewProvider.viewType, sidebarProvider)
     );
@@ -253,7 +321,8 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (!params.funcName) {
                 // 全檔案模式：萃取所有函式，並行處理（最多 3 個同時執行）
-                const funcs = extractFunctionsFromFile(params.filePath);
+                const funcInfos = await extractFunctionsWithAst(params.filePath);
+                const funcs = funcInfos.map(f => f.fullName);
                 if (funcs.length === 0) {
                     log(`[系統] 在檔案 ${path.basename(params.filePath)} 中找不到任何函式，無法進行全檔案測試。`);
                 } else {
@@ -305,7 +374,8 @@ export function activate(context: vscode.ExtensionContext) {
                 for (let i = 0; i < pyFiles.length; i++) {
                     if (isAborted) break;
                     const file = pyFiles[i];
-                    const funcs = extractFunctionsFromFile(file);
+                    const funcInfos = await extractFunctionsWithAst(file);
+                    const funcs = funcInfos.map(f => f.fullName);
                     if (funcs.length === 0) {
                         log(`[系統] 檔案 ${path.basename(file)} 中無可測試的函式，跳過。`);
                         continue;
@@ -335,15 +405,13 @@ export function activate(context: vscode.ExtensionContext) {
     const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
         if (!isAborted) {
             isAborted = true;
-            // 立刻中止所有進行中的 API 請求
-            for (const ctrl of activeAbortControllers) {
-                ctrl.abort();
-            }
+            // 立刻中止所有進行中的 LLM API 請求
+            for (const ctrl of activeAbortControllers) ctrl.abort();
             activeAbortControllers.clear();
-            if (currentMutpyProcess) {
-                exec(`taskkill /pid ${currentMutpyProcess.pid} /T /F`);
-                currentMutpyProcess.kill();
-            }
+            // 跨平台終止所有追蹤中的 Python 子行程
+            if (currentMutpyProcess) killProcessTree(currentMutpyProcess);
+            for (const proc of activeProcesses) killProcessTree(proc);
+            activeProcesses.clear();
         }
     });
 
@@ -363,46 +431,34 @@ async function extractAstContext(
     targetPath: string,
     funcName: string
 ): Promise<AstContext | null> {
-    return new Promise((resolve) => {
-        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
-
-        const cmd = `python "${pythonScript}" "${targetPath}" "${funcName}"`;
-
-        exec(cmd, { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout, stderr) => {
-            if (error) {
-                resolve({ error: stdout || stderr, name: "", args: [], docstring: "", calls: [], code: "" });
-                return;
-            }
-            try {
-                resolve(JSON.parse(stdout));
-            } catch {
-                resolve(null);
-            }
+    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
+    try {
+        const { stdout, stderr, code } = await runSpawn('python', [pythonScript, targetPath, funcName], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
-    });
+        if (code !== 0) {
+            return { error: stdout || stderr, name: '', args: [], docstring: '', calls: [], code: '' };
+        }
+        return JSON.parse(stdout);
+    } catch {
+        return null;
+    }
 }
 
 async function findCallerContexts(
     funcName: string,
     projectRoot: string
 ): Promise<CallerContext[]> {
-    return new Promise((resolve) => {
-        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
-        const cmd = `python "${pythonScript}" "${funcName}" "${projectRoot}"`;
-        exec(cmd, { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout) => {
-            if (error) { resolve([]); return; }
-            try {
-                const parsed = JSON.parse(stdout);
-                if (Array.isArray(parsed)) {
-                    resolve(parsed as CallerContext[]);
-                } else {
-                    resolve([]);
-                }
-            } catch {
-                resolve([]);
-            }
+    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
+    try {
+        const { stdout } = await runSpawn('python', [pythonScript, funcName, projectRoot], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
-    });
+        const parsed = JSON.parse(stdout);
+        return Array.isArray(parsed) ? (parsed as CallerContext[]) : [];
+    } catch {
+        return [];
+    }
 }
 
 interface TraceExample {
@@ -430,27 +486,21 @@ async function runDynamicTrace(
     funcName: string,
     callerArgs?: CallerContext[]
 ): Promise<DynamicTraceResult | null> {
-    return new Promise((resolve) => {
-        const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
-        
-        // 如果有呼叫站語境，把已知的真實參數傳入
-        let inputsArg = '';
-        if (callerArgs && callerArgs.length > 0) {
-            const knownInputs = callerArgs.map(ctx => ctx.args);  // 只取 positional args
-            inputsArg = ` "${JSON.stringify(knownInputs).replace(/"/g, '\\"')}"`;
-        }
-
-        const cmd = `python "${pythonScript}" "${filePath}" "${funcName}"${inputsArg}`;
-        exec(cmd, { encoding: 'utf8', timeout: 15000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }, (error, stdout) => {
-            if (error) { resolve(null); return; }
-            try {
-                const parsed = JSON.parse(stdout.trim());
-                resolve(parsed as DynamicTraceResult);
-            } catch {
-                resolve(null);
-            }
+    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
+    const args = [pythonScript, filePath, funcName];
+    if (callerArgs && callerArgs.length > 0) {
+        const knownInputs = callerArgs.map(ctx => ctx.args);
+        args.push(JSON.stringify(knownInputs));
+    }
+    try {
+        const { stdout } = await runSpawn('python', args, {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            timeout: 15000
         });
-    });
+        return JSON.parse(stdout.trim()) as DynamicTraceResult;
+    } catch {
+        return null;
+    }
 }
 
 async function requestLlmApi(
@@ -763,7 +813,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
     const userTierSetting = params.promptStrategy || 'auto';
-    // evalStrategy 仇用於舊版 Tier 2 內部的 small/large 分流，不再暴露給使用者
+    // evalStrategy 僅用於舊版 Tier 2 內部的 small/large 分流，不再暴露給使用者
     let evalStrategy: 'small' | 'large' = 'small';
     {
         const nameLower = params.modelName.toLowerCase();
@@ -782,7 +832,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const resolvedTier = resolveTier(modelParamBillion, complexityScore, userTierSetting);
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 
-
     if (!params.filePath || !fs.existsSync(params.filePath)) {
         log('[錯誤] 找不到目標檔案路徑');
         return;
@@ -800,6 +849,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const dateStr = params.sessionDate || (now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_'));
     const safeFuncName = params.funcName || 'file';
     const baseName = path.basename(params.filePath, '.py');
+    const displayName = params.funcName ? `${path.basename(params.filePath)}:${params.funcName}` : path.basename(params.filePath);
     
     let sessionDir = "";
     if (params.projectName) {
@@ -818,6 +868,24 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const existingReport = path.join(sessionDir, 'final_report.md');
     if (fs.existsSync(existingReport)) {
         log(`[系統] ⏭️ 跳過 ${params.funcName}：已有完成的分析結果（${existingReport}）。`);
+        try {
+            const content = fs.readFileSync(existingReport, 'utf8');
+            // 若為 Stub/Dummy 函式，依需求不在 UI 列表中顯示
+            if (content.includes('此函式為 Stub/Dummy 函式') || content.includes('快速通道結果')) {
+                return;
+            }
+            const scoreMatch = content.match(/\*\*突變分數\*\*:\s*([^\n]+)/);
+            const covMatch = content.match(/\*\*覆蓋率\*\*:\s*([^\n]+)/);
+            sidebarProvider.webview?.postMessage({
+                command: 'updateCoverage',
+                fileName: displayName,
+                file: path.basename(params.filePath),
+                func: params.funcName || '',
+                score: scoreMatch ? scoreMatch[1].trim() : '已完成',
+                coverage: covMatch ? covMatch[1].trim() : null,
+                reason: '跳過 (已存在報告)'
+            });
+        } catch {}
         return;
     }
 
@@ -967,14 +1035,65 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
         log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
+        // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
         return;
     }
 
+    // 發送開始測試狀態給 Webview
+    sidebarProvider.webview?.postMessage({
+        command: 'updateCoverage',
+        fileName: displayName,
+        file: path.basename(params.filePath),
+        func: params.funcName || '',
+        score: '測試中',
+        coverage: null,
+        reason: '分析中...'
+    });
+
+    // ─── 語意分析師（Semantic Analyzer）───────────────────────────
+    // 目標函式有跨檔案相依時，先讓語意分析師計算各相依函式在此呼叫情境的固定行為，
+    // 避免後續 LLM 猜測回傳值或誤判不可達路徑。
+    let semanticContext: string | undefined;
+    const hasDependencies = astContext?.dependencyContexts && astContext.dependencyContexts.length > 0;
+    if (hasDependencies) {
+        log(`[語意分析師] 偵測到跨檔案相依，啟動語意前置分析...`);
+        try {
+            const semSys = getSemanticAnalyzerSystemPrompt();
+            const semDeps = ((astContext!.dependencyContexts) as any[])
+                .filter((d: any) => d.code)
+                .map((d: any) => ({ name: d.name as string, code: d.code as string }));
+            // 從 AST 的 callerContexts 擷取呼叫表達式
+            const semCallSites = ((astContext!.callerContexts) as any[] | undefined)
+                ?.map((c: any) => ({
+                    caller_func: c.caller_func as string || '',
+                    call_expr: c.call_expr as string || ''
+                })) || [];
+            const semUsr = getSemanticAnalyzerUserPrompt(
+                (astContext as any).code || '',
+                semDeps,
+                semCallSites
+            );
+            const semRaw = await requestLlmApi(params, semSys, semUsr, log);
+            const semResult = parseSemanticAnalysis(semRaw);
+            if (semResult) {
+                semanticContext = formatSemanticContextForPrompt(semResult);
+                log(`[語意分析師] ✅ 分析完成！找到 ${semResult.dependency_behaviors.length} 個相依行為、${semResult.unreachable_paths.length} 個不可達路徑、${semResult.equivalent_mutant_candidates.length} 個等效變異體候選。`);
+                finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
+            } else {
+                log(`[語意分析師] ⚠️ 無法解析 JSON 回應，跳過語意分析（不影響主流程）。`);
+            }
+        } catch (semErr: any) {
+            log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
+        }
+    }
+
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
+
         if (isAborted) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
             break;
         }
+
         log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
         currentTier = resolvedTier;
         finalReportMarkdown += `## 第 ${currentLoop} 輪測試\n`;
@@ -1371,7 +1490,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
                         // ─── Reviewer LLM 修復（適用所有 Tier）───
-                        log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行外科式修復（最多 2 次）...`);
+                        log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行修復及補充測資（最多 2 次）...`);
                         let reviewerFixed = false;
                         const funcArgs: string[] = (astContext as any)?.args || [];
                         for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
@@ -1380,7 +1499,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             try {
                                 const brokenCode = fs.readFileSync(testPath, 'utf8');
                                 const revSys = getReviewerSystemPrompt();
-                                const revUsr = getReviewerUserPrompt(brokenCode, out, params.funcName || '', funcArgs);
+                                const moduleName = path.basename(params.filePath, '.py');
+                                const targetSource = (astContext as any)?.code || targetCode;
+                                const revUsr = getReviewerUserPrompt(
+                                    brokenCode,
+                                    out,
+                                    params.funcName || '',
+                                    funcArgs,
+                                    targetSource,
+                                    astContext,
+                                    moduleName
+                                );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log);
                                 const revCode = sanitizeLlmResponse(revRaw);
                                 if (revCode && (revCode.includes('def test_') || revCode.includes('unittest'))) {
@@ -1393,17 +1522,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     if (revCheck.ok) {
                                         log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
                                         finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
+                                        finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
                                         loopCoverage = extractCoverage(revCheck.out, params.filePath);
                                         reviewerFixed = true;
                                         resolve();
                                         break;
                                     } else {
                                         log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${revCheck.out.substring(0, 300)}`);
-                                        // 把最新錯誤回饋給下一輪
-                                        finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次仍失敗: ${revCheck.out.substring(0, 150)}\n\n`;
+                                        finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
                                     }
                                 } else {
                                     log(`[Reviewer] 第 ${reviewAttempt} 次回應無法解析為有效測試碼。`);
+                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應無法解析為有效測試碼\n\n`;
                                 }
                             } catch (revErr: any) {
                                 log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);
@@ -1483,40 +1613,42 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     } // end while (currentTier >= 1)
 
 
-            // 動態偵測 mutation engine（不再依賴 isWin，改用 Python 版本 + 工具可用性）
-            let engine = 'mutatest';
+            // 動態偵測 mutation engine（Windows 強制使用 mutatest）
+            let engine: 'mutatest' | 'mutmut' = 'mutatest';
             const isWin = process.platform === 'win32';
             try {
                 // 取得 Python 版本
-                const pyVerRaw = execSync('python --version 2>&1', { encoding: 'utf8' }).trim();
-                const pyVer = pyVerRaw.replace('Python ', '');
+                const { stdout: pyVerRaw } = await runSpawn('python', ['--version'], {
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+                });
+                const pyVer = pyVerRaw.trim().replace('Python ', '');
                 const preferredEngine = detectMutationEngine(pyVer);
                 log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
 
-                if (preferredEngine === 'mutmut') {
-                    // 先嘗試 mutmut（Python 3.12+ 首選）
-                    try {
-                        execSync('mutmut --version', { stdio: 'ignore' });
+                if (preferredEngine === 'mutmut' && !isWin) {
+                    // 非 Windows 且建議 mutmut
+                    const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
+                    if (mutmutCheck.code === 0) {
                         engine = 'mutmut';
                         log(`[系統] mutmut 可用，使用 mutmut 進行突變測試。`);
-                    } catch {
-                        // mutmut 不可用，退回 mutatest
-                        log(`[系統] mutmut 不可用，退回使用 mutatest（注意：mutatest 在 Python 3.12+ 可能不穩定）。`);
+                    } else {
                         engine = 'mutatest';
+                        log(`[系統] mutmut 不可用，退回使用 mutatest。`);
                     }
                 } else {
-                    // Python < 3.12，優先 mutatest；若不可用則用 mutmut
-                    try {
-                        execSync('python -c "from mutatest.cli import cli_main"', { stdio: 'ignore' });
+                    // Windows 或 Python < 3.12 優先使用 mutatest
+                    const mutatestCheck = await runSpawn('python', ['-c', 'from mutatest.cli import cli_main'], {});
+                    if (mutatestCheck.code === 0) {
                         engine = 'mutatest';
                         log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
-                    } catch {
-                        try {
-                            execSync('mutmut --version', { stdio: 'ignore' });
+                    } else {
+                        const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
+                        if (mutmutCheck.code === 0 && !isWin) {
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
-                        } catch {
-                            log(`[系統] 警告：mutatest 與 mutmut 均不可用（或缺少 setuptools），請執行 pip install setuptools mutatest mutmut`);
+                        } else {
+                            log(`[系統] 警告：mutatest 不可用（可能缺少 setuptools），請執行 pip install setuptools mutatest`);
+                            engine = 'mutatest';
                         }
                     }
                 }
@@ -1640,11 +1772,33 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalReportMarkdown += `> [!WARNING]\n> ⚠️ 本輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解測試集。\n\n`;
             }
 
+            let finalReason = reasonStr;
+            if (!finalReason) {
+                if (typeof mutationScore === 'number') {
+                    if (mutationScore >= 100) {
+                        finalReason = '通過 (100%)';
+                    } else if (mutationScore >= 80) {
+                        finalReason = `高覆蓋 (${mutationScore}%)`;
+                    } else if (mutationScore >= 50) {
+                        finalReason = `部分通過 (${mutationScore}%)`;
+                    } else if (mutationScore > 0) {
+                        finalReason = `低分 (${mutationScore}%)`;
+                    } else {
+                        finalReason = '已完成 (無突變點/0%)';
+                    }
+                } else {
+                    finalReason = '已完成';
+                }
+            }
+
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
-                fileName: path.basename(params.filePath),
+                fileName: displayName,
+                file: path.basename(params.filePath),
+                func: params.funcName || '',
                 score: typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A',
-                reason: reasonStr || '分析中'
+                coverage: (loopCoverage as { coverageText: string; missingLines: string } | null)?.coverageText ?? null,
+                reason: finalReason
             });
 
             if (fs.existsSync(path.join(reportDir, 'index.html'))) {
@@ -1670,14 +1824,69 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
-                fileName: path.basename(params.filePath),
+                fileName: displayName,
+                file: path.basename(params.filePath),
+                func: params.funcName || '',
                 score: '失敗',
-                reason: message.includes('CUDA') ? 'VRAM 不足' : '執行異常'
+                coverage: null,
+                reason: message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
             });
             break;
         }
+
+        // ─── 變異體分流師（Mutant Triage）───────────────────────────
+        // 從 Loop 2 起，若仍有存活變異體，呼叫分流師判斷：
+        //   EQUIVALENT → 標記為不可殺，停止重試該變異體
+        //   KILLABLE   → 提取 kill_test 程式碼，注入下一輪 focusContext
+        if (currentLoop >= 2 && survivedMutants) {
+            log(`[變異體分流師] 啟動分流分析，判斷 ${survivedMutants.split('mutation').length - 1} 個存活變異體...`);
+            try {
+                const triageSys = getMutantTriageSystemPrompt();
+                const currentTestCode = fs.existsSync(testPath) ? fs.readFileSync(testPath, 'utf8') : '';
+                const moduleName = path.basename(params.filePath, '.py');
+                const triageUsr = getMutantTriageUserPrompt(
+                    survivedMutants,
+                    (astContext as any)?.code || '',
+                    currentTestCode,
+                    moduleName,
+                    params.funcName || '',
+                    semanticContext
+                );
+                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log);
+                const triageResult = parseMutantTriageResult(triageRaw);
+                if (triageResult) {
+                    log(`[變異體分流師] ✅ 分流完成：${triageResult.equivalent_count} 個等效、${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個可殺。`);
+                    // 等效變異體報告加入最終報告
+                    const eqReport = formatEquivalentMutantsReport(triageResult);
+                    if (eqReport) {
+                        finalReportMarkdown += eqReport;
+                        log(`[變異體分流師] 等效變異體已記錄於報告，下輪將跳過重試。`);
+                    }
+                    // KILLABLE：把 kill_test 提示注入 survivedMutants，讓下一輪 LLM 直接看到
+                    if (triageResult.has_killable) {
+                        const killMethods = extractKillTestMethods(triageResult);
+                        if (killMethods) {
+                            survivedMutants += `\n\n[Triage Hint] The following test methods are suggested to kill the KILLABLE mutants above:\n\`\`\`python\n${killMethods}\n\`\`\``;
+                            log(`[變異體分流師] 已將 ${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個 kill_test 注入下一輪 Prompt。`);
+                        }
+                    }
+                    // 若所有存活變異體均為等效，不再繼續循環
+                    if (!triageResult.has_killable && triageResult.equivalent_count > 0) {
+                        log(`[變異體分流師] 所有存活變異體均為等效變異體，無需繼續重試，結束循環。`);
+                        finalReportMarkdown += `\n> [!NOTE]\n> 🔵 所有剩餘存活變異體已被判定為等效變異體，不計入突變分數分母。\n\n`;
+                        currentLoop = params.maxLoops + 1; // 強制結束 while 迴圈
+                    }
+                } else {
+                    log(`[變異體分流師] ⚠️ 無法解析 JSON 回應，跳過分流（不影響主流程）。`);
+                }
+            } catch (triageErr: any) {
+                log(`[變異體分流師] ⚠️ 分流呼叫失敗: ${triageErr.message}，繼續主流程。`);
+            }
+        }
+
         currentLoop++;
     }
+
 
     const finalReportPath = path.join(sessionDir, `final_report.md`);
     fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');

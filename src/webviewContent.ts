@@ -86,6 +86,73 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             font-weight: bold;
         }
 
+        .result-card {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-editorGroup-border);
+            border-radius: 4px;
+            padding: 7px 9px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-sizing: border-box;
+            transition: background 0.15s ease;
+        }
+        .result-card:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .result-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            min-width: 0;
+            flex: 1;
+            word-break: break-all;
+        }
+        .result-badges {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .result-status {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin-left: 22px;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+        details.file-group summary {
+            background: var(--vscode-sideBarSectionHeader-background);
+            border-radius: 4px;
+            padding: 7px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+        }
+        details.file-group summary:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        details.file-group .group-content {
+            padding: 6px 4px 4px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
         #log-area {
             height: 300px;
             resize: vertical;
@@ -173,6 +240,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.testConfig')}</summary>
         <div class="content">
+            <label>⚡ 並行執行緒數 (Concurrency Workers)</label>
+            <select id="concurrency-select" style="margin-bottom: 8px;">
+                <option value="auto" selected>Auto（依模型規模自動調配）</option>
+                <option value="1">1（串行模式 - 適合小顯存 Local 模型）</option>
+                <option value="2">2 Workers</option>
+                <option value="3">3 Workers</option>
+                <option value="4">4 Workers</option>
+            </select>
             <label>🧠 ${t('ui.promptStrategy')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
                 <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>Auto — 依模型自動路由</option>
@@ -235,17 +310,39 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.coverageDashboard')}</summary>
         <div class="content">
-            <table id="coverage-table" style="width:100%; border-collapse:collapse; text-align:left;">
-                <thead style="border-bottom:1px solid var(--vscode-editorGroup-border);"><tr>
-                    <th style="padding:5px; width:30px; text-align:center;"><input type="checkbox" id="select-all"></th>
-                    <th style="padding:5px;">${t('ui.columnFile')}</th>
-                    <th style="padding:5px;">${t('ui.columnScore')}</th>
-                    <th style="padding:5px;">Status</th>
-                </tr></thead>
-                <tbody><tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">${t('ui.noCoverageData')}</td></tr></tbody>
-            </table>
+            <!-- 顯示模式切換工具列 -->
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="display:inline-flex; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; overflow:hidden;">
+                    <button type="button" id="btn-mode-flat" style="margin:0; padding:4px 10px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">📄 平鋪模式</button>
+                    <button type="button" id="btn-mode-grouped" style="margin:0; padding:4px 10px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">📁 檔案分組</button>
+                </div>
+                <div id="grouped-tools" style="display:none; gap:4px;">
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(true)">全部展開</button>
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(false)">全部折疊</button>
+                </div>
+            </div>
+
+            <!-- 指標與符號說明列 (Legend) -->
+            <div style="font-size:11px; opacity:0.85; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--vscode-editor-inactiveSelectionBackground); padding:4px 8px; border-radius:3px; margin-bottom:6px;" title="突變分數代表變異體殺死率，覆蓋率代表程式碼執行涵蓋行數比例">
+                <span title="🧬 突變分數 (Mutation Score)：測試套件殺死程式碼變異體的百分比，分數越高代表測試抓錯能力越強">🧬 <strong>突變分數</strong>: 變異體殺死率</span>
+                <span style="opacity:0.3;">|</span>
+                <span title="📊 行覆蓋率 (Line Coverage)：測試執行過程中所涵蓋到的原始程式碼行數比例">📊 <strong>覆蓋率</strong>: 程式碼行覆蓋</span>
+            </div>
+
+            <!-- 全選與控制列 -->
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
+                <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
+                    <input type="checkbox" id="select-all" style="margin:0; width:auto;"> 全選
+                </label>
+                <span id="results-count" style="font-size:11px; opacity:0.75;">0 項結果</span>
+            </div>
+
+            <!-- 響應式卡片容器 (平鋪 / 分組共用) -->
+            <div id="dashboard-container" style="display:flex; flex-direction:column; gap:6px; min-height:40px;">
+                <div id="empty-state" style="padding:15px; text-align:center; opacity:0.5; font-size:12px;">${t('ui.noCoverageData')}</div>
+            </div>
             
-            <button id="btn-delete-selected" style="margin-top:10px; background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
+            <button id="btn-delete-selected" style="margin-top:8px; background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
         </div>
     </details>
 
@@ -262,6 +359,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let currentKeys = {};
         let currentCustomKeys = {};
         let lastTestedProjectPath = '';
+        const resultsMap = new Map();
+        let currentViewMode = 'flat';
 
         const i18n = {
             noCoverageData: "${t('ui.noCoverageData')}",
@@ -271,24 +370,174 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         vscode.postMessage({ command: 'getInitialData' });
 
+        function setViewMode(mode) {
+            currentViewMode = mode;
+            const btnFlat = document.getElementById('btn-mode-flat');
+            const btnGrouped = document.getElementById('btn-mode-grouped');
+            const groupedTools = document.getElementById('grouped-tools');
+
+            if (mode === 'flat') {
+                btnFlat.style.background = 'var(--vscode-button-background)';
+                btnFlat.style.color = 'var(--vscode-button-foreground)';
+                btnGrouped.style.background = 'transparent';
+                btnGrouped.style.color = 'var(--vscode-foreground)';
+                if (groupedTools) groupedTools.style.display = 'none';
+            } else {
+                btnGrouped.style.background = 'var(--vscode-button-background)';
+                btnGrouped.style.color = 'var(--vscode-button-foreground)';
+                btnFlat.style.background = 'transparent';
+                btnFlat.style.color = 'var(--vscode-foreground)';
+                if (groupedTools) groupedTools.style.display = 'flex';
+            }
+            renderDashboard();
+        }
+
+        function setAllGroupsOpen(open) {
+            document.querySelectorAll('#dashboard-container details.file-group').forEach(d => d.open = open);
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function getScoreBadge(score, coverage) {
+            const scoreNum = parseFloat(score);
+            const scoreColor = score === '失敗' ? '#c75050'
+                : score === '測試中' ? '#1f6feb'
+                : isNaN(scoreNum) ? '#888'
+                : scoreNum >= 80 ? '#2ea043'
+                : scoreNum >= 50 ? '#d29922'
+                : '#c75050';
+
+            const scoreTitle = score === '測試中' ? '狀態: 測試中 (正在執行突變測試與分析)'
+                : score === '失敗' ? '狀態: 執行中斷或驗證失敗'
+                : '🧬 突變分數 (Mutation Score): ' + score + ' (測試殺死變異體的百分比，越高越能抓出潛在 Bug)';
+            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;" title="' + escapeHtml(scoreTitle) + '">🧬 ' + escapeHtml(score) + '</span>';
+
+            const covTitle = '📊 行覆蓋率 (Line Coverage): ' + (coverage || 'N/A') + ' (測試所涵蓋執行的原始程式碼行數比例)';
+            const covBadge = coverage
+                ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
+                : '';
+            return '<div class="result-badges">' + scoreBadge + covBadge + '</div>';
+        }
+
+        function toggleItemCheck(id, checked) {
+            const item = resultsMap.get(id);
+            if (item) item.checked = checked;
+        }
+
+        function createResultCard(item, showFileName = true) {
+            const card = document.createElement('div');
+            card.className = 'result-card';
+
+            const header = document.createElement('div');
+            header.className = 'result-header';
+
+            const titleBox = document.createElement('div');
+            titleBox.className = 'result-title';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.style.width = 'auto';
+            cb.style.margin = '0';
+            cb.className = 'row-sel';
+            cb.checked = !!item.checked;
+            cb.onchange = () => toggleItemCheck(item.id, cb.checked);
+            titleBox.appendChild(cb);
+
+            const label = document.createElement('span');
+            if (showFileName) {
+                label.innerHTML = '<span title="目標檔案: ' + escapeHtml(item.file) + '" style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
+                                  (item.func ? '<span title="目標函式: ' + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
+            } else {
+                label.innerHTML = '<span title="目標函式: ' + escapeHtml(item.func || item.fileName) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
+            }
+            titleBox.appendChild(label);
+            header.appendChild(titleBox);
+
+            const badgesDiv = document.createElement('div');
+            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage);
+            header.appendChild(badgesDiv);
+            card.appendChild(header);
+
+            if (item.reason) {
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'result-status';
+                statusDiv.textContent = item.reason;
+                card.appendChild(statusDiv);
+            }
+
+            return card;
+        }
+
+        function renderDashboard() {
+            const countSpan = document.getElementById('results-count');
+            if (countSpan) countSpan.textContent = resultsMap.size + ' 項結果';
+
+            const container = document.getElementById('dashboard-container');
+            if (!container) return;
+
+            if (resultsMap.size === 0) {
+                container.innerHTML = '<div style="padding:15px; text-align:center; opacity:0.5; font-size:12px;">' + i18n.noCoverageData + '</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+
+            if (currentViewMode === 'flat') {
+                resultsMap.forEach(item => {
+                    container.appendChild(createResultCard(item, true));
+                });
+            } else {
+                // 檔案分組模式
+                const groups = new Map();
+                resultsMap.forEach(item => {
+                    const f = item.file || '其他';
+                    if (!groups.has(f)) groups.set(f, []);
+                    groups.get(f).push(item);
+                });
+
+                groups.forEach((items, fileName) => {
+                    const details = document.createElement('details');
+                    details.className = 'file-group';
+                    details.open = true;
+                    details.style.marginBottom = '6px';
+                    details.style.border = '1px solid var(--vscode-editorGroup-border)';
+                    details.style.borderRadius = '4px';
+
+                    const summary = document.createElement('summary');
+                    summary.innerHTML = '<span style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + items.length + ' 個函式)</small></span>';
+                    details.appendChild(summary);
+
+                    const groupContent = document.createElement('div');
+                    groupContent.className = 'group-content';
+
+                    items.forEach(item => {
+                        groupContent.appendChild(createResultCard(item, false));
+                    });
+
+                    details.appendChild(groupContent);
+                    container.appendChild(details);
+                });
+            }
+        }
+
         document.getElementById('select-all').addEventListener('change', (e) => {
             const isChecked = e.target.checked;
-            const checkboxes = document.querySelectorAll('#coverage-table tbody .row-sel');
-            checkboxes.forEach(cb => cb.checked = isChecked);
+            resultsMap.forEach(item => item.checked = isChecked);
+            renderDashboard();
         });
 
         document.getElementById('btn-delete-selected').addEventListener('click', () => {
-            const tbody = document.querySelector('#coverage-table tbody');
-            const checkboxes = tbody.querySelectorAll('.row-sel:checked');
-            checkboxes.forEach(cb => {
-                const tr = cb.closest('tr');
-                if (tr) tr.remove();
+            const toDelete = [];
+            resultsMap.forEach((item, id) => {
+                if (item.checked) toDelete.push(id);
             });
-            if (tbody.rows.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">' + i18n.noCoverageData + '</td></tr>';
-                document.getElementById('select-all').checked = false;
-            }
+            toDelete.forEach(id => resultsMap.delete(id));
+            document.getElementById('select-all').checked = false;
+            renderDashboard();
         });
+
 
         window.addEventListener('message', event => {
             const msg = event.data;
@@ -301,24 +550,30 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'setBatchPath': document.getElementById('batch-path').value = msg.path; break;
                 case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
                 case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
-                case 'updateCoverage':
-                    const tbody = document.querySelector('#coverage-table tbody');
-                    let existingRow = Array.from(tbody.querySelectorAll('tr')).find(row => row.cells[1]?.textContent === msg.fileName);
-                    if (existingRow) { 
-                        existingRow.cells[2].innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
-                        existingRow.cells[3].textContent = msg.reason || '';
-                    } else { 
-                        if (tbody.rows.length === 1 && tbody.rows[0].cells[0].textContent.includes(i18n.noCoverageData)) tbody.innerHTML = ''; 
-                        const newRow = tbody.insertRow(); 
-                        const cellCheck = newRow.insertCell(0);
-                        cellCheck.style.textAlign = 'center';
-                        cellCheck.innerHTML = '<input type="checkbox" class="row-sel">';
-                        newRow.insertCell(1).textContent = msg.fileName; 
-                        newRow.insertCell(2).innerHTML = \`<span class="badge score-badge">\${msg.score}</span>\`; 
-                        newRow.insertCell(3).textContent = msg.reason || '';
-                        Array.from(newRow.cells).forEach(c => c.style.padding = '5px');
+                case 'updateCoverage': {
+                    const fileName = msg.fileName;
+                    let file = msg.file || '';
+                    let func = msg.func || '';
+                    if (!file && fileName.includes(':')) {
+                        const parts = fileName.split(':');
+                        file = parts[0];
+                        func = parts.slice(1).join(':');
+                    } else if (!file) {
+                        file = fileName;
                     }
+                    resultsMap.set(fileName, {
+                        id: fileName,
+                        file: file,
+                        func: func,
+                        fileName: fileName,
+                        score: msg.score,
+                        coverage: msg.coverage,
+                        reason: msg.reason,
+                        checked: resultsMap.get(fileName)?.checked || false
+                    });
+                    renderDashboard();
                     break;
+                }
                 case 'setCustomKeys':
                     currentCustomKeys = msg.keys;
                     const ckeys = Object.keys(msg.keys);

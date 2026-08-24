@@ -3,11 +3,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
-import { extractFunctionsFromFile } from './utils';
+import { extractFunctionsWithAst } from './utils';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
     public webview?: vscode.Webview;
+
+    constructor(private readonly secretStorage: vscode.SecretStorage) {}
 
     public resolveWebviewView(webviewView: vscode.WebviewView) {
         initI18n();
@@ -25,10 +27,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
             switch (message.command) {
                 case 'getInitialData': {
-                    const keys = config.get<Record<string, string>>('apiKeys', {});
+                    const rawKeys = await this.secretStorage.get('llm_api_keys');
+                    const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
                     this.webview?.postMessage({ command: 'setApiKeys', keys });
 
-                    const customKeys = config.get<Record<string, any>>('customApiKeys', {});
+                    const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
+                    const customKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
                     this.webview?.postMessage({ command: 'setCustomKeys', keys: customKeys });
 
                     const savedProjPath = config.get<string>('projectPath', '');
@@ -161,52 +165,51 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'updateApiKey': {
-                    // 使用外層的 config，不重複宣告
-                    const currentKeys = { ...config.get<Record<string, string>>('apiKeys', {}) };
-
+                    const rawKeys = await this.secretStorage.get('llm_api_keys');
+                    const currentKeys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
                     if (message.oldName && message.oldName !== message.newName) {
                         delete currentKeys[message.oldName];
                     }
                     currentKeys[message.newName] = message.key;
-
-                    await config.update('apiKeys', currentKeys, true);
+                    await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
                     this.webview?.postMessage({ command: 'setApiKeys', keys: currentKeys });
-                    vscode.window.showInformationMessage(`✅ 已存檔：${message.newName}`);
+                    vscode.window.showInformationMessage(`🔒 已安全儲存 API Key 至系統金鑰庫：${message.newName}`);
                     break;
                 }
 
                 case 'deleteApiKey': {
-                    // 使用外層的 config，不重複宣告
-                    const currentKeys = { ...config.get<Record<string, string>>('apiKeys', {}) };
-
+                    const rawKeys = await this.secretStorage.get('llm_api_keys');
+                    const currentKeys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
                     if (currentKeys[message.name]) {
                         delete currentKeys[message.name];
-                        await config.update('apiKeys', currentKeys, true);
+                        await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
                         this.webview?.postMessage({ command: 'setApiKeys', keys: currentKeys });
-                        vscode.window.showInformationMessage(`🗑️ 已刪除：${message.name}`);
+                        vscode.window.showInformationMessage(`🗑️ 已自安全金鑰庫移除：${message.name}`);
                     }
                     break;
                 }
 
                 case 'updateCustomKey': {
-                    const currentKeys = { ...config.get<Record<string, any>>('customApiKeys', {}) };
+                    const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
+                    const currentKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
                     if (message.oldName && message.oldName !== message.newName) {
                         delete currentKeys[message.oldName];
                     }
                     currentKeys[message.newName] = { url: message.url, model: message.model, key: message.key };
-                    await config.update('customApiKeys', currentKeys, true);
+                    await this.secretStorage.store('llm_custom_keys', JSON.stringify(currentKeys));
                     this.webview?.postMessage({ command: 'setCustomKeys', keys: currentKeys });
-                    vscode.window.showInformationMessage(`✅ 已存檔自訂 API：${message.newName}`);
+                    vscode.window.showInformationMessage(`🔒 已安全儲存自訂 API：${message.newName}`);
                     break;
                 }
 
                 case 'deleteCustomKey': {
-                    const currentKeys = { ...config.get<Record<string, any>>('customApiKeys', {}) };
+                    const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
+                    const currentKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
                     if (currentKeys[message.name]) {
                         delete currentKeys[message.name];
-                        await config.update('customApiKeys', currentKeys, true);
+                        await this.secretStorage.store('llm_custom_keys', JSON.stringify(currentKeys));
                         this.webview?.postMessage({ command: 'setCustomKeys', keys: currentKeys });
-                        vscode.window.showInformationMessage(`🗑️ 已刪除自訂 API：${message.name}`);
+                        vscode.window.showInformationMessage(`🗑️ 已自安全金鑰庫移除自訂 API：${message.name}`);
                     }
                     break;
                 }
@@ -284,8 +287,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
                                 }
                             } else if (message.envType === 'cloud') {
-                                const config = vscode.workspace.getConfiguration('llmUnitTest');
-                                const keys = config.get<Record<string, string>>('apiKeys', {});
+                                const rawKeys = await this.secretStorage.get('llm_api_keys');
+                                const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
                                 const key = keys[message.modelName];
                                 if (!key) {
                                     clearTimeout(timeoutId);
@@ -396,14 +399,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {
-        return extractFunctionsFromFile(filePath);
+        const infos = await extractFunctionsWithAst(filePath);
+        return infos.map(f => f.fullName);
     }
 
     private async fetchLocalModels(): Promise<string[]> {
         try {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
             const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-            const response = await fetch(`${baseUrl}/api/tags`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal as any });
+            clearTimeout(timeoutId);
             if (response.ok) {
                 const data = await response.json() as any;
                 if (data && data.models) {
@@ -411,7 +418,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
             }
         } catch (e) {
-            console.warn('Ollama not running or unreachable');
+            // Ollama not running or unreachable
         }
         return [];
     }

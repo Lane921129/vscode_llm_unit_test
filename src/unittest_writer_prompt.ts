@@ -1,4 +1,4 @@
-import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
+﻿import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './few_shot_examples';
 import { getPromptLanguageName } from './i18n';
 
 // ─────────────────────────────────────────────────────────────
@@ -27,12 +27,16 @@ export function getTier1UserPrompt(
     errorType: string = 'Exception'
 ): string {
     if (isError) {
-        return `Input raises ${errorType}("${returnVal}").
+        return `Target call \`${funcCall}\` raises ${errorType}("${returnVal}").
 Complete: with self.assertRaises(${errorType}):
-              ___`;
+              ${funcCall}`;
     }
-    return `Return value: ${returnVal}
-Complete ONE line: self.assertEqual(result, ___)`;
+    const valRepr = (returnVal.startsWith('"') || returnVal.startsWith("'") || returnVal.startsWith("{") || returnVal.startsWith("[") || returnVal === 'True' || returnVal === 'False' || returnVal === 'None' || !isNaN(Number(returnVal)))
+        ? returnVal
+        : JSON.stringify(returnVal);
+    return `Target call: \`result = ${funcCall}\`
+Exact Return Value: ${valRepr}
+Complete ONE line: self.assertEqual(result, ${valRepr})`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -143,12 +147,14 @@ export function getSystemPrompt(
 ${formatBlock}
 
 Rules:
-1. Start with import unittest. Import the function using: from MODULE import FUNCTION (absolute, not relative).
+1. Start with import unittest. Import the target function using its actual module name (e.g. from my_module import target_func). NEVER write literal "from MODULE import FUNCTION".
 2. Each test method starts with test_ and uses self.assert*().
 3. Do NOT copy or redefine the source function. Write test methods only.
 4. No pytest. No top-level assert.
 5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.
-6. Inputs are validated by LENGTH and STRUCTURE, NOT English meaning. "not a valid token" has len=17 which may PASS length checks. ALWAYS use Verified Real Execution Results to determine behavior.`;
+   - WRONG: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError — NEVER pass a string as second arg to assertRaises!
+6. TOKEN LENGTH BOUNDARY: The check is \`len(token) < 10\`. Use 'abc' (len=3) or '123456789' (len=9) as INVALID tokens. Use '1234567890' (len=10) or '123456789012' (len=12) as VALID tokens. Do NOT do long_string[:-1] expecting ValueError — it still has len >> 10!
+7. Inputs are validated by LENGTH and STRUCTURE, NOT English meaning. "not a valid token" has len=17 which may PASS length checks. ALWAYS use Verified Real Execution Results to determine behavior.`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -175,6 +181,8 @@ Guidelines:
 - Use unittest.mock (patch, MagicMock) for external dependencies.
 - Cover edge cases: None, empty, boundary values, exception paths.
 - Do NOT copy the source code into your output.
+- assertRaises syntax: ONLY \`with self.assertRaises(ValueError):\` — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!
+- TOKEN LENGTH BOUNDARY: \`len(token) < 10\` raises ValueError. Use 'abc' or '123456789' (len=9) as invalid; '1234567890' (len=10+) as valid.
 `;
 
     prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), thinking)}\n`;
@@ -246,7 +254,10 @@ export function getUserPrompt(
             prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
         }
         prompt += `- CRITICAL: Do NOT invent keyword arguments like total=... or payment_token=... that are not in the function signature.\n`;
-        prompt += `- TOKEN RULE: If passing a token string, valid tokens must be AT LEAST 10 characters long (e.g. '123456789012'). Short strings like 'abc123' will fail token length validation.\n`;
+        prompt += `- TOKEN LENGTH RULE: The validation check is \`len(token) < 10\`.\n`;
+        prompt += `  - INVALID token (raises ValueError): len < 10. Examples: '' (len=0), 'abc' (len=3), '123456789' (len=9).\n`;
+        prompt += `  - VALID token (no error): len >= 10. Examples: '1234567890' (len=10), '123456789012' (len=12).\n`;
+        prompt += `  - DANGER: Do NOT slice a long token with [:-1] expecting ValueError — e.g. 'abcdefghijklm'[:-1] is still 12 chars, still VALID!\n`;
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
@@ -346,6 +357,23 @@ export function getUserPrompt(
                 prompt += `  - ${funcName}() ONLY accepts: (${(astContext.args || []).join(', ')})\n\n`;
             }
 
+            // ── Fix A-3: 目標函式 vs 相依函式回傳型別區分 ──
+            prompt += `\n🎯 TARGET RETURN TYPE VS DEPENDENCY RETURN TYPE:\n`;
+            prompt += `  - Target \`${funcName}()\` returns its OWN value (inspect return statements in source code), NOT the raw dependency dictionary.\n`;
+            prompt += `  - If \`${funcName}()\` returns a string (e.g. "Welcome User ..."), assert a string, do NOT treat \`result\` as a dict.\n`;
+
+            // ── Fix A-4: 未捕獲的相依函式例外提示 ──
+            const targetHasTry = /^\s*try\s*:/m.test(astContext.code || code);
+            for (const dep of astContext.dependencyContexts) {
+                if (dep.code && /^\s*raise\s+/m.test(dep.code) && !targetHasTry) {
+                    prompt += `\n⚠️ UNCAUGHT DEPENDENCY EXCEPTION WARNING:\n`;
+                    prompt += `  - Dependency \`${dep.name}()\` raises exceptions for invalid inputs (e.g. ValueError("Invalid token length")).\n`;
+                    prompt += `  - Because \`${funcName}()\` does NOT use try/except to catch it, the exception propagates directly to caller!\n`;
+                    prompt += `  - For invalid/short token tests, you MUST use \`with self.assertRaises(ValueError):\`.\n`;
+                    prompt += `  - Do NOT assert that \`${funcName}()\` returns False or an error string on invalid inputs.\n`;
+                }
+            }
+
             prompt += `\nExternal dependencies:\n`;
             for (const dep of astContext.dependencyContexts) {
                 const remaining = budgetTokens - estimateTokens(prompt);
@@ -398,10 +426,37 @@ export function getUserPrompt(
         }
     }
 
-    // ── 共用段：Fix B/C + Trace 重申，Loop 1 和 Loop 2+ 都執行 ──
+    // ── 共用段：Fix B/C + Slicing + Trace 重申，Loop 1 和 Loop 2+ 都執行 ──
     {
         const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
         const srcLines = src.split('\n');
+
+        // 字串切片提示（防止 LLM 算錯 [:5] 和 [-5:]）
+        const sliceMatches = Array.from(src.matchAll(/(\w+)\[(-?\d*):(-?\d*)\]/g));
+        if (sliceMatches.length > 0) {
+            const sliceHints: string[] = [];
+            for (const sm of sliceMatches as RegExpMatchArray[]) {
+                const varName = sm[1];
+                const start = sm[2];
+                const end = sm[3];
+                if (!start && end) {
+                    const n = parseInt(end, 10);
+                    if (!isNaN(n) && n > 0) {
+                        sliceHints.push(`\`${varName}[:${n}]\` takes the FIRST ${n} characters (e.g., '123456789012'[:${n}] == '${"123456789012".substring(0, n)}')`);
+                    }
+                } else if (start && start.startsWith('-') && !end) {
+                    const n = Math.abs(parseInt(start, 10));
+                    sliceHints.push(`\`${varName}[-${n}:]\` takes the LAST ${n} characters (e.g., '123456789012'[-${n}:] == '${"123456789012".slice(-n)}')`);
+                }
+            }
+            if (sliceHints.length > 0) {
+                prompt += `\n🔪 STRING SLICE CALCULATION HINTS (from source code):\n`;
+                for (const sh of [...new Set(sliceHints)]) {
+                    prompt += `  - ${sh}\n`;
+                }
+                prompt += `  → Compute slice values EXACTLY as specified in the source code.\n`;
+            }
+        }
 
         // Fix B：偵測 raise 行 vs try/except 攔截
         const raiseLines = srcLines.filter((l: string) => /^\s*raise\s+/.test(l));

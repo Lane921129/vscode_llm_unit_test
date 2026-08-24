@@ -1,6 +1,7 @@
 {
   "name": "llm-unit-test",
   "displayName": "llm_unit_test",
+  "publisher": "lane",
   "description": "Using llm to generate unit test and analyzation for user",
   "version": "0.0.1",
   "engines": {
@@ -10,7 +11,9 @@
   "categories": [
     "Testing"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:mutation-test-view"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
