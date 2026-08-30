@@ -71,13 +71,23 @@ def find_call_sites(func_name, project_root, target_path=None):
 
                 args_list = [ast.unparse(arg) if hasattr(ast, 'unparse') else repr(arg) for arg in node.args]
                 kwargs_dict = {(kw.arg or '**'): (ast.unparse(kw.value) if hasattr(ast, 'unparse') else repr(kw.value)) for kw in node.keywords}
+                trace_args, trace_kwargs = [], {}
+                try:
+                    trace_args = [ast.literal_eval(arg) for arg in node.args]
+                    if any(keyword.arg is None for keyword in node.keywords):
+                        raise ValueError('**kwargs cannot be safely resolved')
+                    trace_kwargs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords}
+                except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                    trace_args, trace_kwargs = None, None
                 results.append({
                     'caller_file': os.path.relpath(filepath, project_root).replace('\\', '/'),
                     'caller_func': enclosing_func(node.lineno),
                     'line': node.lineno,
                     'args': args_list,
                     'kwargs': kwargs_dict,
-                    'call_expr': ast.unparse(node) if hasattr(ast, 'unparse') else func_name
+                    'call_expr': ast.unparse(node) if hasattr(ast, 'unparse') else func_name,
+                    'trace_args': trace_args,
+                    'trace_kwargs': trace_kwargs
                 })
     return results
 

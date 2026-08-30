@@ -297,6 +297,8 @@ interface CallerContext {
     args: string[];
     kwargs: Record<string, string>;
     call_expr?: string;
+    trace_args?: unknown[] | null;
+    trace_kwargs?: Record<string, unknown> | null;
 }
 
 interface AstContext {
@@ -506,8 +508,12 @@ async function runDynamicTrace(
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
     const args = [pythonScript, filePath, funcName];
     if (callerArgs && callerArgs.length > 0) {
-        const knownInputs = callerArgs.map(ctx => ctx.args);
-        args.push(JSON.stringify(knownInputs));
+        const literalInputs = callerArgs
+            .filter(ctx => Array.isArray(ctx.trace_args) && ctx.trace_kwargs !== null)
+            .map(ctx => ({ args: ctx.trace_args, kwargs: ctx.trace_kwargs || {} }));
+        if (literalInputs.length > 0) {
+            args.push(JSON.stringify(literalInputs));
+        }
     }
     try {
         const { stdout } = await runSpawn('python', args, {
@@ -1619,7 +1625,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         const repairUsr = getTier4SelfRepairPrompt(out);
                                         const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log);
                                         const repairCode = sanitizeLlmResponse(repairRaw);
-                                        if (repairCode && (repairCode.includes('def test_') || repairCode.includes('unittest'))) {
+                                        const repairValidation = await validateGeneratedTestCode(repairCode);
+                                        if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
                                             const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {
                                                 exec(preCheckCmd, { timeout: 30000 }, (err2, out2a, out2b) => {
@@ -1636,6 +1643,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             } else {
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${result2.out.substring(0, 200)}`);
                                             }
+                                        } else {
+                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次回應未通過格式驗證：${repairValidation.reason}`);
                                         }
                                     } catch (repairErr: any) {
                                         log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);

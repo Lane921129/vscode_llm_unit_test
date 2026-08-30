@@ -63,11 +63,19 @@ class Worker:
                 'def validate(value):\n    return value + 1\n\ndef invoke():\n    return validate(2)\n',
                 encoding='utf-8'
             )
+            (root / 'variable_consumer.py').write_text(
+                'from core import validate\n\ndef invoke(value):\n    return validate(value)\n',
+                encoding='utf-8'
+            )
             calls = self.run_script('ast_caller_finder.py', 'validate', root, target)
 
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]['caller_file'], 'consumer.py')
-        self.assertEqual(calls[0]['call_expr'], 'core_validate(1)')
+        by_file = {call['caller_file']: call for call in calls}
+        self.assertEqual(set(by_file), {'consumer.py', 'variable_consumer.py'})
+        self.assertEqual(by_file['consumer.py']['call_expr'], 'core_validate(1)')
+        self.assertEqual(by_file['consumer.py']['trace_args'], [1])
+        self.assertEqual(by_file['consumer.py']['trace_kwargs'], {})
+        self.assertIsNone(by_file['variable_consumer.py']['trace_args'])
+        self.assertIsNone(by_file['variable_consumer.py']['trace_kwargs'])
 
 
 if __name__ == '__main__':

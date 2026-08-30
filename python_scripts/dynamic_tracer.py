@@ -152,8 +152,13 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     if test_inputs is None:
         test_inputs = infer_boundary_inputs(result["args"], annotations if 'annotations' in locals() else {})
 
-    # 執行每個測試輸入
+    # 執行每個測試輸入。呼叫站提供的字面值可包含 args/kwargs；舊格式 list
+    # 仍相容，避免將 AST 變數名稱當成真實字串輸入。
     for inp in test_inputs:
+        kwargs = {}
+        if isinstance(inp, dict):
+            kwargs = inp.get('kwargs', {})
+            inp = inp.get('args', [])
         if not isinstance(inp, (list, tuple)):
             inp = (inp,)
         try:
@@ -164,9 +169,9 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     instance = cls_obj()
                 except Exception:
                     instance = object.__new__(cls_obj)
-                ret = getattr(instance, func_name)(*inp)
+                ret = getattr(instance, func_name)(*inp, **kwargs)
             else:
-                ret = func(*inp)
+                ret = func(*inp, **kwargs)
             result["examples"].append({
                 "args": [safe_repr(a) for a in inp],
                 "result": safe_repr(ret),

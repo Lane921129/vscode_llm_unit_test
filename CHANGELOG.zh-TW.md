@@ -4,6 +4,13 @@
 
 ## 2026-08-30
 
+### 動態追蹤資料可信度
+
+- 呼叫站中的變數、運算式與不可安全還原的資料不再被當成真實輸入執行；它們只保留在語意提示中。
+- 可由 Python `ast.literal_eval` 安全還原的字面值位置／關鍵字參數，才會傳入 dynamic tracer；追蹤器同時支援這種 args／kwargs 格式。
+- Tier 4 Self-repair 補上與生成器、Reviewer 相同的 Python／unittest 格式閘門。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、13 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
 ### 生成驗證、AST 語境與專案維護規範
 
 - 新增 `PROJECT_RULES.md`、`AUTO_MAINTENANCE.md` 與本中文變更紀錄；規定每個已驗證改動必須更新 Log 並建立中英文 commit。
