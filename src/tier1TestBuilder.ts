@@ -2,9 +2,17 @@ import { toPythonAssertionLiteral } from './tier1Literals';
 
 export interface Tier1TraceExample {
     args: string[];
+    kwargs?: Record<string, string>;
     result?: string;
     result_type?: string;
     exception?: string;
+}
+
+function buildTraceCall(funcName: string, example: Tier1TraceExample): string {
+    const kwargs = Object.entries(example.kwargs || {})
+        .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
+        .map(([name, value]) => `${name}=${value}`);
+    return `${funcName}(${[...example.args, ...kwargs].join(', ')})`;
 }
 
 /** Build Tier 1 tests deterministically from verified dynamic-trace facts. */
@@ -16,7 +24,7 @@ export function buildTier1TestMethods(
     const methods: string[] = [];
 
     examples.forEach((example, index) => {
-        const funcCall = `${funcName}(${example.args.join(', ')})`;
+        const funcCall = buildTraceCall(funcName, example);
         const assertion = example.result === 'None' || example.result_type === 'NoneType'
             ? 'self.assertIsNone(result)'
             : `self.assertEqual(result, ${toPythonAssertionLiteral(example.result, example.result_type)})`;
@@ -28,7 +36,7 @@ export function buildTier1TestMethods(
     });
 
     errors.forEach((error, index) => {
-        const funcCall = `${funcName}(${error.args.join(', ')})`;
+        const funcCall = buildTraceCall(funcName, error);
         const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
             ? error.exception
             : 'Exception';

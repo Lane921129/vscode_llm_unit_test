@@ -486,6 +486,7 @@ async function findCallerContexts(
 
 interface TraceExample {
     args: string[];
+    kwargs?: Record<string, string>;
     result?: string;
     result_type?: string;
     exception?: string;

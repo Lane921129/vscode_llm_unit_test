@@ -162,6 +162,20 @@ class Worker:
         self.assertEqual(result['examples'], [])
         self.assertEqual(result['errors'], [])
 
+    def test_dynamic_tracer_preserves_required_keyword_only_arguments(self):
+        source = '''def multiply(value: int, *, factor: int):
+    return value * factor
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'keyword_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'multiply', [{'args': [3], 'kwargs': {'factor': 2}}])
+
+        self.assertIsNone(result['load_error'])
+        self.assertEqual(result['examples'], [{
+            'args': ['3'], 'kwargs': {'factor': '2'}, 'result': '6', 'result_type': 'int'
+        }])
+
     def test_builtin_mutation_runner_kills_a_boundary_mutation_without_changing_source(self):
         source = '''def classify(value):
     return "positive" if value > 0 else "not-positive"

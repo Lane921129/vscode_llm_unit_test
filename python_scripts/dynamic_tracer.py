@@ -36,7 +36,7 @@ def load_module_from_file(file_path: str):
         return None
     return module
 
-def infer_boundary_inputs(func_args: list, annotations: dict = None) -> list:
+def infer_boundary_inputs(positional_args: list, annotations: dict = None, keyword_only_args: list = None) -> list:
     """
     根據參數名稱猜測常見型別，產生通用邊界值組合。
     目的：快速取得「函式是否可正常執行」的初始 I/O 樣本。
@@ -49,8 +49,10 @@ def infer_boundary_inputs(func_args: list, annotations: dict = None) -> list:
     bool_candidates = [True, False]
     none_candidate = [None]
 
+    keyword_only_args = keyword_only_args or []
+    all_args = positional_args + keyword_only_args
     per_arg_candidates = []
-    for arg_name in func_args:
+    for arg_name in all_args:
         annotation = str((annotations or {}).get(arg_name, '')).lower()
         if 'bool' in annotation:
             per_arg_candidates.append(bool_candidates + none_candidate)
@@ -63,17 +65,25 @@ def infer_boundary_inputs(func_args: list, annotations: dict = None) -> list:
             # tracer intentionally uses only annotation-based or mixed probes.
             per_arg_candidates.append(str_candidates[:2] + scalar_candidates[:3] + none_candidate)
 
+    def build_input(values):
+        args = list(values[:len(positional_args)])
+        kwargs = {
+            name: values[len(positional_args) + index]
+            for index, name in enumerate(keyword_only_args)
+        }
+        return {'args': args, 'kwargs': kwargs} if kwargs else tuple(args)
+
     if len(per_arg_candidates) == 0:
         return [()]
     if len(per_arg_candidates) == 1:
-        return [(c,) for c in per_arg_candidates[0][:8]]
+        return [build_input((candidate,)) for candidate in per_arg_candidates[0][:8]]
 
     # zip-style：每個參數取相同 index 的候選值，最多 10 組
     results = []
     max_candidates = max(len(c) for c in per_arg_candidates)
     for i in range(min(max_candidates, 10)):
         combo = tuple(c[i % len(c)] for c in per_arg_candidates)
-        results.append(combo)
+        results.append(build_input(combo))
 
     return results
 
@@ -138,20 +148,35 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     # 取得參數名稱（class method 去除 self/cls）
     try:
         sig = inspect.signature(func)
-        all_params = list(sig.parameters.keys())
+        all_params = list(sig.parameters.values())
         # 未綁定 method 可能包含 self，將其去除
-        result["args"] = [p for p in all_params if p not in ('self', 'cls')]
+        trace_params = [p for p in all_params if p.name not in ('self', 'cls')]
+        result["args"] = [p.name for p in trace_params]
         annotations = {
-            name: parameter.annotation
-            for name, parameter in sig.parameters.items()
+            parameter.name: parameter.annotation
+            for parameter in trace_params
             if parameter.annotation is not inspect.Parameter.empty
         }
+        required_positional_args = [
+            parameter.name for parameter in trace_params
+            if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            and parameter.default is inspect.Parameter.empty
+        ]
+        required_keyword_only_args = [
+            parameter.name for parameter in trace_params
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+            and parameter.default is inspect.Parameter.empty
+        ]
     except Exception:
         pass
 
     # 決定測試輸入
     if test_inputs is None:
-        test_inputs = infer_boundary_inputs(result["args"], annotations if 'annotations' in locals() else {})
+        test_inputs = infer_boundary_inputs(
+            required_positional_args if 'required_positional_args' in locals() else result["args"],
+            annotations if 'annotations' in locals() else {},
+            required_keyword_only_args if 'required_keyword_only_args' in locals() else []
+        )
 
     # 執行每個測試輸入。呼叫站提供的字面值可包含 args/kwargs；舊格式 list
     # 仍相容，避免將 AST 變數名稱當成真實字串輸入。
@@ -181,11 +206,14 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                 ret = func(*inp, **kwargs)
             if inspect.isawaitable(ret):
                 ret = asyncio.run(ret)
-            result["examples"].append({
+            example = {
                 "args": [safe_repr(a) for a in inp],
                 "result": safe_repr(ret),
                 "result_type": type(ret).__name__
-            })
+            }
+            if kwargs:
+                example["kwargs"] = {name: safe_repr(value) for name, value in kwargs.items()}
+            result["examples"].append(example)
         except Exception as e:
             exc_type = type(e).__name__
             exc_msg = str(e)[:200]
@@ -193,11 +221,14 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             if exc_type in ('ValueError', 'TypeError', 'KeyError', 'AttributeError',
                             'IndexError', 'RuntimeError', 'PermissionError', 'FileNotFoundError',
                             'NotImplementedError', 'AssertionError', 'ZeroDivisionError'):
-                result["errors"].append({
+                error_record = {
                     "args": [safe_repr(a) for a in inp],
                     "exception": exc_type,
                     "message": exc_msg
-                })
+                }
+                if kwargs:
+                    error_record["kwargs"] = {name: safe_repr(value) for name, value in kwargs.items()}
+                result["errors"].append(error_record)
             # 其他例外（ImportError 等）靜默跳過
 
     return result

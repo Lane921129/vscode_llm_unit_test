@@ -14,3 +14,11 @@ test('builds exact value and exception assertions without asking an LLM', () => 
         '    def test_case_2(self):\n        with self.assertRaises(ValueError):\n            format_value(\'\')'
     ]);
 });
+
+test('preserves traced keyword arguments in deterministic calls', () => {
+    const methods = buildTier1TestMethods('multiply', [
+        { args: ['3'], kwargs: { factor: '2' }, result: '6', result_type: 'int' }
+    ], []);
+
+    assert.ok(methods[0].includes('result = multiply(3, factor=2)'));
+});

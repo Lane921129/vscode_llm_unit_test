@@ -2,6 +2,16 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-08-31
+
+### Keyword-only 動態追蹤與 Tier 1 生成
+
+- Dynamic tracer 會把 required keyword-only 引數建立為 kwargs 並在結果中保留 Python repr，不再只記錄位置引數。
+- Tier 1 確定性生成可將 trace 的 kwargs 還原為 `function(..., name=value)`，例外與成功斷言皆適用。
+- 保持無 kwargs 的既有 trace 格式不變，避免不必要的 schema 破壞。
+- 新增 keyword-only trace、Tier 1 生成及實際 Python unittest 端到端回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、29 個 TypeScript 單元／端到端測試、8 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
 ## 2026-08-30
 
 ### AST 函式與建構子簽章語境
