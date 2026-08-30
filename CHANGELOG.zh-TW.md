@@ -4,6 +4,13 @@
 
 ## 2026-08-30
 
+### 非同步 unittest 格式閘門
+
+- 生成測試驗證器現在同時接受 `unittest.TestCase` 與 `unittest.IsolatedAsyncioTestCase`，也接受 `async def test_*`。
+- 修正 Tier 3／Tier 4 對 coroutine 目標產生正確 async unittest 後，卻被同步格式規則錯誤拒絕的問題。
+- 新增非同步 unittest 結構回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、26 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
 ### 跨提供者結構化輸出相容性
 
 - Custom OpenAI-compatible API 在需要語意／測試程式碼結構化輸出時，會要求 JSON mode；Cloud、Ollama、Custom 共用同一份通用輸出契約。

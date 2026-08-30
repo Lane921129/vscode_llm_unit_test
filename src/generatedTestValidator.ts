@@ -31,10 +31,10 @@ export function validateUnittestStructure(code: string): GeneratedTestValidation
     if (!/^\s*(?:from\s+unittest\s+import|import\s+unittest\b)/m.test(trimmed)) {
         return { valid: false, reason: '缺少 unittest import' };
     }
-    if (!/^\s*class\s+\w+\s*\(\s*unittest\.TestCase\s*\)\s*:/m.test(trimmed)) {
-        return { valid: false, reason: '缺少 unittest.TestCase 類別' };
+    if (!/^\s*class\s+\w+\s*\(\s*unittest\.(?:TestCase|IsolatedAsyncioTestCase)\s*\)\s*:/m.test(trimmed)) {
+        return { valid: false, reason: '缺少 unittest.TestCase 或 unittest.IsolatedAsyncioTestCase 類別' };
     }
-    if (!/^\s+def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
+    if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
         return { valid: false, reason: '缺少 test_ 測試方法' };
     }
     return { valid: true };

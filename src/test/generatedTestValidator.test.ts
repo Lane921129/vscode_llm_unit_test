@@ -19,6 +19,20 @@ test('accepts a complete unittest file structure', () => {
     assert.strictEqual(result.valid, true);
 });
 
+test('accepts an async unittest structure produced for coroutine targets', () => {
+    const result = validateUnittestStructure([
+        'import unittest',
+        '',
+        'class TestAsyncExample(unittest.IsolatedAsyncioTestCase):',
+        '    async def test_value(self):',
+        '        self.assertEqual(await self._value(), 1)',
+        '',
+        '    async def _value(self):',
+        '        return 1',
+    ].join('\n'));
+    assert.strictEqual(result.valid, true);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');
