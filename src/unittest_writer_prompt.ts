@@ -256,7 +256,7 @@ export function getUserPrompt(
                 prompt += `  - Constructor parameters: ${init.params?.join(', ') || 'none'}; initialized attributes: ${init.assigns?.map((item: any) => item.name).join(', ') || 'none'}.\n`;
             }
         }
-        prompt += `- CRITICAL: Do NOT invent keyword arguments like total=... or payment_token=... that are not in the function signature.\n`;
+        prompt += `- CRITICAL: Do NOT invent keyword arguments such as extra_option=... that are not in the function signature.\n`;
 
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;

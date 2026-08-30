@@ -7,6 +7,8 @@ import unittest
 
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent
+sys.path.insert(0, str(SCRIPTS_DIR))
+from mock_scaffold_generator import generate_scaffold
 
 
 class AstPipelineTests(unittest.TestCase):
@@ -76,6 +78,32 @@ class Worker:
         self.assertEqual(by_file['consumer.py']['trace_kwargs'], {})
         self.assertIsNone(by_file['variable_consumer.py']['trace_args'])
         self.assertIsNone(by_file['variable_consumer.py']['trace_kwargs'])
+
+    def test_mock_scaffold_patches_the_target_module_usage_point_and_supports_async_methods(self):
+        source = '''import transport_lib as transport
+from helpers import normalize as normalize_value
+
+class Worker:
+    def __init__(self, config):
+        self.config = config
+
+    async def process(self, value):
+        response = transport.send(value)
+        return await normalize_value(response)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            result = generate_scaffold(str(target), 'process')
+
+        self.assertEqual(result['patches'], ['worker.transport.send', 'worker.normalize_value'])
+        self.assertEqual(result['mock_names'], ['mock_send', 'mock_normalize_value'])
+        self.assertTrue(result['is_async'])
+        self.assertEqual(result['class_name'], 'Worker')
+        self.assertIn("@patch('worker.normalize_value')\n@patch('worker.transport.send')", result['scaffold'])
+        self.assertIn('async def test_process(self, mock_send, mock_normalize_value):', result['scaffold'])
+        self.assertIn('instance = Worker(...)', result['scaffold'])
+        self.assertIn('result = await instance.process(value)', result['scaffold'])
 
 
 if __name__ == '__main__':

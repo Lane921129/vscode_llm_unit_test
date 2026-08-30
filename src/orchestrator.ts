@@ -153,7 +153,7 @@ async function runMockScaffold(
     filePath: string,
     funcName: string,
     traceResult: any
-): Promise<{ scaffold: string; patches: string[]; mock_names: string[] } | null> {
+): Promise<{ scaffold: string; patches: string[]; mock_names: string[]; class_name?: string | null; is_async?: boolean } | null> {
     const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
     const args = ['python', script, filePath, funcName];
     if (traceResult) args.push(JSON.stringify(traceResult));
@@ -1325,12 +1325,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             const className3 = (astContext as any)?.class_name as string | null;
                             const importLine3 = className3 ? `from ${moduleName2} import ${className3}` : `from ${moduleName2} import *`;
                             const patchImport = scaffoldResult.patches.length > 0 ? `from unittest.mock import patch, MagicMock\n` : '';
+                            const testBase3 = scaffoldResult.is_async ? 'unittest.IsolatedAsyncioTestCase' : 'unittest.TestCase';
                             sanitizedCode = [
                                 `import unittest`,
                                 importLine3,
                                 patchImport.trim(),
                                 ``,
-                                `class TestTier3${params.funcName || 'Auto'}(unittest.TestCase):`,
+                                `class TestTier3${params.funcName || 'Auto'}(${testBase3}):`,
                                 extracted.split('\n').map(l => '    ' + l).join('\n'),
                                 ``,
                                 `if __name__ == '__main__':`,

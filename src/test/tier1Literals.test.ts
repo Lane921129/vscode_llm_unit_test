@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { toPythonAssertionLiteral } from '../tier1Literals';
 
 test('preserves a traced Python string repr without adding nested quotes', () => {
-    assert.strictEqual(toPythonAssertionLiteral("'Login Failed: Token too short'", 'str'), "'Login Failed: Token too short'");
+    assert.strictEqual(toPythonAssertionLiteral("'Input rejected'", 'str'), "'Input rejected'");
 });
 
 test('preserves traced composite Python literals', () => {

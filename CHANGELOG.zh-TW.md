@@ -4,6 +4,14 @@
 
 ## 2026-08-30
 
+### Tier 3 Mock 使用點與非同步骨架
+
+- Tier 3 的 mock patch 路徑改為被測模組的實際使用點，可正確處理 `import ... as ...` 與 `from ... import ... as ...`，不再錯 patch 到原始套件。
+- 修正多個 `@patch` decorator 對應的 mock 參數順序，避免 mock 回傳值套用到錯誤相依項目。
+- Mock 骨架現在辨識 `async def`，使用 `unittest.IsolatedAsyncioTestCase` 與 `await`；類別方法也會產生 instance 呼叫及建構子必填參數提示。
+- 清除 Writer、Reviewer 與回歸測試中殘留的舊領域函式／欄位名稱，並加入防回歸檢查。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、21 個 TypeScript 單元／端到端測試、3 個 Python AST／Mock Scaffold 回歸測試、完整建置與 Git diff 檢查。
+
 ### 通用技能卡保底與進階測試能力
 
 - 完整移除歷史遺留的業務領域 Few-shot，基礎範例只保留算術、例外與布林分支等通用 Python 行為。

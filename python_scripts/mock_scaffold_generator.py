@@ -14,48 +14,60 @@ import json
 import os
 
 
-def find_imports(tree: ast.Module) -> dict:
-    """回傳 {name: module_path} 的 import 映射"""
-    imports = {}
-    module_name = ''
-    for node in ast.walk(tree):
+def find_import_bindings(tree: ast.Module) -> set[str]:
+    """回傳在被測模組命名空間中可被 patch 的匯入綁定名稱。"""
+    bindings = set()
+    for node in tree.body:
         if isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
-                name = alias.asname if alias.asname else alias.name
-                imports[name] = node.module
+                if alias.name != '*':
+                    bindings.add(alias.asname if alias.asname else alias.name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                name = alias.asname if alias.asname else alias.name
-                imports[name] = alias.name
-    return imports
+                # import package.sub binds ``package`` unless an alias is used.
+                bindings.add(alias.asname if alias.asname else alias.name.split('.')[0])
+    return bindings
 
 
-def find_external_calls(func_node, imports: dict) -> list:
-    """找出函式中所有呼叫到外部 import 的函式名稱與完整路徑"""
+def expression_path(node):
+    """將 name/attribute 表達式轉為可比較的使用點路徑。"""
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        parent = expression_path(node.value)
+        return parent + [node.attr] if parent else None
+    return None
+
+
+def find_external_calls(func_node, import_bindings, target_module):
+    """找出外部呼叫，並在「被測模組的使用點」建立 patch 路徑。"""
     external_calls = []
     seen = set()
     for node in ast.walk(func_node):
         if isinstance(node, ast.Call):
-            call_name = None
-            full_path = None
-            if isinstance(node.func, ast.Name):
-                call_name = node.func.id
-                if call_name in imports:
-                    full_path = f"{imports[call_name]}.{call_name}"
-            elif isinstance(node.func, ast.Attribute):
-                obj = node.func.value
-                attr = node.func.attr
-                if isinstance(obj, ast.Name) and obj.id in imports:
-                    full_path = f"{imports[obj.id]}.{attr}"
-                    call_name = attr
-
-            if full_path and full_path not in seen:
-                seen.add(full_path)
+            call_path = expression_path(node.func)
+            if call_path and call_path[0] in import_bindings:
+                patch_path = f"{target_module}." + '.'.join(call_path)
+                if patch_path in seen:
+                    continue
+                seen.add(patch_path)
                 external_calls.append({
-                    "name": call_name,
-                    "patch_path": full_path
+                    "name": call_path[-1],
+                    "patch_path": patch_path
                 })
     return external_calls
+
+
+def constructor_required_params(class_node):
+    if not class_node:
+        return []
+    init_node = next((item for item in class_node.body
+                      if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == '__init__'), None)
+    if not init_node:
+        return []
+    params = [arg.arg for arg in init_node.args.args if arg.arg not in ('self', 'cls')]
+    required_count = len(params) - len(init_node.args.defaults)
+    return params[:required_count]
 
 
 def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None) -> dict:
@@ -73,6 +85,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
     # 找目標函式（優先頂層，後並對 class method）
     target_func = None
     class_name = None
+    class_node = None
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
             target_func = node
@@ -84,6 +97,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
                         target_func = item
                         class_name = node.name
+                        class_node = node
                         break
             if target_func:
                 break
@@ -92,10 +106,11 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
         return {"scaffold": "", "patches": [], "mock_names": [], "error": f"Function '{func_name}' not found"}
 
     # 找 import 映射
-    imports = find_imports(tree)
+    import_bindings = find_import_bindings(tree)
+    target_module = os.path.splitext(os.path.basename(file_path))[0]
 
     # 找外部呼叫
-    external_calls = find_external_calls(target_func, imports)
+    external_calls = find_external_calls(target_func, import_bindings, target_module)
 
     # 取得函式參數名稱（如果在 class 內，去除 self/cls）
     all_params = [arg.arg for arg in target_func.args.args]
@@ -119,8 +134,9 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
         lines.append(f"@patch('{patch_path}')")
 
     # 方法簽章（加上 mock 參數）
-    mock_param_str = ", ".join(["self"] + list(reversed(mock_names)))
-    lines.append(f"def test_{func_name}({mock_param_str}):")
+    mock_param_str = ", ".join(["self"] + mock_names)
+    test_prefix = 'async def' if isinstance(target_func, ast.AsyncFunctionDef) else 'def'
+    lines.append(f"{test_prefix} test_{func_name}({mock_param_str}):")
 
     # Mock return value hints
     for mock_name, ec in zip(mock_names, external_calls):
@@ -136,7 +152,19 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
         lines.append(f"")
 
     call_args = ", ".join(func_params)
-    lines.append(f"    result = {func_name}({call_args})")
+    if class_name:
+        required_init = constructor_required_params(class_node)
+        if required_init:
+            lines.append(f"    instance = {class_name}(...)  # TODO: provide valid values for: {', '.join(required_init)}")
+        else:
+            lines.append(f"    instance = {class_name}()")
+        call_target = f"instance.{func_name}({call_args})"
+    else:
+        call_target = f"{func_name}({call_args})"
+    if isinstance(target_func, ast.AsyncFunctionDef):
+        lines.append(f"    result = await {call_target}")
+    else:
+        lines.append(f"    result = {call_target}")
     lines.append(f"    # TODO: add assertions here")
     lines.append(f"    # Example: self.assertEqual(result, expected_value)")
 
@@ -146,7 +174,9 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
         "scaffold": scaffold,
         "patches": patches,
         "mock_names": mock_names,
-        "func_params": func_params
+        "func_params": func_params,
+        "class_name": class_name,
+        "is_async": isinstance(target_func, ast.AsyncFunctionDef)
     }
 
 
