@@ -4,6 +4,12 @@
 
 ## 2026-08-30
 
+### Tier 1 端到端回歸測試
+
+- 新增 Python `unittest` 端到端回歸：由 Tier 1 產生測試程式碼、載入相依函式並實際執行。
+- 驗證精確字串回傳可正確斷言，避免再出現預期值被額外加引號而全部失敗的結果。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、18 個 TypeScript 單元／端到端測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
 ### 基礎 Prompt 去領域污染
 
 - 共用 Few-shot 僅保留通用的算術、例外與字串處理案例；舊專案領域案例不再注入任何模型 Prompt。
