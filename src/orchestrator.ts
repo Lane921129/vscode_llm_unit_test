@@ -3,6 +3,7 @@ import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
 import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
 import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
+import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode } from './prompt_skill_library';
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
@@ -1137,6 +1138,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     //   1. 計算各相依函式在此呼叫情境的固定行為（原有功能）
     //   2. 推導此函式的最佳測資策略（新功能）—— AI 決定邊界值，不再硬編碼
     let semanticContext: string | undefined;
+    const deterministicSkillIds = astContext && !astContext.error
+        ? inferSkillIdsFromCode((astContext as any).code || '', astContext as any)
+        : [];
     if (astContext && !astContext.error) {
         log(`[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）...`);
         try {
@@ -1158,6 +1162,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const semRaw = await requestLlmApi(params, semSys, semUsr, log, 'json');
             const semResult = parseSemanticAnalysis(semRaw);
             if (semResult) {
+                semResult.required_skills = [...new Set([
+                    ...deterministicSkillIds,
+                    ...(Array.isArray(semResult.required_skills) ? semResult.required_skills : [])
+                ])];
                 semanticContext = formatSemanticContextForPrompt(semResult);
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
@@ -1168,6 +1176,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         } catch (semErr: any) {
             log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
         }
+    }
+
+    if (!semanticContext && deterministicSkillIds.length > 0) {
+        semanticContext = '=== DETERMINISTIC SKILL BASELINE (Derived from source syntax) ===\n\n'
+            + formatSkillCardsForPrompt(getSkillCards(deterministicSkillIds));
+        log(`[技能卡] 使用程式碼特徵的保守技能組合：${deterministicSkillIds.join(', ')}。`);
     }
 
     while (currentLoop <= params.maxLoops && mutationScore < 100) {

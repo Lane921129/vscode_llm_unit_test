@@ -161,12 +161,74 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - Set mock return value: mock_fn.return_value = expected_value',
         ]
     },
+    {
+        id: 'async_coroutine_testing',
+        title: 'Async Coroutine Testing',
+        trigger_hint: 'Use when the target is async or awaits another coroutine',
+        rules: [
+            'ASYNC COROUTINE TESTING:',
+            '  - Use unittest.IsolatedAsyncioTestCase and await the target coroutine in an async test method.',
+            '  - Patch coroutine dependencies with AsyncMock when they must not perform real work.',
+            '  - Assert returned values and raised exceptions after awaiting the coroutine.',
+        ]
+    },
+    {
+        id: 'file_io_mocking',
+        title: 'File I/O Mocking',
+        trigger_hint: 'Use when the target opens, reads, writes, or closes files',
+        rules: [
+            'FILE I/O MOCKING:',
+            '  - Use unittest.mock.mock_open and patch the name at the point where the target uses it.',
+            '  - Exercise read and write paths without creating or changing real files.',
+            '  - Assert the expected path, mode, and written content when the source code makes them observable.',
+        ]
+    },
+    {
+        id: 'datetime_freezing',
+        title: 'Time Control',
+        trigger_hint: 'Use when the target reads the current date, time, or timezone',
+        rules: [
+            'TIME CONTROL:',
+            '  - Patch the time provider at its point of use; do not depend on the real clock.',
+            '  - Use a fixed date or time and assert the exact observable output.',
+            '  - Cover timezone or formatting boundaries only when the source code handles them.',
+        ]
+    },
 ];
 
 export function getSkillCards(skillIds: string[]): SkillCard[] {
     return skillIds
         .map(id => SKILL_LIBRARY.find(s => s.id === id))
         .filter((s): s is SkillCard => s !== undefined);
+}
+
+/**
+ * A conservative, domain-neutral safety net for when the semantic model is
+ * unavailable or omits an obvious language construct.  It only reacts to
+ * Python syntax and standard-library usage, never names from an application.
+ */
+export function inferSkillIdsFromCode(
+    sourceCode: string,
+    context?: { class_name?: string; class_context?: unknown; calls?: string[] }
+): string[] {
+    const ids = new Set<string>(['import_module_name']);
+    const source = sourceCode || '';
+
+    if (/\blen\s*\([^)]*\)\s*[<>]=?\s*\d+/.test(source)) { ids.add('string_length_boundary'); }
+    if (/\w+\s*\[\s*-?\d*\s*:\s*-?\d*\s*\]/.test(source)) { ids.add('python_slicing'); }
+    if (/\b(?:if|elif)\b[^\n]*[<>]=?\s*\d+/.test(source)) { ids.add('branch_threshold_coverage'); }
+    if (/\bround\s*\(|\bfloat\s*\(|\bmath\./.test(source)) { ids.add('float_precision'); }
+    if (/\breturn\s*\{/.test(source)) { ids.add('dict_return'); }
+    if (/\bNone\b|\bnot\s+\w+/.test(source)) { ids.add('none_input_handling'); }
+    if (/\braise\s+[A-Za-z_]/.test(source)) { ids.add('assert_raises_syntax'); }
+    if (/\btry\s*:[\s\S]*\bexcept\b[\s\S]*\breturn\b/.test(source)) { ids.add('try_except_returns_string'); }
+    if (/(?:\b\w+\s*\/\s*(?:\w+|\d+)|\b\d+\s*\/\s*\w+)/.test(source)) { ids.add('zero_division'); }
+    if (context?.class_name || context?.class_context) { ids.add('class_method_testing'); }
+    if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
+    if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
+    if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
+
+    return [...ids];
 }
 
 export function formatSkillCardsForPrompt(cards: SkillCard[]): string {
