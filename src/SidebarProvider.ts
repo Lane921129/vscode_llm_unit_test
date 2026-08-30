@@ -4,7 +4,7 @@ import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
-import { buildGoogleGenerateContentRequest } from './cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -320,6 +320,31 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 if (!credential) {
                                     clearTimeout(timeoutId);
                                     throw new Error("找不到對應的 API Key");
+                                }
+
+                                const listedModels: unknown[] = [];
+                                let nextPageToken: string | undefined;
+                                for (let page = 0; page < 10; page++) {
+                                    const listRequest = buildGoogleListModelsRequest(credential.key, nextPageToken);
+                                    const listResponse = await fetch(listRequest.url, {
+                                        headers: listRequest.headers,
+                                        signal: controller.signal as any
+                                    });
+                                    if (!listResponse.ok) {
+                                        clearTimeout(timeoutId);
+                                        throw new Error(`無法讀取 Google 可用模型清單（HTTP ${listResponse.status}）`);
+                                    }
+                                    const modelList = await listResponse.json() as { models?: unknown[]; nextPageToken?: string };
+                                    listedModels.push(...(modelList.models || []));
+                                    nextPageToken = modelList.nextPageToken;
+                                    if (!nextPageToken) { break; }
+                                }
+                                const usableModels = getGenerateContentModelNames(listedModels as any[]);
+                                const selectedModel = normalizeGoogleModelName(credential.model);
+                                if (!usableModels.includes(selectedModel)) {
+                                    clearTimeout(timeoutId);
+                                    const suggestions = usableModels.slice(0, 12).join(', ') || '無';
+                                    throw new Error(`模型「${selectedModel}」不存在、目前 API Key 無權使用，或不支援 generateContent。請改用可用模型：${suggestions}`);
                                 }
                                 
                                 const request = buildGoogleGenerateContentRequest(credential.model, credential.key, 'hi');

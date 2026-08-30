@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from '../cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, normalizeGoogleModelName, resolveGoogleApiKey } from '../cloudApi';
 
 test('buildGoogleGenerateContentRequest uses the selected model and a key header', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'hello');
@@ -34,4 +34,24 @@ test('buildGoogleGenerateContentRequest supports a JSON output contract without 
         responseMimeType: 'application/json',
         responseSchema: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] }
     });
+});
+
+test('normalizes resource-style model names and lists models without placing the key in a URL', () => {
+    const request = buildGoogleGenerateContentRequest(' models/example-model ', 'test-key', 'hello');
+    const listRequest = buildGoogleListModelsRequest('test-key', 'next page');
+
+    assert.strictEqual(request.url, 'https://generativelanguage.googleapis.com/v1beta/models/example-model:generateContent');
+    assert.strictEqual(listRequest.url, 'https://generativelanguage.googleapis.com/v1beta/models?pageToken=next%20page');
+    assert.ok(!listRequest.url.includes('test-key'));
+    assert.strictEqual(normalizeGoogleModelName('models/example-model'), 'example-model');
+});
+
+test('keeps only Cloud models that declare generateContent support', () => {
+    const supported = getGenerateContentModelNames([
+        { name: 'models/text-model', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/embed-model', supportedActions: ['embedContent'] },
+        { name: 'models/action-model', supportedActions: ['generateContent'] },
+    ]);
+
+    assert.deepStrictEqual(supported, ['text-model', 'action-model']);
 });

@@ -4,6 +4,13 @@
 
 ## 2026-08-30
 
+### Cloud 模型可用性預檢
+
+- Cloud 連線測試先呼叫 Google Model List API，僅接受 API 宣告支援 `generateContent` 的模型，再發送生成探針。
+- 模型不存在、無權使用或不支援生成時，介面會回報可用模型建議，讓使用者直接替換 Model 名稱，而非只看到 404。
+- 支援使用者貼上 API resource 形式的 `models/名稱`，系統會正規化成正確的生成端點，且 API Key 持續只放在 Header。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、3 個 Python AST／Mock Scaffold 回歸測試、完整建置與 Git diff 檢查。
+
 ### Tier 3 Mock 使用點與非同步骨架
 
 - Tier 3 的 mock patch 路徑改為被測模組的實際使用點，可正確處理 `import ... as ...` 與 `from ... import ... as ...`，不再錯 patch 到原始套件。
