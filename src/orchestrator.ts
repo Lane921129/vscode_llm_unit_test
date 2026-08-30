@@ -7,7 +7,7 @@ import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTria
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
-import { validateUnittestStructure } from './generatedTestValidator';
+import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { toPythonAssertionLiteral } from './tier1Literals';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -531,7 +531,8 @@ async function requestLlmApi(
     params: AnalysisParams,
     systemPrompt: string,
     userPrompt: string,
-    log: (text: string) => void
+    log: (text: string) => void,
+    outputFormat: 'text' | 'json' | 'test-code-json' = 'text'
 ): Promise<string> {
     let apiUrl = "";
     let bodyData = {};
@@ -540,7 +541,13 @@ async function requestLlmApi(
     if (params.envType === 'local') {
         const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
-        bodyData = { model: params.modelName, system: systemPrompt, prompt: userPrompt, stream: false };
+        bodyData = {
+            model: params.modelName,
+            system: systemPrompt,
+            prompt: userPrompt,
+            stream: false,
+            ...(outputFormat === 'json' ? { format: 'json' } : {})
+        };
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
         bodyData = {
@@ -558,10 +565,18 @@ async function requestLlmApi(
         if (!actualKey) {
             throw new Error('找不到 Google AI Studio API Key。請在側邊欄儲存對應模型的 key，或設定 LLM_UNIT_TEST_GOOGLE_API_KEY。');
         }
+        const responseSchema = outputFormat === 'test-code-json'
+            ? {
+                type: 'object',
+                properties: { code: { type: 'string', description: 'Complete runnable Python unittest file.' } },
+                required: ['code']
+            }
+            : undefined;
         const googleRequest = buildGoogleGenerateContentRequest(
             params.modelName,
             actualKey,
-            systemPrompt + "\n\n" + userPrompt
+            systemPrompt + "\n\n" + userPrompt,
+            outputFormat === 'text' ? undefined : { responseMimeType: 'application/json', responseSchema }
         );
         apiUrl = googleRequest.url;
         headers = googleRequest.headers;
@@ -593,6 +608,10 @@ async function requestLlmApi(
     if (isAborted) throw new Error("使用者強制中止");
     if (!response.ok) {
         const errText = await response.text();
+        if ((params.envType === 'cloud' || params.envType === 'local') && outputFormat !== 'text' && response.status === 400) {
+            log(`[格式回退] 模型不支援結構化輸出，改用一般文字輸出：${errText.substring(0, 180)}`);
+            return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
+        }
         throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
     }
 
@@ -636,7 +655,7 @@ function cleanCodeBlock(code: string): string {
 }
 
 function sanitizeLlmResponse(rawCode: string): string {
-    let cleanCode = rawCode.trim();
+    let cleanCode = unwrapGeneratedCodeEnvelope(rawCode).trim();
 
     // 偵測無限 thinking 迴圈（小模型常見問題）
     const thinkingCount = (cleanCode.match(/<thinking>/g) || []).length;
@@ -1136,7 +1155,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 semDeps,
                 semCallSites
             );
-            const semRaw = await requestLlmApi(params, semSys, semUsr, log);
+            const semRaw = await requestLlmApi(params, semSys, semUsr, log, 'json');
             const semResult = parseSemanticAnalysis(semRaw);
             if (semResult) {
                 semanticContext = formatSemanticContextForPrompt(semResult);
@@ -1347,7 +1366,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const sysP = getTier3SystemPrompt();
                     const usrP = getTier3UserPrompt(params.funcName, scaffoldResult.scaffold, moduleName, traceExamples);
                     try {
-                        const raw = await requestLlmApi(params, sysP, usrP, log);
+                        const raw = await requestLlmApi(params, sysP, usrP, log, 'test-code-json');
                         rawCode = raw;
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
@@ -1407,7 +1426,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     let subRaw = "";
                     for (let retry = 0; retry < 2; retry++) {
                         try {
-                            subRaw = await requestLlmApi(params, systemPrompt, subUserPrompt, log);
+                            subRaw = await requestLlmApi(params, systemPrompt, subUserPrompt, log, 'test-code-json');
                             const subClean = sanitizeLlmResponse(subRaw);
                             if (subClean) {
                                 subSnippets.push(subClean);
@@ -1434,7 +1453,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
                     if (llmRetry === 0) log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);
                     try {
-                        rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log);
+                        rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log, 'test-code-json');
                     } catch (err: any) {
                         if (llmRetry === 0) {
                             log(`[警告] 網路或 API 請求失敗: ${err.message}，嘗試自動重試 (1/1)...`);
@@ -1581,7 +1600,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     astContext,
                                     moduleName
                                 );
-                                const revRaw = await requestLlmApi(params, revSys, revUsr, log);
+                                const revRaw = await requestLlmApi(params, revSys, revUsr, log, 'test-code-json');
                                 const revCode = sanitizeLlmResponse(revRaw);
                                 const reviewValidation = await validateGeneratedTestCode(revCode);
                                 if (reviewValidation.valid) {
@@ -1623,7 +1642,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     try {
                                         const repairSys = getTier4SystemPrompt();
                                         const repairUsr = getTier4SelfRepairPrompt(out);
-                                        const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log);
+                                        const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, 'test-code-json');
                                         const repairCode = sanitizeLlmResponse(repairRaw);
                                         const repairValidation = await validateGeneratedTestCode(repairCode);
                                         if (repairValidation.valid) {
@@ -1934,7 +1953,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     params.funcName || '',
                     semanticContext
                 );
-                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log);
+                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log, 'json');
                 const triageResult = parseMutantTriageResult(triageRaw);
                 if (triageResult) {
                     log(`[變異體分流師] ✅ 分流完成：${triageResult.equivalent_count} 個等效、${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個可殺。`);

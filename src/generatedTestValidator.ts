@@ -3,6 +3,19 @@ export interface GeneratedTestValidation {
     reason?: string;
 }
 
+/** Extract code from the optional structured-output envelope used by capable APIs. */
+export function unwrapGeneratedCodeEnvelope(response: string): string {
+    try {
+        const parsed = JSON.parse(response);
+        if (parsed && typeof parsed === 'object' && typeof parsed.code === 'string') {
+            return parsed.code;
+        }
+    } catch {
+        // Plain code is the compatibility format for local and custom models.
+    }
+    return response;
+}
+
 /**
  * Fast, deterministic guard before invoking Python's parser. This keeps prose,
  * Markdown plans, and incomplete snippets out of the generated test path.

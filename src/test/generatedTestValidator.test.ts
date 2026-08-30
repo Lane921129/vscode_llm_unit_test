@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { validateUnittestStructure } from '../generatedTestValidator';
+import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../generatedTestValidator';
 
 test('rejects a Markdown test plan even when it mentions unittest', () => {
     const result = validateUnittestStructure('* Import unittest\n* Use unittest.TestCase');
@@ -17,4 +17,9 @@ test('accepts a complete unittest file structure', () => {
         '        self.assertEqual(1, 1)',
     ].join('\n'));
     assert.strictEqual(result.valid, true);
+});
+
+test('unwraps a structured code response while preserving plain-code compatibility', () => {
+    assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
+    assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');
 });

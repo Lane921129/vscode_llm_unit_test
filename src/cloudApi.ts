@@ -3,7 +3,16 @@ export interface GoogleGenerateContentRequest {
     headers: Record<string, string>;
     body: {
         contents: Array<{ parts: Array<{ text: string }> }>;
+        generationConfig?: {
+            responseMimeType: 'application/json';
+            responseSchema?: Record<string, unknown>;
+        };
     };
+}
+
+export interface GoogleGenerationOptions {
+    responseMimeType?: 'application/json';
+    responseSchema?: Record<string, unknown>;
 }
 
 /**
@@ -14,7 +23,8 @@ export interface GoogleGenerateContentRequest {
 export function buildGoogleGenerateContentRequest(
     modelName: string,
     apiKey: string,
-    prompt: string
+    prompt: string,
+    options?: GoogleGenerationOptions
 ): GoogleGenerateContentRequest {
     const normalizedModel = modelName.trim();
     const normalizedKey = apiKey.trim();
@@ -34,6 +44,12 @@ export function buildGoogleGenerateContentRequest(
         },
         body: {
             contents: [{ parts: [{ text: prompt }] }],
+            ...(options?.responseMimeType ? {
+                generationConfig: {
+                    responseMimeType: options.responseMimeType,
+                    ...(options.responseSchema ? { responseSchema: options.responseSchema } : {})
+                }
+            } : {})
         },
     };
 }

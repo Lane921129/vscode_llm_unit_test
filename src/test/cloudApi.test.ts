@@ -23,3 +23,15 @@ test('resolveGoogleApiKey supports CI through an environment variable', () => {
     const key = resolveGoogleApiKey(undefined, { LLM_UNIT_TEST_GOOGLE_API_KEY: 'environment-key' });
     assert.strictEqual(key, 'environment-key');
 });
+
+test('buildGoogleGenerateContentRequest supports a JSON output contract without exposing the key', () => {
+    const request = buildGoogleGenerateContentRequest('gemini-test', 'test-key', 'hello', {
+        responseMimeType: 'application/json',
+        responseSchema: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] }
+    });
+
+    assert.deepStrictEqual(request.body.generationConfig, {
+        responseMimeType: 'application/json',
+        responseSchema: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] }
+    });
+});
