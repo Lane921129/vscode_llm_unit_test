@@ -1524,14 +1524,24 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
 
             // 【預先驗證】先距行一次 unittest 確認測試檔能跟上
-            await new Promise<void>((resolve, reject) => {
+            await new Promise<void>(async (resolve, reject) => {
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
                 const targetDir = path.dirname(params.filePath);
                 const parentDir = path.dirname(targetDir);
                 const grandParentDir = path.dirname(parentDir);
                 const pythonPath = `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`;
-                const preCheckCmd = `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`;
+                const coverageProbe = await runSpawn('python', ['-c', 'import coverage'], {
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+                    timeout: 5000
+                });
+                const hasCoverage = coverageProbe.code === 0;
+                if (!hasCoverage) {
+                    log('[預先驗證] 未安裝 coverage，改以 unittest 執行驗證；本輪覆蓋率將標示為 N/A。');
+                }
+                const preCheckCmd = hasCoverage
+                    ? `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`
+                    : `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
                 exec(preCheckCmd, { timeout: 30000 }, async (err, stdout, stderr) => {
                     const out = (stdout + stderr).trim();
                     if (err) {

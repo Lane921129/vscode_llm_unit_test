@@ -4,6 +4,12 @@
 
 ## 2026-08-30
 
+### Coverage 缺件時的可執行預先驗證
+
+- 預先驗證改為先偵測 `coverage` 是否可用；未安裝時仍會直接執行 `unittest`，只將覆蓋率標為 N/A。
+- 避免把環境缺少 coverage 誤判成 LLM 生成測試失敗，導致不必要的 Reviewer／Self-repair 呼叫與所有 Tier 降階。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、5 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
 ### 無外部套件的 AST 突變測試後備引擎
 
 - 新增標準函式庫 AST 基本突變引擎；外部 `mutatest`／`mutmut` 可用時仍優先使用，否則可在 Windows + Python 3.13 等環境繼續執行比較、算術與布林突變。
