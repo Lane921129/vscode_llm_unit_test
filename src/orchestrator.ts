@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
 import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
-import { getSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
+import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
@@ -498,8 +498,9 @@ async function runDynamicTrace(
             timeout: 15000
         });
         return JSON.parse(stdout.trim()) as DynamicTraceResult;
-    } catch {
-        return null;
+    } catch (e: any) {
+        console.error(`[Trace ERROR] ${e.message || e}`);
+        return { func_name: funcName, args: [], examples: [], errors: [], load_error: `spawn failed: ${e.message || 'unknown'}` } as DynamicTraceResult;
     }
 }
 
@@ -1051,19 +1052,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     });
 
     // ─── 語意分析師（Semantic Analyzer）───────────────────────────
-    // 目標函式有跨檔案相依時，先讓語意分析師計算各相依函式在此呼叫情境的固定行為，
-    // 避免後續 LLM 猜測回傳值或誤判不可達路徑。
+    // 對所有函式啟動（不限有跨檔案相依的函式）：
+    //   1. 計算各相依函式在此呼叫情境的固定行為（原有功能）
+    //   2. 推導此函式的最佳測資策略（新功能）—— AI 決定邊界值，不再硬編碼
     let semanticContext: string | undefined;
-    const hasDependencies = astContext?.dependencyContexts && astContext.dependencyContexts.length > 0;
-    if (hasDependencies) {
-        log(`[語意分析師] 偵測到跨檔案相依，啟動語意前置分析...`);
+    if (astContext && !astContext.error) {
+        log(`[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）...`);
         try {
-            const semSys = getSemanticAnalyzerSystemPrompt();
-            const semDeps = ((astContext!.dependencyContexts) as any[])
+            const semSys = buildSemanticAnalyzerSystemPrompt();
+            const semDeps = ((astContext.dependencyContexts || []) as any[])
                 .filter((d: any) => d.code)
                 .map((d: any) => ({ name: d.name as string, code: d.code as string }));
             // 從 AST 的 callerContexts 擷取呼叫表達式
-            const semCallSites = ((astContext!.callerContexts) as any[] | undefined)
+            const semCallSites = ((astContext.callerContexts) as any[] | undefined)
                 ?.map((c: any) => ({
                     caller_func: c.caller_func as string || '',
                     call_expr: c.call_expr as string || ''
@@ -1077,7 +1078,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const semResult = parseSemanticAnalysis(semRaw);
             if (semResult) {
                 semanticContext = formatSemanticContextForPrompt(semResult);
-                log(`[語意分析師] ✅ 分析完成！找到 ${semResult.dependency_behaviors.length} 個相依行為、${semResult.unreachable_paths.length} 個不可達路徑、${semResult.equivalent_mutant_candidates.length} 個等效變異體候選。`);
+                const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
+                log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
                 finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
             } else {
                 log(`[語意分析師] ⚠️ 無法解析 JSON 回應，跳過語意分析（不影響主流程）。`);

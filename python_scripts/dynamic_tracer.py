@@ -36,50 +36,56 @@ def load_module_from_file(file_path: str):
 
 def infer_boundary_inputs(func_args: list) -> list:
     """
-    根據參數名稱猜測常見的邊界值測試輸入集合。
+    根據參數名稱猜測常見型別，產生通用邊界值組合。
+    目的：快速取得「函式是否可正常執行」的初始 I/O 樣本。
+    注意：函式特定的邊界策略由語意分析師（Semantic Analyzer）的 test_strategy 決定，
+          這裡只做型別推測，不做領域特化。
     回傳: list of arg-tuples，每個 tuple 是一組呼叫參數
     """
-    # 常見邊界值策略
-    scalar_candidates = [0, 1, -1, 100, -100, 0.0, 1.5]
-    str_candidates = ["", "a", "hello", "1234567890", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"]
-    # 邊界穿越字串：精確定位 len-based 驗證的臨界點
-    str_boundary_short = ["", "abc", "123456789", "1234567890", "12345678901", "not a valid token"]
+    scalar_candidates = [0, 1, -1, 100, -100, 0.5, 10.0]
+    str_candidates = ["", "a", "hello", "test_value", "1234567890",
+                      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"]
+    str_boundary_short = ["", "abc", "123456789", "1234567890", "12345678901"]
     bool_candidates = [True, False]
     none_candidate = [None]
 
-    # 對每個參數名稱推斷可能的型別
     per_arg_candidates = []
     for arg_name in func_args:
         name_lower = arg_name.lower()
-        if any(kw in name_lower for kw in ['token', 'key', 'password', 'secret']):
-            # token/key 類參數：強制加入短字串邊界值，確保 len<10 的邊界被測試到
-            per_arg_candidates.append(str_boundary_short + str_candidates[3:] + none_candidate)
-        elif any(kw in name_lower for kw in ['str', 'name', 'path', 'url', 'text', 'msg']):
+        # 字串類型推測
+        if any(kw in name_lower for kw in ['token', 'key', 'password', 'secret', 'hash']):
+            per_arg_candidates.append(str_boundary_short + str_candidates[4:] + none_candidate)
+        elif any(kw in name_lower for kw in ['str', 'name', 'path', 'url', 'text', 'msg', 'query']):
             per_arg_candidates.append(str_candidates + none_candidate)
-        elif any(kw in name_lower for kw in ['num', 'count', 'amount', 'size', 'len', 'int', 'price', 'qty', 'index']):
-            per_arg_candidates.append(scalar_candidates[:4] + none_candidate)
+        # 布林類型推測
         elif any(kw in name_lower for kw in ['flag', 'enable', 'active', 'is_', 'has_', 'bool']):
             per_arg_candidates.append(bool_candidates + none_candidate)
-        elif any(kw in name_lower for kw in ['provider', 'type', 'mode', 'kind', 'category', 'format']):
-            per_arg_candidates.append(str_candidates[:3] + ['jwt', 'payment_gateway', 'unknown'] + none_candidate)
+        # 選項類型推測
+        elif any(kw in name_lower for kw in ['provider', 'type', 'mode', 'kind', 'category', 'format', 'method']):
+            per_arg_candidates.append(str_candidates[:3] + none_candidate)
+        # 數值類型推測（通用）
+        elif any(kw in name_lower for kw in ['num', 'count', 'amount', 'size', 'len', 'int',
+                                              'price', 'qty', 'index', 'id', 'age', 'score',
+                                              'weight', 'height', 'rate', 'percent', 'value']):
+            per_arg_candidates.append(scalar_candidates + none_candidate)
         else:
-            # 預設：混合型
-            per_arg_candidates.append(str_candidates[:2] + scalar_candidates[:2] + none_candidate)
+            # 預設：混合型（字串 + 數值 + None）
+            per_arg_candidates.append(str_candidates[:2] + scalar_candidates[:3] + none_candidate)
 
-    # 生成笛卡爾積的子集（避免組合爆炸，最多取前 10 組）
-    results = []
     if len(per_arg_candidates) == 0:
         return [()]
     if len(per_arg_candidates) == 1:
-        return [(c,) for c in per_arg_candidates[0][:5]]
-    
-    # 簡單 zip-style：每個參數取相同 index 的候選值
+        return [(c,) for c in per_arg_candidates[0][:8]]
+
+    # zip-style：每個參數取相同 index 的候選值，最多 10 組
+    results = []
     max_candidates = max(len(c) for c in per_arg_candidates)
     for i in range(min(max_candidates, 10)):
         combo = tuple(c[i % len(c)] for c in per_arg_candidates)
         results.append(combo)
-    
+
     return results
+
 
 def safe_repr(val) -> str:
     """安全地把值轉成 repr，截斷過長的字串"""

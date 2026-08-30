@@ -36,12 +36,10 @@ CORE RULES:
 7. assertRaises SYNTAX — CRITICAL:
    - ONLY valid form: \`with self.assertRaises(ValueError):\` followed by the call on the next line.
    - NEVER pass a message string: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError, FORBIDDEN!
-8. TOKEN LENGTH BOUNDARY — CRITICAL:
-   - \`len(token) < 10\` raises ValueError. Token length MUST be STRICTLY LESS THAN 10 to trigger the error.
-   - A token of length 9 ("123456789") → raises ValueError.
-   - A token of length 10 ("1234567890") → DOES NOT raise, processes normally.
-   - A token of length 71 (any long string) → DOES NOT raise. Do NOT use [:-1] on a long string expecting ValueError!
-   - Use short, explicit invalid tokens like "abc" (len=3) or "123456789" (len=9).
+8. BOUNDARY VALUES:
+   - ALWAYS check the TARGET SOURCE CODE to determine what input values trigger exceptions vs normal returns.
+   - Do NOT assume any hardcoded boundary rules. Read the actual validation logic in the source code.
+   - Use the VERIFIED REAL EXECUTION TRACE (if provided) to determine exact input-output behavior.
 9. OUTPUT FORMAT:
    - Output the COMPLETE, corrected, runnable test file in a single \`\`\`python ... \`\`\` code block.`;
 }
