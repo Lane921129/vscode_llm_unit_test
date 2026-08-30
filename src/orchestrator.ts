@@ -7,6 +7,8 @@ import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTria
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
+import { validateUnittestStructure } from './generatedTestValidator';
+import { toPythonAssertionLiteral } from './tier1Literals';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -193,7 +195,7 @@ function killProcessTree(proc: ChildProcess) {
 function runSpawn(
     command: string,
     args: string[],
-    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number }
+    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; input?: string }
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
     return new Promise((resolve, reject) => {
         if (isAborted) return reject(new Error('使用者強制中止'));
@@ -219,6 +221,9 @@ function runSpawn(
 
         proc.stdout?.on('data', (d) => { stdout += d.toString(); });
         proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+        if (options.input !== undefined) {
+            proc.stdin?.end(options.input);
+        }
 
         proc.on('close', (code) => {
             if (timer) clearTimeout(timer);
@@ -291,6 +296,7 @@ interface CallerContext {
     line: number;
     args: string[];
     kwargs: Record<string, string>;
+    call_expr?: string;
 }
 
 interface AstContext {
@@ -299,6 +305,10 @@ interface AstContext {
     docstring: string;
     calls: string[];
     dependencies?: { name: string, module: string }[];
+    file_imports?: { kind: string, module: string, name: string | null, alias: string | null, bound_name: string }[];
+    referenced_globals?: { name: string, code: string }[];
+    class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], assigns: { name: string, code: string }[] } } | null;
+    is_async?: boolean;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
     code: string;
@@ -449,11 +459,16 @@ async function extractAstContext(
 
 async function findCallerContexts(
     funcName: string,
-    projectRoot: string
+    projectRoot: string,
+    targetPath?: string
 ): Promise<CallerContext[]> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
     try {
-        const { stdout } = await runSpawn('python', [pythonScript, funcName, projectRoot], {
+        const args = [pythonScript, funcName, projectRoot];
+        if (targetPath) {
+            args.push(targetPath);
+        }
+        const { stdout } = await runSpawn('python', args, {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
         const parsed = JSON.parse(stdout);
@@ -655,6 +670,28 @@ function sanitizeLlmResponse(rawCode: string): string {
     }
 
     return cleanCodeBlock(cleanCode);
+}
+
+/** Require both a unittest shape and a real Python AST before writing a test file. */
+async function validateGeneratedTestCode(code: string): Promise<{ valid: boolean; reason?: string }> {
+    const structure = validateUnittestStructure(code);
+    if (!structure.valid) {
+        return structure;
+    }
+
+    try {
+        const parsed = await runSpawn(
+            'python',
+            ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
+            { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
+        );
+        if (parsed.code !== 0) {
+            return { valid: false, reason: `Python AST 無法解析：${(parsed.stderr || parsed.stdout).trim().slice(0, 300)}` };
+        }
+        return { valid: true };
+    } catch (error: any) {
+        return { valid: false, reason: `Python AST 驗證無法執行：${error.message || error}` };
+    }
 }
 
 /**
@@ -924,7 +961,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         if (depAst && !depAst.error) {
                             // 🔍 呼叫站掃描：找出這個依賴函式在全專案的所有呼叫點
                             log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
-                            const callers = await findCallerContexts(dep.name, projectRoot);
+                            const callers = await findCallerContexts(dep.name, projectRoot, depFilePath);
                             if (callers.length > 0) {
                                 depAst.callerContexts = callers;
                                 log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
@@ -941,7 +978,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const projectRoot = (params as any).batchPath
                     ? (params as any).batchPath
                     : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
-                const selfCallers = await findCallerContexts(params.funcName, projectRoot);
+                const selfCallers = await findCallerContexts(params.funcName, projectRoot, params.filePath);
                 if (selfCallers.length > 0) {
                     astContext.callerContexts = selfCallers;
                     log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
@@ -971,6 +1008,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             if (astContext.dependencies && astContext.dependencies.length > 0) {
                 astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${d.module}.${d.name}\``).join(', ')}\n`;
+            }
+            if (astContext.file_imports && astContext.file_imports.length > 0) {
+                astReport += `- 模組 Imports: ${astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', ')}\n`;
+            }
+            if (astContext.referenced_globals && astContext.referenced_globals.length > 0) {
+                astReport += `- 引用模組常數: ${astContext.referenced_globals.map(item => `\`${item.name}\``).join(', ')}\n`;
+            }
+            if (astContext.class_context) {
+                const init = astContext.class_context.init;
+                astReport += `- 類別語境: \`${astContext.class_context.name}\`，__init__ 參數：\`${init.params.join(', ') || '無'}\`，初始化屬性：\`${init.assigns.map(item => item.name).join(', ') || '無'}\`\n`;
             }
             if (astContext.callerContexts && astContext.callerContexts.length > 0) {
                 astReport += `- 呼叫站語境 (${astContext.callerContexts.length} 個):\n`;
@@ -1209,17 +1256,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                         // 若 LLM 未回傳安全有效的斷言行，自動根據 ex.result 與 ex.result_type 生成精確斷言
                         if (!assertLine) {
-                            let literalVal = String(ex.result ?? '');
-                            const resType = ex.result_type || typeof ex.result;
-                            if (resType === 'str' || resType === 'string') {
-                                literalVal = JSON.stringify(String(ex.result));
-                            } else if (resType === 'bool' || typeof ex.result === 'boolean') {
-                                literalVal = ex.result ? 'True' : 'False';
-                            } else if (resType === 'NoneType' || ex.result === null || ex.result === undefined) {
-                                literalVal = 'None';
-                            } else if (resType === 'int' || resType === 'float' || typeof ex.result === 'number') {
-                                literalVal = String(ex.result);
-                            }
+                            const literalVal = toPythonAssertionLiteral(ex.result, ex.result_type);
                             assertLine = `self.assertEqual(result, ${literalVal})`;
                             log(`[Tier 1] 範例 ${i + 1} LLM 回應無效，已使用精確回傳值代入斷言: ${assertLine}`);
                         }
@@ -1387,10 +1424,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             // 若非分治合流模式，或分治合流未取得結果，走標準 Single-Pass 流程
             if (!sanitizedCode) {
+                let generationPrompt = userPrompt;
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
                     if (llmRetry === 0) log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);
                     try {
-                        rawCode = await requestLlmApi(params, systemPrompt, userPrompt, log);
+                        rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log);
                     } catch (err: any) {
                         if (llmRetry === 0) {
                             log(`[警告] 網路或 API 請求失敗: ${err.message}，嘗試自動重試 (1/1)...`);
@@ -1439,6 +1477,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         sanitizedCode = rescued;
                     }
 
+                    const candidateValidation = await validateGeneratedTestCode(sanitizedCode);
+                    if (!candidateValidation.valid) {
+                        if (llmRetry === 0) {
+                            log(`[警告] 模型輸出未通過 Python/unittest 格式驗證：${candidateValidation.reason}；將以嚴格格式要求重試。`);
+                            generationPrompt = `${userPrompt}\n\nFORMAT REPAIR REQUIRED: Your previous response was not a runnable Python unittest file. Return ONLY one complete Python file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block.`;
+                            sanitizedCode = '';
+                            continue;
+                        }
+                        throw new Error(`模型連續兩次未通過 Python/unittest 格式驗證：${candidateValidation.reason}`);
+                    }
+
                     break; // 成功跳出 retry
                 }
             }
@@ -1479,6 +1528,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if ((finalCode.includes('patch(') || finalCode.includes('MagicMock')) && !finalCode.includes('unittest.mock')) {
                 log(`[警告] 偵測到程式碼使用 patch/MagicMock 但遺漏 import，系統自動補齊 unittest.mock...`);
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
+            }
+
+            const generatedValidation = await validateGeneratedTestCode(finalCode);
+            if (!generatedValidation.valid) {
+                throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
             }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
@@ -1523,7 +1577,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log);
                                 const revCode = sanitizeLlmResponse(revRaw);
-                                if (revCode && (revCode.includes('def test_') || revCode.includes('unittest'))) {
+                                const reviewValidation = await validateGeneratedTestCode(revCode);
+                                if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
                                     const revCheck = await new Promise<{ ok: boolean; out: string }>((res2) => {
                                         exec(preCheckCmd, { timeout: 30000 }, (e2, o2a, o2b) => {
@@ -1543,8 +1598,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
                                     }
                                 } else {
-                                    log(`[Reviewer] 第 ${reviewAttempt} 次回應無法解析為有效測試碼。`);
-                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應無法解析為有效測試碼\n\n`;
+                                    log(`[Reviewer] 第 ${reviewAttempt} 次回應未通過格式驗證：${reviewValidation.reason}`);
+                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應未通過格式驗證：${reviewValidation.reason}\n\n`;
                                 }
                             } catch (revErr: any) {
                                 log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);

@@ -251,11 +251,24 @@ export function getUserPrompt(
             prompt += `  - Import: from ${moduleName} import ${astContext.class_name}\n`;
             prompt += `  - Instantiate in setUp: self._obj = ${astContext.class_name}()\n`;
             prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
+            const init = astContext.class_context?.init;
+            if (init) {
+                prompt += `  - Constructor parameters: ${init.params?.join(', ') || 'none'}; initialized attributes: ${init.assigns?.map((item: any) => item.name).join(', ') || 'none'}.\n`;
+            }
         }
         prompt += `- CRITICAL: Do NOT invent keyword arguments like total=... or payment_token=... that are not in the function signature.\n`;
 
         if (astContext.calls && astContext.calls.length > 0) {
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
+        }
+        if (astContext.file_imports?.length > 0) {
+            prompt += `- Available module imports: ${astContext.file_imports.map((item: any) => item.kind === 'from' ? `from ${item.module} import ${item.name}` : `import ${item.module}`).join('; ')}\n`;
+        }
+        if (astContext.referenced_globals?.length > 0) {
+            prompt += `- Referenced module constants (use exact values):\n`;
+            for (const item of astContext.referenced_globals) {
+                prompt += `  - ${item.code}\n`;
+            }
         }
 
         // 動態執行追蹤結果（真實 input→output 範例，讓 LLM 不用猜 assert 值）

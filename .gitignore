@@ -11,3 +11,4 @@ package-lock.json
 htmlcov/
 mutants/
 .mutmut-cache/
+__pycache__/

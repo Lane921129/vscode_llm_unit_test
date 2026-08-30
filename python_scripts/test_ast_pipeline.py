@@ -1,0 +1,74 @@
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+SCRIPTS_DIR = pathlib.Path(__file__).parent
+
+
+class AstPipelineTests(unittest.TestCase):
+    def run_script(self, script_name, *args):
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / script_name), *map(str, args)],
+            check=True,
+            capture_output=True,
+            encoding='utf-8'
+        )
+        return json.loads(completed.stdout)
+
+    def test_extractor_includes_context_needed_for_a_class_method(self):
+        source = '''import os as operating_system
+from helpers import normalize as normalize_value
+
+MAXIMUM = 10
+
+class Worker:
+    DEFAULT = "ready"
+
+    def __init__(self, config, client=None):
+        self.config = config
+        self.client = client
+
+    def process(self, value):
+        if value > MAXIMUM:
+            return operating_system.path.exists(self.config) and normalize_value(value)
+        return self.DEFAULT
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'process')
+
+        self.assertEqual(data['class_name'], 'Worker')
+        self.assertIn('operating_system.path.exists', data['calls'])
+        self.assertIn('normalize_value', data['calls'])
+        self.assertEqual(data['referenced_globals'], [{'name': 'MAXIMUM', 'code': 'MAXIMUM = 10'}])
+        self.assertEqual(data['class_context']['init']['params'], ['config', 'client'])
+        self.assertEqual([item['name'] for item in data['class_context']['init']['assigns']], ['config', 'client'])
+        self.assertEqual({item['bound_name'] for item in data['file_imports']}, {'operating_system', 'normalize_value'})
+
+    def test_caller_finder_ignores_a_same_named_local_function(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'core.py'
+            target.write_text('def validate(value):\n    return value\n', encoding='utf-8')
+            (root / 'consumer.py').write_text(
+                'from core import validate as core_validate\n\ndef invoke():\n    return core_validate(1)\n',
+                encoding='utf-8'
+            )
+            (root / 'collision.py').write_text(
+                'def validate(value):\n    return value + 1\n\ndef invoke():\n    return validate(2)\n',
+                encoding='utf-8'
+            )
+            calls = self.run_script('ast_caller_finder.py', 'validate', root, target)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['caller_file'], 'consumer.py')
+        self.assertEqual(calls[0]['call_expr'], 'core_validate(1)')
+
+
+if __name__ == '__main__':
+    unittest.main()

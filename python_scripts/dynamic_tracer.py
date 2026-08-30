@@ -34,7 +34,7 @@ def load_module_from_file(file_path: str):
         return None
     return module
 
-def infer_boundary_inputs(func_args: list) -> list:
+def infer_boundary_inputs(func_args: list, annotations: dict = None) -> list:
     """
     根據參數名稱猜測常見型別，產生通用邊界值組合。
     目的：快速取得「函式是否可正常執行」的初始 I/O 樣本。
@@ -43,33 +43,22 @@ def infer_boundary_inputs(func_args: list) -> list:
     回傳: list of arg-tuples，每個 tuple 是一組呼叫參數
     """
     scalar_candidates = [0, 1, -1, 100, -100, 0.5, 10.0]
-    str_candidates = ["", "a", "hello", "test_value", "1234567890",
-                      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"]
-    str_boundary_short = ["", "abc", "123456789", "1234567890", "12345678901"]
+    str_candidates = ["", "a", "hello", "test_value", "1234567890"]
     bool_candidates = [True, False]
     none_candidate = [None]
 
     per_arg_candidates = []
     for arg_name in func_args:
-        name_lower = arg_name.lower()
-        # 字串類型推測
-        if any(kw in name_lower for kw in ['token', 'key', 'password', 'secret', 'hash']):
-            per_arg_candidates.append(str_boundary_short + str_candidates[4:] + none_candidate)
-        elif any(kw in name_lower for kw in ['str', 'name', 'path', 'url', 'text', 'msg', 'query']):
-            per_arg_candidates.append(str_candidates + none_candidate)
-        # 布林類型推測
-        elif any(kw in name_lower for kw in ['flag', 'enable', 'active', 'is_', 'has_', 'bool']):
+        annotation = str((annotations or {}).get(arg_name, '')).lower()
+        if 'bool' in annotation:
             per_arg_candidates.append(bool_candidates + none_candidate)
-        # 選項類型推測
-        elif any(kw in name_lower for kw in ['provider', 'type', 'mode', 'kind', 'category', 'format', 'method']):
-            per_arg_candidates.append(str_candidates[:3] + none_candidate)
-        # 數值類型推測（通用）
-        elif any(kw in name_lower for kw in ['num', 'count', 'amount', 'size', 'len', 'int',
-                                              'price', 'qty', 'index', 'id', 'age', 'score',
-                                              'weight', 'height', 'rate', 'percent', 'value']):
+        elif 'str' in annotation:
+            per_arg_candidates.append(str_candidates + none_candidate)
+        elif any(number_type in annotation for number_type in ('int', 'float', 'decimal')):
             per_arg_candidates.append(scalar_candidates + none_candidate)
         else:
-            # 預設：混合型（字串 + 數值 + None）
+            # Domain-specific inputs belong to the Semantic Analyzer. The generic
+            # tracer intentionally uses only annotation-based or mixed probes.
             per_arg_candidates.append(str_candidates[:2] + scalar_candidates[:3] + none_candidate)
 
     if len(per_arg_candidates) == 0:
@@ -151,12 +140,17 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         all_params = list(sig.parameters.keys())
         # 未綁定 method 可能包含 self，將其去除
         result["args"] = [p for p in all_params if p not in ('self', 'cls')]
+        annotations = {
+            name: parameter.annotation
+            for name, parameter in sig.parameters.items()
+            if parameter.annotation is not inspect.Parameter.empty
+        }
     except Exception:
         pass
 
     # 決定測試輸入
     if test_inputs is None:
-        test_inputs = infer_boundary_inputs(result["args"])
+        test_inputs = infer_boundary_inputs(result["args"], annotations if 'annotations' in locals() else {})
 
     # 執行每個測試輸入
     for inp in test_inputs:
