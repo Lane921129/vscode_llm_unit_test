@@ -5,6 +5,7 @@ import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
 import { buildGoogleGenerateContentRequest } from './cloudApi';
+import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -29,8 +30,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             switch (message.command) {
                 case 'getInitialData': {
                     const rawKeys = await this.secretStorage.get('llm_api_keys');
-                    const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
-                    this.webview?.postMessage({ command: 'setApiKeys', keys });
+                    const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                    this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(keys) });
 
                     const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
                     const customKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
@@ -167,24 +168,25 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'updateApiKey': {
                     const rawKeys = await this.secretStorage.get('llm_api_keys');
-                    const currentKeys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
+                    const currentKeys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
                     if (message.oldName && message.oldName !== message.newName) {
                         delete currentKeys[message.oldName];
                     }
-                    currentKeys[message.newName] = message.key;
+                    currentKeys[message.newName] = { model: message.model, key: message.key };
                     await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
-                    this.webview?.postMessage({ command: 'setApiKeys', keys: currentKeys });
+                    this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(currentKeys) });
+                    this.webview?.postMessage({ command: 'apiKeySaved', keyName: message.newName });
                     vscode.window.showInformationMessage(`🔒 已安全儲存 API Key 至系統金鑰庫：${message.newName}`);
                     break;
                 }
 
                 case 'deleteApiKey': {
                     const rawKeys = await this.secretStorage.get('llm_api_keys');
-                    const currentKeys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
+                    const currentKeys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
                     if (currentKeys[message.name]) {
                         delete currentKeys[message.name];
                         await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
-                        this.webview?.postMessage({ command: 'setApiKeys', keys: currentKeys });
+                        this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(currentKeys) });
                         vscode.window.showInformationMessage(`🗑️ 已自安全金鑰庫移除：${message.name}`);
                     }
                     break;
@@ -219,13 +221,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const params = { ...message };
                     if (params.envType === 'cloud') {
                         const rawKeys = await this.secretStorage.get('llm_api_keys');
-                        const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
-                        const cloudKey = keys[params.modelName];
-                        if (!cloudKey) {
+                        const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                        const credential = keys[params.cloudKeyName];
+                        if (!credential) {
                             vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
                             break;
                         }
-                        params.cloudKey = cloudKey;
+                        params.modelName = credential.model;
+                        params.cloudKey = credential.key;
                     }
                     vscode.commands.executeCommand('llm-unit-test.runCaptureAndTest', params);
                     break;
@@ -235,13 +238,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const params = { ...message };
                     if (params.envType === 'cloud') {
                         const rawKeys = await this.secretStorage.get('llm_api_keys');
-                        const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
-                        const cloudKey = keys[params.modelName];
-                        if (!cloudKey) {
+                        const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                        const credential = keys[params.cloudKeyName];
+                        if (!credential) {
                             vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
                             break;
                         }
-                        params.cloudKey = cloudKey;
+                        params.modelName = credential.model;
+                        params.cloudKey = credential.key;
                     }
                     vscode.commands.executeCommand('llm-unit-test.runBatchAnalysis', params);
                     break;
@@ -311,14 +315,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 }
                             } else if (message.envType === 'cloud') {
                                 const rawKeys = await this.secretStorage.get('llm_api_keys');
-                                const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
-                                const key = keys[message.modelName];
-                                if (!key) {
+                                const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                                const credential = keys[message.cloudKeyName];
+                                if (!credential) {
                                     clearTimeout(timeoutId);
                                     throw new Error("找不到對應的 API Key");
                                 }
                                 
-                                const request = buildGoogleGenerateContentRequest(message.modelName, key, 'hi');
+                                const request = buildGoogleGenerateContentRequest(credential.model, credential.key, 'hi');
                                 const response = await fetch(request.url, {
                                     method: 'POST',
                                     headers: request.headers,

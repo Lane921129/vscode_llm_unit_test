@@ -96,7 +96,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && node --test out/test/cloudApi.test.js out/test/utils.test.js"
+    "test:unit": "npm run compile-tests && node --test out/test/cloudApi.test.js out/test/cloudCredentials.test.js out/test/utils.test.js out/test/webviewContent.test.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

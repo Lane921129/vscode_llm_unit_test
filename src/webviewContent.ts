@@ -183,14 +183,18 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             </select>
             
             <div id="cloud-ui">
+                <label>已儲存的 Cloud 設定</label>
+                <div class="flex-row">
+                    <select id="api-key-select"><option value="">-- 選擇設定 --</option></select>
+                </div>
+
+                <label style="margin-top:5px;">API Key 名稱</label>
+                <input type="text" id="new-key-name" placeholder="例如：Google AI Studio 個人帳號">
+                <label>API Model</label>
+                <input type="text" id="new-key-model" placeholder="例如：gemma-4-31b-it">
                 <label>${t('ui.apiKey')}</label>
                 <div class="flex-row">
-                    <select id="api-key-select"><option value="">-- Loading --</option></select>
-                </div>
-                
-                <div class="flex-row" style="margin-top: 5px;">
-                    <input type="text" id="new-key-name" placeholder="Label">
-                    <input type="password" id="new-key-value" placeholder="Key">
+                    <input type="password" id="new-key-value" placeholder="Google AI Studio API Key">
                     <button id="btn-save-key" style="margin-top:0; width:60px; flex-shrink:0;">Save</button>
                     <button id="btn-del-key" style="margin-top:0; width:40px; flex-shrink:0; background:#a82a2a;">Del</button>
                     <button id="btn-test-cloud" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
@@ -543,7 +547,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const msg = event.data;
             switch (msg.command) {
                 case 'setModels': document.getElementById('model-select').innerHTML = '<option value="">-- Select Model --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join(''); break;
-                case 'setApiKeys': currentKeys = msg.keys; const keys = Object.keys(msg.keys); document.getElementById('api-key-select').innerHTML = '<option value="">-- Select Key --</option>' + keys.map(k => \`<option value="\${k}">\${k}</option>\`).join(''); break;
+                case 'setApiKeys': currentKeys = msg.keys; const keys = Object.keys(msg.keys); document.getElementById('api-key-select').innerHTML = '<option value="">-- Select Setting --</option>' + keys.map(k => \`<option value="\${k}">\${k} (\${currentKeys[k].model})</option>\`).join(''); break;
+                case 'apiKeySaved':
+                    document.getElementById('new-key-name').value = '';
+                    document.getElementById('new-key-model').value = '';
+                    document.getElementById('new-key-value').value = '';
+                    document.getElementById('api-key-select').value = msg.keyName || '';
+                    break;
                 case 'setFiles': document.getElementById('file-select').innerHTML = '<option value="">-- Select File --</option>' + msg.files.map(f => \`<option value="\${f.path}">\${f.name}</option>\`).join(''); break;
                 case 'setFunctions': document.getElementById('func-select').innerHTML = '<option value="">-- All --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); break;
                 case 'setProjectPath': document.getElementById('project-path').value = msg.path; if (!document.getElementById('batch-path').value) document.getElementById('batch-path').value = msg.path; break;
@@ -626,9 +636,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         document.getElementById('btn-save-key').onclick = () => {
             const newName = document.getElementById('new-key-name').value;
+            const newModel = document.getElementById('new-key-model').value;
             const newValue = document.getElementById('new-key-value').value;
             const oldName = document.getElementById('api-key-select').value;
-            if (newName && newValue) vscode.postMessage({ command: 'updateApiKey', oldName, newName, key: newValue });
+            if (newName && newModel && newValue) vscode.postMessage({ command: 'updateApiKey', oldName, newName, model: newModel, key: newValue });
         };
         document.getElementById('btn-del-key').onclick = () => {
             const name = document.getElementById('api-key-select').value;
@@ -637,7 +648,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('api-key-select').onchange = (e) => {
             const name = e.target.value;
             document.getElementById('new-key-name').value = name || '';
-            document.getElementById('new-key-value').value = currentKeys[name] || '';
+            document.getElementById('new-key-model').value = currentKeys[name]?.model || '';
+            document.getElementById('new-key-value').value = '';
         };
 
         document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });
@@ -672,16 +684,16 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const envType = document.getElementById('env-type').value;
             let modelName = '';
             if (envType === 'local') modelName = document.getElementById('model-select').value;
-            else if (envType === 'cloud') modelName = document.getElementById('api-key-select').value;
+            else if (envType === 'cloud') modelName = currentKeys[document.getElementById('api-key-select').value]?.model || '';
             else if (envType === 'custom') modelName = document.getElementById('custom-model').value;
 
-            return { envType, modelName };
+            return { envType, modelName, cloudKeyName: envType === 'cloud' ? document.getElementById('api-key-select').value : undefined };
         };
 
         document.getElementById('btn-test-cloud').onclick = () => {
-            const modelName = document.getElementById('api-key-select').value;
-            if(!modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Cloud API Key.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'cloud', modelName });
+            const cloudKeyName = document.getElementById('api-key-select').value;
+            if(!cloudKeyName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Cloud setting.' });
+            vscode.postMessage({ command: 'testConnection', envType: 'cloud', cloudKeyName });
         };
         document.getElementById('btn-test-local').onclick = () => {
             const modelName = document.getElementById('model-select').value;
