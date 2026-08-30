@@ -4,6 +4,14 @@
 
 ## 2026-08-30
 
+### AST 函式與建構子簽章語境
+
+- AST 提取新增參數 kind、型別註解、必填狀態與預設值，涵蓋位置限定、一般、keyword-only、`*args`、`**kwargs`。
+- 測試 Writer 依實際簽章區分必填與可選參數，不再要求所有函式固定傳入所有參數。
+- 類別建構子同樣區分 required／optional，Tier 1 只在真正存在必填建構子參數時才避免無參數實例化。
+- 新增包含位置限定、預設值、keyword-only 與 variadic 的 AST 回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、27 個 TypeScript 單元／端到端測試、7 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
 ### 結構化回覆內容驗證與文字回退
 
 - 結構化輸出不再只依 HTTP 400 判斷支援性；HTTP 200 但回傳空白、半截 JSON、缺少 `code` 的程式碼 envelope 也會自動改以文字格式重試。

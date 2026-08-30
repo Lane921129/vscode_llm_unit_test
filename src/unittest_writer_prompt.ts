@@ -237,7 +237,15 @@ export function getUserPrompt(
         prompt += `- Name: ${astContext.name}\n`;
         if (astContext.args && astContext.args.length > 0) {
             prompt += `- Parameters: ${astContext.args.join(', ')}\n`;
-            prompt += `- EXACT signature: ${astContext.name}(${astContext.args.join(', ')}). Call with EXACTLY ${astContext.args.length} argument(s).\n`;
+            const signature = Array.isArray(astContext.signature) ? astContext.signature : [];
+            if (signature.length > 0) {
+                const required = signature.filter((param: any) => param.required).map((param: any) => param.name);
+                const optional = signature.filter((param: any) => !param.required).map((param: any) => param.default === null ? param.name : `${param.name}=${param.default}`);
+                prompt += `- Required parameters: ${required.join(', ') || 'none'}; optional/variadic parameters: ${optional.join(', ') || 'none'}.\n`;
+                prompt += `- Call with every required parameter. Optional parameters may be omitted unless the test intentionally covers their default or override behavior.\n`;
+            } else {
+                prompt += `- EXACT signature: ${astContext.name}(${astContext.args.join(', ')}). Call with EXACTLY ${astContext.args.length} argument(s).\n`;
+            }
         } else {
             prompt += `- Parameters: NONE. This function takes ZERO arguments.\n`;
             prompt += `- CRITICAL: ${astContext.name}() takes 0 arguments. ANY call like ${astContext.name}(x) WILL crash with TypeError. ONLY call as ${astContext.name}().\n`;
@@ -253,7 +261,7 @@ export function getUserPrompt(
             prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
             const init = astContext.class_context?.init;
             if (init) {
-                prompt += `  - Constructor parameters: ${init.params?.join(', ') || 'none'}; initialized attributes: ${init.assigns?.map((item: any) => item.name).join(', ') || 'none'}.\n`;
+                prompt += `  - Constructor required parameters: ${init.required_params?.join(', ') || 'none'}; optional parameters: ${init.optional_params?.join(', ') || 'none'}; initialized attributes: ${init.assigns?.map((item: any) => item.name).join(', ') || 'none'}.\n`;
             }
         }
         prompt += `- CRITICAL: Do NOT invent keyword arguments such as extra_option=... that are not in the function signature.\n`;

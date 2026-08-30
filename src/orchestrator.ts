@@ -306,12 +306,14 @@ interface CallerContext {
 interface AstContext {
     name: string;
     args: string[];
+    signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>;
+    required_args?: string[];
     docstring: string;
     calls: string[];
     dependencies?: { name: string, module: string }[];
     file_imports?: { kind: string, module: string, name: string | null, alias: string | null, bound_name: string }[];
     referenced_globals?: { name: string, code: string }[];
-    class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], assigns: { name: string, code: string }[] } } | null;
+    class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] } } | null;
     is_async?: boolean;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
@@ -1276,7 +1278,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
-                        const constructorParams = (astContext as any)?.class_context?.init?.params as string[] | undefined;
+                        const constructorParams = ((astContext as any)?.class_context?.init?.required_params
+                            || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
                         if (className && constructorParams && constructorParams.length > 0) {
                             log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），不使用猜測的無參數實例化；改走一般生成流程。`);
                         } else if (className) {

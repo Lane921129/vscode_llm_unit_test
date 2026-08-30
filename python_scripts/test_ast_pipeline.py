@@ -51,6 +51,8 @@ class Worker:
         self.assertIn('normalize_value', data['calls'])
         self.assertEqual(data['referenced_globals'], [{'name': 'MAXIMUM', 'code': 'MAXIMUM = 10'}])
         self.assertEqual(data['class_context']['init']['params'], ['config', 'client'])
+        self.assertEqual(data['class_context']['init']['required_params'], ['config'])
+        self.assertEqual(data['class_context']['init']['optional_params'], ['client'])
         self.assertEqual([item['name'] for item in data['class_context']['init']['assigns']], ['config', 'client'])
         self.assertEqual({item['bound_name'] for item in data['file_imports']}, {'operating_system', 'normalize_value'})
 
@@ -80,6 +82,28 @@ class Worker:
         self.assertEqual(by_file['consumer.py']['trace_kwargs'], {})
         self.assertIsNone(by_file['variable_consumer.py']['trace_args'])
         self.assertIsNone(by_file['variable_consumer.py']['trace_kwargs'])
+
+    def test_extractor_preserves_required_defaults_and_keyword_only_parameters(self):
+        source = '''def combine(left, /, middle, right=3, *, flag=True, required_option, **extras):
+    return left + middle + right
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'sample.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'combine')
+
+        self.assertEqual(data['required_args'], ['left', 'middle', 'required_option'])
+        self.assertEqual(
+            [(item['name'], item['kind'], item['default'], item['required']) for item in data['signature']],
+            [
+                ('left', 'positional_only', None, True),
+                ('middle', 'positional_or_keyword', None, True),
+                ('right', 'positional_or_keyword', '3', False),
+                ('flag', 'keyword_only', 'True', False),
+                ('required_option', 'keyword_only', None, True),
+                ('extras', 'var_keyword', None, False),
+            ]
+        )
 
     def test_mock_scaffold_patches_the_target_module_usage_point_and_supports_async_methods(self):
         source = '''import transport_lib as transport

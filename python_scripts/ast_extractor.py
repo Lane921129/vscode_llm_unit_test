@@ -45,16 +45,63 @@ def attribute_name(node):
     return unparse(node)
 
 
+def extract_parameters(arguments, excluded_names=None):
+    """Preserve required/default/keyword-only information for safe test calls."""
+    excluded = set(excluded_names or [])
+    parameters = []
+    positional = list(arguments.posonlyargs) + list(arguments.args)
+    defaults = [None] * (len(positional) - len(arguments.defaults)) + list(arguments.defaults)
+    posonly_count = len(arguments.posonlyargs)
+    for index, (arg, default) in enumerate(zip(positional, defaults)):
+        if arg.arg in excluded:
+            continue
+        parameters.append({
+            'name': arg.arg,
+            'kind': 'positional_only' if index < posonly_count else 'positional_or_keyword',
+            'annotation': unparse(arg.annotation) if arg.annotation else None,
+            'default': unparse(default) if default is not None else None,
+            'required': default is None,
+        })
+    for arg, default in zip(arguments.kwonlyargs, arguments.kw_defaults):
+        if arg.arg in excluded:
+            continue
+        parameters.append({
+            'name': arg.arg,
+            'kind': 'keyword_only',
+            'annotation': unparse(arg.annotation) if arg.annotation else None,
+            'default': unparse(default) if default is not None else None,
+            'required': default is None,
+        })
+    if arguments.vararg and arguments.vararg.arg not in excluded:
+        parameters.append({
+            'name': arguments.vararg.arg,
+            'kind': 'var_positional',
+            'annotation': unparse(arguments.vararg.annotation) if arguments.vararg.annotation else None,
+            'default': None,
+            'required': False,
+        })
+    if arguments.kwarg and arguments.kwarg.arg not in excluded:
+        parameters.append({
+            'name': arguments.kwarg.arg,
+            'kind': 'var_keyword',
+            'annotation': unparse(arguments.kwarg.annotation) if arguments.kwarg.annotation else None,
+            'default': None,
+            'required': False,
+        })
+    return parameters
+
+
 def extract_class_context(class_node, lines):
     if class_node is None:
         return None
-    attrs, init_assigns, init_params = [], [], []
+    attrs, init_assigns, init_params, init_signature = [], [], [], []
     for item in class_node.body:
         if isinstance(item, (ast.Assign, ast.AnnAssign)):
             for name in assignment_names(item):
                 attrs.append({'name': name, 'code': source_for(lines, item)})
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == '__init__':
-            init_params = [arg.arg for arg in item.args.args if arg.arg not in ('self', 'cls')]
+            init_signature = extract_parameters(item.args, ('self', 'cls'))
+            init_params = [param['name'] for param in init_signature]
             for node in ast.walk(item):
                 if isinstance(node, (ast.Assign, ast.AnnAssign)):
                     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -65,7 +112,13 @@ def extract_class_context(class_node, lines):
         'name': class_node.name,
         'bases': [unparse(base) for base in class_node.bases],
         'class_attrs': attrs,
-        'init': {'params': init_params, 'assigns': init_assigns}
+        'init': {
+            'params': init_params,
+            'required_params': [param['name'] for param in init_signature if param['required']],
+            'optional_params': [param['name'] for param in init_signature if not param['required']],
+            'signature': init_signature,
+            'assigns': init_assigns,
+        }
     }
 
 
@@ -97,8 +150,8 @@ def extract_info(filepath, func_name):
             print(json.dumps({'error': 'Function not found'}, ensure_ascii=False))
             return
 
-        raw_args = [arg.arg for arg in func_node.args.args]
-        args = [arg for arg in raw_args if not (class_name is not None and arg in ('self', 'cls'))]
+        signature = extract_parameters(func_node.args, ('self', 'cls') if class_name is not None else ())
+        args = [param['name'] for param in signature]
         calls = [attribute_name(child.func) for child in ast.walk(func_node) if isinstance(child, ast.Call)]
         unique_calls = list(dict.fromkeys(calls))
 
@@ -117,6 +170,8 @@ def extract_info(filepath, func_name):
         print(json.dumps({
             'name': func_node.name,
             'args': args,
+            'signature': signature,
+            'required_args': [param['name'] for param in signature if param['required']],
             'docstring': ast.get_docstring(func_node) or '',
             'calls': unique_calls,
             'dependencies': dependencies,
