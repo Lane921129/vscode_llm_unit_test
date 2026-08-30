@@ -107,14 +107,27 @@ export async function findPythonFilesInDir(dir: string): Promise<string[]> {
     return results;
 }
 
-/** 偵測突變引擎 */
-export function detectMutationEngine(pythonVersion: string): 'mutatest' | 'mutmut' {
-    // Windows 下 mutmut 在 Python 3.12+ 經常因缺少 Unix resource 模組而報錯，強制優先使用 mutatest
-    if (process.platform === 'win32') {
-        return 'mutatest';
-    }
+export type MutationEngine = 'mutatest' | 'mutmut' | null;
+
+/**
+ * Resolves the compatible mutation engine for a Python runtime and platform.
+ * Native mutmut does not support Windows; mutatest 3.x cannot use coverage 7.
+ */
+export function detectMutationEngineForPlatform(
+    pythonVersion: string,
+    platform: NodeJS.Platform
+): MutationEngine {
     const versionMatch = pythonVersion.match(/(\d+)\.(\d+)/);
     const major = versionMatch ? parseInt(versionMatch[1]) : 3;
     const minor = versionMatch ? parseInt(versionMatch[2]) : 0;
-    return (major > 3 || (major === 3 && minor >= 12)) ? 'mutmut' : 'mutatest';
+
+    if (major > 3 || (major === 3 && minor >= 12)) {
+        return platform === 'win32' ? null : 'mutmut';
+    }
+    return 'mutatest';
+}
+
+/** 偵測目前執行環境可用的突變引擎 */
+export function detectMutationEngine(pythonVersion: string): MutationEngine {
+    return detectMutationEngineForPlatform(pythonVersion, process.platform);
 }

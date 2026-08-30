@@ -4,6 +4,7 @@ import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
+import { buildGoogleGenerateContentRequest } from './cloudApi';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -215,12 +216,34 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'startAnalysis': {
-                    vscode.commands.executeCommand('llm-unit-test.runCaptureAndTest', message);
+                    const params = { ...message };
+                    if (params.envType === 'cloud') {
+                        const rawKeys = await this.secretStorage.get('llm_api_keys');
+                        const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
+                        const cloudKey = keys[params.modelName];
+                        if (!cloudKey) {
+                            vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
+                            break;
+                        }
+                        params.cloudKey = cloudKey;
+                    }
+                    vscode.commands.executeCommand('llm-unit-test.runCaptureAndTest', params);
                     break;
                 }
 
                 case 'startBatchAnalysis': {
-                    vscode.commands.executeCommand('llm-unit-test.runBatchAnalysis', message);
+                    const params = { ...message };
+                    if (params.envType === 'cloud') {
+                        const rawKeys = await this.secretStorage.get('llm_api_keys');
+                        const keys: Record<string, string> = rawKeys ? JSON.parse(rawKeys) : {};
+                        const cloudKey = keys[params.modelName];
+                        if (!cloudKey) {
+                            vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
+                            break;
+                        }
+                        params.cloudKey = cloudKey;
+                    }
+                    vscode.commands.executeCommand('llm-unit-test.runBatchAnalysis', params);
                     break;
                 }
 
@@ -295,11 +318,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     throw new Error("找不到對應的 API Key");
                                 }
                                 
-                                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
-                                const response = await fetch(url, {
+                                const request = buildGoogleGenerateContentRequest(message.modelName, key, 'hi');
+                                const response = await fetch(request.url, {
                                     method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ contents: [{ parts: [{ text: "hi" }] }] }),
+                                    headers: request.headers,
+                                    body: JSON.stringify(request.body),
                                     signal: controller.signal as any
                                 });
                                 clearTimeout(timeoutId);

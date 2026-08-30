@@ -6,6 +6,7 @@ import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parse
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
+import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -279,6 +280,7 @@ interface AnalysisParams {
     outputPath: string;
     customUrl?: string;
     customKey?: string;
+    cloudKey?: string;
     projectName?: string;
     sessionDate?: string;
 }
@@ -531,11 +533,18 @@ async function requestLlmApi(
             headers['Authorization'] = `Bearer ${params.customKey}`;
         }
     } else {
-        const config = vscode.workspace.getConfiguration('llmUnitTest');
-        const keys = config.get<Record<string, string>>('apiKeys', {});
-        const actualKey = keys[params.modelName];
-        apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.modelName)}:generateContent?key=${actualKey}`;
-        bodyData = { contents: [{ parts: [{ text: systemPrompt + "\n\n" + userPrompt }] }] };
+        const actualKey = resolveGoogleApiKey(params.cloudKey);
+        if (!actualKey) {
+            throw new Error('找不到 Google AI Studio API Key。請在側邊欄儲存對應模型的 key，或設定 LLM_UNIT_TEST_GOOGLE_API_KEY。');
+        }
+        const googleRequest = buildGoogleGenerateContentRequest(
+            params.modelName,
+            actualKey,
+            systemPrompt + "\n\n" + userPrompt
+        );
+        apiUrl = googleRequest.url;
+        headers = googleRequest.headers;
+        bodyData = googleRequest.body;
     }
 
     const controller = new AbortController();
@@ -1618,17 +1627,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             // 動態偵測 mutation engine（Windows 強制使用 mutatest）
             let engine: 'mutatest' | 'mutmut' = 'mutatest';
             const isWin = process.platform === 'win32';
+            let pyVer = '';
             try {
                 // 取得 Python 版本
                 const { stdout: pyVerRaw } = await runSpawn('python', ['--version'], {
                     env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
                 });
-                const pyVer = pyVerRaw.trim().replace('Python ', '');
+                pyVer = pyVerRaw.trim().replace('Python ', '');
                 const preferredEngine = detectMutationEngine(pyVer);
+                if (!preferredEngine) {
+                    throw new Error(`Python ${pyVer} 的原生 Windows 環境沒有相容的突變引擎。請改用 WSL 執行 mutmut，或使用 Python 3.11 執行 mutatest。`);
+                }
                 log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
 
-                if (preferredEngine === 'mutmut' && !isWin) {
-                    // 非 Windows 且建議 mutmut
+                if (preferredEngine === 'mutmut') {
+                    // Python 3.12+ uses mutmut because mutatest requires coverage < 6.
                     const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
                     if (mutmutCheck.code === 0) {
                         engine = 'mutmut';
@@ -1645,7 +1658,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
                     } else {
                         const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
-                        if (mutmutCheck.code === 0 && !isWin) {
+                        if (mutmutCheck.code === 0) {
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
                         } else {
@@ -1655,6 +1668,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 }
             } catch (e) {
+                if (e instanceof Error && e.message.includes('沒有相容的突變引擎')) {
+                    throw e;
+                }
                 log(`[系統] 無法取得 Python 版本，使用預設引擎 mutatest。`);
             }
 
