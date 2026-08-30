@@ -168,8 +168,14 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                 cls_obj = getattr(module, method_class_name)
                 try:
                     instance = cls_obj()
-                except Exception:
-                    instance = object.__new__(cls_obj)
+                except Exception as constructor_error:
+                    result["load_error"] = (
+                        f"Cannot safely instantiate class '{method_class_name}' for dynamic trace: "
+                        f"{type(constructor_error).__name__}: {constructor_error}"
+                    )
+                    result["examples"] = []
+                    result["errors"] = []
+                    return result
                 ret = getattr(instance, func_name)(*inp, **kwargs)
             else:
                 ret = func(*inp, **kwargs)

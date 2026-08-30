@@ -121,6 +121,23 @@ class Worker:
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
 
+    def test_dynamic_tracer_does_not_treat_an_uninitialized_class_as_a_real_trace(self):
+        source = '''class Worker:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def render(self, value):
+        return self.prefix + value
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'render', [{'args': ['x'], 'kwargs': {}}])
+
+        self.assertIn('Cannot safely instantiate class', result['load_error'])
+        self.assertEqual(result['examples'], [])
+        self.assertEqual(result['errors'], [])
+
     def test_builtin_mutation_runner_kills_a_boundary_mutation_without_changing_source(self):
         source = '''def classify(value):
     return "positive" if value > 0 else "not-positive"

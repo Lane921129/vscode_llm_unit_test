@@ -1272,7 +1272,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
-                        if (className) {
+                        const constructorParams = (astContext as any)?.class_context?.init?.params as string[] | undefined;
+                        if (className && constructorParams && constructorParams.length > 0) {
+                            log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），不使用猜測的無參數實例化；改走一般生成流程。`);
+                        } else if (className) {
                             // Class method：需要建立 instance
                             const setupBlock = [
                                 `    def setUp(self):`,
