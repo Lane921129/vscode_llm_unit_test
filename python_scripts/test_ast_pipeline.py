@@ -9,6 +9,7 @@ import unittest
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 from mock_scaffold_generator import generate_scaffold
+from dynamic_tracer import trace_function
 
 
 class AstPipelineTests(unittest.TestCase):
@@ -104,6 +105,20 @@ class Worker:
         self.assertIn('async def test_process(self, mock_send, mock_normalize_value):', result['scaffold'])
         self.assertIn('instance = Worker(...)', result['scaffold'])
         self.assertIn('result = await instance.process(value)', result['scaffold'])
+
+    def test_dynamic_tracer_awaits_async_target_before_recording_the_result(self):
+        source = '''async def double(value):
+    return value * 2
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'async_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'double', [{'args': [3], 'kwargs': {}}])
+
+        self.assertIsNone(result['load_error'])
+        self.assertEqual(result['examples'], [
+            {'args': ['3'], 'result': '6', 'result_type': 'int'}
+        ])
 
 
 if __name__ == '__main__':

@@ -13,6 +13,8 @@ import importlib.util
 import os
 import traceback
 import types
+import asyncio
+import inspect
 
 def load_module_from_file(file_path: str):
     """動態載入 Python 模組"""
@@ -135,7 +137,6 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
 
     # 取得參數名稱（class method 去除 self/cls）
     try:
-        import inspect
         sig = inspect.signature(func)
         all_params = list(sig.parameters.keys())
         # 未綁定 method 可能包含 self，將其去除
@@ -172,6 +173,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                 ret = getattr(instance, func_name)(*inp, **kwargs)
             else:
                 ret = func(*inp, **kwargs)
+            if inspect.isawaitable(ret):
+                ret = asyncio.run(ret)
             result["examples"].append({
                 "args": [safe_repr(a) for a in inp],
                 "result": safe_repr(ret),

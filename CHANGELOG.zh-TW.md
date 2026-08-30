@@ -4,6 +4,12 @@
 
 ## 2026-08-30
 
+### 非同步動態追蹤結果
+
+- 動態追蹤器現在會偵測 awaitable 並以 `asyncio.run` 取得真正回傳值，不再把 coroutine 物件當作函式輸出。
+- 新增 async 函式追蹤回歸測試，確認已驗證 I/O 可正確提供給低階與一般測試生成路徑。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、4 個 Python AST／Mock Scaffold／async trace 回歸測試、完整建置與 Git diff 檢查。
+
 ### Cloud 模型可用性預檢
 
 - Cloud 連線測試先呼叫 Google Model List API，僅接受 API 宣告支援 `generateContent` 的模型，再發送生成探針。
