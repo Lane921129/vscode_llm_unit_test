@@ -4,6 +4,13 @@
 
 ## 2026-08-30
 
+### Tier 1 確定性測試生成
+
+- Tier 1 不再請小模型補全 assertion；它直接根據已驗證的 dynamic trace 產生 `assertEqual`、`assertIsNone` 與 `assertRaises`。
+- 修正模型即使回覆語法正確、但把字串多包一層引號時仍被接受的問題。
+- 例外測試不再因 LLM 請求失敗而遺失，讓小模型、離線或不穩定連線仍能產出基本可執行測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、16 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
 ### Cloud／Local 結構化輸出與相容回退
 
 - Google Cloud 生成測試時可要求受 JSON Schema 限制的 `{ "code": "..." }` 回應；回覆會在寫入前還原成 Python 程式碼並接受既有驗證。

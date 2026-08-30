@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1SystemPrompt, getTier1UserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
+import { getSystemPrompt, getUserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
 import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
 import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
@@ -8,7 +8,7 @@ import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } f
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
-import { toPythonAssertionLiteral } from './tier1Literals';
+import { buildTier1TestMethods } from './tier1TestBuilder';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -1244,73 +1244,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     log(`[Tier 1 退回] 動態追蹤失敗，已自動切換至 Tier 2。建議：請在策略選單改選 Tier 2 以符合此函式的複雜度。`);
                     // 退回 Tier 2：繼續下方的標準流程
                 } else {
-                    log(`[Tier 1] 開啟填空法，將為 ${traceResult.examples.length} 個成功範例 + ${traceResult.errors.length} 個例外範例分別詢問 AI…`);
+                    log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const moduleName = path.basename(params.filePath, '.py');
-                    const tier1Methods: string[] = [];
-
-                    // 成功範例
-                    for (let i = 0; i < traceResult.examples.length; i++) {
-                        const ex = traceResult.examples[i];
-                        const funcCall = `${params.funcName}(${ex.args.join(', ')})`;
-                        const resultRepr = String(ex.result ?? '');
-
-                        // 若回傳值已知為 None，直接生成 assertIsNone，不詢問 LLM（避免 AI 猜錯值）
-                        if (resultRepr === 'None' || ex.result_type === 'NoneType') {
-                            tier1Methods.push(
-                                `    def test_case_${i + 1}(self):\n` +
-                                `        result = ${funcCall}\n` +
-                                `        self.assertIsNone(result)`
-                            );
-                            log(`[Tier 1] 範例 ${i + 1} 回傳 None，已直接生成 assertIsNone。`);
-                            continue;
-                        }
-
-                        const sysP = getTier1SystemPrompt();
-                        const usrP = getTier1UserPrompt(funcCall, resultRepr, false);
-                        let assertLine = '';
-                        try {
-                            const raw = await requestLlmApi(params, sysP, usrP, log);
-                            const extracted = raw.split('\n').map(l => l.trim()).find(l => l.startsWith('self.assert') || l.startsWith('with self.assert'));
-                            // 檢查 extracted 是否包含未定義變數名稱 (如 expected_value, expected_output, expected_result, ___)
-                            if (extracted && !/\b(expected_|expected_value|expected_output|expected_result|___|\.\.\.)\b/i.test(extracted)) {
-                                assertLine = extracted;
-                            }
-                        } catch (e: any) {
-                            log(`[Tier 1] 範例 ${i + 1} 詢問失敗: ${e.message}`);
-                        }
-
-                        // 若 LLM 未回傳安全有效的斷言行，自動根據 ex.result 與 ex.result_type 生成精確斷言
-                        if (!assertLine) {
-                            const literalVal = toPythonAssertionLiteral(ex.result, ex.result_type);
-                            assertLine = `self.assertEqual(result, ${literalVal})`;
-                            log(`[Tier 1] 範例 ${i + 1} LLM 回應無效，已使用精確回傳值代入斷言: ${assertLine}`);
-                        }
-
-                        tier1Methods.push(
-                            `    def test_case_${i + 1}(self):\n` +
-                            `        result = ${funcCall}\n` +
-                            `        ${assertLine}`
-                        );
-                    }
-
-                    // 例外範例
-                    for (let i = 0; i < traceResult.errors.length; i++) {
-                        const er = traceResult.errors[i];
-                        const funcCall = `${params.funcName}(${er.args.join(', ')})`;
-                        const sysP = getTier1SystemPrompt();
-                        const usrP = getTier1UserPrompt(funcCall, String(er.message ?? ''), true, er.exception);
-                        try {
-                            const raw = await requestLlmApi(params, sysP, usrP, log);
-                            const methodIdx = traceResult.examples.length + i + 1;
-                            tier1Methods.push(
-                                `    def test_case_${methodIdx}(self):\n` +
-                                `        with self.assertRaises(${er.exception}):\n` +
-                                `            ${funcCall}`
-                            );
-                        } catch (e: any) {
-                            log(`[Tier 1] 例外範例 ${i + 1} 詢問失敗: ${e.message}`);
-                        }
-                    }
+                    const tier1Methods = buildTier1TestMethods(params.funcName, traceResult.examples, traceResult.errors);
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
