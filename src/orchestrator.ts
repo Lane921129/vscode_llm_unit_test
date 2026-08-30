@@ -8,6 +8,7 @@ import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTria
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
+import { addOutputContract, buildCustomChatCompletionBody } from './customApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1TestMethods } from './tier1TestBuilder';
 import * as path from 'path';
@@ -539,25 +540,21 @@ async function requestLlmApi(
     let bodyData = {};
     let headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
+    const contractedSystemPrompt = addOutputContract(systemPrompt, outputFormat);
+
     if (params.envType === 'local') {
         const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
         bodyData = {
             model: params.modelName,
-            system: systemPrompt,
+            system: contractedSystemPrompt,
             prompt: userPrompt,
             stream: false,
             ...(outputFormat === 'json' ? { format: 'json' } : {})
         };
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
-        bodyData = {
-            model: params.modelName,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-            ]
-        };
+        bodyData = buildCustomChatCompletionBody(params.modelName, contractedSystemPrompt, userPrompt, outputFormat);
         if (params.customKey) {
             headers['Authorization'] = `Bearer ${params.customKey}`;
         }
@@ -576,7 +573,7 @@ async function requestLlmApi(
         const googleRequest = buildGoogleGenerateContentRequest(
             params.modelName,
             actualKey,
-            systemPrompt + "\n\n" + userPrompt,
+            contractedSystemPrompt + "\n\n" + userPrompt,
             outputFormat === 'text' ? undefined : { responseMimeType: 'application/json', responseSchema }
         );
         apiUrl = googleRequest.url;
@@ -609,7 +606,7 @@ async function requestLlmApi(
     if (isAborted) throw new Error("使用者強制中止");
     if (!response.ok) {
         const errText = await response.text();
-        if ((params.envType === 'cloud' || params.envType === 'local') && outputFormat !== 'text' && response.status === 400) {
+        if (outputFormat !== 'text' && response.status === 400) {
             log(`[格式回退] 模型不支援結構化輸出，改用一般文字輸出：${errText.substring(0, 180)}`);
             return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
         }

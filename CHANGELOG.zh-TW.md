@@ -4,6 +4,13 @@
 
 ## 2026-08-30
 
+### 跨提供者結構化輸出相容性
+
+- Custom OpenAI-compatible API 在需要語意／測試程式碼結構化輸出時，會要求 JSON mode；Cloud、Ollama、Custom 共用同一份通用輸出契約。
+- 任一提供者以 HTTP 400 回報不支援結構化輸出時，會自動以文字格式重試，確保不同模型可加入同一個 Tier 流程。
+- 新增 Custom API 請求內容與通用 JSON／程式碼 envelope 的回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、25 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
 ### 類別動態追蹤可信度
 
 - 動態追蹤無法安全建立類別實例時，不再以 `__new__` 跳過建構子；避免把未初始化屬性造成的 `AttributeError` 誤當成目標方法的真實行為。
