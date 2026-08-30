@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { addOutputContract, buildCustomChatCompletionBody } from '../customApi';
+import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from '../customApi';
 
 test('custom API requests JSON mode only when the caller needs a structured result', () => {
     const textRequest = buildCustomChatCompletionBody('model-a', 'system', 'user', 'text');
@@ -18,4 +18,13 @@ test('structured output contracts are generic and describe the expected envelope
     assert.ok(codeContract.includes('Python unittest'));
     assert.ok(jsonContract.includes('valid JSON object'));
     assert.strictEqual(addOutputContract('base', 'text'), 'base');
+});
+
+test('detects malformed successful structured responses before they reach a Tier', () => {
+    assert.ok(!isStructuredResponseUsable('{', 'json'));
+    assert.ok(!isStructuredResponseUsable('{}', 'json'));
+    assert.ok(!isStructuredResponseUsable('{}', 'test-code-json'));
+    assert.ok(isStructuredResponseUsable('{"required_skills": []}', 'json'));
+    assert.ok(isStructuredResponseUsable('{"code":"import unittest"}', 'test-code-json'));
+    assert.ok(isStructuredResponseUsable('import unittest', 'test-code-json'));
 });

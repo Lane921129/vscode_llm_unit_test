@@ -8,7 +8,7 @@ import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTria
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
-import { addOutputContract, buildCustomChatCompletionBody } from './customApi';
+import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1TestMethods } from './tier1TestBuilder';
 import * as path from 'path';
@@ -615,12 +615,13 @@ async function requestLlmApi(
 
     const resJson = await response.json() as Record<string, unknown>;
 
+    let responseText: string;
     if (params.envType === 'local') {
-        return (resJson as { response?: string }).response || "";
+        responseText = (resJson as { response?: string }).response || "";
     } else if (params.envType === 'custom') {
         const choices = (resJson as any).choices;
         if (choices && choices[0]?.message?.content) {
-            return choices[0].message.content;
+            responseText = choices[0].message.content;
         } else if ((resJson as any).error) {
             throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
         } else {
@@ -629,13 +630,19 @@ async function requestLlmApi(
     } else {
         const candidates = (resJson as any).candidates;
         if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
-            return candidates[0].content.parts[0].text;
+            responseText = candidates[0].content.parts[0].text;
         } else if ((resJson as any).error) {
             throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
         } else {
             throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
         }
     }
+
+    if (!isStructuredResponseUsable(responseText, outputFormat)) {
+        log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
+        return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
+    }
+    return responseText;
 }
 
 function cleanCodeBlock(code: string): string {

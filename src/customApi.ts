@@ -31,3 +31,31 @@ export function addOutputContract(systemPrompt: string, outputFormat: CustomOutp
     }
     return systemPrompt;
 }
+
+/**
+ * Distinguishes usable structured output from HTTP-successful but malformed
+ * output. Plain Python remains valid compatibility output for test generation.
+ */
+export function isStructuredResponseUsable(response: string, outputFormat: CustomOutputFormat): boolean {
+    if (outputFormat === 'text') {
+        return true;
+    }
+    const trimmed = response.trim();
+    if (!trimmed) {
+        return false;
+    }
+    if (outputFormat === 'test-code-json' && !trimmed.startsWith('{')) {
+        return true;
+    }
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+            return false;
+        }
+        return outputFormat === 'json'
+            ? Object.keys(parsed as Record<string, unknown>).length > 0
+            : typeof (parsed as { code?: unknown }).code === 'string';
+    } catch {
+        return false;
+    }
+}

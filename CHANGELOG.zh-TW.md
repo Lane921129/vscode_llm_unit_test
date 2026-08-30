@@ -4,6 +4,13 @@
 
 ## 2026-08-30
 
+### 結構化回覆內容驗證與文字回退
+
+- 結構化輸出不再只依 HTTP 400 判斷支援性；HTTP 200 但回傳空白、半截 JSON、缺少 `code` 的程式碼 envelope 也會自動改以文字格式重試。
+- 保留純 Python 程式碼作為測試生成的相容格式，避免要求 JSON 的小型本地模型被不必要拒絕。
+- 這項修正由本機 `codegemma:2b` 實測的不完整 JSON 回覆觸發，並加入結構化回覆有效性回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、27 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
 ### 非同步 unittest 格式閘門
 
 - 生成測試驗證器現在同時接受 `unittest.TestCase` 與 `unittest.IsolatedAsyncioTestCase`，也接受 `async def test_*`。
