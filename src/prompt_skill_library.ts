@@ -42,7 +42,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
     {
         id: 'branch_threshold_coverage',
         title: 'Multi-Branch Threshold Coverage',
-        trigger_hint: 'Use when function has multiple if/elif branches based on numeric comparisons (e.g. bmi < 18.5, elif bmi < 24)',
+        trigger_hint: 'Use when function has multiple if/elif branches based on numeric comparisons',
         rules: [
             'BRANCH THRESHOLD COVERAGE: the function has multiple if/elif numeric thresholds.',
             '  - Write at least one test per branch (including the final else).',
@@ -124,8 +124,8 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'IMPORT MODULE NAME:',
             '  - Import from the MODULE FILE NAME, not from the function name.',
-            '  - Correct: from bmi import calculate_bmi',
-            '  - WRONG:   from calculate_bmi import calculate_bmi',
+            '  - Correct: from module_name import target_function',
+            '  - WRONG:   from target_function import target_function',
             '  - WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths.',
         ]
     },

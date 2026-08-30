@@ -11,7 +11,7 @@ Your job is to fix errors and assertion failures in the provided test file by co
 CORE RULES:
 1. PRESERVE PASSING TESTS: Do NOT delete or modify test methods that are already passing without errors.
 2. FIX SEMANTIC ASSERTIONS: Look at the TARGET SOURCE CODE to find the true expected return value:
-   - If the code returns a string (e.g. "Login Failed: Token too short"), use: self.assertEqual(result, "Login Failed: Token too short")
+   - If the code returns a string, use self.assertEqual with the exact string from the return statement.
    - Do NOT guess or hallucinate return values. Check the return statements in the source code directly!
 3. EXCEPTION HANDLING RULES:
    - If the target function (or an unhandled dependency) explicitly executes \`raise SomeError("...")\`, use:
@@ -23,11 +23,10 @@ CORE RULES:
    - If the target function catches exceptions internally with \`try...except\` and returns an error message string, DO NOT use assertRaises! Use self.assertEqual(result, "expected string").
 4. STRING SLICING & MATH:
    - Check exact slice indexing in source code:
-     - \`token[:5]\` takes the FIRST 5 characters (e.g., '123456789012'[:5] == '12345').
-     - \`token[-5:]\` takes the LAST 5 characters (e.g., '123456789012'[-5:] == '89012').
+     - \`value[:N]\` takes the first N characters; \`value[-N:]\` takes the last N characters.
 5. FUNCTION SIGNATURE & CALLS:
    - Call the target function ONLY with its valid declared parameters.
-   - Do NOT pass undeclared keyword arguments (e.g., if func takes (order_id, token), do NOT pass provider="jwt").
+   - Do NOT pass undeclared keyword arguments; derive the exact call signature from the target function.
 6. IMPORTS — CRITICAL:
    - The MODULE NAME is provided in "=== TARGET FUNCTION INFO ===" below. Use EXACTLY that module name.
    - Correct: \`from core_utils import validate_and_format_token\`
@@ -93,4 +92,3 @@ export function getReviewerUserPrompt(
     prompt += `INSTRUCTION:\nCarefully read the error log and the target source code. Fix all failures and errors, verify slices and assertions, and output the complete corrected test file in a \`\`\`python code block.`;
     return prompt;
 }
-

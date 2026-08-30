@@ -1,5 +1,3 @@
-import { t } from './i18n';
-
 export interface FewShotExample {
     label: string;
     sourceCode: string;
@@ -11,7 +9,7 @@ export interface FewShotExample {
  * Foundation Examples (Math, Exception, String) - Fully English
  */
 export function getBaseFewShotExamples(): FewShotExample[] {
-    return [
+    const examples: FewShotExample[] = [
         {
             label: 'Arithmetic addition with boundary values',
             sourceCode: `def add(a, b):\n    return a + b`,
@@ -186,6 +184,10 @@ if __name__ == '__main__':
     unittest.main()`
         }
     ];
+
+    // Only generic examples may enter the shared base prompt. Function-specific
+    // patterns are supplied later by AST facts and selected Skill Cards.
+    return examples.slice(0, 3);
 }
 
 /**

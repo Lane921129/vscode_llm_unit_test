@@ -32,11 +32,11 @@ export interface EquivalentMutantCandidate {
 }
 
 export interface TestInputHint {
-    param_name: string;       // 參數名稱, e.g. "weight_kg"
-    strategy: string;         // 策略說明, e.g. "numeric: cover all 4 BMI thresholds"
+    param_name: string;       // 參數名稱, e.g. "measurement"
+    strategy: string;         // 策略說明, e.g. "numeric: cover all comparison thresholds"
     boundary_inputs: string[]; // 具體邊界值 repr, e.g. ["40", "55", "70", "85"]
     invalid_inputs: string[]; // 預期引發例外的值, e.g. ["0", "-1", "None", "'abc'"]
-    notes: string;            // 額外推導說明, e.g. "BMI = weight/(height/100)**2"
+    notes: string;            // 額外推導說明, e.g. "division requires a non-zero denominator"
 }
 
 export interface TestStrategy {
@@ -101,7 +101,7 @@ Your output must be a single valid JSON object with this exact schema:
         "strategy": "<how to choose inputs for this param>",
         "boundary_inputs": ["<repr value1>", "<repr value2>"],
         "invalid_inputs": ["<repr value that raises exception>"],
-        "notes": "<any critical notes, e.g. 'token[-5:] takes LAST 5 chars'>"
+        "notes": "<any critical notes, e.g. 'value[-N:] takes the last N characters'>"
       }
     ],
     "assertion_style": "assertEqual | assertRaises | mixed",

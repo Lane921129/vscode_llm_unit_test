@@ -15,7 +15,7 @@ export function getTier1SystemPrompt(): string {
 
 /**
  * Tier 1 User Prompt：給定函式呼叫與真實回傳值，讓 AI 補全斷言
- * @param funcCall  已產生的函式呼叫字串，e.g. "func('abc', 'jwt')"
+ * @param funcCall  已產生的函式呼叫字串，e.g. "func('sample', 'mode_a')"
  * @param returnVal 真實回傳值的 repr，e.g. "{'valid': True, 'type': 'user'}"
  * @param isError   若為 True，表示這個輸入會 raise，需要填 assertRaises
  * @param errorType 例外類型，e.g. "ValueError"
@@ -95,7 +95,7 @@ Output format:
 \`\`\`
 
 Guidelines:
-- Use absolute imports (e.g. from service_auth import login_user).
+- Use absolute imports (e.g. from module_name import target_function).
 - Use unittest.mock (patch, MagicMock) for all external dependencies.
 - Cover all edge cases: None, empty, boundary values, all exception paths.
 - Every test method name must start with test_.
@@ -176,7 +176,7 @@ Output format:
 \`\`\`
 
 Guidelines:
-- Use absolute import (e.g. from service_auth import login_user).
+- Use absolute import (e.g. from module_name import target_function).
 - Use unittest.mock (patch, MagicMock) for external dependencies.
 - Cover edge cases: None, empty, boundary values, exception paths.
 - Do NOT copy the source code into your output.
@@ -362,7 +362,7 @@ export function getUserPrompt(
                 const fb = [...new Set(forbiddenKwargs)];
                 prompt += `\n⚠️ FORBIDDEN KWARGS: The following names belong to DEPENDENCY functions (as params or return dict keys), NOT to ${funcName}:\n`;
                 prompt += `  - Do NOT pass: ${fb.map(k => `${k}=...`).join(', ')} to ${funcName}(...)\n`;
-                prompt += `  - Some of these (e.g. 'partner', 'claims') are RETURN VALUE KEYS from a dependency, NOT parameters of ${funcName}.\n`;
+                prompt += `  - Some of these are RETURN VALUE KEYS from a dependency, NOT parameters of ${funcName}.\n`;
                 prompt += `  - ${funcName}() ONLY accepts: (${(astContext.args || []).join(', ')})\n\n`;
             }
 
@@ -376,9 +376,9 @@ export function getUserPrompt(
             for (const dep of astContext.dependencyContexts) {
                 if (dep.code && /^\s*raise\s+/m.test(dep.code) && !targetHasTry) {
                     prompt += `\n⚠️ UNCAUGHT DEPENDENCY EXCEPTION WARNING:\n`;
-                    prompt += `  - Dependency \`${dep.name}()\` raises exceptions for invalid inputs (e.g. ValueError("Invalid token length")).\n`;
+                    prompt += `  - Dependency \`${dep.name}()\` raises exceptions for inputs that violate its own validation rule.\n`;
                     prompt += `  - Because \`${funcName}()\` does NOT use try/except to catch it, the exception propagates directly to caller!\n`;
-                    prompt += `  - For invalid/short token tests, you MUST use \`with self.assertRaises(ValueError):\`.\n`;
+                    prompt += `  - For inputs that trigger this uncaught exception, you MUST use \`with self.assertRaises(ExceptionType):\`.\n`;
                     prompt += `  - Do NOT assert that \`${funcName}()\` returns False or an error string on invalid inputs.\n`;
                 }
             }
