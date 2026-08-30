@@ -7,3 +7,7 @@ node_modules
 .DS_Store
 package-lock.json
 .venv
+.coverage
+htmlcov/
+mutants/
+.mutmut-cache/
