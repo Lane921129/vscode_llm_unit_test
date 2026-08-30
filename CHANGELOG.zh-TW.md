@@ -4,6 +4,14 @@
 
 ## 2026-08-30
 
+### 無外部套件的 AST 突變測試後備引擎
+
+- 新增標準函式庫 AST 基本突變引擎；外部 `mutatest`／`mutmut` 可用時仍優先使用，否則可在 Windows + Python 3.13 等環境繼續執行比較、算術與布林突變。
+- 每個突變都在暫存副本中執行生成的 unittest，原始碼不會被覆寫；存活突變會回饋給下一輪生成作為精準修補焦點。
+- 當無法安裝外部工具時，系統不再直接中斷，並在 Log 明確說明完整引擎（WSL／Python 3.11）仍可提供更廣覆蓋。
+- 新增回歸測試，確認邊界比較突變能被殺死且原始檔案保持不變。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、5 個 Python AST／Mock Scaffold／async trace／mutation 回歸測試、完整建置與 Git diff 檢查。
+
 ### 非同步動態追蹤結果
 
 - 動態追蹤器現在會偵測 awaitable 並以 `asyncio.run` 取得真正回傳值，不再把 coroutine 物件當作函式輸出。

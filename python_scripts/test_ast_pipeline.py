@@ -10,6 +10,7 @@ SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 from mock_scaffold_generator import generate_scaffold
 from dynamic_tracer import trace_function
+from basic_mutation_runner import run_mutation_trials
 
 
 class AstPipelineTests(unittest.TestCase):
@@ -119,6 +120,34 @@ class Worker:
         self.assertEqual(result['examples'], [
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
+
+    def test_builtin_mutation_runner_kills_a_boundary_mutation_without_changing_source(self):
+        source = '''def classify(value):
+    return "positive" if value > 0 else "not-positive"
+'''
+        test_source = '''import unittest
+from target import classify
+
+class TestClassify(unittest.TestCase):
+    def test_positive(self):
+        self.assertEqual(classify(1), "positive")
+
+    def test_boundary(self):
+        self.assertEqual(classify(0), "not-positive")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'target.py'
+            test_file = root / 'test_target.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(target, test_file)
+            original_source = target.read_text(encoding='utf-8')
+
+        self.assertEqual(original_source, source)
+        self.assertGreaterEqual(result['total'], 1)
+        self.assertGreaterEqual(result['killed'], 1)
+        self.assertEqual(result['survived'], 0)
 
 
 if __name__ == '__main__':

@@ -698,6 +698,14 @@ function sanitizeLlmResponse(rawCode: string): string {
     return cleanCodeBlock(cleanCode);
 }
 
+interface BasicMutationResult {
+    total: number;
+    killed: number;
+    survived: number;
+    errors: number;
+    mutants: Array<{ line: number; column: number; from: string; to: string; status: string }>;
+}
+
 /** Require both a unittest shape and a real Python AST before writing a test file. */
 async function validateGeneratedTestCode(code: string): Promise<{ valid: boolean; reason?: string }> {
     const structure = validateUnittestStructure(code);
@@ -1658,8 +1666,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     } // end while (currentTier >= 1)
 
 
-            // 動態偵測 mutation engine（Windows 強制使用 mutatest）
-            let engine: 'mutatest' | 'mutmut' = 'mutatest';
+            // 動態偵測 mutation engine；無外部工具時使用安全的 AST 後備引擎。
+            let engine: 'mutatest' | 'mutmut' | 'builtin' = 'mutatest';
             const isWin = process.platform === 'win32';
             let pyVer = '';
             try {
@@ -1670,11 +1678,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 pyVer = pyVerRaw.trim().replace('Python ', '');
                 const preferredEngine = detectMutationEngine(pyVer);
                 if (!preferredEngine) {
-                    throw new Error(`Python ${pyVer} 的原生 Windows 環境沒有相容的突變引擎。請改用 WSL 執行 mutmut，或使用 Python 3.11 執行 mutatest。`);
-                }
-                log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
-
-                if (preferredEngine === 'mutmut') {
+                    engine = 'builtin';
+                    log(`[系統] Python ${pyVer} 的原生環境沒有相容的外部突變工具，使用內建 AST 基本突變引擎。建議在 WSL 或 Python 3.11 安裝完整引擎以取得更廣的突變覆蓋。`);
+                } else if (preferredEngine === 'mutmut') {
+                    log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
                     // Python 3.12+ uses mutmut because mutatest requires coverage < 6.
                     const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
                     if (mutmutCheck.code === 0) {
@@ -1685,6 +1692,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         log(`[系統] mutmut 不可用，退回使用 mutatest。`);
                     }
                 } else {
+                    log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
                     // Windows 或 Python < 3.12 優先使用 mutatest
                     const mutatestCheck = await runSpawn('python', ['-c', 'from mutatest.cli import cli_main'], {});
                     if (mutatestCheck.code === 0) {
@@ -1696,16 +1704,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
                         } else {
-                            log(`[系統] 警告：mutatest 不可用（可能缺少 setuptools），請執行 pip install setuptools mutatest`);
-                            engine = 'mutatest';
+                            log(`[系統] mutatest/mutmut 均不可用，使用內建 AST 基本突變引擎。`);
+                            engine = 'builtin';
                         }
                     }
                 }
             } catch (e) {
-                if (e instanceof Error && e.message.includes('沒有相容的突變引擎')) {
-                    throw e;
-                }
-                log(`[系統] 無法取得 Python 版本，使用預設引擎 mutatest。`);
+                engine = 'builtin';
+                log(`[系統] 無法取得 Python 版本或外部突變工具狀態，使用內建 AST 基本突變引擎。`);
             }
 
             log(`[${engine}] 正在建構突變測試指令...`);
@@ -1713,7 +1719,30 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             if (isAborted) {throw new Error("使用者強制中止");}
 
-            const mutpyResult = await new Promise<string>((resolve, reject) => {
+            let builtinMutation: BasicMutationResult | null = null;
+            let mutpyResult: string;
+            if (engine === 'builtin') {
+                const fallbackScript = path.join(__dirname, '..', 'python_scripts', 'basic_mutation_runner.py');
+                const perMutationTimeout = Math.max(1, Math.min(10, Math.floor(params.timeoutSeconds / 3)));
+                const fallbackRun = await runSpawn(
+                    'python',
+                    [fallbackScript, params.filePath, testPath, '30', String(perMutationTimeout)],
+                    { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: params.timeoutSeconds * 1000 }
+                );
+                if (fallbackRun.code !== 0) {
+                    throw new Error(`內建 AST 突變引擎執行失敗：${(fallbackRun.stderr || fallbackRun.stdout).slice(0, 500)}`);
+                }
+                try {
+                    builtinMutation = JSON.parse(fallbackRun.stdout) as BasicMutationResult;
+                    if (!builtinMutation || typeof builtinMutation.total !== 'number') {
+                        throw new Error('輸出格式不完整');
+                    }
+                } catch (error: any) {
+                    throw new Error(`內建 AST 突變引擎輸出無法解析：${error.message || error}`);
+                }
+                mutpyResult = JSON.stringify(builtinMutation, null, 2);
+            } else {
+            mutpyResult = await new Promise<string>((resolve, reject) => {
                 const targetDir = path.dirname(params.filePath);
                 const parentDir = path.dirname(targetDir);
                 const grandParentDir = path.dirname(parentDir);
@@ -1754,6 +1783,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 });
             });
+            }
 
             log(`[${engine}] 突變分析執行完畢！正在解析報告與分數...`);
             log(`--- 突變測試原生輸出 ---\n${mutpyResult}\n------------------------`);
@@ -1767,7 +1797,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             
             let reasonStr = "";
-            if (engine === 'mutmut') {
+            if (engine === 'builtin' && builtinMutation) {
+                const total = builtinMutation.total;
+                const survived = builtinMutation.survived;
+                mutationScore = total === 0 ? 0 : Math.round((builtinMutation.killed / total) * 100);
+                log(`[分析] 內建 AST 突變分數：${mutationScore}% (Total: ${total}, Killed: ${builtinMutation.killed}, Survived: ${survived}, Errors: ${builtinMutation.errors})`);
+                finalReportMarkdown += `- **突變分數**: ${mutationScore}%（內建 AST 基本引擎）\n`;
+            } else if (engine === 'mutmut') {
                 const totalMatch = mutpyResult.match(/(\d+)\s+mutants/i);
                 const survivedMatch = mutpyResult.match(/(\d+)\s+survived/i);
                 if (totalMatch || mutpyResult.includes('mutmut')) {
@@ -1797,7 +1833,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
-            survivedMutants = engine === 'mutmut' ? parseMutmutSurvived(mutpyResult) : parseMutatestSurvived(mutpyResult);
+            survivedMutants = engine === 'builtin' && builtinMutation
+                ? builtinMutation.mutants
+                    .filter(mutant => mutant.status === 'SURVIVED')
+                    .map(mutant => `- line ${mutant.line}, column ${mutant.column}: mutation from ${mutant.from} to ${mutant.to}`)
+                    .join('\n')
+                : engine === 'mutmut' ? parseMutmutSurvived(mutpyResult) : parseMutatestSurvived(mutpyResult);
             if (survivedMutants) {
                 log(`[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n${survivedMutants}`);
                 reasonStr = survivedMutants.split('\n')[0] + (survivedMutants.split('\n').length > 1 ? "..." : "");
