@@ -724,8 +724,8 @@ interface BasicMutationResult {
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
-async function validateGeneratedTestCode(code: string): Promise<{ valid: boolean; reason?: string }> {
-    const structure = validateUnittestStructure(code);
+async function validateGeneratedTestCode(code: string, targetCallable?: string): Promise<{ valid: boolean; reason?: string }> {
+    const structure = validateUnittestStructure(code, targetCallable);
     if (!structure.valid) {
         return structure;
     }
@@ -1489,7 +1489,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         sanitizedCode = rescued;
                     }
 
-                    const candidateValidation = await validateGeneratedTestCode(sanitizedCode);
+                    const candidateValidation = await validateGeneratedTestCode(sanitizedCode, params.funcName);
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
                             log(`[警告] 模型輸出未通過 Python/unittest 格式驗證：${candidateValidation.reason}；將以嚴格格式要求重試。`);
@@ -1542,7 +1542,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
             }
 
-            const generatedValidation = await validateGeneratedTestCode(finalCode);
+            const generatedValidation = await validateGeneratedTestCode(finalCode, params.funcName);
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
             }
@@ -1599,7 +1599,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log, 'test-code-json');
                                 const revCode = sanitizeLlmResponse(revRaw);
-                                const reviewValidation = await validateGeneratedTestCode(revCode);
+                                const reviewValidation = await validateGeneratedTestCode(revCode, params.funcName);
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
                                     const revCheck = await new Promise<{ ok: boolean; out: string }>((res2) => {
@@ -1641,7 +1641,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         const repairUsr = getTier4SelfRepairPrompt(out);
                                         const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, 'test-code-json');
                                         const repairCode = sanitizeLlmResponse(repairRaw);
-                                        const repairValidation = await validateGeneratedTestCode(repairCode);
+                                        const repairValidation = await validateGeneratedTestCode(repairCode, params.funcName);
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
                                             const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {

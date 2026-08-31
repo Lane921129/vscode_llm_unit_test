@@ -32,9 +32,27 @@ test('test-generation probe requires a complete unittest structure, not merely J
     assert.strictEqual(
         assessTestGenerationProbe({
             response: JSON.stringify({
-                code: 'import unittest\n\nclass TestIncrement(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(2, 2)\n'
+                code: [
+                    'import unittest',
+                    '',
+                    'def increment(value):',
+                    '    return value + 1',
+                    '',
+                    'class TestIncrement(unittest.TestCase):',
+                    '    def test_increment(self):',
+                    '        self.assertEqual(increment(1), 2)',
+                    ''
+                ].join('\n')
             })
         }).capability,
         'verified'
+    );
+    assert.strictEqual(
+        assessTestGenerationProbe({
+            response: JSON.stringify({
+                code: 'import unittest\n\nclass TestIncrement(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(2, 2)\n'
+            })
+        }).capability,
+        'unverified'
     );
 });

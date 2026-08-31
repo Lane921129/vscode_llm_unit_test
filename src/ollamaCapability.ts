@@ -17,7 +17,7 @@ export const STRUCTURED_OUTPUT_PROBE_SCHEMA = {
 };
 
 export const TEST_GENERATION_PROBE_PROMPT =
-    'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file that imports unittest, defines a unittest.TestCase class, and tests this function: def increment(value): return value + 1. Do not include Markdown or explanations.';
+    'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file: import unittest, include this fixture exactly as the function under test: def increment(value): return value + 1, define a unittest.TestCase class, and include a test assertion that calls increment. Do not include Markdown or explanations.';
 
 export const TEST_GENERATION_PROBE_SCHEMA = {
     type: 'object',
@@ -87,7 +87,19 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
     }
     const code = unwrapGeneratedCodeEnvelope(response);
     const validation = validateUnittestStructure(code);
-    return validation.valid
-        ? { capability: 'verified', reason: '模型已通過 unittest 結構驗證。' }
-        : { capability: 'unverified', reason: validation.reason || '模型沒有產生有效的 unittest 結構。' };
+    if (!validation.valid) {
+        return { capability: 'unverified', reason: validation.reason || '模型沒有產生有效的 unittest 結構。' };
+    }
+
+    const definesFixture = /^\s*def\s+increment\s*\(\s*value\s*\)\s*:/m.test(code);
+    const invokesFixture = code.split(/\r?\n/).some(line =>
+        !/^\s*def\s+increment\s*\(/.test(line) && /\bincrement\s*\(/.test(line)
+    );
+    if (!definesFixture || !invokesFixture) {
+        return {
+            capability: 'unverified',
+            reason: '模型沒有產生可自我驗證的 increment 測試程式。'
+        };
+    }
+    return { capability: 'verified', reason: '模型已通過 unittest 結構與目標呼叫驗證。' };
 }

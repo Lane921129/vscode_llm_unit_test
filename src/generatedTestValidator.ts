@@ -3,6 +3,27 @@ export interface GeneratedTestValidation {
     reason?: string;
 }
 
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
+}
+
+function definesCallable(code: string, callableName: string): boolean {
+    const escapedName = escapeRegex(callableName);
+    return new RegExp(
+        '^\\s*(?:async\\s+)?def\\s+' + escapedName + '\\s*\\(',
+        'm'
+    ).test(code);
+}
+
+function invokesCallable(code: string, callableName: string): boolean {
+    const escapedName = escapeRegex(callableName);
+    const invocation = new RegExp('\\b' + escapedName + '\\s*\\(');
+    const definition = new RegExp(
+        '^\\s*(?:async\\s+)?def\\s+' + escapedName + '\\s*\\('
+    );
+    return code.split(/\\r?\\n/).some(line => !definition.test(line) && invocation.test(line));
+}
+
 /** Extract code from the optional structured-output envelope used by capable APIs. */
 export function unwrapGeneratedCodeEnvelope(response: string): string {
     try {
@@ -20,7 +41,7 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
  * Fast, deterministic guard before invoking Python's parser. This keeps prose,
  * Markdown plans, and incomplete snippets out of the generated test path.
  */
-export function validateUnittestStructure(code: string): GeneratedTestValidation {
+export function validateUnittestStructure(code: string, targetCallable?: string): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
         return { valid: false, reason: '輸出為空' };
@@ -39,6 +60,14 @@ export function validateUnittestStructure(code: string): GeneratedTestValidation
     }
     if (!/\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(trimmed)) {
         return { valid: false, reason: '缺少可驗證行為的 assertion 或 assertRaises' };
+    }
+    if (targetCallable) {
+        if (definesCallable(trimmed, targetCallable)) {
+            return { valid: false, reason: '測試檔重新定義了被測函式 ' + targetCallable + '，可能沒有測到原始模組' };
+        }
+        if (!invokesCallable(trimmed, targetCallable)) {
+            return { valid: false, reason: '測試沒有呼叫被測函式 ' + targetCallable };
+        }
     }
     return { valid: true };
 }
