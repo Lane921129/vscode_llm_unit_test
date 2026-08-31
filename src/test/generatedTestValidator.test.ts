@@ -60,6 +60,18 @@ test('requires generated tests to invoke the requested callable', () => {
     assert.match(result.reason || '', /沒有呼叫被測函式/);
 });
 
+test('accepts a property read when the selected target is a descriptor', () => {
+    const code = [
+        'import unittest',
+        'from feature import Feature',
+        '',
+        'class TestFeature(unittest.TestCase):',
+        '    def test_enabled(self):',
+        '        self.assertTrue(Feature().enabled)',
+    ].join('\n');
+    assert.strictEqual(validateUnittestStructure(code, 'enabled', 'feature', 'property').valid, true);
+});
+
 test('rejects a generated test that shadows the requested callable', () => {
     const code = [
         'import unittest',

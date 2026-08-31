@@ -127,11 +127,53 @@ def method_kind(func_node, class_node):
     if class_node is None:
         return 'module'
     decorators = {attribute_name(decorator) for decorator in func_node.decorator_list}
+    if any(
+        decorator == 'property'
+        or decorator.endswith('.getter')
+        or decorator.endswith('.setter')
+        or decorator.endswith('.deleter')
+        or decorator.endswith('cached_property')
+        for decorator in decorators
+    ):
+        return 'property'
     if 'staticmethod' in decorators:
         return 'static'
     if 'classmethod' in decorators:
         return 'class'
     return 'instance'
+
+
+def extract_property_context(class_node, lines, property_name):
+    """Return accessor relationships for a selected Python descriptor."""
+    if class_node is None:
+        return None
+    accessors = {}
+    for item in class_node.body:
+        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        decorators = [attribute_name(decorator) for decorator in item.decorator_list]
+        accessor_kind = None
+        name = item.name
+        if any(decorator == 'property' or decorator.endswith('cached_property') for decorator in decorators):
+            accessor_kind = 'getter'
+        else:
+            for decorator in decorators:
+                for suffix, kind in (('.getter', 'getter'), ('.setter', 'setter'), ('.deleter', 'deleter')):
+                    if decorator.endswith(suffix):
+                        name = decorator[:-len(suffix)]
+                        accessor_kind = kind
+                        break
+                if accessor_kind:
+                    break
+        if not accessor_kind:
+            continue
+        descriptor = accessors.setdefault(name, {'name': name, 'getter': None, 'setter': None, 'deleter': None})
+        descriptor[accessor_kind] = {
+            'signature': extract_parameters(item.args, ('self', 'cls')),
+            'is_async': isinstance(item, ast.AsyncFunctionDef),
+            'code': source_for(lines, item),
+        }
+    return accessors.get(property_name)
 
 
 def extract_info(filepath, func_name):
@@ -208,6 +250,7 @@ def extract_info(filepath, func_name):
             'class_name': class_name,
             'class_context': extract_class_context(class_node, lines),
             'method_kind': method_kind(func_node, class_node),
+            'property_context': extract_property_context(class_node, lines, func_node.name),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
             'code': source_for(lines, func_node)
         }, ensure_ascii=False))

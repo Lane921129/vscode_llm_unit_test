@@ -257,7 +257,13 @@ export function getUserPrompt(
         if (astContext.class_name) {
             prompt += `- IMPORTANT: This is a METHOD of class \`${astContext.class_name}\`.\n`;
             prompt += `  - Import: from ${moduleName} import ${astContext.class_name}\n`;
-            if (astContext.method_kind === 'static' || astContext.method_kind === 'class') {
+            if (astContext.method_kind === 'property') {
+                prompt += `  - Binding: property getter. Instantiate the class, then read it as: self._obj.${funcName} (NO parentheses).\n`;
+                const property = (astContext as any).property_context;
+                if (property?.setter) {
+                    prompt += `  - A setter exists. Test assignment only when the source behavior and constructor context make it safe; do not call the property like a function.\n`;
+                }
+            } else if (astContext.method_kind === 'static' || astContext.method_kind === 'class') {
                 prompt += `  - Binding: ${astContext.method_kind} method. Do NOT instantiate the class.\n`;
                 prompt += `  - Call method as: ${astContext.class_name}.${funcName}(...).\n`;
             } else {
@@ -572,9 +578,12 @@ export function getUserPrompt(
     if (strategy === 'small') {
         const className = astContext?.class_name as string | null | undefined;
         const directClassCall = astContext?.method_kind === 'static' || astContext?.method_kind === 'class';
+        const propertyAccess = astContext?.method_kind === 'property';
         const importHint = className
             ? directClassCall
                 ? `from ${moduleName} import ${className}  # call ${className}.${funcName}(...) directly`
+                : propertyAccess
+                    ? `from ${moduleName} import ${className}  # use self._obj = ${className}(); then read self._obj.${funcName} without parentheses`
                 : `from ${moduleName} import ${className}  # instance method — use self._obj = ${className}(); self._obj.${funcName}(...)`
             : `from ${moduleName} import ${funcName}`;
         const trigger = thinking

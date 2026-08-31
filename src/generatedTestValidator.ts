@@ -3,6 +3,8 @@ export interface GeneratedTestValidation {
     reason?: string;
 }
 
+export type TargetUsage = 'call' | 'property';
+
 function escapeRegex(value: string): string {
     return value.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
 }
@@ -22,6 +24,12 @@ function invokesCallable(code: string, callableName: string): boolean {
         '^\\s*(?:async\\s+)?def\\s+' + escapedName + '\\s*\\('
     );
     return code.split(/\r?\n/).some(line => !definition.test(line) && invocation.test(line));
+}
+
+function accessesProperty(code: string, propertyName: string): boolean {
+    const escapedName = escapeRegex(propertyName);
+    const access = new RegExp('\\.\\s*' + escapedName + '\\b');
+    return code.split(/\r?\n/).some(line => !/^\s*(?:from|import)\b/.test(line) && access.test(line));
 }
 
 function shadowsTargetModule(code: string, moduleName: string): boolean {
@@ -55,7 +63,8 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
 export function validateUnittestStructure(
     code: string,
     targetCallable?: string,
-    targetModule?: string
+    targetModule?: string,
+    targetUsage: TargetUsage = 'call'
 ): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -80,8 +89,10 @@ export function validateUnittestStructure(
         if (definesCallable(trimmed, targetCallable)) {
             return { valid: false, reason: '測試檔重新定義了被測函式 ' + targetCallable + '，可能沒有測到原始模組' };
         }
-        if (!invokesCallable(trimmed, targetCallable)) {
-            return { valid: false, reason: '測試沒有呼叫被測函式 ' + targetCallable };
+        if (targetUsage === 'property' ? !accessesProperty(trimmed, targetCallable) : !invokesCallable(trimmed, targetCallable)) {
+            return { valid: false, reason: targetUsage === 'property'
+                ? '測試沒有讀取被測 property ' + targetCallable
+                : '測試沒有呼叫被測函式 ' + targetCallable };
         }
     }
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {

@@ -241,6 +241,32 @@ class Worker:
             'args': ['3'], 'kwargs': {'factor': '2'}, 'result': '6', 'result_type': 'int'
         }])
 
+    def test_property_getter_exposes_accessor_context_and_real_trace(self):
+        source = '''class Feature:
+    def __init__(self):
+        self._enabled = True
+
+    @property
+    def enabled(self):
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value):
+        self._enabled = bool(value)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'feature.py'
+            target.write_text(source, encoding='utf-8')
+            ast_data = self.run_script('ast_extractor.py', target, 'enabled')
+            trace = trace_function(str(target), 'enabled')
+
+        self.assertEqual(ast_data['method_kind'], 'property')
+        self.assertEqual(ast_data['property_context']['name'], 'enabled')
+        self.assertIsNotNone(ast_data['property_context']['getter'])
+        self.assertIsNotNone(ast_data['property_context']['setter'])
+        self.assertIsNone(trace['load_error'])
+        self.assertEqual(trace['examples'], [{'args': [], 'result': 'True', 'result_type': 'bool'}])
+
     def test_dynamic_tracer_reaches_scalar_branches_from_source_conditions(self):
         source = '''def route(value: str, mode: str):
     if not value or len(value) < 4:

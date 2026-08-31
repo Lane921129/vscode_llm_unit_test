@@ -272,6 +272,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     # 取得函式（支援頂層函式與 class method）
     func = getattr(module, func_name, None)
     func_is_method = False
+    func_is_property = False
     method_class_name = None
     method_kind = 'module'
 
@@ -282,6 +283,12 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             if isinstance(cls_obj, type):
                 descriptor = cls_obj.__dict__.get(func_name)
                 method = getattr(cls_obj, func_name, None)
+                if isinstance(descriptor, property) and callable(descriptor.fget):
+                    func = descriptor.fget
+                    method_kind = 'property'
+                    func_is_property = True
+                    method_class_name = attr_name
+                    break
                 if method and callable(method):
                     func = method
                     method_kind = (
@@ -366,7 +373,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         if not isinstance(inp, (list, tuple)):
             inp = (inp,)
         try:
-            if func_is_method:
+            if func_is_method or func_is_property:
                 # 將 class 實例化後呼叫 method
                 cls_obj = getattr(module, method_class_name)
                 try:
@@ -379,7 +386,12 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     result["examples"] = []
                     result["errors"] = []
                     return result
-                ret = getattr(instance, func_name)(*inp, **kwargs)
+                if func_is_property:
+                    if inp or kwargs:
+                        raise TypeError(f"Property '{func_name}' does not accept call arguments")
+                    ret = getattr(instance, func_name)
+                else:
+                    ret = getattr(instance, func_name)(*inp, **kwargs)
             else:
                 ret = func(*inp, **kwargs)
             if inspect.isawaitable(ret):

@@ -49,3 +49,35 @@ export function buildTier1TestMethods(
 
     return methods;
 }
+
+/** Build deterministic assertions for an instance property getter. */
+export function buildTier1PropertyTestMethods(
+    propertyName: string,
+    examples: Tier1TraceExample[],
+    errors: Tier1TraceExample[],
+    instanceName = 'self._instance'
+): string[] {
+    const propertyAccess = `${instanceName}.${propertyName}`;
+    const methods: string[] = [];
+    examples.forEach((example, index) => {
+        const assertion = example.result === 'None' || example.result_type === 'NoneType'
+            ? 'self.assertIsNone(result)'
+            : `self.assertEqual(result, ${toPythonAssertionLiteral(example.result, example.result_type)})`;
+        methods.push([
+            `    def test_case_${index + 1}(self):`,
+            `        result = ${propertyAccess}`,
+            `        ${assertion}`
+        ].join('\n'));
+    });
+    errors.forEach((error, index) => {
+        const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
+            ? error.exception
+            : 'Exception';
+        methods.push([
+            `    def test_case_${examples.length + index + 1}(self):`,
+            `        with self.assertRaises(${exception}):`,
+            `            _ = ${propertyAccess}`
+        ].join('\n'));
+    });
+    return methods;
+}

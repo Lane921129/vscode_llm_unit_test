@@ -4,6 +4,12 @@
 
 ## 2026-08-31
 
+### Python Property Descriptor 語境
+
+- AST 會辨識 @property、getter、setter 與 deleter，並把同一 descriptor 的 accessor 語境提供給測試生成流程。
+- 動態 Trace 能安全建立無參數類別實例並讀取 property getter；Tier 1 會生成 self._instance.property 存取，而不是錯誤地呼叫 property()。
+- 結構驗證器與測試 Prompt 支援 property 存取語法；有 setter 時會保留其存在與安全測試提醒。
+
 ### Trace 回復與突變報告可信度
 
 - 動態 Trace 若 caller 字面值只造成參數數量或關鍵字不符的 TypeError，會自動改用原始碼條件導向測資重試，不再讓錯範圍的呼叫站阻斷 Tier 1。

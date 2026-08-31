@@ -10,7 +10,7 @@ import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
-import { buildTier1TestMethods } from './tier1TestBuilder';
+import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
 import { qualificationForRequest } from './modelQualification';
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
@@ -298,7 +298,8 @@ interface AstContext {
     file_imports?: { kind: string, module: string, level?: number, name: string | null, alias: string | null, bound_name: string }[];
     referenced_globals?: { name: string, code: string }[];
     class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] } } | null;
-    method_kind?: 'module' | 'instance' | 'static' | 'class';
+    method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+    property_context?: { name: string, getter?: unknown, setter?: unknown, deleter?: unknown } | null;
     is_async?: boolean;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
@@ -725,9 +726,10 @@ interface BasicMutationResult {
 async function validateGeneratedTestCode(
     code: string,
     targetCallable?: string,
-    targetModule?: string
+    targetModule?: string,
+    targetUsage: 'call' | 'property' = 'call'
 ): Promise<{ valid: boolean; reason?: string }> {
-    const structure = validateUnittestStructure(code, targetCallable, targetModule);
+    const structure = validateUnittestStructure(code, targetCallable, targetModule, targetUsage);
     if (!structure.valid) {
         return structure;
     }
@@ -1311,7 +1313,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else {
                     log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const moduleName = path.basename(params.filePath, '.py');
-                    const tier1Methods = buildTier1TestMethods(params.funcName, traceResult.examples, traceResult.errors);
+                    const isProperty = (astContext as any)?.method_kind === 'property';
+                    const tier1Methods = isProperty
+                        ? buildTier1PropertyTestMethods(params.funcName, traceResult.examples, traceResult.errors)
+                        : buildTier1TestMethods(params.funcName, traceResult.examples, traceResult.errors);
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
@@ -1327,8 +1332,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 `        self._instance = ${className}()`,
                             ].join('\n');
                             const callPrefix = directClassCall ? `${className}.${params.funcName}(` : `self._instance.${params.funcName}(`;
-                            // Replace only standalone function calls with the class binding.
-                            const classMethodsMapped = tier1Methods.map(m =>
+                            // Property methods already use self._instance.<property> access.
+                            const classMethodsMapped = isProperty ? tier1Methods : tier1Methods.map(m =>
                                 m.replace(new RegExp(`(?<![._])\\b${params.funcName}\\(`, 'g'), callPrefix)
                             );
                             sanitizedCode = [
@@ -1513,7 +1518,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const candidateValidation = await validateGeneratedTestCode(
                         sanitizedCode,
                         params.funcName,
-                        path.basename(params.filePath, '.py')
+                        path.basename(params.filePath, '.py'),
+                        (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
                     );
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
@@ -1567,7 +1573,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
             }
 
-            const generatedValidation = await validateGeneratedTestCode(finalCode, params.funcName, baseName);
+            const generatedValidation = await validateGeneratedTestCode(
+                finalCode,
+                params.funcName,
+                baseName,
+                (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
+            );
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
             }
@@ -1627,7 +1638,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 const reviewValidation = await validateGeneratedTestCode(
                                     revCode,
                                     params.funcName,
-                                    path.basename(params.filePath, '.py')
+                                    path.basename(params.filePath, '.py'),
+                                    (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
                                 );
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
@@ -1673,7 +1685,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         const repairValidation = await validateGeneratedTestCode(
                                             repairCode,
                                             params.funcName,
-                                            path.basename(params.filePath, '.py')
+                                            path.basename(params.filePath, '.py'),
+                                            (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
                                         );
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');

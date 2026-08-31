@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildTier1TestMethods } from '../tier1TestBuilder';
+import { buildTier1PropertyTestMethods, buildTier1TestMethods } from '../tier1TestBuilder';
 
 test('builds exact value and exception assertions without asking an LLM', () => {
     const methods = buildTier1TestMethods('format_value', [
@@ -21,4 +21,12 @@ test('preserves traced keyword arguments in deterministic calls', () => {
     ], []);
 
     assert.ok(methods[0].includes('result = multiply(3, factor=2)'));
+});
+
+test('builds property getter assertions without calling the descriptor as a function', () => {
+    const methods = buildTier1PropertyTestMethods('enabled', [
+        { args: [], result: 'True', result_type: 'bool' }
+    ], []);
+    assert.ok(methods[0].includes('result = self._instance.enabled'));
+    assert.ok(!methods[0].includes('enabled('));
 });
