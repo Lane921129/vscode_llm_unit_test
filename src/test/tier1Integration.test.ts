@@ -1,6 +1,9 @@
 import * as assert from 'assert';
 import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { test } from 'node:test';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { buildTier1TestMethods } from '../tier1TestBuilder';
 
 test('Tier 1 generated tests execute against a dependency that returns exact strings', () => {
@@ -61,4 +64,56 @@ test('Tier 1 generated tests execute keyword-only calls from verified trace data
     const result = spawnSync('python', ['-c', runner, encodedTest], { encoding: 'utf8' });
 
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+});
+
+test('condition-guided trace produces Tier 1 tests that kill boundary mutations', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tier1-mutation-'));
+    try {
+        const sourcePath = join(tempDir, 'route_target.py');
+        const testPath = join(tempDir, 'test_route_target.py');
+        writeFileSync(sourcePath, [
+            'def route(value: str, mode: str):',
+            '    if not value or len(value) < 4:',
+            '        raise ValueError("value is too short")',
+            '    if mode == "first":',
+            '        return "first-route"',
+            '    if mode == "second":',
+            '        return "second-route"',
+            '    return "default-route"',
+            ''
+        ].join('\n'), 'utf8');
+
+        const trace = spawnSync(
+            'python',
+            [join(process.cwd(), 'python_scripts', 'dynamic_tracer.py'), sourcePath, 'route'],
+            { encoding: 'utf8' }
+        );
+        assert.strictEqual(trace.status, 0, trace.stdout + trace.stderr);
+        const traceData = JSON.parse(trace.stdout) as {
+            examples: Array<{ args: string[]; result: string; result_type: string }>;
+            errors: Array<{ args: string[]; exception: string }>;
+        };
+        const methods = buildTier1TestMethods('route', traceData.examples, traceData.errors);
+        writeFileSync(testPath, [
+            'import unittest',
+            'from route_target import route',
+            '',
+            'class TestRoute(unittest.TestCase):',
+            methods.join('\n\n'),
+            ''
+        ].join('\n'), 'utf8');
+
+        const mutation = spawnSync(
+            'python',
+            [join(process.cwd(), 'python_scripts', 'basic_mutation_runner.py'), sourcePath, testPath],
+            { encoding: 'utf8' }
+        );
+        assert.strictEqual(mutation.status, 0, mutation.stdout + mutation.stderr);
+        const mutationData = JSON.parse(mutation.stdout) as { total: number; killed: number; survived: number };
+        assert.ok(mutationData.total >= 3, mutation.stdout);
+        assert.strictEqual(mutationData.killed, mutationData.total, mutation.stdout);
+        assert.strictEqual(mutationData.survived, 0, mutation.stdout);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
 });
