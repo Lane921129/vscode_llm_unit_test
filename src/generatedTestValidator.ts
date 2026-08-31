@@ -37,5 +37,8 @@ export function validateUnittestStructure(code: string): GeneratedTestValidation
     if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
         return { valid: false, reason: '缺少 test_ 測試方法' };
     }
+    if (!/\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(trimmed)) {
+        return { valid: false, reason: '缺少可驗證行為的 assertion 或 assertRaises' };
+    }
     return { valid: true };
 }

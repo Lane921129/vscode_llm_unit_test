@@ -33,6 +33,18 @@ test('accepts an async unittest structure produced for coroutine targets', () =>
     assert.strictEqual(result.valid, true);
 });
 
+test('rejects an empty test method that has no behavioral assertion', () => {
+    const result = validateUnittestStructure([
+        'import unittest',
+        '',
+        'class TestEmpty(unittest.TestCase):',
+        '    def test_placeholder(self):',
+        '        pass',
+    ].join('\n'));
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /assertion/);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');
