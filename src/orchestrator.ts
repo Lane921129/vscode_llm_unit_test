@@ -12,6 +12,7 @@ import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseU
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1TestMethods } from './tier1TestBuilder';
 import { qualificationForRequest } from './modelQualification';
+import { resolveTier } from './tierRouter';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -41,36 +42,6 @@ async function assessFunctionComplexity(
     } catch {
         return { score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] };
     }
-}
-
-/**
- * Tier Router：依使用者設定或自動路由到 1~4
- * @param modelParamBillion 模型參數量（B），NaN 代表 Cloud/未知
- * @param complexity 複雜度分數 0~100
- * @param userTier 使用者設定的 tier 字串（'auto'|'tier1'|'tier2'|'tier3'|'tier4'）
- */
-function resolveTier(modelParamBillion: number, complexity: number, userTier: string,
-                     testGenerationReady?: boolean): 1 | 2 | 3 | 4 {
-    if (userTier && userTier !== 'auto') {
-        const n = parseInt(userTier.replace('tier', ''));
-        if (n >= 1 && n <= 4) return n as 1 | 2 | 3 | 4;
-    }
-    // A connection alone does not prove a model can produce runnable tests.
-    // Preserve explicit user choice, but keep automatic routing deterministic
-    // when the provider's qualification probe has failed.
-    if (testGenerationReady === false) {
-        return 1;
-    }
-    // Cloud / 未知大模型 → Tier 4
-    if (isNaN(modelParamBillion)) return 4;
-    // 極小模型（≤ 4B）→ Tier 1
-    if (modelParamBillion <= 4) return 1;
-    // 小模型（4–20B）
-    if (modelParamBillion <= 20) return complexity > 65 ? 1 : 2;
-    // 中型模型（20–60B）
-    if (modelParamBillion <= 60) return complexity <= 40 ? 2 : 3;
-    // 大型模型（60B+）
-    return complexity <= 60 ? 3 : 4;
 }
 
 /**
@@ -958,6 +929,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         userTierSetting,
         qualifiedForSelectedModel
     );
+    if (qualifiedForSelectedModel === false && userTierSetting !== 'auto' && resolvedTier !== Number(userTierSetting.replace('tier', ''))) {
+        log('[模型資格] 目前模型未通過 unittest 生成探測；已覆蓋手動高階策略並安全改用 Tier 1。');
+    }
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {
