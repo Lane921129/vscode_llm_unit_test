@@ -209,7 +209,7 @@ export function getSkillCards(skillIds: string[]): SkillCard[] {
  */
 export function inferSkillIdsFromCode(
     sourceCode: string,
-    context?: { class_name?: string; class_context?: unknown; calls?: string[] }
+    context?: { class_name?: string; class_context?: unknown; calls?: string[]; dependencies?: unknown[] }
 ): string[] {
     const ids = new Set<string>(['import_module_name']);
     const source = sourceCode || '';
@@ -219,16 +219,37 @@ export function inferSkillIdsFromCode(
     if (/\b(?:if|elif)\b[^\n]*[<>]=?\s*\d+/.test(source)) { ids.add('branch_threshold_coverage'); }
     if (/\bround\s*\(|\bfloat\s*\(|\bmath\./.test(source)) { ids.add('float_precision'); }
     if (/\breturn\s*\{/.test(source)) { ids.add('dict_return'); }
+    if (/\breturn\s*\(\s*[^()\n]+,\s*[^()\n]+\)|\breturn\s+(?![^#\n]*\()[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*/.test(source)) { ids.add('tuple_return'); }
     if (/\bNone\b|\bnot\s+\w+/.test(source)) { ids.add('none_input_handling'); }
     if (/\braise\s+[A-Za-z_]/.test(source)) { ids.add('assert_raises_syntax'); }
     if (/\btry\s*:[\s\S]*\bexcept\b[\s\S]*\breturn\b/.test(source)) { ids.add('try_except_returns_string'); }
     if (/(?:\b\w+\s*\/\s*(?:\w+|\d+)|\b\d+\s*\/\s*\w+)/.test(source)) { ids.add('zero_division'); }
     if (context?.class_name || context?.class_context) { ids.add('class_method_testing'); }
+    if ((context?.dependencies?.length || 0) > 0) { ids.add('mock_external_dependency'); }
     if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
     if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
 
     return [...ids];
+}
+
+/**
+ * Keep the semantic-model shopping cart evidence-bound. A model may prioritize
+ * applicable cards, but it cannot inject unrelated cards which AST evidence
+ * does not support. This prevents malformed or over-broad JSON from polluting
+ * prompts across unrelated projects.
+ */
+export function mergeEvidenceBoundSkillIds(
+    sourceCode: string,
+    semanticSkillIds: unknown,
+    context?: { class_name?: string; class_context?: unknown; calls?: string[]; dependencies?: unknown[] }
+): string[] {
+    const baseline = inferSkillIdsFromCode(sourceCode, context);
+    const allowed = new Set(baseline);
+    const semantic = Array.isArray(semanticSkillIds)
+        ? semanticSkillIds.filter((id): id is string => typeof id === 'string')
+        : [];
+    return [...new Set([...baseline, ...semantic.filter(id => allowed.has(id))])];
 }
 
 export function formatSkillCardsForPrompt(cards: SkillCard[]): string {

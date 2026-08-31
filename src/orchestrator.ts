@@ -3,7 +3,7 @@ import { MutationViewProvider } from './SidebarProvider';
 import { getSystemPrompt, getUserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
 import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
 import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
-import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode } from './prompt_skill_library';
+import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompt_skill_library';
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
@@ -14,6 +14,7 @@ import { buildTier1TestMethods } from './tier1TestBuilder';
 import { qualificationForRequest } from './modelQualification';
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
+import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -492,6 +493,7 @@ interface DynamicTraceResult {
     examples: TraceExample[];
     errors: TraceExample[];
     load_error: string | null;
+    input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry';
 }
 
 /**
@@ -504,21 +506,32 @@ async function runDynamicTrace(
     callerArgs?: CallerContext[]
 ): Promise<DynamicTraceResult | null> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
-    const args = [pythonScript, filePath, funcName];
+    const baseArgs = [pythonScript, filePath, funcName];
+    let literalInputs: Array<{ args: unknown[] | null | undefined; kwargs: Record<string, unknown> }> = [];
     if (callerArgs && callerArgs.length > 0) {
-        const literalInputs = callerArgs
+        literalInputs = callerArgs
             .filter(ctx => Array.isArray(ctx.trace_args) && ctx.trace_kwargs !== null)
             .map(ctx => ({ args: ctx.trace_args, kwargs: ctx.trace_kwargs || {} }));
-        if (literalInputs.length > 0) {
-            args.push(JSON.stringify(literalInputs));
-        }
     }
     try {
-        const { stdout } = await runSpawn('python', args, {
-            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-            timeout: 15000
-        });
-        return JSON.parse(stdout.trim()) as DynamicTraceResult;
+        const runTrace = async (inputs?: typeof literalInputs): Promise<DynamicTraceResult> => {
+            const args = [...baseArgs];
+            if (inputs && inputs.length > 0) args.push(JSON.stringify(inputs));
+            const { stdout } = await runSpawn('python', args, {
+                env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+                timeout: 15000
+            });
+            return JSON.parse(stdout.trim()) as DynamicTraceResult;
+        };
+        const initial = await runTrace(literalInputs);
+        if (shouldRetryTraceWithoutCallerInputs(initial, literalInputs.length)) {
+            const retry = await runTrace();
+            return { ...retry, input_source: 'source_guided_retry' };
+        }
+        return {
+            ...initial,
+            input_source: literalInputs.length > 0 ? 'caller_literals' : 'source_guided'
+        };
     } catch (e: any) {
         console.error(`[Trace ERROR] ${e.message || e}`);
         return { func_name: funcName, args: [], examples: [], errors: [], load_error: `spawn failed: ${e.message || 'unknown'}` } as DynamicTraceResult;
@@ -1047,7 +1060,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 (astContext as any).traceResult = traceResult;
                 const exCount = traceResult.examples.length;
                 const errCount = traceResult.errors.length;
-                log(`[Trace] 完成！取得 ${exCount} 個成功範例、${errCount} 個預期例外範例。`);
+                const sourceLabel = traceResult.input_source === 'source_guided_retry'
+                    ? '（caller 字面值無效，已改用原始碼導向輸入）'
+                    : traceResult.input_source === 'caller_literals' ? '（含 caller 字面值）' : '';
+                log(`[Trace] 完成！取得 ${exCount} 個成功範例、${errCount} 個預期例外範例。${sourceLabel}`);
             } else if (traceResult?.load_error) {
                 log(`[Trace] 動態追蹤失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
             }
@@ -1191,10 +1207,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const semRaw = await requestLlmApi(params, semSys, semUsr, log, 'json');
             const semResult = parseSemanticAnalysis(semRaw);
             if (semResult) {
-                semResult.required_skills = [...new Set([
-                    ...deterministicSkillIds,
-                    ...(Array.isArray(semResult.required_skills) ? semResult.required_skills : [])
-                ])];
+                semResult.required_skills = mergeEvidenceBoundSkillIds(
+                    (astContext as any).code || '',
+                    semResult.required_skills,
+                    astContext as any
+                );
                 semanticContext = formatSemanticContextForPrompt(semResult);
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
@@ -1774,6 +1791,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (isAborted) {throw new Error("使用者強制中止");}
 
             let builtinMutation: BasicMutationResult | null = null;
+            let noMutationCandidates = false;
             let mutpyResult: string;
             if (engine === 'builtin') {
                 const fallbackScript = path.join(__dirname, '..', 'python_scripts', 'basic_mutation_runner.py');
@@ -1866,11 +1884,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (engine === 'builtin' && builtinMutation) {
                 const total = builtinMutation.total;
                 const survived = builtinMutation.survived;
-                mutationScore = total === 0 ? 0 : Math.round((builtinMutation.killed / total) * 100);
+                noMutationCandidates = total === 0;
+                mutationScore = noMutationCandidates ? 0 : Math.round((builtinMutation.killed / total) * 100);
                 const scopeLabel = builtinMutation.scope || '選定範圍';
                 const scopeStatus = builtinMutation.scope_found === false ? '未找到' : scopeLabel;
-                log(`[分析] 內建 AST 突變分數：${mutationScore}% (Scope: ${scopeStatus}, Total: ${total}, Killed: ${builtinMutation.killed}, Survived: ${survived}, Errors: ${builtinMutation.errors})`);
-                finalReportMarkdown += `- **突變分數**: ${mutationScore}%（內建 AST 基本引擎，範圍：${scopeStatus}）\n`;
+                if (noMutationCandidates) {
+                    reasonStr = 'N/A - 選定範圍沒有此引擎可產生的突變點';
+                    log(`[分析] 內建 AST 突變引擎在範圍 ${scopeStatus} 找不到可產生的突變點，分數標示為 N/A，不重複執行。`);
+                    finalReportMarkdown += `- **突變分數**: N/A（內建 AST 基本引擎，範圍：${scopeStatus}，沒有可產生的突變點）\n`;
+                } else {
+                    log(`[分析] 內建 AST 突變分數：${mutationScore}% (Scope: ${scopeStatus}, Total: ${total}, Killed: ${builtinMutation.killed}, Survived: ${survived}, Errors: ${builtinMutation.errors})`);
+                    finalReportMarkdown += `- **突變分數**: ${mutationScore}%（內建 AST 基本引擎，範圍：${scopeStatus}）\n`;
+                }
             } else if (engine === 'mutmut') {
                 const totalMatch = mutpyResult.match(/(\d+)\s+mutants/i);
                 const survivedMatch = mutpyResult.match(/(\d+)\s+survived/i);
@@ -1918,13 +1943,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
 
             // ── Rollback 保底：更新或回滾至歷史最優解 ──
-            if (mutationScore > bestScore) {
+            if (!noMutationCandidates && mutationScore > bestScore) {
                 bestScore = mutationScore;
                 bestCode = fs.readFileSync(testPath, 'utf8');
                 bestTestPath = testPath;
                 log(`[Rollback] 💾 新最高分！已將第 ${currentLoop} 輪測試檔記錄為歷史最優解（${mutationScore}%）。`);
                 finalReportMarkdown += `> [!NOTE]\n> 💾 本輪為目前最高分（${mutationScore}%），已存為歷史最優解。\n\n`;
-            } else if (currentLoop > 1 && mutationScore < bestScore && bestCode) {
+            } else if (!noMutationCandidates && currentLoop > 1 && mutationScore < bestScore && bestCode) {
                 // 分數下降：自動回滾至歷史最優解
                 const droppedScore = mutationScore;
                 fs.writeFileSync(testPath, bestCode, 'utf8');
@@ -1957,7 +1982,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 fileName: displayName,
                 file: path.basename(params.filePath),
                 func: params.funcName || '',
-                score: typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A',
+                score: noMutationCandidates ? 'N/A' : (typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A'),
                 coverage: (loopCoverage as { coverageText: string; missingLines: string } | null)?.coverageText ?? null,
                 reason: finalReason
             });
@@ -1966,6 +1991,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
             }
 
+            if (noMutationCandidates) {
+                log(`[優化] 本輪沒有可評分的突變點，停止重複迴圈。`);
+                break;
+            }
             if (mutationScore >= 100) {
                 log(`[優化] 突變分數已達到 100%，自我修復成功！`);
                 break;

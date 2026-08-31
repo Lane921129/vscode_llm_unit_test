@@ -62,7 +62,16 @@ def mutation_candidates(tree, scope=None):
     candidates = []
     target_scope = scope or tree
     for node in ast.walk(target_scope):
-        if isinstance(node, ast.Compare):
+        if isinstance(node, ast.If):
+            candidates.append({
+                'kind': 'conditional_negation',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'if_condition',
+                'to': 'not_if_condition',
+            })
+        elif isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
                 replacement = COMPARISON_REPLACEMENTS.get(type(operator))
                 if replacement:
@@ -126,7 +135,12 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
         raise IndexError('Mutation target scope was not found')
     current = 0
     for node in ast.walk(copied_scope):
-        if isinstance(node, ast.Compare):
+        if isinstance(node, ast.If):
+            if current == candidate_index:
+                node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
+        elif isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
                 replacement = COMPARISON_REPLACEMENTS.get(type(operator))
                 if replacement:

@@ -406,6 +406,35 @@ class TestBothEnabled(unittest.TestCase):
         self.assertEqual(len(boolean_mutants), 1)
         self.assertEqual(boolean_mutants[0]['status'], 'KILLED')
 
+    def test_builtin_mutation_runner_mutates_if_predicates(self):
+        source = '''def choose(flag):
+    if flag:
+        return "enabled"
+    return "disabled"
+'''
+        test_source = '''import unittest
+from target import choose
+
+class TestChoose(unittest.TestCase):
+    def test_enabled(self):
+        self.assertEqual(choose(True), "enabled")
+
+    def test_disabled(self):
+        self.assertEqual(choose(False), "disabled")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'target.py'
+            test_file = root / 'test_target.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(target, test_file, target_function='choose')
+
+        predicates = [mutant for mutant in result['mutants'] if mutant['kind'] == 'conditional_negation']
+        self.assertEqual(len(predicates), 1)
+        self.assertEqual(predicates[0]['status'], 'KILLED')
+        self.assertEqual(result['survived'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
