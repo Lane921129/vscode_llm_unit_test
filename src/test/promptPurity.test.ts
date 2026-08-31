@@ -24,3 +24,11 @@ test('writer prompt source does not retain legacy application-specific examples'
 
     assert.ok(!/payment_token|login_user|validate_and_format_token/i.test(writerSource));
 });
+
+test('writer prompt calls static methods through the class without inventing an instance', () => {
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+
+    assert.match(writerSource, /method_kind === 'static'.*method_kind === 'class'/s);
+    assert.match(writerSource, /Do NOT instantiate the class/);
+    assert.match(writerSource, /\$\{astContext\.class_name\}\.\$\{funcName\}/);
+});

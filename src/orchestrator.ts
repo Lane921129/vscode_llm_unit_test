@@ -322,6 +322,7 @@ interface AstContext {
     file_imports?: { kind: string, module: string, name: string | null, alias: string | null, bound_name: string }[];
     referenced_globals?: { name: string, code: string }[];
     class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] } } | null;
+    method_kind?: 'module' | 'instance' | 'static' | 'class';
     is_async?: boolean;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
@@ -1293,19 +1294,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
+                        const methodKind = (astContext as any)?.method_kind as string | undefined;
+                        const directClassCall = className && (methodKind === 'static' || methodKind === 'class');
                         const constructorParams = ((astContext as any)?.class_context?.init?.required_params
                             || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
-                        if (className && constructorParams && constructorParams.length > 0) {
+                        if (className && !directClassCall && constructorParams && constructorParams.length > 0) {
                             log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），不使用猜測的無參數實例化；改走一般生成流程。`);
                         } else if (className) {
-                            // Class method：需要建立 instance
-                            const setupBlock = [
+                            const setupBlock = directClassCall ? '' : [
                                 `    def setUp(self):`,
                                 `        self._instance = ${className}()`,
                             ].join('\n');
-                            // 把所有 funcCall 中的 `funcName(` 替換成 `self._instance.funcName(`
+                            const callPrefix = directClassCall ? `${className}.${params.funcName}(` : `self._instance.${params.funcName}(`;
+                            // Replace only standalone function calls with the class binding.
                             const classMethodsMapped = tier1Methods.map(m =>
-                                m.replace(new RegExp(`(?<![._])\\b${params.funcName}\\(`, 'g'), `self._instance.${params.funcName}(`)
+                                m.replace(new RegExp(`(?<![._])\\b${params.funcName}\\(`, 'g'), callPrefix)
                             );
                             sanitizedCode = [
                                 `import unittest`,

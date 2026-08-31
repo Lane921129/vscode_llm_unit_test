@@ -4,6 +4,13 @@
 
 ## 2026-08-31
 
+### 類別 static／class 方法的跨 Tier 呼叫語境
+
+- AST 現在會標示模組函式、實例方法、static method 與 class method 的綁定型態。
+- Dynamic tracer 對 static／class 方法不再嘗試建立實例，因此必填建構子不會阻擋真實 I/O Trace。
+- Tier 1 與 Tier 3 的測試骨架可直接呼叫 Class.method；Prompt 也會明確禁止為這兩種方法多餘實例化。
+- 新增帶必填建構子的 static／class 方法回歸測試。
+
 ### 生成測試的行為斷言品質閘門
 
 - 生成測試驗證器現在要求至少一個 unittest assertion、assertRaises 或原生 assert，不再將只有 pass 的空測試方法視為可用產物。

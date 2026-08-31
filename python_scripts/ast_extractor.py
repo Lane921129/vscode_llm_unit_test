@@ -122,6 +122,18 @@ def extract_class_context(class_node, lines):
     }
 
 
+def method_kind(func_node, class_node):
+    """Describe how a class member is bound so callers need not guess."""
+    if class_node is None:
+        return 'module'
+    decorators = {attribute_name(decorator) for decorator in func_node.decorator_list}
+    if 'staticmethod' in decorators:
+        return 'static'
+    if 'classmethod' in decorators:
+        return 'class'
+    return 'instance'
+
+
 def extract_info(filepath, func_name):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -179,6 +191,7 @@ def extract_info(filepath, func_name):
             'referenced_globals': referenced_globals,
             'class_name': class_name,
             'class_context': extract_class_context(class_node, lines),
+            'method_kind': method_kind(func_node, class_node),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
             'code': source_for(lines, func_node)
         }, ensure_ascii=False))

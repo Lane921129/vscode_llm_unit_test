@@ -273,16 +273,23 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     func = getattr(module, func_name, None)
     func_is_method = False
     method_class_name = None
+    method_kind = 'module'
 
     if func is None or not callable(func):
         # 在模組中找 class method
         for attr_name in dir(module):
             cls_obj = getattr(module, attr_name, None)
             if isinstance(cls_obj, type):
+                descriptor = cls_obj.__dict__.get(func_name)
                 method = getattr(cls_obj, func_name, None)
                 if method and callable(method):
                     func = method
-                    func_is_method = True
+                    method_kind = (
+                        'static' if isinstance(descriptor, staticmethod)
+                        else 'class' if isinstance(descriptor, classmethod)
+                        else 'instance'
+                    )
+                    func_is_method = method_kind == 'instance'
                     method_class_name = attr_name
                     break
 

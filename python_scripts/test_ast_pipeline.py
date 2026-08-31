@@ -47,6 +47,7 @@ class Worker:
             data = self.run_script('ast_extractor.py', target, 'process')
 
         self.assertEqual(data['class_name'], 'Worker')
+        self.assertEqual(data['method_kind'], 'instance')
         self.assertIn('operating_system.path.exists', data['calls'])
         self.assertIn('normalize_value', data['calls'])
         self.assertEqual(data['referenced_globals'], [{'name': 'MAXIMUM', 'code': 'MAXIMUM = 10'}])
@@ -161,6 +162,38 @@ class Worker:
         self.assertIn('Cannot safely instantiate class', result['load_error'])
         self.assertEqual(result['examples'], [])
         self.assertEqual(result['errors'], [])
+
+    def test_static_and_class_methods_do_not_require_constructor_instantiation(self):
+        source = '''class Worker:
+    def __init__(self, required):
+        self.required = required
+
+    @staticmethod
+    def static_double(value):
+        return value * 2
+
+    @classmethod
+    def class_label(cls, value):
+        return cls.__name__ + ":" + value
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            static_result = trace_function(str(target), 'static_double', [{'args': [3], 'kwargs': {}}])
+            class_result = trace_function(str(target), 'class_label', [{'args': ['x'], 'kwargs': {}}])
+            static_data = self.run_script('ast_extractor.py', target, 'static_double')
+            class_data = self.run_script('ast_extractor.py', target, 'class_label')
+            scaffold = generate_scaffold(str(target), 'static_double')
+
+        self.assertEqual(static_data['method_kind'], 'static')
+        self.assertEqual(class_data['method_kind'], 'class')
+        self.assertIsNone(static_result['load_error'])
+        self.assertEqual(static_result['examples'][0]['result'], '6')
+        self.assertIsNone(class_result['load_error'])
+        self.assertEqual(class_result['examples'][0]['result'], "'Worker:x'")
+        self.assertEqual(scaffold['method_kind'], 'static')
+        self.assertIn('result = Worker.static_double(value)', scaffold['scaffold'])
+        self.assertNotIn('instance = Worker(...)', scaffold['scaffold'])
 
     def test_dynamic_tracer_preserves_required_keyword_only_arguments(self):
         source = '''def multiply(value: int, *, factor: int):

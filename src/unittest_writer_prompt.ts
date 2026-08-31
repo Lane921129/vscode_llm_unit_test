@@ -257,8 +257,13 @@ export function getUserPrompt(
         if (astContext.class_name) {
             prompt += `- IMPORTANT: This is a METHOD of class \`${astContext.class_name}\`.\n`;
             prompt += `  - Import: from ${moduleName} import ${astContext.class_name}\n`;
-            prompt += `  - Instantiate in setUp: self._obj = ${astContext.class_name}()\n`;
-            prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
+            if (astContext.method_kind === 'static' || astContext.method_kind === 'class') {
+                prompt += `  - Binding: ${astContext.method_kind} method. Do NOT instantiate the class.\n`;
+                prompt += `  - Call method as: ${astContext.class_name}.${funcName}(...).\n`;
+            } else {
+                prompt += `  - Instantiate in setUp: self._obj = ${astContext.class_name}()\n`;
+                prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
+            }
             const init = astContext.class_context?.init;
             if (init) {
                 prompt += `  - Constructor required parameters: ${init.required_params?.join(', ') || 'none'}; optional parameters: ${init.optional_params?.join(', ') || 'none'}; initialized attributes: ${init.assigns?.map((item: any) => item.name).join(', ') || 'none'}.\n`;
@@ -566,8 +571,11 @@ export function getUserPrompt(
 
     if (strategy === 'small') {
         const className = astContext?.class_name as string | null | undefined;
+        const directClassCall = astContext?.method_kind === 'static' || astContext?.method_kind === 'class';
         const importHint = className
-            ? `from ${moduleName} import ${className}  # class method — use self._obj = ${className}(); self._obj.${funcName}(...)`
+            ? directClassCall
+                ? `from ${moduleName} import ${className}  # call ${className}.${funcName}(...) directly`
+                : `from ${moduleName} import ${className}  # instance method — use self._obj = ${className}(); self._obj.${funcName}(...)`
             : `from ${moduleName} import ${funcName}`;
         const trigger = thinking
             ? `\n\nImport from: ${importHint}\n\nWrite the test file now:\n<thinking>\n`

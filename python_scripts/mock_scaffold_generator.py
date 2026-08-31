@@ -70,6 +70,22 @@ def constructor_required_params(class_node):
     return params[:required_count]
 
 
+def get_method_kind(func_node, class_node):
+    if not class_node:
+        return 'module'
+    decorator_names = {
+        node.id if isinstance(node, ast.Name)
+        else node.attr if isinstance(node, ast.Attribute)
+        else ''
+        for node in func_node.decorator_list
+    }
+    if 'staticmethod' in decorator_names:
+        return 'static'
+    if 'classmethod' in decorator_names:
+        return 'class'
+    return 'instance'
+
+
 def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None) -> dict:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -104,6 +120,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
 
     if not target_func:
         return {"scaffold": "", "patches": [], "mock_names": [], "error": f"Function '{func_name}' not found"}
+
+    method_kind = get_method_kind(target_func, class_node)
 
     # 找 import 映射
     import_bindings = find_import_bindings(tree)
@@ -152,13 +170,15 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
         lines.append(f"")
 
     call_args = ", ".join(func_params)
-    if class_name:
+    if class_name and method_kind == 'instance':
         required_init = constructor_required_params(class_node)
         if required_init:
             lines.append(f"    instance = {class_name}(...)  # TODO: provide valid values for: {', '.join(required_init)}")
         else:
             lines.append(f"    instance = {class_name}()")
         call_target = f"instance.{func_name}({call_args})"
+    elif class_name:
+        call_target = f"{class_name}.{func_name}({call_args})"
     else:
         call_target = f"{func_name}({call_args})"
     if isinstance(target_func, ast.AsyncFunctionDef):
@@ -176,6 +196,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
         "mock_names": mock_names,
         "func_params": func_params,
         "class_name": class_name,
+        "method_kind": method_kind,
         "is_async": isinstance(target_func, ast.AsyncFunctionDef)
     }
 
