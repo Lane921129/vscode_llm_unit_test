@@ -38,10 +38,30 @@ BOOLEAN_OPERATOR_REPLACEMENTS = {
 }
 
 
-def mutation_candidates(tree):
-    """Return deterministic, generic AST mutation descriptions."""
+def find_target_scope(tree, function_name=None, class_name=None):
+    """Return the exact function or method selected by the caller when known."""
+    if not function_name:
+        return tree
+
+    if class_name:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                for member in node.body:
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name == function_name:
+                        return member
+        return None
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
+            return node
+    return None
+
+
+def mutation_candidates(tree, scope=None):
+    """Return deterministic, generic AST mutation descriptions in the selected scope."""
     candidates = []
-    for node in ast.walk(tree):
+    target_scope = scope or tree
+    for node in ast.walk(target_scope):
         if isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
                 replacement = COMPARISON_REPLACEMENTS.get(type(operator))
@@ -88,11 +108,14 @@ def mutation_candidates(tree):
     return candidates
 
 
-def apply_mutation(tree, candidate_index):
+def apply_mutation(tree, candidate_index, target_function=None, target_class=None):
     """Mutate one candidate selected by the same traversal used for discovery."""
     copied = copy.deepcopy(tree)
+    copied_scope = find_target_scope(copied, target_function, target_class)
+    if copied_scope is None:
+        raise IndexError('Mutation target scope was not found')
     current = 0
-    for node in ast.walk(copied):
+    for node in ast.walk(copied_scope):
         if isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
                 replacement = COMPARISON_REPLACEMENTS.get(type(operator))
@@ -123,11 +146,24 @@ def apply_mutation(tree, candidate_index):
     raise IndexError('Mutation candidate index was not found')
 
 
-def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10):
+def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
+                        target_function=None, target_class=None):
     source_file = Path(source_path).resolve()
     test_file = Path(test_path).resolve()
     tree = ast.parse(source_file.read_text(encoding='utf-8'), filename=str(source_file))
-    candidates = mutation_candidates(tree)[:max_mutations]
+    scope = find_target_scope(tree, target_function, target_class)
+    if target_function and scope is None:
+        return {
+            'engine': 'builtin',
+            'total': 0,
+            'killed': 0,
+            'survived': 0,
+            'errors': 0,
+            'mutants': [],
+            'scope_found': False,
+            'scope': f'{target_class + "." if target_class else ""}{target_function}',
+        }
+    candidates = mutation_candidates(tree, scope)[:max_mutations]
     result = {
         'engine': 'builtin',
         'total': len(candidates),
@@ -135,6 +171,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         'survived': 0,
         'errors': 0,
         'mutants': [],
+        'scope_found': True,
+        'scope': f'{target_class + "." if target_class else ""}{target_function or "module"}',
     }
 
     with tempfile.TemporaryDirectory(prefix='llm_unit_mutation_') as temp_dir:
@@ -150,7 +188,12 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         environment = {**os.environ, 'PYTHONPATH': python_path, 'PYTHONIOENCODING': 'utf-8'}
 
         for index, candidate in enumerate(candidates):
-            mutant_tree = apply_mutation(tree, index)
+            mutant_tree = apply_mutation(
+                tree,
+                index,
+                target_function,
+                target_class
+            )
             ast.fix_missing_locations(mutant_tree)
             mutant_source = ast.unparse(mutant_tree) + '\n'
             (temp_root / source_file.name).write_text(mutant_source, encoding='utf-8')
@@ -186,8 +229,13 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds]'}))
+        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class]'}))
         sys.exit(2)
     maximum = int(sys.argv[3]) if len(sys.argv) >= 4 else 30
     timeout = int(sys.argv[4]) if len(sys.argv) >= 5 else 10
-    print(json.dumps(run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout), ensure_ascii=False))
+    function_name = sys.argv[5] if len(sys.argv) >= 6 and sys.argv[5] else None
+    class_name = sys.argv[6] if len(sys.argv) >= 7 and sys.argv[6] else None
+    print(json.dumps(
+        run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name),
+        ensure_ascii=False
+    ))

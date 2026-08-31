@@ -721,6 +721,8 @@ interface BasicMutationResult {
     survived: number;
     errors: number;
     mutants: Array<{ line: number; column: number; from: string; to: string; status: string }>;
+    scope_found?: boolean;
+    scope?: string;
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
@@ -1762,9 +1764,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (engine === 'builtin') {
                 const fallbackScript = path.join(__dirname, '..', 'python_scripts', 'basic_mutation_runner.py');
                 const perMutationTimeout = Math.max(1, Math.min(10, Math.floor(params.timeoutSeconds / 3)));
+                const selectedClassName = (astContext as any)?.class_name as string | undefined;
                 const fallbackRun = await runSpawn(
                     'python',
-                    [fallbackScript, params.filePath, testPath, '30', String(perMutationTimeout)],
+                    [
+                        fallbackScript,
+                        params.filePath,
+                        testPath,
+                        '30',
+                        String(perMutationTimeout),
+                        params.funcName || '',
+                        selectedClassName || ''
+                    ],
                     { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: params.timeoutSeconds * 1000 }
                 );
                 if (fallbackRun.code !== 0) {
@@ -1777,6 +1788,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 } catch (error: any) {
                     throw new Error(`內建 AST 突變引擎輸出無法解析：${error.message || error}`);
+                }
+                if (builtinMutation.scope_found === false) {
+                    throw new Error(`找不到選定的突變範圍：${builtinMutation.scope || params.funcName || '未知函式'}`);
                 }
                 mutpyResult = JSON.stringify(builtinMutation, null, 2);
             } else {
@@ -1839,8 +1853,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const total = builtinMutation.total;
                 const survived = builtinMutation.survived;
                 mutationScore = total === 0 ? 0 : Math.round((builtinMutation.killed / total) * 100);
-                log(`[分析] 內建 AST 突變分數：${mutationScore}% (Total: ${total}, Killed: ${builtinMutation.killed}, Survived: ${survived}, Errors: ${builtinMutation.errors})`);
-                finalReportMarkdown += `- **突變分數**: ${mutationScore}%（內建 AST 基本引擎）\n`;
+                const scopeLabel = builtinMutation.scope || '選定範圍';
+                const scopeStatus = builtinMutation.scope_found === false ? '未找到' : scopeLabel;
+                log(`[分析] 內建 AST 突變分數：${mutationScore}% (Scope: ${scopeStatus}, Total: ${total}, Killed: ${builtinMutation.killed}, Survived: ${survived}, Errors: ${builtinMutation.errors})`);
+                finalReportMarkdown += `- **突變分數**: ${mutationScore}%（內建 AST 基本引擎，範圍：${scopeStatus}）\n`;
             } else if (engine === 'mutmut') {
                 const totalMatch = mutpyResult.match(/(\d+)\s+mutants/i);
                 const survivedMatch = mutpyResult.match(/(\d+)\s+survived/i);

@@ -282,6 +282,40 @@ class TestClassify(unittest.TestCase):
         self.assertGreaterEqual(result['killed'], 1)
         self.assertEqual(result['survived'], 0)
 
+    def test_builtin_mutation_runner_limits_candidates_to_selected_function(self):
+        source = '''def target(value):
+    return "positive" if value > 0 else "not-positive"
+
+def unrelated(value):
+    return "large" if value > 100 else "small"
+'''
+        test_source = '''import unittest
+from sample import target
+
+class TestTarget(unittest.TestCase):
+    def test_positive(self):
+        self.assertEqual(target(1), "positive")
+
+    def test_not_positive(self):
+        self.assertEqual(target(0), "not-positive")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(
+                str(source_path),
+                str(test_path),
+                target_function='target'
+            )
+
+        self.assertTrue(result['scope_found'])
+        self.assertEqual(result['scope'], 'target')
+        self.assertEqual(result['total'], 1)
+        self.assertEqual(result['killed'], 1)
+
     def test_builtin_mutation_runner_mutates_boolean_operators(self):
         source = '''def both_enabled(left, right):
     return "enabled" if left and right else "disabled"
