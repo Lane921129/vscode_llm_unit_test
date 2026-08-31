@@ -60,6 +60,37 @@ test('requires generated tests to invoke the requested callable', () => {
     assert.match(result.reason || '', /沒有呼叫被測函式/);
 });
 
+test('requires a single test method to both invoke the target and assert behavior', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_invokes_only(self):',
+        '        add(1, 1)',
+        '',
+        '    def test_asserts_only(self):',
+        '        self.assertTrue(True)',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'add');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /同時呼叫被測函式/);
+});
+
+test('accepts a target invocation and assertion in the same test method', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        self.assertEqual(add(1, 2), 3)',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
+});
+
 test('accepts a property read when the selected target is a descriptor', () => {
     const code = [
         'import unittest',

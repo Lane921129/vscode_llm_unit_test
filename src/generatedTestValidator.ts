@@ -32,6 +32,28 @@ function accessesProperty(code: string, propertyName: string): boolean {
     return code.split(/\r?\n/).some(line => !/^\s*(?:from|import)\b/.test(line) && access.test(line));
 }
 
+function testMethodBlocks(code: string): string[] {
+    const headers = [...code.matchAll(/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\([^\n]*\)\s*:/gm)];
+    return headers.map((header, index) => {
+        const start = header.index || 0;
+        const end = headers[index + 1]?.index ?? code.length;
+        return code.slice(start, end);
+    });
+}
+
+function hasAssertion(code: string): boolean {
+    return /\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(code);
+}
+
+function hasBehavioralTargetTest(code: string, callableName: string, targetUsage: TargetUsage): boolean {
+    return testMethodBlocks(code).some(block => {
+        const usesTarget = targetUsage === 'property'
+            ? accessesProperty(block, callableName)
+            : invokesCallable(block, callableName);
+        return usesTarget && hasAssertion(block);
+    });
+}
+
 function shadowsTargetModule(code: string, moduleName: string): boolean {
     const quotedModule = "['\"]" + escapeRegex(moduleName) + "['\"]";
     const moduleRegistryWrite = new RegExp(
@@ -82,7 +104,7 @@ export function validateUnittestStructure(
     if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
         return { valid: false, reason: '缺少 test_ 測試方法' };
     }
-    if (!/\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(trimmed)) {
+    if (!hasAssertion(trimmed)) {
         return { valid: false, reason: '缺少可驗證行為的 assertion 或 assertRaises' };
     }
     if (targetCallable) {
@@ -93,6 +115,11 @@ export function validateUnittestStructure(
             return { valid: false, reason: targetUsage === 'property'
                 ? '測試沒有讀取被測 property ' + targetCallable
                 : '測試沒有呼叫被測函式 ' + targetCallable };
+        }
+        if (!hasBehavioralTargetTest(trimmed, targetCallable, targetUsage)) {
+            return { valid: false, reason: targetUsage === 'property'
+                ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
+                : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
         }
     }
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
