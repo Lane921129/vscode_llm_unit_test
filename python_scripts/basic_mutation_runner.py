@@ -105,6 +105,16 @@ def mutation_candidates(tree, scope=None):
                 'from': str(node.value),
                 'to': str(not node.value),
             })
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float, complex)):
+            replacement = 1 if node.value == 0 else 0
+            candidates.append({
+                'kind': 'numeric_constant',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': repr(node.value),
+                'to': repr(replacement),
+            })
     return candidates
 
 
@@ -141,6 +151,11 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
         elif isinstance(node, ast.Constant) and isinstance(node.value, bool):
             if current == candidate_index:
                 node.value = not node.value
+                return copied
+            current += 1
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float, complex)):
+            if current == candidate_index:
+                node.value = 1 if node.value == 0 else 0
                 return copied
             current += 1
     raise IndexError('Mutation candidate index was not found')
