@@ -11,6 +11,7 @@ import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudA
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1TestMethods } from './tier1TestBuilder';
+import { qualificationForRequest } from './modelQualification';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -252,6 +253,8 @@ interface ModelProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
     contextLength: number;  // max context tokens from model
     budgetTokens: number;   // calculated usable budget
+    envType?: 'local' | 'cloud' | 'custom';
+    modelName?: string;
     testGenerationReady?: boolean;
 }
 
@@ -442,11 +445,19 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    const updateModelProfileCmd = vscode.commands.registerCommand('llm-unit-test.updateModelProfile', (profile: { paramSize: string; contextLength: number; testGenerationReady?: boolean }) => {
+    const updateModelProfileCmd = vscode.commands.registerCommand('llm-unit-test.updateModelProfile', (profile: {
+        paramSize: string;
+        contextLength: number;
+        envType?: 'local' | 'cloud' | 'custom';
+        modelName?: string;
+        testGenerationReady?: boolean;
+    }) => {
         currentModelProfile = {
             paramSize: profile.paramSize,
             contextLength: profile.contextLength,
             budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 }),
+            envType: profile.envType,
+            modelName: profile.modelName,
             testGenerationReady: profile.testGenerationReady
         };
     });
@@ -929,11 +940,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
     }
     const modelParamBillion = parseFloat(currentModelProfile.paramSize);
+    const qualifiedForSelectedModel = qualificationForRequest(
+        currentModelProfile,
+        { envType: params.envType, modelName: params.modelName }
+    );
+    if (currentModelProfile.testGenerationReady !== undefined && qualifiedForSelectedModel === false
+        && (currentModelProfile.envType !== params.envType || currentModelProfile.modelName !== params.modelName)) {
+        log('[模型資格] 選用模型與最近探測的模型不同；不沿用舊資格，Auto 會安全改走 Tier 1。');
+    }
     const resolvedTier = resolveTier(
         modelParamBillion,
         complexityScore,
         userTierSetting,
-        currentModelProfile.testGenerationReady
+        qualifiedForSelectedModel
     );
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 

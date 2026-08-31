@@ -297,7 +297,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 }
                                             }
 
-                                            const profile = { paramSize, contextLength };
+                                            const profile = {
+                                                paramSize,
+                                                contextLength,
+                                                envType: 'local' as const,
+                                                modelName: message.modelName
+                                            };
                                             // 傳送探針結果給 webview 顯示
                                             this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                             // 同時傳給 extension 主程式
@@ -327,6 +332,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     );
                                                 }
                                             } catch {
+                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                                    ...profile,
+                                                    testGenerationReady: false
+                                                });
                                                 vscode.window.showWarningMessage(
                                                     '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
                                                 );
@@ -399,6 +408,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     const profile = {
                                         paramSize: 'Cloud (Gemini)',
                                         contextLength: 1000000,
+                                        envType: 'cloud' as const,
+                                        modelName: credential.model,
                                         testGenerationReady: capability.capability === 'verified'
                                     };
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
@@ -424,6 +435,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                         paramSize: 'Cloud (Gemini)',
                                         contextLength: 1000000,
+                                        envType: 'cloud',
+                                        modelName: credential.model,
                                         testGenerationReady: false
                                     });
                                     vscode.window.showWarningMessage(
@@ -453,6 +466,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                         paramSize: 'Custom API',
                                         contextLength: 8192,
+                                        envType: 'custom',
+                                        modelName: message.modelName,
                                         testGenerationReady: capability.capability === 'verified'
                                     });
                                     if (capability.capability === 'verified') {
@@ -480,6 +495,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                         paramSize: 'Custom API',
                                         contextLength: 8192,
+                                        envType: 'custom',
+                                        modelName: message.modelName,
                                         testGenerationReady: false
                                     });
                                     vscode.window.showWarningMessage(
