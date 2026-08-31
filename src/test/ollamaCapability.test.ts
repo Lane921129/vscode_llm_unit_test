@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { assessOllamaStructuredProbe, buildOllamaStructuredProbe } from '../ollamaCapability';
+import { assessStructuredOutputProbe, buildOllamaStructuredProbe } from '../ollamaCapability';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
     const request = buildOllamaStructuredProbe('local-model');
@@ -16,10 +16,10 @@ test('Ollama structured probe is small, deterministic, and domain neutral', () =
 
 test('Ollama structured probe accepts the expected JSON object only', () => {
     assert.deepStrictEqual(
-        assessOllamaStructuredProbe({ response: '{"ok":true}' }),
+        assessStructuredOutputProbe({ response: '{"ok":true}' }),
         { capability: 'verified', reason: '模型已通過結構化 JSON 輸出驗證。' }
     );
-    assert.strictEqual(assessOllamaStructuredProbe({ response: '{}' }).capability, 'unverified');
-    assert.strictEqual(assessOllamaStructuredProbe({ response: '{' }).capability, 'unverified');
-    assert.strictEqual(assessOllamaStructuredProbe({ response: '' }).capability, 'unverified');
+    assert.strictEqual(assessStructuredOutputProbe({ response: '{}' }).capability, 'unverified');
+    assert.strictEqual(assessStructuredOutputProbe({ response: '{' }).capability, 'unverified');
+    assert.strictEqual(assessStructuredOutputProbe({ response: '' }).capability, 'unverified');
 });

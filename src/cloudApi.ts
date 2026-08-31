@@ -26,6 +26,26 @@ export interface GoogleModelDescriptor {
     supportedActions?: string[];
 }
 
+/** Extracts the text from a non-streaming GenerateContent response safely. */
+export function getGoogleGeneratedText(payload: unknown): string | undefined {
+    if (!payload || typeof payload !== 'object') {
+        return undefined;
+    }
+    const candidates = (payload as { candidates?: unknown }).candidates;
+    if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== 'object') {
+        return undefined;
+    }
+    const parts = ((candidates[0] as { content?: { parts?: unknown } }).content?.parts);
+    if (!Array.isArray(parts)) {
+        return undefined;
+    }
+    const text = parts
+        .map(part => part && typeof part === 'object' ? (part as { text?: unknown }).text : undefined)
+        .filter((part): part is string => typeof part === 'string')
+        .join('');
+    return text || undefined;
+}
+
 /** Accept both API resource names (models/name) and UI-friendly model names. */
 export function normalizeGoogleModelName(modelName: string): string {
     return modelName.trim().replace(/^models\//, '');

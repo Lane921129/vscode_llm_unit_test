@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, normalizeGoogleModelName, resolveGoogleApiKey } from '../cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, normalizeGoogleModelName, resolveGoogleApiKey } from '../cloudApi';
 
 test('buildGoogleGenerateContentRequest uses the selected model and a key header', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'hello');
@@ -54,4 +54,13 @@ test('keeps only Cloud models that declare generateContent support', () => {
     ]);
 
     assert.deepStrictEqual(supported, ['text-model', 'action-model']);
+});
+
+test('extracts a Cloud generated text response without trusting malformed payloads', () => {
+    assert.strictEqual(
+        getGoogleGeneratedText({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] }),
+        '{"ok":true}'
+    );
+    assert.strictEqual(getGoogleGeneratedText({ candidates: [] }), undefined);
+    assert.strictEqual(getGoogleGeneratedText({ candidates: [{ content: { parts: [{}] } }] }), undefined);
 });

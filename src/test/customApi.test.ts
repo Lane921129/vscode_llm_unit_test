@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from '../customApi';
+import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable } from '../customApi';
 
 test('custom API requests JSON mode only when the caller needs a structured result', () => {
     const textRequest = buildCustomChatCompletionBody('model-a', 'system', 'user', 'text');
@@ -27,4 +27,13 @@ test('detects malformed successful structured responses before they reach a Tier
     assert.ok(isStructuredResponseUsable('{"required_skills": []}', 'json'));
     assert.ok(isStructuredResponseUsable('{"code":"import unittest"}', 'test-code-json'));
     assert.ok(isStructuredResponseUsable('import unittest', 'test-code-json'));
+});
+
+test('extracts Custom assistant text without trusting malformed payloads', () => {
+    assert.strictEqual(
+        getCustomChatCompletionText({ choices: [{ message: { content: '{"ok":true}' } }] }),
+        '{"ok":true}'
+    );
+    assert.strictEqual(getCustomChatCompletionText({ choices: [{ message: {} }] }), undefined);
+    assert.strictEqual(getCustomChatCompletionText({ choices: [] }), undefined);
 });

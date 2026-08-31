@@ -4,9 +4,10 @@ import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, normalizeGoogleModelName } from './cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
-import { assessOllamaStructuredProbe, buildOllamaStructuredProbe } from './ollamaCapability';
+import { assessStructuredOutputProbe, buildOllamaStructuredProbe, STRUCTURED_OUTPUT_PROBE_PROMPT, STRUCTURED_OUTPUT_PROBE_SCHEMA } from './ollamaCapability';
+import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -311,7 +312,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     signal: outputController.signal as any
                                                 });
                                                 const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
-                                                const capability = assessOllamaStructuredProbe(outputPayload);
+                                                const capability = assessStructuredOutputProbe(outputPayload);
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
                                                         `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過結構化輸出驗證。`
@@ -372,7 +373,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     throw new Error(`模型「${selectedModel}」不存在、目前 API Key 無權使用，或不支援 generateContent。請改用可用模型：${suggestions}`);
                                 }
                                 
-                                const request = buildGoogleGenerateContentRequest(credential.model, credential.key, 'hi');
+                                const request = buildGoogleGenerateContentRequest(
+                                    credential.model,
+                                    credential.key,
+                                    STRUCTURED_OUTPUT_PROBE_PROMPT,
+                                    { responseMimeType: 'application/json', responseSchema: STRUCTURED_OUTPUT_PROBE_SCHEMA }
+                                );
                                 const response = await fetch(request.url, {
                                     method: 'POST',
                                     headers: request.headers,
@@ -381,13 +387,35 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 });
                                 clearTimeout(timeoutId);
                                 if (response.ok) {
+                                    const responsePayload = await response.json();
+                                    const capability = assessStructuredOutputProbe({
+                                        response: getGoogleGeneratedText(responsePayload)
+                                    });
                                     // Cloud Gemini: 使用已知 context window 大小
                                     const profile = { paramSize: 'Cloud (Gemini)', contextLength: 1000000 };
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                    vscode.window.showInformationMessage(`✅ Cloud Gemini 連線成功！Context：1M tokens`);
+                                    if (capability.capability === 'verified') {
+                                        vscode.window.showInformationMessage('✅ Cloud Gemini 連線成功！Context：1M tokens；已通過結構化輸出驗證。');
+                                    } else {
+                                        vscode.window.showWarningMessage(
+                                            '⚠️ Cloud Gemini 連線成功，但未通過結構化輸出驗證。系統會在需要時改用文字輸出回退；建議改選支援 JSON 的模型。'
+                                        );
+                                    }
                                 } else {
-                                    throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                                    const errorText = await response.text();
+                                    const fallbackRequest = buildGoogleGenerateContentRequest(credential.model, credential.key, 'hi');
+                                    const fallbackResponse = await fetch(fallbackRequest.url, {
+                                        method: 'POST',
+                                        headers: fallbackRequest.headers,
+                                        body: JSON.stringify(fallbackRequest.body)
+                                    });
+                                    if (!fallbackResponse.ok) {
+                                        throw new Error(`HTTP ${response.status} - ${errorText}`);
+                                    }
+                                    vscode.window.showWarningMessage(
+                                        '⚠️ Cloud Gemini 可連線，但不支援這個結構化輸出格式。系統會在需要時改用文字輸出回退；建議改選支援 JSON 的模型。'
+                                    );
                                 }
                             } else if (message.envType === 'custom') {
                                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -396,17 +424,44 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const response = await fetch(message.customUrl, {
                                     method: 'POST',
                                     headers: headers,
-                                    body: JSON.stringify({
-                                        model: message.modelName,
-                                        messages: [{ role: 'user', content: 'hi' }]
-                                    }),
+                                    body: JSON.stringify(buildCustomChatCompletionBody(
+                                        message.modelName,
+                                        'Return only the requested structured output.',
+                                        STRUCTURED_OUTPUT_PROBE_PROMPT,
+                                        'json'
+                                    )),
                                     signal: controller.signal as any
                                 });
                                 clearTimeout(timeoutId);
                                 if (response.ok) {
-                                    vscode.window.showInformationMessage(`✅ Custom API 連線成功！`);
+                                    const capability = assessStructuredOutputProbe({
+                                        response: getCustomChatCompletionText(await response.json())
+                                    });
+                                    if (capability.capability === 'verified') {
+                                        vscode.window.showInformationMessage('✅ Custom API 連線成功！已通過結構化輸出驗證。');
+                                    } else {
+                                        vscode.window.showWarningMessage(
+                                            '⚠️ Custom API 連線成功，但未通過結構化輸出驗證。系統會在需要時改用文字輸出回退；建議選用支援 JSON mode 的模型。'
+                                        );
+                                    }
                                 } else {
-                                    throw new Error(`HTTP ${response.status} - ${await response.text()}`);
+                                    const errorText = await response.text();
+                                    const fallbackResponse = await fetch(message.customUrl, {
+                                        method: 'POST',
+                                        headers,
+                                        body: JSON.stringify(buildCustomChatCompletionBody(
+                                            message.modelName,
+                                            'Reply briefly.',
+                                            'hi',
+                                            'text'
+                                        ))
+                                    });
+                                    if (!fallbackResponse.ok) {
+                                        throw new Error(`HTTP ${response.status} - ${errorText}`);
+                                    }
+                                    vscode.window.showWarningMessage(
+                                        '⚠️ Custom API 可連線，但不支援 JSON mode。系統會在需要時改用文字輸出回退；建議選用支援 JSON mode 的模型。'
+                                    );
                                 }
                             }
                         } catch (error: any) {

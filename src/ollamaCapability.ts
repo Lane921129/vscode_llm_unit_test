@@ -1,9 +1,18 @@
-export type OllamaStructuredOutputCapability = 'verified' | 'unverified';
+export type StructuredOutputCapability = 'verified' | 'unverified';
 
-export interface OllamaStructuredProbeResult {
-    capability: OllamaStructuredOutputCapability;
+export interface StructuredOutputProbeResult {
+    capability: StructuredOutputCapability;
     reason: string;
 }
+
+export const STRUCTURED_OUTPUT_PROBE_PROMPT =
+    'Return exactly one JSON object with a boolean field named "ok" set to true. Do not include any other text.';
+
+export const STRUCTURED_OUTPUT_PROBE_SCHEMA = {
+    type: 'object',
+    properties: { ok: { type: 'boolean' } },
+    required: ['ok']
+};
 
 /**
  * A deliberately tiny, domain-neutral probe. It tests the exact JSON mode
@@ -13,14 +22,15 @@ export interface OllamaStructuredProbeResult {
 export function buildOllamaStructuredProbe(model: string) {
     return {
         model,
-        prompt: 'Return exactly one JSON object with a boolean field named "ok" set to true. Do not include any other text.',
+        prompt: STRUCTURED_OUTPUT_PROBE_PROMPT,
         stream: false,
         format: 'json',
         options: { temperature: 0 }
     };
 }
 
-export function assessOllamaStructuredProbe(payload: unknown): OllamaStructuredProbeResult {
+/** Validates the provider-neutral JSON response used by every connection probe. */
+export function assessStructuredOutputProbe(payload: unknown): StructuredOutputProbeResult {
     const response = payload && typeof payload === 'object'
         ? (payload as { response?: unknown }).response
         : undefined;

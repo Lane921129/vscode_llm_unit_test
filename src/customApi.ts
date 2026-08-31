@@ -1,5 +1,18 @@
 export type CustomOutputFormat = 'text' | 'json' | 'test-code-json';
 
+/** Safely obtains the assistant text from a standard Chat Completions response. */
+export function getCustomChatCompletionText(payload: unknown): string | undefined {
+    if (!payload || typeof payload !== 'object') {
+        return undefined;
+    }
+    const choices = (payload as { choices?: unknown }).choices;
+    if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') {
+        return undefined;
+    }
+    const content = (choices[0] as { message?: { content?: unknown } }).message?.content;
+    return typeof content === 'string' && content.trim() ? content : undefined;
+}
+
 /**
  * Builds an OpenAI-compatible chat-completions request body.  JSON mode is
  * requested only for analysis/code contracts and the caller can retry as text
