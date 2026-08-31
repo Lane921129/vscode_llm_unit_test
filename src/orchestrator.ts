@@ -12,7 +12,7 @@ import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseU
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1TestMethods } from './tier1TestBuilder';
 import { qualificationForRequest } from './modelQualification';
-import { resolveTier } from './tierRouter';
+import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -1283,9 +1283,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 // ─── Tier 1：填空法（2–3B 模型） ───
                 if (currentTier === 1 && !survivedMutants) {
                 const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
-                if (!traceResult || traceResult.load_error || (traceResult.examples.length === 0 && traceResult.errors.length === 0)) {
-                    log(`[Tier 1 退回] 動態追蹤失敗，已自動切換至 Tier 2。建議：請在策略選單改選 Tier 2 以符合此函式的複雜度。`);
-                    // 退回 Tier 2：繼續下方的標準流程
+                if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
+                    if (qualifiedForSelectedModel === false) {
+                        throw new Error(
+                            'Tier 1 無法取得可驗證的動態 Trace；目前模型未通過 unittest 生成資格，'
+                            + '無法安全改用 LLM 生成。請改用通過探測的 Instruct／Cloud 模型後重試。'
+                        );
+                    }
+                    log('[Tier 1 退回] 動態追蹤失敗，改走標準 LLM 生成與預先驗證流程。');
                 } else {
                     log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const moduleName = path.basename(params.filePath, '.py');

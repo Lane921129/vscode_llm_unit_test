@@ -34,3 +34,18 @@ export function resolveTier(
     }
     return complexity <= 60 ? 3 : 4;
 }
+
+export interface DeterministicTraceAvailability {
+    load_error?: unknown;
+    examples?: unknown[];
+    errors?: unknown[];
+}
+
+/** Tier 1 is safe for an unqualified model only when verified trace data exists. */
+export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability | undefined): boolean {
+    return Boolean(
+        trace
+        && !trace.load_error
+        && ((trace.examples?.length || 0) > 0 || (trace.errors?.length || 0) > 0)
+    );
+}
