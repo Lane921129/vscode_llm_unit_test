@@ -97,7 +97,7 @@
     "lint": "eslint src",
     "test": "vscode-test",
     "test:python": "python -m unittest python_scripts/test_ast_pipeline.py",
-    "test:unit": "npm run compile-tests && node --test out/test/cloudApi.test.js out/test/cloudCredentials.test.js out/test/customApi.test.js out/test/generatedTestValidator.test.js out/test/modelQualification.test.js out/test/ollamaCapability.test.js out/test/promptPurity.test.js out/test/promptSkillLibrary.test.js out/test/tier1Integration.test.js out/test/tier1Literals.test.js out/test/tier1TestBuilder.test.js out/test/tierRouter.test.js out/test/utils.test.js out/test/webviewContent.test.js && npm run test:python"
+    "test:unit": "npm run compile-tests && node --test out/test/cloudApi.test.js out/test/cloudCredentials.test.js out/test/customApi.test.js out/test/dependencyResolver.test.js out/test/generatedTestValidator.test.js out/test/modelQualification.test.js out/test/ollamaCapability.test.js out/test/promptPurity.test.js out/test/promptSkillLibrary.test.js out/test/tier1Integration.test.js out/test/tier1Literals.test.js out/test/tier1TestBuilder.test.js out/test/tierRouter.test.js out/test/utils.test.js out/test/webviewContent.test.js && npm run test:python"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

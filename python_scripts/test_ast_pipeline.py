@@ -57,6 +57,38 @@ class Worker:
         self.assertEqual([item['name'] for item in data['class_context']['init']['assigns']], ['config', 'client'])
         self.assertEqual({item['bound_name'] for item in data['file_imports']}, {'operating_system', 'normalize_value'})
 
+    def test_extractor_preserves_relative_import_levels(self):
+        source = '''from .helpers import normalize as normalize_value
+from ..shared import validate
+from . import sibling
+
+def process(value):
+    return normalize_value(value) and validate(value) and sibling.run(value)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'consumer.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'process')
+
+        imports = {
+            item['bound_name']: (item['module'], item.get('level', 0))
+            for item in data['file_imports']
+        }
+        self.assertEqual(imports, {
+            'normalize_value': ('helpers', 1),
+            'validate': ('shared', 2),
+            'sibling': ('', 1),
+        })
+        dependencies = {
+            (item['name'], item['module'], item.get('level', 0))
+            for item in data['dependencies']
+        }
+        self.assertEqual(dependencies, {
+            ('normalize', 'helpers', 1),
+            ('validate', 'shared', 2),
+            ('sibling', '', 1),
+        })
+
     def test_caller_finder_ignores_a_same_named_local_function(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

@@ -148,11 +148,23 @@ def extract_info(filepath, func_name):
                     bound = alias.asname or alias.name.split('.')[0]
                     file_imports.append({'kind': 'import', 'module': alias.name, 'name': None, 'alias': alias.asname, 'bound_name': bound})
                     imported_symbols[bound] = {'name': bound, 'module': alias.name}
-            elif isinstance(node, ast.ImportFrom) and node.module:
+            elif isinstance(node, ast.ImportFrom) and (node.module or node.level):
+                imported_module = node.module or ''
                 for alias in node.names:
                     bound = alias.asname or alias.name
-                    file_imports.append({'kind': 'from', 'module': node.module, 'name': alias.name, 'alias': alias.asname, 'bound_name': bound})
-                    imported_symbols[bound] = {'name': alias.name, 'module': node.module}
+                    file_imports.append({
+                        'kind': 'from',
+                        'module': imported_module,
+                        'level': node.level,
+                        'name': alias.name,
+                        'alias': alias.asname,
+                        'bound_name': bound
+                    })
+                    imported_symbols[bound] = {
+                        'name': alias.name,
+                        'module': imported_module,
+                        'level': node.level
+                    }
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
                 for name in assignment_names(node):
                     module_globals[name] = {'name': name, 'code': source_for(lines, node)}
@@ -171,9 +183,13 @@ def extract_info(filepath, func_name):
         for call in unique_calls:
             symbol = imported_symbols.get(call.split('.')[0])
             if symbol:
-                key = (symbol['module'], symbol['name'])
+                key = (symbol['module'], symbol['name'], symbol.get('level', 0))
                 if key not in seen_dependencies:
-                    dependencies.append({'name': symbol['name'], 'module': symbol['module']})
+                    dependencies.append({
+                        'name': symbol['name'],
+                        'module': symbol['module'],
+                        'level': symbol.get('level', 0)
+                    })
                     seen_dependencies.add(key)
 
         loaded_names = {node.id for node in ast.walk(func_node) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}

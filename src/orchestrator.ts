@@ -13,6 +13,7 @@ import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './genera
 import { buildTier1TestMethods } from './tier1TestBuilder';
 import { qualificationForRequest } from './modelQualification';
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
+import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -292,8 +293,8 @@ interface AstContext {
     required_args?: string[];
     docstring: string;
     calls: string[];
-    dependencies?: { name: string, module: string }[];
-    file_imports?: { kind: string, module: string, name: string | null, alias: string | null, bound_name: string }[];
+    dependencies?: { name: string, module: string, level?: number }[];
+    file_imports?: { kind: string, module: string, level?: number, name: string | null, alias: string | null, bound_name: string }[];
     referenced_globals?: { name: string, code: string }[];
     class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] } } | null;
     method_kind?: 'module' | 'instance' | 'static' | 'class';
@@ -1008,8 +1009,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
 
                 for (const dep of astContext.dependencies) {
-                    const moduleParts = dep.module.split('.');
-                    const depFilePath = path.join(projectRoot, ...moduleParts) + '.py';
+                    const depFilePath = resolvePythonDependencyPath(params.filePath, projectRoot, dep);
                     
                     if (fs.existsSync(depFilePath)) {
                         const depAst = await extractAstContext(depFilePath, dep.name);
@@ -1022,7 +1022,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
                             }
                             astContext.dependencyContexts.push(depAst);
-                            log(`[AST] 成功擷取外部依賴: ${dep.module}.${dep.name}`);
+                            log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
                         }
                     }
                 }
@@ -1062,10 +1062,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 astReport += `- 文件註解: \`${astContext.docstring.trim().replace(/\n/g, ' ')}\`\n`;
             }
             if (astContext.dependencies && astContext.dependencies.length > 0) {
-                astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${d.module}.${d.name}\``).join(', ')}\n`;
+                astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${formatPythonImport(d)}.${d.name}\``).join(', ')}\n`;
             }
             if (astContext.file_imports && astContext.file_imports.length > 0) {
-                astReport += `- 模組 Imports: ${astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', ')}\n`;
+                astReport += `- 模組 Imports: ${astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', ')}\n`;
             }
             if (astContext.referenced_globals && astContext.referenced_globals.length > 0) {
                 astReport += `- 引用模組常數: ${astContext.referenced_globals.map(item => `\`${item.name}\``).join(', ')}\n`;
