@@ -235,6 +235,25 @@ class Worker:
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
 
+    def test_dynamic_tracer_keeps_literal_caller_input_and_adds_other_branches(self):
+        source = '''def route(value: str, mode: str):
+    if len(value) < 4:
+        raise ValueError("value is too short")
+    if mode == "first":
+        return "first-route"
+    if mode == "second":
+        return "second-route"
+    return "default-route"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'route', [{'args': ['known-value', 'first'], 'kwargs': {}}])
+
+        observed_inputs = [example['args'] for example in result['examples']]
+        self.assertIn(["'known-value'", "'first'"], observed_inputs)
+        self.assertIn(["'test_value'", "'second'"], observed_inputs)
+
     def test_builtin_mutation_runner_kills_a_boundary_mutation_without_changing_source(self):
         source = '''def classify(value):
     return "positive" if value > 0 else "not-positive"

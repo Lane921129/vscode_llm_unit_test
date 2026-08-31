@@ -4,6 +4,12 @@
 
 ## 2026-08-31
 
+### Caller Trace 與分支取樣合流
+
+- Dynamic tracer 不再讓 AST 擷取到的字面呼叫站輸入覆蓋自動分支取樣。
+- 現在會保留真實 Caller I/O，同時加入條件導向輸入並去重；沒有 Caller 時才補上型別邊界輸入，讓固定呼叫站不會掩蓋其他可達分支。
+- 新增「真實 caller 值與另一分支同時存在」的回歸測試。
+
 ### 類別 static／class 方法的跨 Tier 呼叫語境
 
 - AST 現在會標示模組函式、實例方法、static method 與 class method 的綁定型態。

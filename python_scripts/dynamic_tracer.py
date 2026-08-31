@@ -322,30 +322,39 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     except Exception:
         pass
 
-    # 決定測試輸入
+    # Combine literal call-site facts with generic source-derived coverage.
+    # A real caller example is valuable, but must not suppress other reachable
+    # branches just because the caller happened to use one fixed value.
+    positional = required_positional_args if 'required_positional_args' in locals() else result["args"]
+    keyword_only = required_keyword_only_args if 'required_keyword_only_args' in locals() else []
+    inferred_annotations = annotations if 'annotations' in locals() else {}
+    guided_inputs = infer_condition_guided_inputs(
+        file_path,
+        func_name,
+        positional,
+        inferred_annotations,
+        keyword_only
+    )
+    # With a known caller, retain that concrete I/O and only add inputs that
+    # exercise source-derived conditions. Generic type boundaries remain useful
+    # when no caller information exists, but would otherwise add noisy samples
+    # without improving a fixed caller trace.
+    caller_inputs = list(test_inputs) if test_inputs is not None else []
+    coverage_inputs = list(guided_inputs)
     if test_inputs is None:
-        positional = required_positional_args if 'required_positional_args' in locals() else result["args"]
-        keyword_only = required_keyword_only_args if 'required_keyword_only_args' in locals() else []
-        inferred_annotations = annotations if 'annotations' in locals() else {}
-        guided_inputs = infer_condition_guided_inputs(
-            file_path,
-            func_name,
+        coverage_inputs.extend(infer_boundary_inputs(
             positional,
             inferred_annotations,
             keyword_only
-        )
-        boundary_inputs = infer_boundary_inputs(
-            positional,
-            inferred_annotations,
-            keyword_only
-        )
-        test_inputs = []
-        seen_inputs = set()
-        for candidate in guided_inputs + boundary_inputs:
-            serialized = json.dumps(candidate, sort_keys=True, default=repr)
-            if serialized not in seen_inputs:
-                seen_inputs.add(serialized)
-                test_inputs.append(candidate)
+        ))
+    seen_inputs = set()
+    merged_inputs = []
+    for candidate in caller_inputs + coverage_inputs:
+        serialized = json.dumps(candidate, sort_keys=True, default=repr)
+        if serialized not in seen_inputs:
+            seen_inputs.add(serialized)
+            merged_inputs.append(candidate)
+    test_inputs = merged_inputs
 
     # 執行每個測試輸入。呼叫站提供的字面值可包含 args/kwargs；舊格式 list
     # 仍相容，避免將 AST 變數名稱當成真實字串輸入。
