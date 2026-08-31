@@ -432,8 +432,8 @@ class TestTarget(unittest.TestCase):
 
         self.assertTrue(result['scope_found'])
         self.assertEqual(result['scope'], 'target')
-        self.assertEqual(result['total'], 2)
-        self.assertEqual(result['killed'], 2)
+        self.assertEqual(result['total'], 3)
+        self.assertEqual(result['killed'], 3)
 
     def test_builtin_mutation_runner_mutates_numeric_constants(self):
         source = '''def increment(value):
@@ -521,6 +521,60 @@ class TestChoose(unittest.TestCase):
         self.assertEqual(len(predicates), 1)
         self.assertEqual(predicates[0]['status'], 'KILLED')
         self.assertEqual(result['survived'], 0)
+
+    def test_builtin_mutation_runner_mutates_ternaries_loops_and_augmented_assignments(self):
+        source = '''def advance(limit, enabled):
+    current = 0
+    while current < limit:
+        current += 1
+    return current if enabled else -current
+'''
+        test_source = '''import unittest
+from sample import advance
+
+class TestAdvance(unittest.TestCase):
+    def test_enabled(self):
+        self.assertEqual(advance(3, True), 3)
+
+    def test_disabled(self):
+        self.assertEqual(advance(3, False), -3)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='advance')
+
+        kinds = {mutant['kind']: mutant['status'] for mutant in result['mutants']}
+        self.assertEqual(kinds['loop_condition_negation'], 'KILLED')
+        self.assertEqual(kinds['conditional_expression_negation'], 'KILLED')
+        self.assertEqual(kinds['augmented_assignment'], 'KILLED')
+
+    def test_builtin_mutation_runner_keeps_candidate_indexes_aligned_after_unsupported_operator(self):
+        source = '''def increment(value, exponent):
+    ignored = value ** exponent
+    return value + 1
+'''
+        test_source = '''import unittest
+from sample import increment
+
+class TestIncrement(unittest.TestCase):
+    def test_increment(self):
+        self.assertEqual(increment(2, 3), 3)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='increment')
+
+        binary_mutants = [mutant for mutant in result['mutants'] if mutant['kind'] == 'binary']
+        self.assertEqual(len(binary_mutants), 1)
+        self.assertEqual(binary_mutants[0]['status'], 'KILLED')
 
 
 if __name__ == '__main__':

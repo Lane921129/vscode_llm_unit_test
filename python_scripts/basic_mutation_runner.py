@@ -71,6 +71,24 @@ def mutation_candidates(tree, scope=None):
                 'from': 'if_condition',
                 'to': 'not_if_condition',
             })
+        elif isinstance(node, ast.While):
+            candidates.append({
+                'kind': 'loop_condition_negation',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'while_condition',
+                'to': 'not_while_condition',
+            })
+        elif isinstance(node, ast.IfExp):
+            candidates.append({
+                'kind': 'conditional_expression_negation',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'if_expression_condition',
+                'to': 'not_if_expression_condition',
+            })
         elif isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
                 replacement = COMPARISON_REPLACEMENTS.get(type(operator))
@@ -94,6 +112,17 @@ def mutation_candidates(tree, scope=None):
                     'from': type(node.op).__name__,
                     'to': replacement.__name__,
                     })
+        elif isinstance(node, ast.AugAssign):
+            replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                candidates.append({
+                    'kind': 'augmented_assignment',
+                    'line': getattr(node, 'lineno', 0),
+                    'column': getattr(node, 'col_offset', 0),
+                    'position': 0,
+                    'from': type(node.op).__name__,
+                    'to': replacement.__name__,
+                })
         elif isinstance(node, ast.BoolOp):
             replacement = BOOLEAN_OPERATOR_REPLACEMENTS.get(type(node.op))
             if replacement:
@@ -140,6 +169,16 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
                 node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
                 return copied
             current += 1
+        elif isinstance(node, ast.While):
+            if current == candidate_index:
+                node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
+        elif isinstance(node, ast.IfExp):
+            if current == candidate_index:
+                node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
         elif isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
                 replacement = COMPARISON_REPLACEMENTS.get(type(operator))
@@ -154,7 +193,14 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
                 if current == candidate_index:
                     node.op = replacement()
                     return copied
-            current += 1
+                current += 1
+        elif isinstance(node, ast.AugAssign):
+            replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                if current == candidate_index:
+                    node.op = replacement()
+                    return copied
+                current += 1
         elif isinstance(node, ast.BoolOp):
             replacement = BOOLEAN_OPERATOR_REPLACEMENTS.get(type(node.op))
             if replacement:
@@ -239,8 +285,12 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 status = 'KILLED' if completed.returncode else 'SURVIVED'
                 output = (completed.stdout + completed.stderr).strip()[-500:]
             except subprocess.TimeoutExpired as error:
-                status = 'ERROR'
-                output = f'Timeout after {timeout_seconds}s: {error}'
+                # This timeout happened while exercising one mutated copy.
+                # A mutant that makes a formerly terminating test hang is a
+                # detected behavioral change, so mutation testing counts it
+                # as killed rather than an infrastructure error.
+                status = 'KILLED'
+                output = f'Killed by timeout after {timeout_seconds}s: {error}'
             except OSError as error:
                 status = 'ERROR'
                 output = str(error)
