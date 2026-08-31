@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### Stub Smoke Test 斷言
+
+- 純 pass、return None 與安全固定 literal 的 Stub 測試現在會使用精確 assertion，不再只確認未拋出例外。
+- 若回傳值是運算式或其他不應在產生器中執行的內容，維持保守的 smoke 行為，不會杜撰預期值。
+
 ### 執行環境追溯
 
 - 每份結果報告現在記錄實際執行的 extension.js 路徑、工作目錄、模型、請求與實際 Tier，以及模型 unittest 資格。

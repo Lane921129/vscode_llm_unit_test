@@ -16,6 +16,7 @@ import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
 import { formatReportProvenance } from './reportProvenance';
+import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -1145,6 +1146,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             ? `self._obj = ${className}()\n        result = self._obj.${params.funcName}(${defaultArgs.join(', ')})`
             : `result = ${params.funcName}(${defaultArgs.join(', ')})`;
         const setupClass = className ? `\n    def setUp(self):\n        self._obj = ${className}()\n` : '';
+        const smokeAssertion = buildStubSmokeAssertion((astContext as any)?.code || '');
+        const smokeBody = smokeAssertion
+            ? [
+                `        ${callLine}`,
+                `        ${smokeAssertion}`,
+            ]
+            : [
+                `        try:`,
+                `            ${callLine}`,
+                `        except Exception as e:`,
+                `            self.fail(f"Stub function raised an exception: {e}")`,
+            ];
 
         const smokeTest = [
             `import unittest`,
@@ -1153,11 +1166,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             `class TestStub${params.funcName}(unittest.TestCase):`,
             setupClass,
             `    def test_smoke_no_exception(self):`,
-            `        """Stub function smoke test: verifies calling it does not raise an exception."""`,
-            `        try:`,
-            `            ${callLine}`,
-            `        except Exception as e:`,
-            `            self.fail(f"Stub function raised an exception: {e}")`,
+            `        """Smoke test with an exact assertion when the stub body is static."""`,
+            ...smokeBody,
             ``,
             `if __name__ == '__main__':`,
             `    unittest.main()`,
