@@ -48,10 +48,17 @@ async function assessFunctionComplexity(
  * @param complexity 複雜度分數 0~100
  * @param userTier 使用者設定的 tier 字串（'auto'|'tier1'|'tier2'|'tier3'|'tier4'）
  */
-function resolveTier(modelParamBillion: number, complexity: number, userTier: string): 1 | 2 | 3 | 4 {
+function resolveTier(modelParamBillion: number, complexity: number, userTier: string,
+                     testGenerationReady?: boolean): 1 | 2 | 3 | 4 {
     if (userTier && userTier !== 'auto') {
         const n = parseInt(userTier.replace('tier', ''));
         if (n >= 1 && n <= 4) return n as 1 | 2 | 3 | 4;
+    }
+    // A connection alone does not prove a model can produce runnable tests.
+    // Preserve explicit user choice, but keep automatic routing deterministic
+    // when the provider's qualification probe has failed.
+    if (testGenerationReady === false) {
+        return 1;
     }
     // Cloud / 未知大模型 → Tier 4
     if (isNaN(modelParamBillion)) return 4;
@@ -245,6 +252,7 @@ interface ModelProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
     contextLength: number;  // max context tokens from model
     budgetTokens: number;   // calculated usable budget
+    testGenerationReady?: boolean;
 }
 
 let currentModelProfile: ModelProfile = {
@@ -433,11 +441,12 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    const updateModelProfileCmd = vscode.commands.registerCommand('llm-unit-test.updateModelProfile', (profile: { paramSize: string; contextLength: number }) => {
+    const updateModelProfileCmd = vscode.commands.registerCommand('llm-unit-test.updateModelProfile', (profile: { paramSize: string; contextLength: number; testGenerationReady?: boolean }) => {
         currentModelProfile = {
             paramSize: profile.paramSize,
             contextLength: profile.contextLength,
-            budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 })
+            budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 }),
+            testGenerationReady: profile.testGenerationReady
         };
     });
 
@@ -917,7 +926,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
     }
     const modelParamBillion = parseFloat(currentModelProfile.paramSize);
-    const resolvedTier = resolveTier(modelParamBillion, complexityScore, userTierSetting);
+    const resolvedTier = resolveTier(
+        modelParamBillion,
+        complexityScore,
+        userTierSetting,
+        currentModelProfile.testGenerationReady
+    );
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {

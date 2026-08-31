@@ -13,9 +13,10 @@
 
 ### 跨提供者結構化輸出能力驗證
 
-- Cloud Gemini 與 OpenAI-compatible Custom API 的「測試連線」改為實際驗證結構化 JSON 回覆，而非只送出一般文字。
+- Cloud Gemini、Ollama 與 OpenAI-compatible Custom API 的「測試連線」改為實際驗證 JSON 內含完整 unittest 的最小生成能力，而非只送出一般文字或只檢查 JSON。
 - 若提供者拒絕 JSON 格式，系統會確認純文字請求仍可連線後顯示能力警告；正式生成流程可沿用既有的文字回退，不會把「不支援 JSON」誤報為整個 API 無法使用。
 - 新增 Cloud／Custom 回覆安全提取函式與回歸測試，不會假設外部 API 回傳的 JSON 一定具備預期巢狀結構。
+- Auto 路由會在模型已明確未通過 unittest 生成資格時改選 Tier 1；使用者手動指定 Tier 則維持原選擇。
 
 ### 本地模型結構化輸出能力驗證
 

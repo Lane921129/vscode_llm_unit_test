@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { assessStructuredOutputProbe, buildOllamaStructuredProbe } from '../ollamaCapability';
+import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../ollamaCapability';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
     const request = buildOllamaStructuredProbe('local-model');
@@ -22,4 +22,19 @@ test('Ollama structured probe accepts the expected JSON object only', () => {
     assert.strictEqual(assessStructuredOutputProbe({ response: '{}' }).capability, 'unverified');
     assert.strictEqual(assessStructuredOutputProbe({ response: '{' }).capability, 'unverified');
     assert.strictEqual(assessStructuredOutputProbe({ response: '' }).capability, 'unverified');
+});
+
+test('test-generation probe requires a complete unittest structure, not merely JSON', () => {
+    const request = buildOllamaTestGenerationProbe('local-model');
+    assert.strictEqual(request.format, 'json');
+    assert.ok(request.prompt.includes('def increment(value): return value + 1'));
+    assert.strictEqual(assessTestGenerationProbe({ response: '{"code":"string"}' }).capability, 'unverified');
+    assert.strictEqual(
+        assessTestGenerationProbe({
+            response: JSON.stringify({
+                code: 'import unittest\n\nclass TestIncrement(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(2, 2)\n'
+            })
+        }).capability,
+        'verified'
+    );
 });

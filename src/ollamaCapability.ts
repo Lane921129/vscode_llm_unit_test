@@ -1,3 +1,5 @@
+import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
+
 export type StructuredOutputCapability = 'verified' | 'unverified';
 
 export interface StructuredOutputProbeResult {
@@ -14,6 +16,15 @@ export const STRUCTURED_OUTPUT_PROBE_SCHEMA = {
     required: ['ok']
 };
 
+export const TEST_GENERATION_PROBE_PROMPT =
+    'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file that imports unittest, defines a unittest.TestCase class, and tests this function: def increment(value): return value + 1. Do not include Markdown or explanations.';
+
+export const TEST_GENERATION_PROBE_SCHEMA = {
+    type: 'object',
+    properties: { code: { type: 'string' } },
+    required: ['code']
+};
+
 /**
  * A deliberately tiny, domain-neutral probe. It tests the exact JSON mode
  * needed by the semantic-analysis and generated-test envelopes without
@@ -23,6 +34,17 @@ export function buildOllamaStructuredProbe(model: string) {
     return {
         model,
         prompt: STRUCTURED_OUTPUT_PROBE_PROMPT,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0 }
+    };
+}
+
+/** A provider-neutral qualification probe for the minimum Tier 2-4 output shape. */
+export function buildOllamaTestGenerationProbe(model: string) {
+    return {
+        model,
+        prompt: TEST_GENERATION_PROBE_PROMPT,
         stream: false,
         format: 'json',
         options: { temperature: 0 }
@@ -54,4 +76,18 @@ export function assessStructuredOutputProbe(payload: unknown): StructuredOutputP
     }
 
     return { capability: 'unverified', reason: '模型未能依 JSON 格式回傳預期內容。' };
+}
+
+export function assessTestGenerationProbe(payload: unknown): StructuredOutputProbeResult {
+    const response = payload && typeof payload === 'object'
+        ? (payload as { response?: unknown }).response
+        : undefined;
+    if (typeof response !== 'string' || !response.trim()) {
+        return { capability: 'unverified', reason: '模型沒有回傳測試程式碼。' };
+    }
+    const code = unwrapGeneratedCodeEnvelope(response);
+    const validation = validateUnittestStructure(code);
+    return validation.valid
+        ? { capability: 'verified', reason: '模型已通過 unittest 結構驗證。' }
+        : { capability: 'unverified', reason: validation.reason || '模型沒有產生有效的 unittest 結構。' };
 }

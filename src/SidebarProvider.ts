@@ -6,7 +6,7 @@ import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
-import { assessStructuredOutputProbe, buildOllamaStructuredProbe, STRUCTURED_OUTPUT_PROBE_PROMPT, STRUCTURED_OUTPUT_PROBE_SCHEMA } from './ollamaCapability';
+import { assessTestGenerationProbe, buildOllamaTestGenerationProbe, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -308,11 +308,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 const outputResponse = await fetch(`${baseUrl}/api/generate`, {
                                                     method: 'POST',
                                                     headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify(buildOllamaStructuredProbe(message.modelName)),
+                                                    body: JSON.stringify(buildOllamaTestGenerationProbe(message.modelName)),
                                                     signal: outputController.signal as any
                                                 });
                                                 const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
-                                                const capability = assessStructuredOutputProbe(outputPayload);
+                                                const capability = assessTestGenerationProbe(outputPayload);
+                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                                    ...profile,
+                                                    testGenerationReady: capability.capability === 'verified'
+                                                });
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
                                                         `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過結構化輸出驗證。`
@@ -376,8 +380,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const request = buildGoogleGenerateContentRequest(
                                     credential.model,
                                     credential.key,
-                                    STRUCTURED_OUTPUT_PROBE_PROMPT,
-                                    { responseMimeType: 'application/json', responseSchema: STRUCTURED_OUTPUT_PROBE_SCHEMA }
+                                    TEST_GENERATION_PROBE_PROMPT,
+                                    { responseMimeType: 'application/json', responseSchema: TEST_GENERATION_PROBE_SCHEMA }
                                 );
                                 const response = await fetch(request.url, {
                                     method: 'POST',
@@ -388,11 +392,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 clearTimeout(timeoutId);
                                 if (response.ok) {
                                     const responsePayload = await response.json();
-                                    const capability = assessStructuredOutputProbe({
+                                    const capability = assessTestGenerationProbe({
                                         response: getGoogleGeneratedText(responsePayload)
                                     });
                                     // Cloud Gemini: 使用已知 context window 大小
-                                    const profile = { paramSize: 'Cloud (Gemini)', contextLength: 1000000 };
+                                    const profile = {
+                                        paramSize: 'Cloud (Gemini)',
+                                        contextLength: 1000000,
+                                        testGenerationReady: capability.capability === 'verified'
+                                    };
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                     if (capability.capability === 'verified') {
@@ -413,6 +421,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     if (!fallbackResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${errorText}`);
                                     }
+                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                        paramSize: 'Cloud (Gemini)',
+                                        contextLength: 1000000,
+                                        testGenerationReady: false
+                                    });
                                     vscode.window.showWarningMessage(
                                         '⚠️ Cloud Gemini 可連線，但不支援這個結構化輸出格式。系統會在需要時改用文字輸出回退；建議改選支援 JSON 的模型。'
                                     );
@@ -427,15 +440,20 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     body: JSON.stringify(buildCustomChatCompletionBody(
                                         message.modelName,
                                         'Return only the requested structured output.',
-                                        STRUCTURED_OUTPUT_PROBE_PROMPT,
+                                        TEST_GENERATION_PROBE_PROMPT,
                                         'json'
                                     )),
                                     signal: controller.signal as any
                                 });
                                 clearTimeout(timeoutId);
                                 if (response.ok) {
-                                    const capability = assessStructuredOutputProbe({
+                                    const capability = assessTestGenerationProbe({
                                         response: getCustomChatCompletionText(await response.json())
+                                    });
+                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                        paramSize: 'Custom API',
+                                        contextLength: 8192,
+                                        testGenerationReady: capability.capability === 'verified'
                                     });
                                     if (capability.capability === 'verified') {
                                         vscode.window.showInformationMessage('✅ Custom API 連線成功！已通過結構化輸出驗證。');
@@ -459,6 +477,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     if (!fallbackResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${errorText}`);
                                     }
+                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                        paramSize: 'Custom API',
+                                        contextLength: 8192,
+                                        testGenerationReady: false
+                                    });
                                     vscode.window.showWarningMessage(
                                         '⚠️ Custom API 可連線，但不支援 JSON mode。系統會在需要時改用文字輸出回退；建議選用支援 JSON mode 的模型。'
                                     );
