@@ -11,7 +11,7 @@ import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudA
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
-import { qualificationForRequest } from './modelQualification';
+import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
@@ -239,6 +239,24 @@ let currentModelProfile: ModelProfile = {
     budgetTokens: 2000  // safe default
 };
 
+const MODEL_PROFILE_STORE_KEY = 'llmUnitTest.modelProfiles.v1';
+let storedModelProfiles: StoredModelProfile[] = [];
+
+function defaultModelProfile(): ModelProfile {
+    return {
+        paramSize: 'unknown',
+        contextLength: 4096,
+        budgetTokens: 2000
+    };
+}
+
+function withBudget(profile: StoredModelProfile): ModelProfile {
+    return {
+        ...profile,
+        budgetTokens: getContextBudget({ ...profile, budgetTokens: 0 })
+    };
+}
+
 function estimateTokens(text: string): number {
     // 快速估算：平均 4 字元 ≈ 1 token（英文）；中文約 1.5 字元 ≈ 1 token
     return Math.ceil(text.length / 3.5);
@@ -310,6 +328,9 @@ interface AstContext {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    storedModelProfiles = restoreModelProfiles(
+        context.globalState.get<unknown>(MODEL_PROFILE_STORE_KEY)
+    );
     const sidebarProvider = new MutationViewProvider(context.secrets);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(MutationViewProvider.viewType, sidebarProvider)
@@ -428,7 +449,7 @@ export function activate(context: vscode.ExtensionContext) {
         modelName?: string;
         testGenerationReady?: boolean;
     }) => {
-        currentModelProfile = {
+        const updatedProfile: ModelProfile = {
             paramSize: profile.paramSize,
             contextLength: profile.contextLength,
             budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 }),
@@ -436,6 +457,17 @@ export function activate(context: vscode.ExtensionContext) {
             modelName: profile.modelName,
             testGenerationReady: profile.testGenerationReady
         };
+        currentModelProfile = updatedProfile;
+        if (updatedProfile.envType && updatedProfile.modelName) {
+            storedModelProfiles = upsertModelProfile(storedModelProfiles, {
+                envType: updatedProfile.envType,
+                modelName: updatedProfile.modelName,
+                paramSize: updatedProfile.paramSize,
+                contextLength: updatedProfile.contextLength,
+                testGenerationReady: updatedProfile.testGenerationReady
+            });
+            void context.globalState.update(MODEL_PROFILE_STORE_KEY, storedModelProfiles);
+        }
     });
 
     context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd, updateModelProfileCmd);
@@ -932,14 +964,26 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         complexityScore = comp.score;
         log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
     }
-    const modelParamBillion = parseFloat(currentModelProfile.paramSize);
-    const qualifiedForSelectedModel = qualificationForRequest(
-        currentModelProfile,
-        { envType: params.envType, modelName: params.modelName }
+    const selectedStoredProfile = findModelProfile(storedModelProfiles, {
+        envType: params.envType,
+        modelName: params.modelName
+    });
+    const activeModelProfile = selectedStoredProfile
+        ? withBudget(selectedStoredProfile)
+        : (currentModelProfile.envType === params.envType && currentModelProfile.modelName === params.modelName
+            ? currentModelProfile
+            : defaultModelProfile());
+    const modelParamBillion = parseFloat(activeModelProfile.paramSize);
+    // When another model has already been probed in this session but the
+    // selected one has no saved entry, retain the conservative Tier-1 gate.
+    // A fresh extension with no probe data stays neutral for compatibility.
+    const qualifiedForSelectedModel = qualificationForSelectedProfile(
+        storedModelProfiles,
+        { envType: params.envType, modelName: params.modelName },
+        currentModelProfile.testGenerationReady !== undefined
     );
-    if (currentModelProfile.testGenerationReady !== undefined && qualifiedForSelectedModel === false
-        && (currentModelProfile.envType !== params.envType || currentModelProfile.modelName !== params.modelName)) {
-        log('[模型資格] 選用模型與最近探測的模型不同；不沿用舊資格，Auto 會安全改走 Tier 1。');
+    if (!selectedStoredProfile && (currentModelProfile.envType !== params.envType || currentModelProfile.modelName !== params.modelName)) {
+        log('[模型資格] 此供應商／模型尚未探測；不會沿用其他模型的能力資料。建議先執行「測試連線」。');
     }
     const resolvedTier = resolveTier(
         modelParamBillion,
@@ -1296,11 +1340,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             evalStrategy as 'small' | 'large',
             astContext,
             focusContext,
-            currentModelProfile.budgetTokens,
+            activeModelProfile.budgetTokens,
             params.modelName
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
-        log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${currentModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${currentModelProfile.paramSize}, Context: ${currentModelProfile.contextLength.toLocaleString()})`);
+        log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${activeModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${activeModelProfile.paramSize}, Context: ${activeModelProfile.contextLength.toLocaleString()})`);
 
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
@@ -1451,7 +1495,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         'small',
                         subAstContext,
                         focusContext,
-                        currentModelProfile.budgetTokens,
+                        activeModelProfile.budgetTokens,
                         params.modelName
                     );
 
