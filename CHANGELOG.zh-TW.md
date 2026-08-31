@@ -4,6 +4,13 @@
 
 ## 2026-08-31
 
+### 選定函式的突變範圍隔離
+
+- 當使用者指定單一函式或方法時，內建突變引擎現在會排除其內部宣告的巢狀函式、lambda 與類別；這些 callable 不再被誤算進外層目標的突變分數。
+- 候選發現與實際突變套用共用同一走訪規則，避免範圍調整造成候選索引不一致。
+- 未指定函式的全檔案模式維持原本完整走訪，確保批次分析不遺漏任何可測 callable。
+- 新增巢狀 helper 含分支時，仍只計算外層目標突變的回歸測試。
+
 ### Python match/case 分支追蹤
 
 - 動態 Trace 現在可從 Python structural pattern matching 的 MatchValue、MatchSingleton 與 MatchOr 萃取安全純量 case 值，為每個 case 建立真實 I/O 範例。

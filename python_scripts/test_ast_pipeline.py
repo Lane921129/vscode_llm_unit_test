@@ -597,6 +597,33 @@ class TestIncrement(unittest.TestCase):
         self.assertEqual(len(binary_mutants), 1)
         self.assertEqual(binary_mutants[0]['status'], 'KILLED')
 
+    def test_builtin_mutation_runner_excludes_nested_callable_mutants_from_selected_function_score(self):
+        source = '''def increment(value):
+    def unrelated_helper(flag):
+        if flag:
+            return 1
+        return 0
+    return value + 1
+'''
+        test_source = '''import unittest
+from sample import increment
+
+class TestIncrement(unittest.TestCase):
+    def test_increment(self):
+        self.assertEqual(increment(2), 3)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='increment')
+
+        self.assertEqual(result['total'], 2)
+        self.assertEqual(result['survived'], 0)
+        self.assertTrue(all(mutant['line'] != 3 for mutant in result['mutants']))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -38,6 +38,28 @@ BOOLEAN_OPERATOR_REPLACEMENTS = {
 }
 
 
+CALLABLE_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def mutation_scope_walk(scope):
+    """Walk a selected function without charging its nested callables to it.
+
+    When the user selected one function/method, mutations inside a locally
+    declared helper or nested class are a different callable's responsibility.
+    Module-wide analysis intentionally keeps its existing full-tree behaviour.
+    """
+    exclude_nested_callables = isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+
+    def visit(node):
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if exclude_nested_callables and isinstance(child, CALLABLE_SCOPE_NODES):
+                continue
+            yield from visit(child)
+
+    yield from visit(scope)
+
+
 def find_target_scope(tree, function_name=None, class_name=None):
     """Return the exact function or method selected by the caller when known."""
     if not function_name:
@@ -61,7 +83,7 @@ def mutation_candidates(tree, scope=None):
     """Return deterministic, generic AST mutation descriptions in the selected scope."""
     candidates = []
     target_scope = scope or tree
-    for node in ast.walk(target_scope):
+    for node in mutation_scope_walk(target_scope):
         if isinstance(node, ast.If):
             candidates.append({
                 'kind': 'conditional_negation',
@@ -163,7 +185,7 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
     if copied_scope is None:
         raise IndexError('Mutation target scope was not found')
     current = 0
-    for node in ast.walk(copied_scope):
+    for node in mutation_scope_walk(copied_scope):
         if isinstance(node, ast.If):
             if current == candidate_index:
                 node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
