@@ -4,6 +4,13 @@
 
 ## 2026-08-31
 
+### Python match/case 分支追蹤
+
+- 動態 Trace 現在可從 Python structural pattern matching 的 MatchValue、MatchSingleton 與 MatchOr 萃取安全純量 case 值，為每個 case 建立真實 I/O 範例。
+- 字串、布林與數值 case 會加入不匹配值，以覆蓋 case _ 或未匹配預設路徑；不推測任何領域詞彙或複雜 pattern。
+- 技能購物車新增 pattern_matching 卡，只有 AST／原始碼確實出現 match/case 時才提示模型逐一測試 literal 與預設分支。
+- 新增 OR case、預設路徑與技能卡證據邊界的回歸測試。
+
 ### 純 Python 模型能力探測回退
 
 - 本地 Ollama、Cloud Gemini 與 Custom API 的連線探測現在優先驗證結構化輸出；若模型不支援 JSON mode，會再以純 Python unittest 探測確認實際測試生成能力。

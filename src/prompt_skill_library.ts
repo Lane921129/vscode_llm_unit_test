@@ -51,6 +51,17 @@ export const SKILL_LIBRARY: SkillCard[] = [
         ]
     },
     {
+        id: 'pattern_matching',
+        title: 'Structural Pattern Matching',
+        trigger_hint: 'Use when the function contains Python match/case branches',
+        rules: [
+            'PATTERN MATCHING:',
+            '  - Add one test for each literal case value shown in the source, including each value in an OR pattern.',
+            '  - If the source has case _, add one value that does not equal any literal case to verify the default path.',
+            '  - Do not invent patterns or domain values that are absent from the source.',
+        ]
+    },
+    {
         id: 'float_precision',
         title: 'Float Precision',
         trigger_hint: 'Use when function uses round(), math operations, or returns float values',
@@ -217,6 +228,7 @@ export function inferSkillIdsFromCode(
     if (/\blen\s*\([^)]*\)\s*[<>]=?\s*\d+/.test(source)) { ids.add('string_length_boundary'); }
     if (/\w+\s*\[\s*-?\d*\s*:\s*-?\d*\s*\]/.test(source)) { ids.add('python_slicing'); }
     if (/\b(?:if|elif)\b[^\n]*[<>]=?\s*\d+/.test(source)) { ids.add('branch_threshold_coverage'); }
+    if (/^\s*match\s+[^\n]+\s*:/m.test(source)) { ids.add('pattern_matching'); }
     if (/\bround\s*\(|\bfloat\s*\(|\bmath\./.test(source)) { ids.add('float_precision'); }
     if (/\breturn\s*\{/.test(source)) { ids.add('dict_return'); }
     if (/\breturn\s*\(\s*[^()\n]+,\s*[^()\n]+\)|\breturn\s+(?![^#\n]*\()[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*/.test(source)) { ids.add('tuple_return'); }

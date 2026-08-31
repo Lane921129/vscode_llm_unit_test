@@ -43,6 +43,24 @@ def _condition_subject(node, parameter_names):
     return None
 
 
+def _match_pattern_literals(pattern):
+    """Extract only scalar literals from safe Python structural patterns."""
+    match_value_type = getattr(ast, 'MatchValue', ())
+    match_singleton_type = getattr(ast, 'MatchSingleton', ())
+    match_or_type = getattr(ast, 'MatchOr', ())
+    if match_value_type and isinstance(pattern, match_value_type):
+        value = _literal_value(pattern.value)
+        return [value] if isinstance(value, (str, int, float, bool)) else []
+    if match_singleton_type and isinstance(pattern, match_singleton_type):
+        return [pattern.value]
+    if match_or_type and isinstance(pattern, match_or_type):
+        values = []
+        for nested in pattern.patterns:
+            values.extend(_match_pattern_literals(nested))
+        return values
+    return []
+
+
 def infer_condition_guided_inputs(file_path: str, func_name: str, positional_args: list,
                                   annotations: dict = None, keyword_only_args: list = None) -> list:
     """
@@ -80,6 +98,26 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
             candidates[name].append(value)
 
     for node in ast.walk(target):
+        match_type = getattr(ast, 'Match', ())
+        if match_type and isinstance(node, match_type):
+            subject = _condition_subject(node.subject, parameter_names)
+            if subject and subject[1] == 'value':
+                name = subject[0]
+                literals = []
+                for case in node.cases:
+                    literals.extend(_match_pattern_literals(case.pattern))
+                for literal in literals:
+                    add(name, literal)
+                # A synthetic non-match reaches `case _` / the unmatched path
+                # without relying on business vocabulary from the source.
+                if any(isinstance(value, str) for value in literals):
+                    add(name, '__other_value__')
+                elif literals and all(isinstance(value, bool) for value in literals):
+                    add(name, not literals[0])
+                elif any(isinstance(value, (int, float)) and not isinstance(value, bool) for value in literals):
+                    numeric = [value for value in literals if isinstance(value, (int, float)) and not isinstance(value, bool)]
+                    add(name, max(numeric) + 1)
+
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             subject = _condition_subject(node.operand, parameter_names)
             if subject and subject[1] == 'value':

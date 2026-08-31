@@ -354,6 +354,27 @@ class Settings:
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
 
+    def test_dynamic_tracer_reaches_match_case_literals_and_default_path(self):
+        source = '''def route(kind: str):
+    match kind:
+        case "new" | "queued":
+            return "pending"
+        case "active":
+            return "running"
+        case _:
+            return "other"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route_match.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'route')
+
+        observed = {(item['args'][0], item['result']) for item in result['examples']}
+        self.assertIn(("'new'", "'pending'"), observed)
+        self.assertIn(("'queued'", "'pending'"), observed)
+        self.assertIn(("'active'", "'running'"), observed)
+        self.assertIn(("'__other_value__'", "'other'"), observed)
+
     def test_dynamic_tracer_keeps_literal_caller_input_and_adds_other_branches(self):
         source = '''def route(value: str, mode: str):
     if len(value) < 4:

@@ -37,6 +37,13 @@ test('syntax-based skill inference recognizes explicit tuple returns without mis
     assert.ok(!callIds.includes('tuple_return'));
 });
 
+test('syntax-based skill inference selects pattern matching only for match/case syntax', () => {
+    const matchIds = inferSkillIdsFromCode('def route(kind):\n    match kind:\n        case "new":\n            return 1');
+    const ordinaryIds = inferSkillIdsFromCode('def match_words(value):\n    return value');
+    assert.ok(matchIds.includes('pattern_matching'));
+    assert.ok(!ordinaryIds.includes('pattern_matching'));
+});
+
 test('evidence-bound skill cart rejects unrelated semantic cards', () => {
     const source = `
 def render(value):
