@@ -66,6 +66,46 @@ test('Tier 1 generated tests execute keyword-only calls from verified trace data
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 });
 
+test('Tier 1 generated tests execute finite sync and async generator assertions', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tier1-generator-'));
+    try {
+        writeFileSync(join(tempDir, 'generator_target.py'), [
+            'def numbers(limit):',
+            '    for value in range(limit):',
+            '        yield value * 2',
+            '',
+            'async def async_numbers(limit):',
+            '    for value in range(limit):',
+            '        yield value * 3',
+            ''
+        ].join('\n'), 'utf8');
+        const syncMethods = buildTier1TestMethods('numbers', [
+            { args: ['3'], result: '[0, 2, 4]', result_type: 'generator', result_truncated: false }
+        ], []);
+        const asyncMethods = buildTier1TestMethods('async_numbers', [
+            { args: ['3'], result: '[0, 3, 6]', result_type: 'async_generator', result_truncated: false }
+        ], []);
+        writeFileSync(join(tempDir, 'test_generator_target.py'), [
+            'import unittest',
+            'from generator_target import async_numbers, numbers',
+            '',
+            'class TestGenerated(unittest.TestCase):',
+            syncMethods.join('\n\n'),
+            '',
+            asyncMethods.join('\n\n'),
+            ''
+        ].join('\n'), 'utf8');
+
+        const result = spawnSync('python', ['-m', 'unittest', 'test_generator_target.py'], {
+            cwd: tempDir,
+            encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('condition-guided trace produces Tier 1 tests that kill boundary mutations', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'tier1-mutation-'));
     try {

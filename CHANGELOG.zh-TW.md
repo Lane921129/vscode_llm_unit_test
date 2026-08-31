@@ -4,6 +4,12 @@
 
 ## 2026-08-31
 
+### 產生器 Trace 與 Tier 1 斷言
+
+- 動態追蹤現在會將同步與非同步產生器安全收集為最多 100 項的真實值前綴，不再把含記憶體位址的 generator repr 當作測試預期結果。
+- Tier 1 可對有限 generator 使用 list(...) 斷言；對截斷序列只比對已驗證前綴，對 async generator 則在標準 unittest 方法中安全收集後斷言。
+- 新增同步與非同步 generator 的 Trace 回歸測試，以及實際執行生成測試的整合驗證。
+
 ### Cached Property 動態追蹤
 
 - 動態追蹤新增 functools.cached_property 支援，與一般 property 一樣以 descriptor 存取取得真實回傳值。

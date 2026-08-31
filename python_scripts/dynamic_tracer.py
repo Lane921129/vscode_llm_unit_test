@@ -15,6 +15,7 @@ import traceback
 import types
 import asyncio
 import inspect
+import itertools
 
 
 def _literal_value(node):
@@ -241,6 +242,32 @@ def safe_repr(val) -> str:
     return r
 
 
+TRACE_COLLECTION_LIMIT = 100
+
+
+def materialize_trace_result(value):
+    """Turn a generator into a bounded, reproducible trace fact.
+
+    Generator repr values include memory addresses and are unsuitable as test
+    oracles. A bounded prefix keeps tracing safe while recording whether the
+    sequence continued beyond that prefix.
+    """
+    if inspect.isgenerator(value):
+        captured = list(itertools.islice(value, TRACE_COLLECTION_LIMIT + 1))
+        return captured[:TRACE_COLLECTION_LIMIT], 'generator', len(captured) > TRACE_COLLECTION_LIMIT
+    return value, type(value).__name__, False
+
+
+async def materialize_async_generator(value):
+    """Turn an async generator into a bounded, reproducible trace fact."""
+    captured = []
+    async for item in value:
+        captured.append(item)
+        if len(captured) > TRACE_COLLECTION_LIMIT:
+            break
+    return captured[:TRACE_COLLECTION_LIMIT], 'async_generator', len(captured) > TRACE_COLLECTION_LIMIT
+
+
 def is_cached_property_descriptor(descriptor):
     """Recognise functools.cached_property without accepting arbitrary descriptors."""
     descriptor_type = type(descriptor)
@@ -404,13 +431,20 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     ret = getattr(instance, func_name)(*inp, **kwargs)
             else:
                 ret = func(*inp, **kwargs)
-            if inspect.isawaitable(ret):
-                ret = asyncio.run(ret)
+            if inspect.isasyncgen(ret):
+                ret, result_type, result_truncated = asyncio.run(materialize_async_generator(ret))
+            else:
+                if inspect.isawaitable(ret):
+                    ret = asyncio.run(ret)
+                ret, result_type, result_truncated = materialize_trace_result(ret)
             example = {
                 "args": [safe_repr(a) for a in inp],
                 "result": safe_repr(ret),
-                "result_type": type(ret).__name__
+                "result_type": result_type
             }
+            if result_type in ('generator', 'async_generator'):
+                example['result_truncated'] = result_truncated
+                example['result_collection_limit'] = TRACE_COLLECTION_LIMIT
             if kwargs:
                 example["kwargs"] = {name: safe_repr(value) for name, value in kwargs.items()}
             result["examples"].append(example)

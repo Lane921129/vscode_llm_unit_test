@@ -30,3 +30,20 @@ test('builds property getter assertions without calling the descriptor as a func
     assert.ok(methods[0].includes('result = self._instance.enabled'));
     assert.ok(!methods[0].includes('enabled('));
 });
+
+test('materializes finite generators before asserting their traced values', () => {
+    const methods = buildTier1TestMethods('numbers', [
+        { args: ['3'], result: '[0, 2, 4]', result_type: 'generator', result_truncated: false }
+    ], []);
+    assert.ok(methods[0].includes('result = list(numbers(3))'));
+    assert.ok(methods[0].includes('self.assertEqual(result, [0, 2, 4])'));
+});
+
+test('collects async generators in a normal unittest method', () => {
+    const methods = buildTier1TestMethods('numbers', [
+        { args: ['3'], result: '[0, 2, 4]', result_type: 'async_generator', result_truncated: false }
+    ], []);
+    assert.ok(methods[0].includes('async def collect():'));
+    assert.ok(methods[0].includes('async for item in numbers(3)'));
+    assert.ok(methods[0].includes("__import__('asyncio').run(collect())"));
+});

@@ -178,6 +178,34 @@ class Worker:
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
 
+    def test_dynamic_tracer_materializes_generator_values_for_a_reproducible_oracle(self):
+        source = '''def numbers(limit):
+    for value in range(limit):
+        yield value * 2
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'generator_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'numbers', [{'args': [3], 'kwargs': {}}])
+
+        self.assertEqual(result['examples'][0]['result'], '[0, 2, 4]')
+        self.assertEqual(result['examples'][0]['result_type'], 'generator')
+        self.assertFalse(result['examples'][0]['result_truncated'])
+
+    def test_dynamic_tracer_materializes_async_generator_values_for_a_reproducible_oracle(self):
+        source = '''async def numbers(limit):
+    for value in range(limit):
+        yield value * 2
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'async_generator_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'numbers', [{'args': [3], 'kwargs': {}}])
+
+        self.assertEqual(result['examples'][0]['result'], '[0, 2, 4]')
+        self.assertEqual(result['examples'][0]['result_type'], 'async_generator')
+        self.assertFalse(result['examples'][0]['result_truncated'])
+
     def test_dynamic_tracer_does_not_treat_an_uninitialized_class_as_a_real_trace(self):
         source = '''class Worker:
     def __init__(self, prefix):
