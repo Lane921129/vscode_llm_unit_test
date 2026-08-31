@@ -230,6 +230,32 @@ class TestClassify(unittest.TestCase):
         self.assertGreaterEqual(result['killed'], 1)
         self.assertEqual(result['survived'], 0)
 
+    def test_builtin_mutation_runner_mutates_boolean_operators(self):
+        source = '''def both_enabled(left, right):
+    return "enabled" if left and right else "disabled"
+'''
+        test_source = '''import unittest
+from target import both_enabled
+
+class TestBothEnabled(unittest.TestCase):
+    def test_both_enabled(self):
+        self.assertEqual(both_enabled(True, True), "enabled")
+
+    def test_one_disabled(self):
+        self.assertEqual(both_enabled(True, False), "disabled")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'target.py'
+            test_file = root / 'test_target.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(target, test_file)
+
+        boolean_mutants = [mutant for mutant in result['mutants'] if mutant['kind'] == 'boolean_operator']
+        self.assertEqual(len(boolean_mutants), 1)
+        self.assertEqual(boolean_mutants[0]['status'], 'KILLED')
+
 
 if __name__ == '__main__':
     unittest.main()

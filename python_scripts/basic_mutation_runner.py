@@ -32,6 +32,11 @@ BINARY_REPLACEMENTS = {
     ast.FloorDiv: ast.Mult,
 }
 
+BOOLEAN_OPERATOR_REPLACEMENTS = {
+    ast.And: ast.Or,
+    ast.Or: ast.And,
+}
+
 
 def mutation_candidates(tree):
     """Return deterministic, generic AST mutation descriptions."""
@@ -54,6 +59,17 @@ def mutation_candidates(tree):
             if replacement:
                 candidates.append({
                     'kind': 'binary',
+                    'line': getattr(node, 'lineno', 0),
+                    'column': getattr(node, 'col_offset', 0),
+                    'position': 0,
+                    'from': type(node.op).__name__,
+                    'to': replacement.__name__,
+                    })
+        elif isinstance(node, ast.BoolOp):
+            replacement = BOOLEAN_OPERATOR_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                candidates.append({
+                    'kind': 'boolean_operator',
                     'line': getattr(node, 'lineno', 0),
                     'column': getattr(node, 'col_offset', 0),
                     'position': 0,
@@ -87,6 +103,13 @@ def apply_mutation(tree, candidate_index):
                     current += 1
         elif isinstance(node, ast.BinOp):
             replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                if current == candidate_index:
+                    node.op = replacement()
+                    return copied
+            current += 1
+        elif isinstance(node, ast.BoolOp):
+            replacement = BOOLEAN_OPERATOR_REPLACEMENTS.get(type(node.op))
             if replacement:
                 if current == candidate_index:
                     node.op = replacement()
