@@ -15,6 +15,7 @@ import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
+import { assessTargetCoverage } from './targetCoverage';
 import { formatReportProvenance } from './reportProvenance';
 import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import * as path from 'path';
@@ -321,6 +322,7 @@ interface AstContext {
     method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
     property_context?: { name: string, getter?: unknown, setter?: unknown, deleter?: unknown } | null;
     is_async?: boolean;
+    executable_lines?: number[];
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
     code: string;
@@ -1670,8 +1672,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     ? `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`
                     : `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
                 exec(preCheckCmd, { timeout: 30000 }, async (err, stdout, stderr) => {
-                    const out = (stdout + stderr).trim();
-                    if (err) {
+                    let out = (stdout + stderr).trim();
+                    const assessExecution = (coverageOutput: string) => hasCoverage
+                        ? assessTargetCoverage(coverageOutput, params.filePath, astContext?.executable_lines || [])
+                        : undefined;
+                    const initialCoverage = assessExecution(out);
+                    const targetWasNotExecuted = initialCoverage?.targetExecuted === false;
+                    if (targetWasNotExecuted) {
+                        const coverageError = 'Coverage 顯示被測函式本體的可執行行均未執行。';
+                        out = `${out}\n${coverageError}`.trim();
+                        log(`[預先驗證失敗] ${coverageError}`);
+                        finalReportMarkdown += `### ⚠️ 目標覆蓋驗證失敗\n\n${coverageError}\n\n`;
+                    }
+                    if (err || targetWasNotExecuted) {
                         log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
@@ -1711,7 +1724,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             res2({ ok: !e2, out: (o2a + o2b).trim() });
                                         });
                                     });
-                                    if (revCheck.ok) {
+                                    const reviewerCoverage = assessExecution(revCheck.out);
+                                    const reviewerMissedTarget = reviewerCoverage?.targetExecuted === false;
+                                    if (revCheck.ok && !reviewerMissedTarget) {
                                         log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
                                         finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
                                         finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
@@ -1720,7 +1735,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         resolve();
                                         break;
                                     } else {
-                                        log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${revCheck.out.substring(0, 300)}`);
+                                        const reviewerFailure = reviewerMissedTarget
+                                            ? 'Coverage 顯示被測函式本體仍未執行。'
+                                            : revCheck.out.substring(0, 300);
+                                        log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${reviewerFailure}`);
                                         finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
                                     }
                                 } else {
@@ -1758,7 +1776,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                     res2({ ok: !err2, out: (out2a + out2b).trim() });
                                                 });
                                             });
-                                            if (result2.ok) {
+                                            const repairCoverage = assessExecution(result2.out);
+                                            const repairMissedTarget = repairCoverage?.targetExecuted === false;
+                                            if (result2.ok && !repairMissedTarget) {
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
                                                 finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
                                                 loopCoverage = extractCoverage(result2.out, params.filePath);
@@ -1766,7 +1786,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                 resolve();
                                                 break;
                                             } else {
-                                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${result2.out.substring(0, 200)}`);
+                                                const repairFailure = repairMissedTarget
+                                                    ? 'Coverage 顯示被測函式本體仍未執行。'
+                                                    : result2.out.substring(0, 200);
+                                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${repairFailure}`);
                                             }
                                         } else {
                                             log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次回應未通過格式驗證：${repairValidation.reason}`);

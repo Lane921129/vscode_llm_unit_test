@@ -176,6 +176,28 @@ def extract_property_context(class_node, lines, property_name):
     return accessors.get(property_name)
 
 
+def executable_body_lines(func_node):
+    """Return statement lines inside the target body, excluding nested callables.
+
+    The list is used only to decide whether coverage executed any target-body
+    statement.  Decorator and definition lines are intentionally excluded:
+    importing a module executes those lines without exercising the function.
+    """
+    result = set()
+
+    def visit(node):
+        if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return
+        if node is not func_node and isinstance(node, ast.stmt) and hasattr(node, 'lineno'):
+            result.add(node.lineno)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in func_node.body:
+        visit(statement)
+    return sorted(result)
+
+
 def extract_info(filepath, func_name):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -252,6 +274,7 @@ def extract_info(filepath, func_name):
             'method_kind': method_kind(func_node, class_node),
             'property_context': extract_property_context(class_node, lines, func_node.name),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
+            'executable_lines': executable_body_lines(func_node),
             'code': source_for(lines, func_node)
         }, ensure_ascii=False))
     except Exception as error:

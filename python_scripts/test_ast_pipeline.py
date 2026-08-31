@@ -57,6 +57,21 @@ class Worker:
         self.assertEqual([item['name'] for item in data['class_context']['init']['assigns']], ['config', 'client'])
         self.assertEqual({item['bound_name'] for item in data['file_imports']}, {'operating_system', 'normalize_value'})
 
+    def test_extractor_reports_executable_target_lines_without_nested_callable_lines(self):
+        source = '''def choose(value):
+    if value:
+        return "yes"
+    def deferred():
+        return "nested"
+    return "no"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'choose.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'choose')
+
+        self.assertEqual(data['executable_lines'], [2, 3, 6])
+
     def test_extractor_preserves_relative_import_levels(self):
         source = '''from .helpers import normalize as normalize_value
 from ..shared import validate
