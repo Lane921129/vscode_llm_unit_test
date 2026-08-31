@@ -176,6 +176,32 @@ class Worker:
             'args': ['3'], 'kwargs': {'factor': '2'}, 'result': '6', 'result_type': 'int'
         }])
 
+    def test_dynamic_tracer_reaches_scalar_branches_from_source_conditions(self):
+        source = '''def route(value: str, mode: str):
+    if not value or len(value) < 4:
+        raise ValueError("value is too short")
+    if mode == "first":
+        return "first-route"
+    if mode == "second":
+        return "second-route"
+    return "default-route"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'route')
+
+        self.assertIsNone(result['load_error'])
+        self.assertIn(
+            {'args': ["'test_value'", "'first'"], 'result': "'first-route'", 'result_type': 'str'},
+            result['examples']
+        )
+        self.assertIn(
+            {'args': ["'test_value'", "'second'"], 'result': "'second-route'", 'result_type': 'str'},
+            result['examples']
+        )
+        self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
+
     def test_builtin_mutation_runner_kills_a_boundary_mutation_without_changing_source(self):
         source = '''def classify(value):
     return "positive" if value > 0 else "not-positive"

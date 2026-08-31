@@ -16,6 +16,151 @@ import types
 import asyncio
 import inspect
 
+
+def _literal_value(node):
+    """Return a safe Python literal used in a source-level condition, if any."""
+    try:
+        value = ast.literal_eval(node)
+        return value if isinstance(value, (str, int, float, bool, type(None))) else None
+    except Exception:
+        return None
+
+
+def _condition_subject(node, parameter_names):
+    """Recognise a direct parameter or len(parameter), never arbitrary calls."""
+    if isinstance(node, ast.Name) and node.id in parameter_names:
+        return node.id, 'value'
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == 'len'
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in parameter_names
+    ):
+        return node.args[0].id, 'length'
+    return None
+
+
+def infer_condition_guided_inputs(file_path: str, func_name: str, positional_args: list,
+                                  annotations: dict = None, keyword_only_args: list = None) -> list:
+    """
+    Derive a small set of safe scalar inputs from the target function's own
+    comparisons. This is intentionally syntax-only: it recognises parameter
+    equality, numeric boundaries and length boundaries, without encoding domain
+    vocabulary or attempting to execute source expressions.
+    """
+    keyword_only_args = keyword_only_args or []
+    parameter_names = set(positional_args + keyword_only_args)
+    if not parameter_names:
+        return []
+
+    try:
+        with open(file_path, encoding='utf-8') as source_file:
+            tree = ast.parse(source_file.read(), filename=file_path)
+    except (OSError, SyntaxError, UnicodeError):
+        return []
+
+    target = next(
+        (
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name
+        ),
+        None
+    )
+    if target is None:
+        return []
+
+    annotations = annotations or {}
+    candidates = {name: [] for name in parameter_names}
+
+    def add(name, value):
+        if value not in candidates[name]:
+            candidates[name].append(value)
+
+    for node in ast.walk(target):
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            subject = _condition_subject(node.operand, parameter_names)
+            if subject and subject[1] == 'value':
+                annotation = str(annotations.get(subject[0], '')).lower()
+                add(subject[0], '' if 'str' in annotation else 0)
+
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+            continue
+        subject = _condition_subject(node.left, parameter_names)
+        if not subject:
+            continue
+        name, subject_kind = subject
+        operator = node.ops[0]
+        right = node.comparators[0]
+
+        if isinstance(operator, (ast.In, ast.NotIn)) and subject_kind == 'value' and isinstance(right, (ast.List, ast.Tuple, ast.Set)):
+            literal_items = [_literal_value(item) for item in right.elts]
+            for item in literal_items:
+                if item is not None:
+                    add(name, item)
+            if any(isinstance(item, str) for item in literal_items):
+                add(name, '__other_value__')
+            continue
+
+        literal = _literal_value(right)
+        if literal is None and not (isinstance(right, ast.Constant) and right.value is None):
+            continue
+
+        if subject_kind == 'length':
+            if isinstance(literal, int) and not isinstance(literal, bool) and literal >= 0:
+                for length in (max(0, literal - 1), literal, literal + 1):
+                    add(name, 'x' * length)
+            continue
+
+        add(name, literal)
+        if isinstance(operator, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)):
+            if isinstance(literal, str):
+                add(name, '__other_value__')
+            elif isinstance(literal, bool):
+                add(name, not literal)
+            elif literal is None:
+                annotation = str(annotations.get(name, '')).lower()
+                add(name, '' if 'str' in annotation else 0)
+        elif isinstance(literal, (int, float)) and not isinstance(literal, bool):
+            add(name, literal - 1)
+            add(name, literal + 1)
+
+    if not any(candidates.values()):
+        return []
+
+    def default_value(name):
+        annotation = str(annotations.get(name, '')).lower()
+        if 'bool' in annotation:
+            return True
+        if 'str' in annotation:
+            return 'test_value'
+        if any(number_type in annotation for number_type in ('int', 'float', 'decimal')):
+            return 1
+        return 'test_value'
+
+    def build_input(values):
+        args = [values[name] for name in positional_args]
+        kwargs = {name: values[name] for name in keyword_only_args}
+        return {'args': args, 'kwargs': kwargs} if kwargs else tuple(args)
+
+    baseline = {name: default_value(name) for name in parameter_names}
+    results = []
+    for name in positional_args + keyword_only_args:
+        for value in candidates[name]:
+            values = dict(baseline)
+            values[name] = value
+            results.append(build_input(values))
+
+    unique_results = []
+    seen = set()
+    for value in results:
+        serialized = json.dumps(value, sort_keys=True, default=repr)
+        if serialized not in seen:
+            seen.add(serialized)
+            unique_results.append(value)
+    return unique_results[:12]
+
 def load_module_from_file(file_path: str):
     """動態載入 Python 模組"""
     module_name = os.path.basename(file_path).replace('.py', '')
@@ -172,11 +317,28 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
 
     # 決定測試輸入
     if test_inputs is None:
-        test_inputs = infer_boundary_inputs(
-            required_positional_args if 'required_positional_args' in locals() else result["args"],
-            annotations if 'annotations' in locals() else {},
-            required_keyword_only_args if 'required_keyword_only_args' in locals() else []
+        positional = required_positional_args if 'required_positional_args' in locals() else result["args"]
+        keyword_only = required_keyword_only_args if 'required_keyword_only_args' in locals() else []
+        inferred_annotations = annotations if 'annotations' in locals() else {}
+        guided_inputs = infer_condition_guided_inputs(
+            file_path,
+            func_name,
+            positional,
+            inferred_annotations,
+            keyword_only
         )
+        boundary_inputs = infer_boundary_inputs(
+            positional,
+            inferred_annotations,
+            keyword_only
+        )
+        test_inputs = []
+        seen_inputs = set()
+        for candidate in guided_inputs + boundary_inputs:
+            serialized = json.dumps(candidate, sort_keys=True, default=repr)
+            if serialized not in seen_inputs:
+                seen_inputs.add(serialized)
+                test_inputs.append(candidate)
 
     # 執行每個測試輸入。呼叫站提供的字面值可包含 args/kwargs；舊格式 list
     # 仍相容，避免將 AST 變數名稱當成真實字串輸入。
