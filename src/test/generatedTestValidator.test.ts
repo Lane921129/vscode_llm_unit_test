@@ -78,6 +78,45 @@ test('rejects a generated test that shadows the requested callable', () => {
     assert.match(result.reason || '', /重新定義/);
 });
 
+test('rejects a generated test that replaces the target module dynamically', () => {
+    const code = [
+        'import sys',
+        'import types',
+        'import unittest',
+        '',
+        'fake = types.ModuleType("calculator")',
+        'fake.add = lambda left, right: 2',
+        'sys.modules["calculator"] = fake',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_add(self):',
+        '        self.assertEqual(add(1, 1), 2)',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'add', 'calculator');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /動態模組替換/);
+});
+
+test('allows a dynamic replacement for an external dependency, not the target module', () => {
+    const code = [
+        'import sys',
+        'import types',
+        'import unittest',
+        'from calculator import add',
+        '',
+        'sys.modules["external_service"] = types.ModuleType("external_service")',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_add(self):',
+        '        self.assertEqual(add(1, 1), 2)',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'add', 'calculator');
+    assert.strictEqual(result.valid, true);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');

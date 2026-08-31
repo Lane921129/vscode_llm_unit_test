@@ -737,8 +737,12 @@ interface BasicMutationResult {
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
-async function validateGeneratedTestCode(code: string, targetCallable?: string): Promise<{ valid: boolean; reason?: string }> {
-    const structure = validateUnittestStructure(code, targetCallable);
+async function validateGeneratedTestCode(
+    code: string,
+    targetCallable?: string,
+    targetModule?: string
+): Promise<{ valid: boolean; reason?: string }> {
+    const structure = validateUnittestStructure(code, targetCallable, targetModule);
     if (!structure.valid) {
         return structure;
     }
@@ -1510,7 +1514,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         sanitizedCode = rescued;
                     }
 
-                    const candidateValidation = await validateGeneratedTestCode(sanitizedCode, params.funcName);
+                    const candidateValidation = await validateGeneratedTestCode(
+                        sanitizedCode,
+                        params.funcName,
+                        path.basename(params.filePath, '.py')
+                    );
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
                             log(`[警告] 模型輸出未通過 Python/unittest 格式驗證：${candidateValidation.reason}；將以嚴格格式要求重試。`);
@@ -1563,7 +1571,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
             }
 
-            const generatedValidation = await validateGeneratedTestCode(finalCode, params.funcName);
+            const generatedValidation = await validateGeneratedTestCode(finalCode, params.funcName, baseName);
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
             }
@@ -1620,7 +1628,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log, 'test-code-json');
                                 const revCode = sanitizeLlmResponse(revRaw);
-                                const reviewValidation = await validateGeneratedTestCode(revCode, params.funcName);
+                                const reviewValidation = await validateGeneratedTestCode(
+                                    revCode,
+                                    params.funcName,
+                                    path.basename(params.filePath, '.py')
+                                );
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
                                     const revCheck = await new Promise<{ ok: boolean; out: string }>((res2) => {
@@ -1662,7 +1674,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         const repairUsr = getTier4SelfRepairPrompt(out);
                                         const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, 'test-code-json');
                                         const repairCode = sanitizeLlmResponse(repairRaw);
-                                        const repairValidation = await validateGeneratedTestCode(repairCode, params.funcName);
+                                        const repairValidation = await validateGeneratedTestCode(
+                                            repairCode,
+                                            params.funcName,
+                                            path.basename(params.filePath, '.py')
+                                        );
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
                                             const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {

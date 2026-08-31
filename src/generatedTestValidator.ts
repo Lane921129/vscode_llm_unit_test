@@ -21,7 +21,18 @@ function invokesCallable(code: string, callableName: string): boolean {
     const definition = new RegExp(
         '^\\s*(?:async\\s+)?def\\s+' + escapedName + '\\s*\\('
     );
-    return code.split(/\\r?\\n/).some(line => !definition.test(line) && invocation.test(line));
+    return code.split(/\r?\n/).some(line => !definition.test(line) && invocation.test(line));
+}
+
+function shadowsTargetModule(code: string, moduleName: string): boolean {
+    const quotedModule = "['\"]" + escapeRegex(moduleName) + "['\"]";
+    const moduleRegistryWrite = new RegExp(
+        '\\bsys\\.modules\\s*\\[\\s*' + quotedModule + '\\s*\\]\\s*='
+    );
+    const dynamicTargetModule = new RegExp(
+        '\\b(?:types\\.)?ModuleType\\s*\\(\\s*' + quotedModule
+    );
+    return moduleRegistryWrite.test(code) || dynamicTargetModule.test(code);
 }
 
 /** Extract code from the optional structured-output envelope used by capable APIs. */
@@ -41,7 +52,11 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
  * Fast, deterministic guard before invoking Python's parser. This keeps prose,
  * Markdown plans, and incomplete snippets out of the generated test path.
  */
-export function validateUnittestStructure(code: string, targetCallable?: string): GeneratedTestValidation {
+export function validateUnittestStructure(
+    code: string,
+    targetCallable?: string,
+    targetModule?: string
+): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
         return { valid: false, reason: '輸出為空' };
@@ -68,6 +83,9 @@ export function validateUnittestStructure(code: string, targetCallable?: string)
         if (!invokesCallable(trimmed, targetCallable)) {
             return { valid: false, reason: '測試沒有呼叫被測函式 ' + targetCallable };
         }
+    }
+    if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
+        return { valid: false, reason: '測試檔嘗試以動態模組替換被測模組 ' + targetModule };
     }
     return { valid: true };
 }
