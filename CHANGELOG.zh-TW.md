@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 執行環境追溯
+
+- 每份結果報告現在記錄實際執行的 extension.js 路徑、工作目錄、模型、請求與實際 Tier，以及模型 unittest 資格。
+- 可直接辨識舊版或不同安裝位置的擴充功能產生的結果，避免將部署問題誤判為測試生成缺陷。
+
 ### Python Property Descriptor 語境
 
 - AST 會辨識 @property、getter、setter 與 deleter，並把同一 descriptor 的 accessor 語境提供給測試生成流程。

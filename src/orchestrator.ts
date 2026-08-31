@@ -15,6 +15,7 @@ import { qualificationForRequest } from './modelQualification';
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
 import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
+import { formatReportProvenance } from './reportProvenance';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -959,6 +960,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let currentTier = resolvedTier;
     let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **使用的策略**: Tier ${currentTier} (${userTierSetting === 'auto' ? 'Auto 自動路由' : '使用者指定 Tier ' + currentTier})\n- **日期**: ${reportDateStr}\n\n`;
+    finalReportMarkdown += formatReportProvenance({
+        extensionEntry: __filename,
+        workingDirectory: process.cwd(),
+        modelName: params.modelName,
+        requestedTier: userTierSetting,
+        resolvedTier,
+        qualified: qualifiedForSelectedModel,
+    });
 
     const baseDir = params.outputPath || path.dirname(params.filePath);
     
