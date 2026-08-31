@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../ollamaCapability';
+import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../ollamaCapability';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
     const request = buildOllamaStructuredProbe('local-model');
@@ -55,4 +55,24 @@ test('test-generation probe requires a complete unittest structure, not merely J
         }).capability,
         'unverified'
     );
+});
+
+test('plain test-generation probe does not require JSON mode and accepts fenced Python', () => {
+    const request = buildOllamaPlainTestGenerationProbe('local-model');
+    assert.strictEqual('format' in request, false);
+    assert.ok(request.prompt.startsWith('Return only one complete runnable Python unittest file.'));
+    assert.strictEqual(assessTestGenerationProbe({
+        response: [
+            '```python',
+            'import unittest',
+            '',
+            'def increment(value):',
+            '    return value + 1',
+            '',
+            'class TestIncrement(unittest.TestCase):',
+            '    def test_increment(self):',
+            '        self.assertEqual(increment(1), 2)',
+            '```'
+        ].join('\n')
+    }).capability, 'verified');
 });

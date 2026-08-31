@@ -6,7 +6,7 @@ import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
-import { assessTestGenerationProbe, buildOllamaTestGenerationProbe, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
+import { assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -317,18 +317,31 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     signal: outputController.signal as any
                                                 });
                                                 const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
-                                                const capability = assessTestGenerationProbe(outputPayload);
+                                                let capability = assessTestGenerationProbe(outputPayload);
+                                                let plainPythonVerified = false;
+                                                if (capability.capability !== 'verified') {
+                                                    const plainResponse = await fetch(`${baseUrl}/api/generate`, {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName)),
+                                                        signal: outputController.signal as any
+                                                    });
+                                                    capability = assessTestGenerationProbe(
+                                                        plainResponse.ok ? await plainResponse.json() : undefined
+                                                    );
+                                                    plainPythonVerified = capability.capability === 'verified';
+                                                }
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                                     ...profile,
                                                     testGenerationReady: capability.capability === 'verified'
                                                 });
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
-                                                        `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過結構化輸出驗證。`
+                                                        `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
                                                     );
                                                 } else {
                                                     vscode.window.showWarningMessage(
-                                                        `⚠️ Local Ollama 連線成功，但未通過結構化輸出驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。`
+                                                        `⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。`
                                                     );
                                                 }
                                             } catch {
@@ -398,49 +411,47 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     body: JSON.stringify(request.body),
                                     signal: controller.signal as any
                                 });
-                                clearTimeout(timeoutId);
-                                if (response.ok) {
-                                    const responsePayload = await response.json();
-                                    const capability = assessTestGenerationProbe({
-                                        response: getGoogleGeneratedText(responsePayload)
-                                    });
-                                    // Cloud Gemini: 使用已知 context window 大小
-                                    const profile = {
-                                        paramSize: 'Cloud (Gemini)',
-                                        contextLength: 1000000,
-                                        envType: 'cloud' as const,
-                                        modelName: credential.model,
-                                        testGenerationReady: capability.capability === 'verified'
-                                    };
-                                    this.webview?.postMessage({ command: 'modelProbeResult', profile });
-                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                    if (capability.capability === 'verified') {
-                                        vscode.window.showInformationMessage('✅ Cloud Gemini 連線成功！Context：1M tokens；已通過結構化輸出驗證。');
-                                    } else {
-                                        vscode.window.showWarningMessage(
-                                            '⚠️ Cloud Gemini 連線成功，但未通過結構化輸出驗證。系統會在需要時改用文字輸出回退；建議改選支援 JSON 的模型。'
-                                        );
-                                    }
-                                } else {
-                                    const errorText = await response.text();
-                                    const fallbackRequest = buildGoogleGenerateContentRequest(credential.model, credential.key, 'hi');
-                                    const fallbackResponse = await fetch(fallbackRequest.url, {
+                                let capability = assessTestGenerationProbe(response.ok
+                                    ? { response: getGoogleGeneratedText(await response.json()) }
+                                    : undefined);
+                                let plainPythonVerified = false;
+                                if (capability.capability !== 'verified') {
+                                    const plainRequest = buildGoogleGenerateContentRequest(
+                                        credential.model,
+                                        credential.key,
+                                        PLAIN_TEST_GENERATION_PROBE_PROMPT
+                                    );
+                                    const plainResponse = await fetch(plainRequest.url, {
                                         method: 'POST',
-                                        headers: fallbackRequest.headers,
-                                        body: JSON.stringify(fallbackRequest.body)
+                                        headers: plainRequest.headers,
+                                        body: JSON.stringify(plainRequest.body),
+                                        signal: controller.signal as any
                                     });
-                                    if (!fallbackResponse.ok) {
-                                        throw new Error(`HTTP ${response.status} - ${errorText}`);
+                                    if (!response.ok && !plainResponse.ok) {
+                                        throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
-                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
-                                        paramSize: 'Cloud (Gemini)',
-                                        contextLength: 1000000,
-                                        envType: 'cloud',
-                                        modelName: credential.model,
-                                        testGenerationReady: false
-                                    });
+                                    capability = assessTestGenerationProbe(plainResponse.ok
+                                        ? { response: getGoogleGeneratedText(await plainResponse.json()) }
+                                        : undefined);
+                                    plainPythonVerified = capability.capability === 'verified';
+                                }
+                                clearTimeout(timeoutId);
+                                const profile = {
+                                    paramSize: 'Cloud (Gemini)',
+                                    contextLength: 1000000,
+                                    envType: 'cloud' as const,
+                                    modelName: credential.model,
+                                    testGenerationReady: capability.capability === 'verified'
+                                };
+                                this.webview?.postMessage({ command: 'modelProbeResult', profile });
+                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
+                                if (capability.capability === 'verified') {
+                                    vscode.window.showInformationMessage(
+                                        `✅ Cloud Gemini 連線成功！Context：1M tokens；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
+                                    );
+                                } else {
                                     vscode.window.showWarningMessage(
-                                        '⚠️ Cloud Gemini 可連線，但不支援這個結構化輸出格式。系統會在需要時改用文字輸出回退；建議改選支援 JSON 的模型。'
+                                        `⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用。`
                                     );
                                 }
                             } else if (message.envType === 'custom') {
@@ -458,49 +469,45 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     )),
                                     signal: controller.signal as any
                                 });
-                                clearTimeout(timeoutId);
-                                if (response.ok) {
-                                    const capability = assessTestGenerationProbe({
-                                        response: getCustomChatCompletionText(await response.json())
-                                    });
-                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
-                                        paramSize: 'Custom API',
-                                        contextLength: 8192,
-                                        envType: 'custom',
-                                        modelName: message.modelName,
-                                        testGenerationReady: capability.capability === 'verified'
-                                    });
-                                    if (capability.capability === 'verified') {
-                                        vscode.window.showInformationMessage('✅ Custom API 連線成功！已通過結構化輸出驗證。');
-                                    } else {
-                                        vscode.window.showWarningMessage(
-                                            '⚠️ Custom API 連線成功，但未通過結構化輸出驗證。系統會在需要時改用文字輸出回退；建議選用支援 JSON mode 的模型。'
-                                        );
-                                    }
-                                } else {
-                                    const errorText = await response.text();
-                                    const fallbackResponse = await fetch(message.customUrl, {
+                                let capability = assessTestGenerationProbe(response.ok
+                                    ? { response: getCustomChatCompletionText(await response.json()) }
+                                    : undefined);
+                                let plainPythonVerified = false;
+                                if (capability.capability !== 'verified') {
+                                    const plainResponse = await fetch(message.customUrl, {
                                         method: 'POST',
                                         headers,
                                         body: JSON.stringify(buildCustomChatCompletionBody(
                                             message.modelName,
-                                            'Reply briefly.',
-                                            'hi',
+                                            'Return only runnable Python unittest code.',
+                                            PLAIN_TEST_GENERATION_PROBE_PROMPT,
                                             'text'
-                                        ))
+                                        )),
+                                        signal: controller.signal as any
                                     });
-                                    if (!fallbackResponse.ok) {
-                                        throw new Error(`HTTP ${response.status} - ${errorText}`);
+                                    if (!response.ok && !plainResponse.ok) {
+                                        throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
-                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
-                                        paramSize: 'Custom API',
-                                        contextLength: 8192,
-                                        envType: 'custom',
-                                        modelName: message.modelName,
-                                        testGenerationReady: false
-                                    });
+                                    capability = assessTestGenerationProbe(plainResponse.ok
+                                        ? { response: getCustomChatCompletionText(await plainResponse.json()) }
+                                        : undefined);
+                                    plainPythonVerified = capability.capability === 'verified';
+                                }
+                                clearTimeout(timeoutId);
+                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                    paramSize: 'Custom API',
+                                    contextLength: 8192,
+                                    envType: 'custom',
+                                    modelName: message.modelName,
+                                    testGenerationReady: capability.capability === 'verified'
+                                });
+                                if (capability.capability === 'verified') {
+                                    vscode.window.showInformationMessage(
+                                        `✅ Custom API 連線成功！已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
+                                    );
+                                } else {
                                     vscode.window.showWarningMessage(
-                                        '⚠️ Custom API 可連線，但不支援 JSON mode。系統會在需要時改用文字輸出回退；建議選用支援 JSON mode 的模型。'
+                                        `⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用。`
                                     );
                                 }
                             }

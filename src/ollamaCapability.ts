@@ -19,6 +19,10 @@ export const STRUCTURED_OUTPUT_PROBE_SCHEMA = {
 export const TEST_GENERATION_PROBE_PROMPT =
     'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file: import unittest, include this fixture exactly as the function under test: def increment(value): return value + 1, define a unittest.TestCase class, and include a test assertion that calls increment. Do not include Markdown or explanations.';
 
+/** A compatibility probe for models that can write tests but do not support JSON mode. */
+export const PLAIN_TEST_GENERATION_PROBE_PROMPT =
+    'Return only one complete runnable Python unittest file. Include this fixture exactly as the function under test: def increment(value): return value + 1. Import unittest, define a unittest.TestCase class, and include a test assertion that calls increment. Do not include explanations.';
+
 export const TEST_GENERATION_PROBE_SCHEMA = {
     type: 'object',
     properties: { code: { type: 'string' } },
@@ -49,6 +53,22 @@ export function buildOllamaTestGenerationProbe(model: string) {
         format: 'json',
         options: { temperature: 0 }
     };
+}
+
+/** Probe plain Python output without sending an Ollama JSON-format constraint. */
+export function buildOllamaPlainTestGenerationProbe(model: string) {
+    return {
+        model,
+        prompt: PLAIN_TEST_GENERATION_PROBE_PROMPT,
+        stream: false,
+        options: { temperature: 0 }
+    };
+}
+
+function extractProbeCode(response: string): string {
+    const unwrapped = unwrapGeneratedCodeEnvelope(response).trim();
+    const fenced = unwrapped.match(/^```(?:python)?\s*\r?\n([\s\S]*?)\r?\n?```\s*$/i);
+    return (fenced ? fenced[1] : unwrapped).trim();
 }
 
 /** Validates the provider-neutral JSON response used by every connection probe. */
@@ -85,7 +105,7 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
     if (typeof response !== 'string' || !response.trim()) {
         return { capability: 'unverified', reason: '模型沒有回傳測試程式碼。' };
     }
-    const code = unwrapGeneratedCodeEnvelope(response);
+    const code = extractProbeCode(response);
     const validation = validateUnittestStructure(code);
     if (!validation.valid) {
         return { capability: 'unverified', reason: validation.reason || '模型沒有產生有效的 unittest 結構。' };

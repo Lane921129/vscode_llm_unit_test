@@ -4,6 +4,13 @@
 
 ## 2026-08-31
 
+### 純 Python 模型能力探測回退
+
+- 本地 Ollama、Cloud Gemini 與 Custom API 的連線探測現在優先驗證結構化輸出；若模型不支援 JSON mode，會再以純 Python unittest 探測確認實際測試生成能力。
+- 只有產出完整、可驗證且包含目標呼叫的 unittest 時才會通過 Tier 2–4 資格；不會因單純可連線或簡短文字回覆而放行。
+- 純 Python 回應可安全接受單一 python code fence，讓遵守程式碼格式但不提供 JSON envelope 的模型可被正確辨識。
+- 語意 JSON 仍採保守語法技能卡回退，避免非結構化模型污染 Prompt。
+
 ### 內建突變引擎控制流程擴充
 
 - 內建 AST 後備引擎新增 while 迴圈條件、三元運算式條件與 augmented assignment（如 +=）的通用突變，不依賴特定業務函式。
