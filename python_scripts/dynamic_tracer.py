@@ -240,6 +240,16 @@ def safe_repr(val) -> str:
         r = r[:100] + '...'
     return r
 
+
+def is_cached_property_descriptor(descriptor):
+    """Recognise functools.cached_property without accepting arbitrary descriptors."""
+    descriptor_type = type(descriptor)
+    return (
+        descriptor_type.__module__ == 'functools'
+        and descriptor_type.__name__ == 'cached_property'
+        and callable(getattr(descriptor, 'func', None))
+    )
+
 def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> dict:
     """
     載入模組、執行函式、記錄 I/O
@@ -283,8 +293,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             if isinstance(cls_obj, type):
                 descriptor = cls_obj.__dict__.get(func_name)
                 method = getattr(cls_obj, func_name, None)
-                if isinstance(descriptor, property) and callable(descriptor.fget):
-                    func = descriptor.fget
+                if (isinstance(descriptor, property) and callable(descriptor.fget)) or is_cached_property_descriptor(descriptor):
+                    func = descriptor.fget if isinstance(descriptor, property) else descriptor.func
                     method_kind = 'property'
                     func_is_property = True
                     method_class_name = attr_name

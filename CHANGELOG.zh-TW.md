@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### Cached Property 動態追蹤
+
+- 動態追蹤新增 functools.cached_property 支援，與一般 property 一樣以 descriptor 存取取得真實回傳值。
+- 僅辨識標準庫 cached_property，避免把任意自訂 descriptor 誤判為安全可追蹤目標。
+
 ### Stub Smoke Test 斷言
 
 - 純 pass、return None 與安全固定 literal 的 Stub 測試現在會使用精確 assertion，不再只確認未拋出例外。

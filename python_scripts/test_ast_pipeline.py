@@ -267,6 +267,24 @@ class Worker:
         self.assertIsNone(trace['load_error'])
         self.assertEqual(trace['examples'], [{'args': [], 'result': 'True', 'result_type': 'bool'}])
 
+    def test_dynamic_tracer_supports_standard_library_cached_property(self):
+        source = '''from functools import cached_property
+
+class Settings:
+    @cached_property
+    def label(self):
+        return "ready"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'settings.py'
+            target.write_text(source, encoding='utf-8')
+            ast_data = self.run_script('ast_extractor.py', target, 'label')
+            trace = trace_function(str(target), 'label')
+
+        self.assertEqual(ast_data['method_kind'], 'property')
+        self.assertIsNone(trace['load_error'])
+        self.assertEqual(trace['examples'], [{'args': [], 'result': "'ready'", 'result_type': 'str'}])
+
     def test_dynamic_tracer_reaches_scalar_branches_from_source_conditions(self):
         source = '''def route(value: str, mode: str):
     if not value or len(value) < 4:
