@@ -6,6 +6,7 @@ import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
+import { assessOllamaStructuredProbe, buildOllamaStructuredProbe } from './ollamaCapability';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -300,9 +301,33 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                             // 同時傳給 extension 主程式
                                             vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                            vscode.window.showInformationMessage(
-                                                `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens`
-                                            );
+                                            const outputController = new AbortController();
+                                            const outputTimeout = setTimeout(() => outputController.abort(), 15000);
+                                            try {
+                                                const outputResponse = await fetch(`${baseUrl}/api/generate`, {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify(buildOllamaStructuredProbe(message.modelName)),
+                                                    signal: outputController.signal as any
+                                                });
+                                                const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
+                                                const capability = assessOllamaStructuredProbe(outputPayload);
+                                                if (capability.capability === 'verified') {
+                                                    vscode.window.showInformationMessage(
+                                                        `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過結構化輸出驗證。`
+                                                    );
+                                                } else {
+                                                    vscode.window.showWarningMessage(
+                                                        `⚠️ Local Ollama 連線成功，但未通過結構化輸出驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。`
+                                                    );
+                                                }
+                                            } catch {
+                                                vscode.window.showWarningMessage(
+                                                    '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
+                                                );
+                                            } finally {
+                                                clearTimeout(outputTimeout);
+                                            }
                                         } else {
                                             vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
                                         }
