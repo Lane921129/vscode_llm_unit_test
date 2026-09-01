@@ -369,6 +369,25 @@ def infer_boundary_inputs(positional_args: list, annotations: dict = None, keywo
         combo = tuple(c[i % len(c)] for c in per_arg_candidates)
         results.append(build_input(combo))
 
+    # Two independent numeric inputs often need different relative magnitudes
+    # to expose arithmetic or comparison branches. Zip-style probes only use
+    # matching positions (for example 50, 50), which can miss those branches.
+    # Add a tiny fixed set of domain-neutral scale pairs. We do this only when
+    # there are exactly two non-string/non-boolean parameters, so ordinary
+    # string APIs and higher-arity functions do not get an input explosion.
+    def numeric_or_unknown(name):
+        annotation = str((annotations or {}).get(name, '')).lower()
+        return 'str' not in annotation and 'bool' not in annotation
+
+    if len(all_args) == 2 and all(numeric_or_unknown(name) for name in all_args):
+        relative_scale_pairs = [
+            (10, 200),
+            (50, 150),
+            (100, 200),
+            (200, 100),
+        ]
+        results.extend(build_input(pair) for pair in relative_scale_pairs)
+
     return results
 
 

@@ -157,3 +157,55 @@ test('condition-guided trace produces Tier 1 tests that kill boundary mutations'
         rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test('relative numeric trace probes produce runnable Tier 1 tests for derived threshold branches', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tier1-derived-threshold-'));
+    try {
+        const sourcePath = join(tempDir, 'derived_thresholds.py');
+        const testPath = join(tempDir, 'test_derived_thresholds.py');
+        writeFileSync(sourcePath, [
+            'def classify(numerator, denominator):',
+            '    score = round(numerator / (denominator / 100) ** 2, 2)',
+            '    if score < 18.5:',
+            '        return "low"',
+            '    if score < 24:',
+            '        return "middle"',
+            '    if score < 27:',
+            '        return "high"',
+            '    return "top"',
+            ''
+        ].join('\n'), 'utf8');
+
+        const trace = spawnSync(
+            'python',
+            [join(process.cwd(), 'python_scripts', 'dynamic_tracer.py'), sourcePath, 'classify'],
+            { encoding: 'utf8' }
+        );
+        assert.strictEqual(trace.status, 0, trace.stdout + trace.stderr);
+        const traceData = JSON.parse(trace.stdout) as {
+            examples: Array<{ args: string[]; result: string; result_type: string }>;
+            errors: Array<{ args: string[]; exception: string }>;
+        };
+        assert.deepStrictEqual(
+            new Set(traceData.examples.map(example => example.result)),
+            new Set(["'low'", "'middle'", "'high'", "'top'"])
+        );
+        const methods = buildTier1TestMethods('classify', traceData.examples, traceData.errors);
+        writeFileSync(testPath, [
+            'import unittest',
+            'from derived_thresholds import classify',
+            '',
+            'class TestDerivedThresholds(unittest.TestCase):',
+            methods.join('\n\n'),
+            ''
+        ].join('\n'), 'utf8');
+
+        const run = spawnSync('python', ['-m', 'unittest', 'test_derived_thresholds.py'], {
+            cwd: tempDir,
+            encoding: 'utf8'
+        });
+        assert.strictEqual(run.status, 0, run.stdout + run.stderr);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
+});

@@ -568,6 +568,25 @@ class Settings:
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
 
+    def test_dynamic_tracer_uses_relative_numeric_probes_for_derived_thresholds(self):
+        source = '''def classify(numerator, denominator):
+    score = round(numerator / (denominator / 100) ** 2, 2)
+    if score < 18.5:
+        return "low"
+    if score < 24:
+        return "middle"
+    if score < 27:
+        return "high"
+    return "top"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'derived_thresholds.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'classify')
+
+        observed = {example['result'] for example in result['examples']}
+        self.assertTrue({"'low'", "'middle'", "'high'", "'top'"}.issubset(observed))
+
     def test_dynamic_tracer_reaches_match_case_literals_and_default_path(self):
         source = '''def route(kind: str):
     match kind:
