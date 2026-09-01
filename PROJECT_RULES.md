@@ -34,6 +34,7 @@
 - API Key 只能放在 VS Code SecretStorage、CI Secret 或執行環境變數；禁止寫入原始碼、設定檔、報告與 Git。
 - Google API Key 必須走 HTTP Header，不可放入 URL。
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
+- 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 
 ## 品質、Git 與紀錄
 

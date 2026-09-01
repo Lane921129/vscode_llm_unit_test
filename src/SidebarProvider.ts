@@ -6,7 +6,8 @@ import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
-import { assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
+import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
+import { verifyRunnableTestGenerationProbe } from './modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -317,7 +318,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     signal: outputController.signal as any
                                                 });
                                                 const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
-                                                let capability = assessTestGenerationProbe(outputPayload);
+                                                let capability = await verifyRunnableTestGenerationProbe(outputPayload);
                                                 let plainPythonVerified = false;
                                                 if (capability.capability !== 'verified') {
                                                     const plainResponse = await fetch(`${baseUrl}/api/generate`, {
@@ -326,7 +327,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                         body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName)),
                                                         signal: outputController.signal as any
                                                     });
-                                                    capability = assessTestGenerationProbe(
+                                                    capability = await verifyRunnableTestGenerationProbe(
                                                         plainResponse.ok ? await plainResponse.json() : undefined
                                                     );
                                                     plainPythonVerified = capability.capability === 'verified';
@@ -416,7 +417,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     body: JSON.stringify(request.body),
                                     signal: controller.signal as any
                                 });
-                                let capability = assessTestGenerationProbe(response.ok
+                                let capability = await verifyRunnableTestGenerationProbe(response.ok
                                     ? { response: getGoogleGeneratedText(await response.json()) }
                                     : undefined);
                                 let plainPythonVerified = false;
@@ -435,7 +436,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     if (!response.ok && !plainResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
-                                    capability = assessTestGenerationProbe(plainResponse.ok
+                                    capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
                                         ? { response: getGoogleGeneratedText(await plainResponse.json()) }
                                         : undefined);
                                     plainPythonVerified = capability.capability === 'verified';
@@ -479,7 +480,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     )),
                                     signal: controller.signal as any
                                 });
-                                let capability = assessTestGenerationProbe(response.ok
+                                let capability = await verifyRunnableTestGenerationProbe(response.ok
                                     ? { response: getCustomChatCompletionText(await response.json()) }
                                     : undefined);
                                 let plainPythonVerified = false;
@@ -498,7 +499,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     if (!response.ok && !plainResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
-                                    capability = assessTestGenerationProbe(plainResponse.ok
+                                    capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
                                         ? { response: getCustomChatCompletionText(await plainResponse.json()) }
                                         : undefined);
                                     plainPythonVerified = capability.capability === 'verified';

@@ -4,6 +4,11 @@
 
 ## 2026-09-01
 
+### 可執行的模型 unittest 探測
+
+- 「測試連線」不再只檢查模型輸出的 unittest 結構與 assertion；探測碼必須符合嚴格、無外部副作用的最小 fixture，並在 Python isolated mode 中實際執行通過。
+- 連線資格結果因此能區分「格式看似正確」與「真的能產生可執行 unittest」，且不會執行模型任意輸出的程式碼。
+
 ### 匯入別名的簽名驗證
 
 - 目標函式以 `from module import target as alias` 匯入時，Python AST 簽名閘門現在同樣會檢查別名呼叫的 positional 與 keyword 引數。

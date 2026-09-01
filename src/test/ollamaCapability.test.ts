@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../ollamaCapability';
+import { isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../modelProbeExecution';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
     const request = buildOllamaStructuredProbe('local-model');
@@ -95,4 +96,30 @@ test('plain test-generation probe does not require JSON mode and accepts fenced 
             '```'
         ].join('\n')
     }).capability, 'verified');
+});
+
+test('runnable probe requires the safe fixture and an isolated execution pass', async () => {
+    const code = [
+        'import unittest',
+        '',
+        'def increment(value):',
+        '    return value + 1',
+        '',
+        'class TestIncrement(unittest.TestCase):',
+        '    def test_increment(self):',
+        '        self.assertEqual(increment(1), 2)',
+    ].join('\n');
+    const payload = { response: JSON.stringify({ code }) };
+
+    assert.strictEqual(isIsolatedProbeCode(code), true);
+    assert.strictEqual(isIsolatedProbeCode(code + '\nopen("unsafe", "w")'), false);
+    assert.strictEqual(await runIsolatedProbe(code), true);
+    assert.deepStrictEqual(
+        await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code),
+        { capability: 'verified', reason: '模型已通過 unittest 結構、行為 assertion 與隔離執行驗證。' }
+    );
+    assert.strictEqual(
+        (await verifyRunnableTestGenerationProbe(payload, async () => false)).capability,
+        'unverified'
+    );
 });
