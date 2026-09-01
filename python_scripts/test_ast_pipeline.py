@@ -265,7 +265,7 @@ def build():
             result = trace_function(str(target), 'build')
 
         example = result['examples'][0]
-        self.assertIn('Result object at 0x', example['result'])
+        self.assertEqual(example['result'], '<non_assertable: Result>')
         self.assertFalse(example['result_assertable'])
 
     def test_dynamic_tracer_cli_keeps_target_output_out_of_json_stdout(self):

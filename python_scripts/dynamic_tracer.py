@@ -343,10 +343,14 @@ def is_assertable_literal(value, seen=None):
 
 def trace_repr_with_oracle(value):
     """Return display repr and whether it is safe for a deterministic assertion."""
+    if not is_assertable_literal(value):
+        # Do not call an arbitrary object's __repr__: it may expose a memory
+        # address, perform I/O, or throw. The type is enough diagnostic context.
+        return f'<non_assertable: {type(value).__name__}>', False
     rendered = repr(value)
     if len(rendered) > 100:
         return safe_repr(value), False
-    return rendered, is_assertable_literal(value)
+    return rendered, True
 
 
 TRACE_COLLECTION_LIMIT = 100
