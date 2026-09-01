@@ -1678,13 +1678,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         : undefined;
                     const initialCoverage = assessExecution(out);
                     const targetWasNotExecuted = initialCoverage?.targetExecuted === false;
-                    if (targetWasNotExecuted) {
-                        const coverageError = 'Coverage 顯示被測函式本體的可執行行均未執行。';
+                    const targetCoverageIncomplete = initialCoverage?.targetFullyCovered === false;
+                    const coverageError = targetWasNotExecuted
+                        ? 'Coverage 顯示被測函式本體的可執行行均未執行。'
+                        : targetCoverageIncomplete
+                            ? `Coverage 顯示被測函式本體尚有未覆蓋行：${initialCoverage?.missingTargetLines?.join(', ') || '未知'}。`
+                            : undefined;
+                    if (coverageError) {
                         out = `${out}\n${coverageError}`.trim();
                         log(`[預先驗證失敗] ${coverageError}`);
                         finalReportMarkdown += `### ⚠️ 目標覆蓋驗證失敗\n\n${coverageError}\n\n`;
                     }
-                    if (err || targetWasNotExecuted) {
+                    if (err || coverageError) {
                         log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
@@ -1726,7 +1731,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     });
                                     const reviewerCoverage = assessExecution(revCheck.out);
                                     const reviewerMissedTarget = reviewerCoverage?.targetExecuted === false;
-                                    if (revCheck.ok && !reviewerMissedTarget) {
+                                    const reviewerCoverageIncomplete = reviewerCoverage?.targetFullyCovered === false;
+                                    if (revCheck.ok && !reviewerMissedTarget && !reviewerCoverageIncomplete) {
                                         log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
                                         finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
                                         finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
@@ -1737,6 +1743,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     } else {
                                         const reviewerFailure = reviewerMissedTarget
                                             ? 'Coverage 顯示被測函式本體仍未執行。'
+                                            : reviewerCoverageIncomplete
+                                                ? `Coverage 顯示被測函式本體仍有未覆蓋行：${reviewerCoverage?.missingTargetLines?.join(', ') || '未知'}。`
                                             : revCheck.out.substring(0, 300);
                                         log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${reviewerFailure}`);
                                         finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
@@ -1778,7 +1786,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             });
                                             const repairCoverage = assessExecution(result2.out);
                                             const repairMissedTarget = repairCoverage?.targetExecuted === false;
-                                            if (result2.ok && !repairMissedTarget) {
+                                            const repairCoverageIncomplete = repairCoverage?.targetFullyCovered === false;
+                                            if (result2.ok && !repairMissedTarget && !repairCoverageIncomplete) {
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
                                                 finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
                                                 loopCoverage = extractCoverage(result2.out, params.filePath);
@@ -1788,6 +1797,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             } else {
                                                 const repairFailure = repairMissedTarget
                                                     ? 'Coverage 顯示被測函式本體仍未執行。'
+                                                    : repairCoverageIncomplete
+                                                        ? `Coverage 顯示被測函式本體仍有未覆蓋行：${repairCoverage?.missingTargetLines?.join(', ') || '未知'}。`
                                                     : result2.out.substring(0, 200);
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${repairFailure}`);
                                             }

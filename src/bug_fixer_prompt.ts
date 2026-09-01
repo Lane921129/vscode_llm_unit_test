@@ -40,7 +40,10 @@ CORE RULES:
    - Do NOT assume any hardcoded boundary rules. Read the actual validation logic in the source code.
    - Use the VERIFIED REAL EXECUTION TRACE (if provided) to determine exact input-output behavior.
 9. OUTPUT FORMAT:
-   - Output the COMPLETE, corrected, runnable test file in a single \`\`\`python ... \`\`\` code block.`;
+   - Output the COMPLETE, corrected, runnable test file in a single \`\`\`python ... \`\`\` code block.
+10. COVERAGE COMPLETENESS:
+   - If the pre-verification log identifies uncovered target-source lines, add focused tests that execute those paths.
+   - Do not treat a passing test suite or a high mutation score as sufficient while target-source lines remain uncovered.`;
 }
 
 export function getReviewerUserPrompt(

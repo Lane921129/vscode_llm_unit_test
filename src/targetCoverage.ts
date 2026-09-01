@@ -5,6 +5,10 @@ export interface TargetCoverageAssessment {
     coverageText: string;
     missingLines: string;
     targetExecuted?: boolean;
+    /** Target-body lines that coverage confirms were not exercised. */
+    missingTargetLines?: number[];
+    /** Undefined means coverage could not safely determine the answer. */
+    targetFullyCovered?: boolean;
 }
 
 function parseMissingLines(text: string): Set<number> | undefined {
@@ -51,6 +55,9 @@ export function assessTargetCoverage(
         const missingLines = match[5].trim();
         const missing = parseMissingLines(missingLines);
         const usableLines = [...new Set(executableLines.filter(Number.isSafeInteger))];
+        const missingTargetLines = missing === undefined || usableLines.length === 0
+            ? undefined
+            : usableLines.filter(line => missing.has(line));
         return {
             available: true,
             coverageText: match[4],
@@ -59,7 +66,11 @@ export function assessTargetCoverage(
             // rejection and let normal execution/mutation validation decide.
             targetExecuted: missing === undefined || usableLines.length === 0
                 ? undefined
-                : usableLines.some(line => !missing.has(line))
+                : usableLines.some(line => !missing.has(line)),
+            missingTargetLines,
+            targetFullyCovered: missingTargetLines === undefined
+                ? undefined
+                : missingTargetLines.length === 0,
         };
     }
     return { available: false, coverageText: 'N/A', missingLines: '無' };

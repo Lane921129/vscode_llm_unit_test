@@ -13,7 +13,7 @@ test('detects that every executable target line was missed', () => {
     assert.strictEqual(assessment.targetExecuted, false);
 });
 
-test('accepts target coverage when at least one executable target line ran', () => {
+test('reports partial target coverage separately from basic execution', () => {
     const assessment = assessTargetCoverage(
         'target.py 5 2 60% 4-5',
         'target.py',
@@ -21,12 +21,18 @@ test('accepts target coverage when at least one executable target line ran', () 
     );
     assert.strictEqual(assessment.targetExecuted, true);
     assert.strictEqual(assessment.coverageText, '60%');
+    assert.deepStrictEqual(assessment.missingTargetLines, [4, 5]);
+    assert.strictEqual(assessment.targetFullyCovered, false);
 });
 
 test('does not mistake an unavailable or malformed report for zero coverage', () => {
     assert.strictEqual(assessTargetCoverage('no coverage available', 'target.py', [2]).available, false);
     assert.strictEqual(
         assessTargetCoverage('target.py 5 2 60% branch 3', 'target.py', [2, 3]).targetExecuted,
+        undefined
+    );
+    assert.strictEqual(
+        assessTargetCoverage('target.py 5 2 60% branch 3', 'target.py', [2, 3]).targetFullyCovered,
         undefined
     );
 });
