@@ -1010,6 +1010,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         { envType: params.envType, modelName: params.modelName },
         currentModelProfile.testGenerationReady !== undefined
     );
+    const mayUseModelAuthoredTests = canUseTierOneLlmFallback(qualifiedForSelectedModel);
     if (qualifiedForSelectedModel === undefined) {
         log('[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；本次先限制為 Tier 1。測試連線會同時讀取供應商可提供的參數量／Context，並以無副作用 fixture 實測可執行 unittest。');
     }
@@ -1292,7 +1293,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const deterministicSkillIds = astContext && !astContext.error
         ? inferSkillIdsFromCode((astContext as any).code || '', astContext as any)
         : [];
-    if (astContext && !astContext.error) {
+    if (astContext && !astContext.error && mayUseModelAuthoredTests) {
         log(`[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）...`);
         try {
             const semSys = buildSemanticAnalyzerSystemPrompt();
@@ -1337,7 +1338,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     if (!semanticContext && deterministicSkillIds.length > 0) {
         semanticContext = '=== DETERMINISTIC SKILL BASELINE (Derived from source syntax) ===\n\n'
             + formatSkillCardsForPrompt(getSkillCards(deterministicSkillIds));
-        log(`[技能卡] 使用程式碼特徵的保守技能組合：${deterministicSkillIds.join(', ')}。`);
+        log(mayUseModelAuthoredTests
+            ? `[技能卡] 使用程式碼特徵的保守技能組合：${deterministicSkillIds.join(', ')}。`
+            : `[技能卡] 模型尚未驗證；略過 LLM 語意分析，使用程式碼特徵的確定性技能組合：${deterministicSkillIds.join(', ')}。`);
     }
 
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
@@ -1411,7 +1414,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (currentTier === 1 && !survivedMutants) {
                 const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
                 if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
-                    if (!canUseTierOneLlmFallback(qualifiedForSelectedModel)) {
+                    if (!mayUseModelAuthoredTests) {
                         throw new Error(
                             'Tier 1 無法取得可驗證的動態 Trace；目前模型尚未通過 unittest 生成資格，'
                             + '無法安全改用 LLM 猜測測試。請先執行「測試連線」，或改用已通過探測的模型後重試。'
@@ -1433,7 +1436,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const constructorParams = ((astContext as any)?.class_context?.init?.required_params
                             || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
                         if (className && !directClassCall && constructorParams && constructorParams.length > 0) {
-                            if (!canUseTierOneLlmFallback(qualifiedForSelectedModel)) {
+                            if (!mayUseModelAuthoredTests) {
                                 throw new Error(
                                     `Tier 1 無法安全建立 ${className}：建構子需要 ${constructorParams.join(', ')}，`
                                     + '而目前模型尚未通過 unittest 生成資格。請先執行「測試連線」後再使用 LLM fallback。'
@@ -2175,6 +2178,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             if (mutationScore >= 100) {
                 log(`[優化] 突變分數已達到 100%，自我修復成功！`);
+                break;
+            }
+            if (survivedMutants && !mayUseModelAuthoredTests) {
+                const note = '目前模型尚未通過 unittest 生成驗證；已保留 deterministic Tier 1 測試與存活變異體報告，停止 LLM 修補以避免猜測性測試。請先執行「測試連線」後再啟用 Tier 2–4 自我修復。';
+                log(`[優化] ${note}`);
+                finalReportMarkdown += `> [!NOTE]\n> ${note}\n\n`;
                 break;
             }
         } catch (error: unknown) {
