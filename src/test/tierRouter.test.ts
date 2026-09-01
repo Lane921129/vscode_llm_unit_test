@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { canUseDeterministicTierOne, resolveTier } from '../tierRouter';
+import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from '../tierRouter';
 
 test('routes an unqualified model to deterministic Tier 1 even when a higher Tier is requested', () => {
     assert.strictEqual(resolveTier(70, 90, 'tier4', false), 1);
@@ -40,4 +40,10 @@ test('requires verified examples or errors before an unqualified model may use T
     assert.strictEqual(canUseDeterministicTierOne({
         examples: [], errors: [{ call_assertable: false, exception: 'ValueError' }]
     }), false);
+});
+
+test('permits the non-deterministic Tier 1 fallback only for an executed model probe', () => {
+    assert.strictEqual(canUseTierOneLlmFallback(true), true);
+    assert.strictEqual(canUseTierOneLlmFallback(false), false);
+    assert.strictEqual(canUseTierOneLlmFallback(undefined), false);
 });

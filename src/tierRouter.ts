@@ -62,3 +62,13 @@ export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability
         )
     );
 }
+
+/**
+ * Tier 1 may need a model-written fallback when tracing cannot create a safe
+ * deterministic test (for example, an opaque required constructor argument).
+ * That fallback is only safe after the exact provider/model has passed the
+ * executable unittest probe; "unprobed" is deliberately not treated as true.
+ */
+export function canUseTierOneLlmFallback(testGenerationReady?: boolean): boolean {
+    return testGenerationReady === true;
+}

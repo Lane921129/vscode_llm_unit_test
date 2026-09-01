@@ -12,7 +12,7 @@ import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseU
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
-import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
+import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tierRouter';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
 import { assessTargetCoverage } from './targetCoverage';
@@ -1411,10 +1411,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (currentTier === 1 && !survivedMutants) {
                 const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
                 if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
-                    if (qualifiedForSelectedModel === false) {
+                    if (!canUseTierOneLlmFallback(qualifiedForSelectedModel)) {
                         throw new Error(
-                            'Tier 1 無法取得可驗證的動態 Trace；目前模型未通過 unittest 生成資格，'
-                            + '無法安全改用 LLM 生成。請改用通過探測的 Instruct／Cloud 模型後重試。'
+                            'Tier 1 無法取得可驗證的動態 Trace；目前模型尚未通過 unittest 生成資格，'
+                            + '無法安全改用 LLM 猜測測試。請先執行「測試連線」，或改用已通過探測的模型後重試。'
                         );
                     }
                     log('[Tier 1 退回] 動態追蹤失敗，改走標準 LLM 生成與預先驗證流程。');
@@ -1433,7 +1433,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const constructorParams = ((astContext as any)?.class_context?.init?.required_params
                             || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
                         if (className && !directClassCall && constructorParams && constructorParams.length > 0) {
-                            log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），不使用猜測的無參數實例化；改走一般生成流程。`);
+                            if (!canUseTierOneLlmFallback(qualifiedForSelectedModel)) {
+                                throw new Error(
+                                    `Tier 1 無法安全建立 ${className}：建構子需要 ${constructorParams.join(', ')}，`
+                                    + '而目前模型尚未通過 unittest 生成資格。請先執行「測試連線」後再使用 LLM fallback。'
+                                );
+                            }
+                            log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），已驗證模型可改走一般生成流程。`);
                         } else if (className) {
                             const setupBlock = directClassCall ? '' : [
                                 `    def setUp(self):`,
