@@ -11,6 +11,7 @@ import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudA
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
+import { appendTraceMethodsToUnittestClass } from './traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
 import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tierRouter';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './dependencyResolver';
@@ -1690,6 +1691,25 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if ((finalCode.includes('patch(') || finalCode.includes('MagicMock')) && !finalCode.includes('unittest.mock')) {
                 log(`[警告] 偵測到程式碼使用 patch/MagicMock 但遺漏 import，系統自動補齊 unittest.mock...`);
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
+            }
+
+            // A capable model can add mocks and higher-level scenarios, but it
+            // must not discard concrete target behavior already verified by
+            // Dynamic Trace. Instance construction is intentionally excluded:
+            // its setup may require source-specific arguments or patches.
+            const traceForAugmentation = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
+            const isTopLevelFunction = !(astContext as any)?.class_name;
+            if (currentTier > 1 && isTopLevelFunction && canUseDeterministicTierOne(traceForAugmentation)) {
+                const traceMethods = buildTier1TestMethods(
+                    params.funcName,
+                    traceForAugmentation!.examples,
+                    traceForAugmentation!.errors
+                );
+                const augmented = appendTraceMethodsToUnittestClass(finalCode, traceMethods);
+                finalCode = augmented.code;
+                if (augmented.addedMethodCount > 0) {
+                    log(`[Trace 保底] 已將 ${augmented.addedMethodCount} 個已驗證 I/O 測試加入 Tier ${currentTier} 測試類別。`);
+                }
             }
 
             const generatedValidation = await validateGeneratedTestCode(

@@ -75,6 +75,11 @@
 - 語意分析師輸出的相依回傳值不再被視為未經驗證的事實；缺少 Trace 時改以相依原始碼與 `mock.patch` 為準，避免將 Python dict 誤寫為 `[object Object]`。
 - Trace 失敗只記錄原因並保留靜態語境，不會中斷目標函式的測試生成流程。
 
+### 跨 Tier 的 Trace 行為保底
+
+- Tier 2–4 對頂層函式產生的合法 unittest，現在會自動加入所有可安全 assertion 的 Dynamic Trace 測試方法。
+- LLM 仍可專注於 Mock、跨模組與存活突變體修補；但不能漏掉已由 Python 實際執行證實的輸入／輸出行為。
+
 ### 目標函式簽名相容性閘門
 
 - 產生、Reviewer 與 Tier 4 自癒階段現在會以 AST 檢查測試對目標函式的呼叫；未定義 keyword 或超出 positional 上限的呼叫，若未明確以 `assertRaises(TypeError)` 驗證，會在寫檔前拒絕。
