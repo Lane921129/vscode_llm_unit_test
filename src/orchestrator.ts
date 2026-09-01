@@ -985,7 +985,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         currentModelProfile.testGenerationReady !== undefined
     );
     if (!selectedStoredProfile && (currentModelProfile.envType !== params.envType || currentModelProfile.modelName !== params.modelName)) {
-        log('[模型資格] 此供應商／模型尚未探測；不會沿用其他模型的能力資料。建議先執行「測試連線」。');
+        log('[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；不會沿用其他模型的結果。本機 Ollama 連線同時會讀取其回報的參數量與 Context。');
     }
     const resolvedTier = resolveTier(
         modelParamBillion,
@@ -994,7 +994,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         qualifiedForSelectedModel
     );
     if (qualifiedForSelectedModel === false && userTierSetting !== 'auto' && resolvedTier !== Number(userTierSetting.replace('tier', ''))) {
-        log('[模型資格] 目前模型未通過 unittest 生成探測；已覆蓋手動高階策略並安全改用 Tier 1。');
+        log('[模型能力] 目前模型未通過 unittest 生成驗證；已覆蓋手動高階策略並安全改用 Tier 1。');
     }
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 

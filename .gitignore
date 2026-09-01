@@ -12,3 +12,7 @@ htmlcov/
 mutants/
 .mutmut-cache/
 __pycache__/
+
+# 本機 Agent／執行期日誌：保留說明檔，避免將工作階段、提示與診斷內容提交。
+log/*
+!log/README.md

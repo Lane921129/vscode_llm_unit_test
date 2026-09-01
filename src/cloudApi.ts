@@ -22,8 +22,19 @@ export interface GoogleListModelsRequest {
 
 export interface GoogleModelDescriptor {
     name?: string;
+    displayName?: string;
+    inputTokenLimit?: number;
+    outputTokenLimit?: number;
     supportedGenerationMethods?: string[];
     supportedActions?: string[];
+}
+
+export interface GoogleModelConnectionMetadata {
+    /** The API does not guarantee a parameter count; a name-derived value is labelled as such. */
+    paramSize: string;
+    /** Safe input budget used when the API omits its advertised input limit. */
+    contextLength: number;
+    contextLengthKnown: boolean;
 }
 
 /** Extracts the text from a non-streaming GenerateContent response safely. */
@@ -115,6 +126,32 @@ export function getGenerateContentModelNames(models: GoogleModelDescriptor[]): s
         })
         .map(model => normalizeGoogleModelName(model.name || ''))
         .filter(Boolean);
+}
+
+/**
+ * Read only metadata that the selected Google model actually advertises.
+ * AI Studio's ListModels response normally exposes token limits but not a
+ * guaranteed parameter count.  A "31B" value is therefore shown only when it
+ * is explicitly present in the API model/display name and marked as inferred.
+ */
+export function getGoogleModelConnectionMetadata(
+    models: GoogleModelDescriptor[],
+    modelName: string
+): GoogleModelConnectionMetadata {
+    const selectedName = normalizeGoogleModelName(modelName).toLowerCase();
+    const selected = models.find(model => normalizeGoogleModelName(model.name || '').toLowerCase() === selectedName);
+    const advertisedLimit = selected?.inputTokenLimit;
+    const contextLengthKnown = typeof advertisedLimit === 'number' && Number.isFinite(advertisedLimit) && advertisedLimit > 0;
+    const modelLabel = [selected?.name, selected?.displayName, modelName]
+        .filter((value): value is string => typeof value === 'string')
+        .join(' ');
+    const parameterMatch = modelLabel.match(/(?:^|[\s_-])(\d+(?:\.\d+)?)\s*b(?:\b|[\s_-])/i);
+
+    return {
+        paramSize: parameterMatch ? `${parameterMatch[1]}B（依模型名稱推定）` : 'Cloud API 未提供',
+        contextLength: contextLengthKnown ? advertisedLimit : 4096,
+        contextLengthKnown,
+    };
 }
 
 /**

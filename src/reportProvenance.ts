@@ -18,7 +18,7 @@ export function formatReportProvenance(provenance: ReportProvenance): string {
         `- **工作目錄**: \`${provenance.workingDirectory}\``,
         `- **模型**: \`${provenance.modelName}\``,
         `- **策略**: 請求 ${provenance.requestedTier}，實際 Tier ${provenance.resolvedTier}`, 
-        `- **模型 unittest 資格**: ${qualification}`,
+        `- **模型 unittest 生成能力（測試連線驗證）**: ${qualification}`,
         ''
     ].join('\n');
 }

@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, normalizeGoogleModelName, resolveGoogleApiKey } from '../cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName, resolveGoogleApiKey } from '../cloudApi';
 
 test('buildGoogleGenerateContentRequest uses the selected model and a key header', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'hello');
@@ -54,6 +54,28 @@ test('keeps only Cloud models that declare generateContent support', () => {
     ]);
 
     assert.deepStrictEqual(supported, ['text-model', 'action-model']);
+});
+
+test('uses advertised Cloud token limits and labels name-derived parameter sizes', () => {
+    const metadata = getGoogleModelConnectionMetadata([
+        { name: 'models/gemma-4-31b-it', displayName: 'Gemma 4 31B IT', inputTokenLimit: 131072 }
+    ], 'gemma-4-31b-it');
+
+    assert.deepStrictEqual(metadata, {
+        paramSize: '31B（依模型名稱推定）',
+        contextLength: 131072,
+        contextLengthKnown: true,
+    });
+});
+
+test('uses a conservative budget when Cloud metadata omits an input limit', () => {
+    const metadata = getGoogleModelConnectionMetadata([
+        { name: 'models/gemini-unknown', supportedGenerationMethods: ['generateContent'] }
+    ], 'gemini-unknown');
+
+    assert.strictEqual(metadata.paramSize, 'Cloud API 未提供');
+    assert.strictEqual(metadata.contextLength, 4096);
+    assert.strictEqual(metadata.contextLengthKnown, false);
 });
 
 test('extracts a Cloud generated text response without trusting malformed payloads', () => {

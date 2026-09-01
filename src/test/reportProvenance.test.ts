@@ -13,5 +13,5 @@ test('report provenance identifies the actual extension build and model qualific
     });
     assert.match(text, /D:\/project\/dist\/extension\.js/);
     assert.match(text, /請求 tier3，實際 Tier 1/);
-    assert.match(text, /未通過/);
+    assert.match(text, /模型 unittest 生成能力（測試連線驗證）\*\*: 未通過/);
 });

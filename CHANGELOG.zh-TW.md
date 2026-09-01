@@ -4,6 +4,22 @@
 
 ## 2026-08-31
 
+### 本機日誌與模型連線資訊釐清
+
+- 新增 `log/` 本機 Agent／執行日誌目錄；除 `log/README.md` 外一律由 Git 忽略，且明訂不得記錄 API Key、Token 或含密鑰網址。
+- 「模型資格」改名為「模型 unittest 生成能力（測試連線驗證）」，明確區分模型可連線、參數／Context 資訊與實際生成可執行 unittest 的能力。
+- Cloud AI Studio 的測試連線現在採用 ListModels 實際宣告的輸入 token 上限；只有模型名稱明示 `31B` 等資訊時才標為「依模型名稱推定」，API 未公開時採保守預算，不再固定宣稱 1M Context。
+
+### match/case 突變測試
+
+- 內建 AST 突變引擎新增 literal `match/case` 模式的通用突變與回歸測試，讓各 case 分支未被測試時能被突變分數偵測；不加入任何領域專屬規則。
+
+### 專案執行規則與維護規範完善
+
+- 在 `PROJECT_RULES.md` 補充動態追蹤標準輸出（stdout）重定向隔離規範，避免被測函式內的 print 語句污染 Tracer 的 JSON 輸出。
+- 在 `PROJECT_RULES.md` 新增 Reviewer 語境對等原則，要求自癒修復階段必須提供完整常數、Class 結構與 Trace 數據；同時明訂禁止透過竄改本地變數進行偽 Mock。
+- 在 `AUTO_MAINTENANCE.md` 每次變更驗證流程中加入 `python_scripts/test_ast_pipeline.py` 回歸測試，並新增 `test/result` 歷史測試產物的定期清理與歸檔策略。
+
 ### 選定函式的突變範圍隔離
 
 - 當使用者指定單一函式或方法時，內建突變引擎現在會排除其內部宣告的巢狀函式、lambda 與類別；這些 callable 不再被誤算進外層目標的突變分數。

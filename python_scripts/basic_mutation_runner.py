@@ -39,6 +39,7 @@ BOOLEAN_OPERATOR_REPLACEMENTS = {
 
 
 CALLABLE_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+NO_PATTERN_MUTATION = object()
 
 
 def mutation_scope_walk(scope):
@@ -58,6 +59,30 @@ def mutation_scope_walk(scope):
             yield from visit(child)
 
     yield from visit(scope)
+
+
+def pattern_literal_replacement(node):
+    """Return a safe replacement for scalar match patterns, if applicable."""
+    match_value_type = getattr(ast, 'MatchValue', ())
+    match_singleton_type = getattr(ast, 'MatchSingleton', ())
+    if match_value_type and isinstance(node, match_value_type):
+        value = getattr(node.value, 'value', NO_PATTERN_MUTATION)
+        if isinstance(value, str):
+            return value + '__mutated_case__'
+    if match_singleton_type and isinstance(node, match_singleton_type):
+        if node.value is None:
+            return True
+        if isinstance(node.value, bool):
+            return not node.value
+    return NO_PATTERN_MUTATION
+
+
+def pattern_literal_value(node):
+    """Return the source literal used for a match mutation report."""
+    match_value_type = getattr(ast, 'MatchValue', ())
+    if match_value_type and isinstance(node, match_value_type):
+        return getattr(node.value, 'value', None)
+    return getattr(node, 'value', None)
 
 
 def find_target_scope(tree, function_name=None, class_name=None):
@@ -110,6 +135,16 @@ def mutation_candidates(tree, scope=None):
                 'position': 0,
                 'from': 'if_expression_condition',
                 'to': 'not_if_expression_condition',
+            })
+        elif pattern_literal_replacement(node) is not NO_PATTERN_MUTATION:
+            replacement = pattern_literal_replacement(node)
+            candidates.append({
+                'kind': 'match_literal',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': repr(pattern_literal_value(node)),
+                'to': repr(replacement),
             })
         elif isinstance(node, ast.Compare):
             for position, operator in enumerate(node.ops):
@@ -199,6 +234,16 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
         elif isinstance(node, ast.IfExp):
             if current == candidate_index:
                 node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
+        elif pattern_literal_replacement(node) is not NO_PATTERN_MUTATION:
+            replacement = pattern_literal_replacement(node)
+            if current == candidate_index:
+                match_value_type = getattr(ast, 'MatchValue', ())
+                if match_value_type and isinstance(node, match_value_type):
+                    node.value = ast.Constant(value=replacement)
+                else:
+                    node.value = replacement
                 return copied
             current += 1
         elif isinstance(node, ast.Compare):

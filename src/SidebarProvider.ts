@@ -4,7 +4,7 @@ import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from './i18n';
 import { extractFunctionsWithAst } from './utils';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, normalizeGoogleModelName } from './cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from './cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
 import { assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
@@ -398,6 +398,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     const suggestions = usableModels.slice(0, 12).join(', ') || '無';
                                     throw new Error(`模型「${selectedModel}」不存在、目前 API Key 無權使用，或不支援 generateContent。請改用可用模型：${suggestions}`);
                                 }
+                                const connectionMetadata = getGoogleModelConnectionMetadata(listedModels as any[], credential.model);
                                 
                                 const request = buildGoogleGenerateContentRequest(
                                     credential.model,
@@ -437,8 +438,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 }
                                 clearTimeout(timeoutId);
                                 const profile = {
-                                    paramSize: 'Cloud (Gemini)',
-                                    contextLength: 1000000,
+                                    paramSize: connectionMetadata.paramSize,
+                                    contextLength: connectionMetadata.contextLength,
                                     envType: 'cloud' as const,
                                     modelName: credential.model,
                                     testGenerationReady: capability.capability === 'verified'
@@ -446,8 +447,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                 if (capability.capability === 'verified') {
+                                    const contextMessage = connectionMetadata.contextLengthKnown
+                                        ? `最大輸入 Context：${connectionMetadata.contextLength.toLocaleString()} tokens`
+                                        : '最大輸入 Context：API 未公開（採保守 4,096-token 預算）';
                                     vscode.window.showInformationMessage(
-                                        `✅ Cloud Gemini 連線成功！Context：1M tokens；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
+                                        `✅ Cloud AI Studio 連線成功！模型：${connectionMetadata.paramSize}；${contextMessage}；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(

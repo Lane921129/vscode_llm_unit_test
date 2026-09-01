@@ -624,6 +624,42 @@ class TestIncrement(unittest.TestCase):
         self.assertEqual(result['survived'], 0)
         self.assertTrue(all(mutant['line'] != 3 for mutant in result['mutants']))
 
+    def test_builtin_mutation_runner_mutates_match_case_literals(self):
+        source = '''def route(kind):
+    match kind:
+        case "new":
+            return "pending"
+        case "active":
+            return "running"
+        case _:
+            return "other"
+'''
+        test_source = '''import unittest
+from sample import route
+
+class TestRoute(unittest.TestCase):
+    def test_new(self):
+        self.assertEqual(route("new"), "pending")
+
+    def test_active(self):
+        self.assertEqual(route("active"), "running")
+
+    def test_default(self):
+        self.assertEqual(route("archived"), "other")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='route')
+
+        match_mutants = [mutant for mutant in result['mutants'] if mutant['kind'] == 'match_literal']
+        self.assertEqual(len(match_mutants), 2)
+        self.assertTrue(all(mutant['status'] == 'KILLED' for mutant in match_mutants))
+        self.assertEqual(result['survived'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
