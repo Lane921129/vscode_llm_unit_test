@@ -380,6 +380,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         'mutants': [],
         'scope_found': True,
         'scope': f'{target_class + "." if target_class else ""}{target_function or "module"}',
+        'baseline_passed': False,
     }
 
     with tempfile.TemporaryDirectory(prefix='llm_unit_mutation_') as temp_dir:
@@ -387,6 +388,11 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         test_copy = temp_root / test_file.name
         test_copy.write_text(test_file.read_text(encoding='utf-8'), encoding='utf-8')
         mirrored_targets = package_mutant_targets(source_file, test_file, temp_root)
+        original_source = source_file.read_text(encoding='utf-8')
+        # Run the unmodified target in exactly the same isolated import layout
+        # used for every mutant. A failing baseline is infrastructure/test
+        # failure, never evidence that every mutant was killed.
+        (temp_root / source_file.name).write_text(original_source, encoding='utf-8')
         python_path = os.pathsep.join([
             str(temp_root),
             str(source_file.parent),
@@ -394,6 +400,44 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             os.environ.get('PYTHONPATH', ''),
         ])
         environment = {**os.environ, 'PYTHONPATH': python_path, 'PYTHONIOENCODING': 'utf-8'}
+
+        try:
+            baseline = subprocess.run(
+                [sys.executable, '-m', 'unittest', test_copy.stem],
+                cwd=temp_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=timeout_seconds,
+            )
+            if baseline.returncode:
+                result.update({
+                    'total': 0,
+                    'baseline_passed': False,
+                    'baseline_output': (baseline.stdout + baseline.stderr).strip()[-500:],
+                    'mutants': [],
+                })
+                return result
+        except subprocess.TimeoutExpired as error:
+            result.update({
+                'total': 0,
+                'baseline_passed': False,
+                'baseline_output': f'Baseline timed out after {timeout_seconds}s: {error}',
+                'mutants': [],
+            })
+            return result
+        except OSError as error:
+            result.update({
+                'total': 0,
+                'baseline_passed': False,
+                'baseline_output': str(error),
+                'mutants': [],
+            })
+            return result
+
+        result['baseline_passed'] = True
 
         for index, candidate in enumerate(candidates):
             mutant_tree = apply_mutation(

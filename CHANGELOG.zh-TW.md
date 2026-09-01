@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 突變分數隔離 Baseline 閘門
+
+- 內建 AST 突變引擎現在會在與 mutant 完全相同的暫存匯入環境中，先執行未修改原始碼的 unittest baseline。
+- baseline 失敗、逾時或無法啟動時，不再將每個 mutant 的測試失敗誤算為 killed；流程會拒絕該輪不可信的突變分數並顯示隔離 baseline 原因。
+
 ### Dynamic Trace 非決定性 Oracle 隔離
 
 - Dynamic Trace 現在會辨識含記憶體位址的自訂物件、循環／過長容器、非有限浮點數等不可重現結果，將它們標示為不可作為 deterministic assertion 的語境資料。

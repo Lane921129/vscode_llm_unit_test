@@ -767,6 +767,8 @@ interface BasicMutationResult {
     mutants: Array<{ line: number; column: number; from: string; to: string; status: string }>;
     scope_found?: boolean;
     scope?: string;
+    baseline_passed?: boolean;
+    baseline_output?: string;
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
@@ -1970,14 +1972,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
                 try {
                     builtinMutation = JSON.parse(fallbackRun.stdout) as BasicMutationResult;
-                    if (!builtinMutation || typeof builtinMutation.total !== 'number') {
-                        throw new Error('輸出格式不完整');
-                    }
+                if (!builtinMutation || typeof builtinMutation.total !== 'number') {
+                    throw new Error('輸出格式不完整');
+                }
                 } catch (error: any) {
                     throw new Error(`內建 AST 突變引擎輸出無法解析：${error.message || error}`);
                 }
                 if (builtinMutation.scope_found === false) {
                     throw new Error(`找不到選定的突變範圍：${builtinMutation.scope || params.funcName || '未知函式'}`);
+                }
+                if (builtinMutation.baseline_passed === false) {
+                    throw new Error(
+                        `內建 AST 突變引擎的隔離 baseline 測試失敗，拒絕產生不可信突變分數：${(builtinMutation.baseline_output || '').slice(0, 300)}`
+                    );
                 }
                 mutpyResult = JSON.stringify(builtinMutation, null, 2);
             } else {

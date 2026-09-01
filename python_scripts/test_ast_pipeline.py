@@ -532,6 +532,30 @@ class TestClassify(unittest.TestCase):
         self.assertGreaterEqual(result['killed'], 1)
         self.assertEqual(result['survived'], 0)
 
+    def test_builtin_mutation_runner_refuses_to_score_a_failing_isolated_baseline(self):
+        source = '''def choose(value):
+    return "yes" if value else "no"
+'''
+        test_source = '''import unittest
+from target import choose
+
+class TestChoose(unittest.TestCase):
+    def test_broken_baseline(self):
+        self.assertEqual(choose(True), "no")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'target.py'
+            test_file = root / 'test_target.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(target, test_file)
+
+        self.assertFalse(result['baseline_passed'])
+        self.assertEqual(result['total'], 0)
+        self.assertEqual(result['mutants'], [])
+        self.assertIn('FAILED', result['baseline_output'])
+
     def test_builtin_mutation_runner_tolerates_non_utf8_target_output(self):
         source = '''import os
 
