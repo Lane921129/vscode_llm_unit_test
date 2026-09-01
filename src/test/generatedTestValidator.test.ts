@@ -272,6 +272,36 @@ test('allows mock.patch for an external operation without executing it', () => {
     assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
 });
 
+test('rejects direct file access while allowing mock_open patches', () => {
+    const directFileCode = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_add(self):',
+        '        with open("project-data.txt", "w") as handle:',
+        '            handle.write("unsafe")',
+        '        self.assertEqual(add(1, 1), 2)',
+    ].join('\n');
+    const pathMethodCode = directFileCode
+        .replace('with open("project-data.txt", "w") as handle:', 'file_path = Path("project-data.txt")')
+        .replace('            handle.write("unsafe")', '        file_path.write_text("unsafe")');
+    const mockedFileCode = [
+        'import unittest',
+        'from unittest.mock import mock_open, patch',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    @patch("builtins.open", new_callable=mock_open, read_data="safe")',
+        '    def test_add(self, mocked_open):',
+        '        self.assertEqual(add(1, 1), 2)',
+    ].join('\n');
+
+    assert.match(validateUnittestStructure(directFileCode, 'add').reason || '', /直接檔案存取/);
+    assert.match(validateUnittestStructure(pathMethodCode, 'add').reason || '', /直接檔案存取/);
+    assert.strictEqual(validateUnittestStructure(mockedFileCode, 'add').valid, true);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');

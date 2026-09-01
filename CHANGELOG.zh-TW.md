@@ -4,6 +4,11 @@
 
 ## 2026-09-01
 
+### 直接檔案 I/O 安全閘門
+
+- 生成測試結構驗證現在拒絕直接呼叫 `open()` 與常見 `Path.read_*`／`Path.write_*` 操作，避免模型測試碼讀寫使用者專案或本機檔案。
+- `unittest.mock.mock_open` 與 `patch("builtins.open")` 維持可用，檔案相依測試必須透過 mock 模擬。
+
 ### 目標行為斷言關聯閘門
 
 - 強化生成測試結構驗證：被測函式的呼叫必須直接出現在 assertion、其回傳值必須被 assertion 使用，或必須位於對應的 `assertRaises` 區塊中。
