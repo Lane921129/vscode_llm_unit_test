@@ -333,7 +333,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 }
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                                     ...profile,
-                                                    testGenerationReady: capability.capability === 'verified'
+                                                    testGenerationReady: capability.capability === 'verified',
+                                                    testGenerationReason: capability.reason,
+                                                    testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
                                                 });
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
@@ -347,7 +349,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             } catch {
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                                     ...profile,
-                                                    testGenerationReady: false
+                                                    testGenerationReady: false,
+                                                    testGenerationReason: '測試連線逾時或無法完成 unittest 生成探針。',
+                                                    testGenerationMode: '未完成'
                                                 });
                                                 vscode.window.showWarningMessage(
                                                     '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
@@ -442,7 +446,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     contextLength: connectionMetadata.contextLength,
                                     envType: 'cloud' as const,
                                     modelName: credential.model,
-                                    testGenerationReady: capability.capability === 'verified'
+                                    testGenerationReady: capability.capability === 'verified',
+                                    testGenerationReason: capability.reason,
+                                    testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
@@ -503,7 +509,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     contextLength: 8192,
                                     envType: 'custom',
                                     modelName: message.modelName,
-                                    testGenerationReady: capability.capability === 'verified'
+                                    testGenerationReady: capability.capability === 'verified',
+                                    testGenerationReason: capability.reason,
+                                    testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
                                 });
                                 if (capability.capability === 'verified') {
                                     vscode.window.showInformationMessage(

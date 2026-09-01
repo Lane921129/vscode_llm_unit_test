@@ -232,6 +232,8 @@ interface ModelProfile {
     envType?: 'local' | 'cloud' | 'custom';
     modelName?: string;
     testGenerationReady?: boolean;
+    testGenerationReason?: string;
+    testGenerationMode?: string;
 }
 
 let currentModelProfile: ModelProfile = {
@@ -450,6 +452,8 @@ export function activate(context: vscode.ExtensionContext) {
         envType?: 'local' | 'cloud' | 'custom';
         modelName?: string;
         testGenerationReady?: boolean;
+        testGenerationReason?: string;
+        testGenerationMode?: string;
     }) => {
         const updatedProfile: ModelProfile = {
             paramSize: profile.paramSize,
@@ -457,7 +461,9 @@ export function activate(context: vscode.ExtensionContext) {
             budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 }),
             envType: profile.envType,
             modelName: profile.modelName,
-            testGenerationReady: profile.testGenerationReady
+            testGenerationReady: profile.testGenerationReady,
+            testGenerationReason: profile.testGenerationReason,
+            testGenerationMode: profile.testGenerationMode
         };
         currentModelProfile = updatedProfile;
         if (updatedProfile.envType && updatedProfile.modelName) {
@@ -466,7 +472,9 @@ export function activate(context: vscode.ExtensionContext) {
                 modelName: updatedProfile.modelName,
                 paramSize: updatedProfile.paramSize,
                 contextLength: updatedProfile.contextLength,
-                testGenerationReady: updatedProfile.testGenerationReady
+                testGenerationReady: updatedProfile.testGenerationReady,
+                testGenerationReason: updatedProfile.testGenerationReason,
+                testGenerationMode: updatedProfile.testGenerationMode
             });
             void context.globalState.update(MODEL_PROFILE_STORE_KEY, storedModelProfiles);
         }
@@ -1014,6 +1022,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         requestedTier: userTierSetting,
         resolvedTier,
         qualified: qualifiedForSelectedModel,
+        qualificationReason: activeModelProfile.testGenerationReason,
+        qualificationMode: activeModelProfile.testGenerationMode,
     });
 
     const baseDir = params.outputPath || path.dirname(params.filePath);

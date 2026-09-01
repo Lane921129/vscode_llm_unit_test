@@ -7,7 +7,9 @@ const localProfile = {
     modelName: 'reliable-instruct',
     paramSize: '8B',
     contextLength: 8192,
-    testGenerationReady: true
+    testGenerationReady: true,
+    testGenerationReason: '模型已通過行為 assertion 驗證。',
+    testGenerationMode: '結構化 JSON unittest'
 };
 
 test('keeps qualification metadata for multiple provider/model pairs', () => {
@@ -22,6 +24,9 @@ test('keeps qualification metadata for multiple provider/model pairs', () => {
     assert.strictEqual(findModelProfile(profiles, {
         envType: 'local', modelName: 'reliable-instruct'
     })?.testGenerationReady, true);
+    assert.strictEqual(findModelProfile(profiles, {
+        envType: 'local', modelName: 'reliable-instruct'
+    })?.testGenerationMode, '結構化 JSON unittest');
     assert.strictEqual(findModelProfile(profiles, {
         envType: 'cloud', modelName: 'gemma-4-31b-it'
     })?.testGenerationReady, true);

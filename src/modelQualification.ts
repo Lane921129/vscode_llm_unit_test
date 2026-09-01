@@ -2,6 +2,10 @@ export interface ModelQualificationProfile {
     envType?: 'local' | 'cloud' | 'custom';
     modelName?: string;
     testGenerationReady?: boolean;
+    /** Non-secret explanation captured from the deterministic connection probe. */
+    testGenerationReason?: string;
+    /** Structured JSON or plain-Python compatibility path that passed the probe. */
+    testGenerationMode?: string;
 }
 
 export interface ModelQualificationRequest {

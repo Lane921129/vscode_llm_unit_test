@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 可追溯的模型能力結果
+
+- 每個 provider／model 的測試連線現在會保存非敏感的驗證結果說明與通過模式（結構化 JSON 或純 Python），並在最終報告列出。
+- 使用者可直接判斷 Tier 限制是因格式、已知行為 assertion 或探針逾時，不需猜測「未通過」的原因；不保存 API Key、原始 API 錯誤或任何 Authorization 資訊。
+
 ### 類別綁定的技能卡精準化
 
 - 「需要實例」技能卡現在只會套用至 instance method 與 property；`staticmethod`、`classmethod` 不再收到相互矛盾的實例化指令。
