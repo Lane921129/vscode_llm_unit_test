@@ -25,6 +25,29 @@ test('reports partial target coverage separately from basic execution', () => {
     assert.strictEqual(assessment.targetFullyCovered, false);
 });
 
+test('detects a missing branch even when all target statements ran', () => {
+    const assessment = assessTargetCoverage(
+        'target.py 4 0 2 1 83% 2->4',
+        'target.py',
+        [2, 3, 4]
+    );
+
+    assert.strictEqual(assessment.targetFullyCovered, true);
+    assert.deepStrictEqual(assessment.missingTargetBranches, ['2->4']);
+    assert.strictEqual(assessment.targetBranchesCovered, false);
+});
+
+test('limits branch failures to arcs that originate in the selected target', () => {
+    const assessment = assessTargetCoverage(
+        'target.py 7 0 4 1 91% 8->10',
+        'target.py',
+        [2, 3, 4]
+    );
+
+    assert.deepStrictEqual(assessment.missingTargetBranches, []);
+    assert.strictEqual(assessment.targetBranchesCovered, true);
+});
+
 test('does not mistake an unavailable or malformed report for zero coverage', () => {
     assert.strictEqual(assessTargetCoverage('no coverage available', 'target.py', [2]).available, false);
     assert.strictEqual(

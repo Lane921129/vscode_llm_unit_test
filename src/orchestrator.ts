@@ -896,23 +896,8 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
 }
 
 function extractCoverage(output: string, targetFile: string): { coverageText: string, missingLines: string } {
-    let coverageText = "N/A";
-    let missingLines = "無";
-    const targetBaseName = path.basename(targetFile);
-    const lines = output.split('\n');
-    for (const line of lines) {
-        if (line.includes(targetBaseName)) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 4) {
-                coverageText = parts[3];
-                if (parts.length >= 5) {
-                    missingLines = parts.slice(4).join('');
-                }
-            }
-            break;
-        }
-    }
-    return { coverageText, missingLines };
+    const assessment = assessTargetCoverage(output, targetFile, []);
+    return { coverageText: assessment.coverageText, missingLines: assessment.missingLines };
 }
 
 function parseMutatestSurvived(mutatestResult: string): string {
@@ -1679,7 +1664,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     log('[預先驗證] 未安裝 coverage，改以 unittest 執行驗證；本輪覆蓋率將標示為 N/A。');
                 }
                 const preCheckCmd = hasCoverage
-                    ? `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`
+                    ? `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --branch --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`
                     : `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
                 exec(preCheckCmd, { timeout: 30000 }, async (err, stdout, stderr) => {
                     let out = (stdout + stderr).trim();
@@ -1689,11 +1674,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const initialCoverage = assessExecution(out);
                     const targetWasNotExecuted = initialCoverage?.targetExecuted === false;
                     const targetCoverageIncomplete = initialCoverage?.targetFullyCovered === false;
+                    const targetBranchesIncomplete = initialCoverage?.targetBranchesCovered === false;
                     const coverageError = targetWasNotExecuted
                         ? 'Coverage 顯示被測函式本體的可執行行均未執行。'
                         : targetCoverageIncomplete
                             ? `Coverage 顯示被測函式本體尚有未覆蓋行：${initialCoverage?.missingTargetLines?.join(', ') || '未知'}。`
-                            : undefined;
+                            : targetBranchesIncomplete
+                                ? `Coverage 顯示被測函式本體尚有未覆蓋分支：${initialCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
+                                : undefined;
                     if (coverageError) {
                         out = `${out}\n${coverageError}`.trim();
                         log(`[預先驗證失敗] ${coverageError}`);
@@ -1742,7 +1730,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     const reviewerCoverage = assessExecution(revCheck.out);
                                     const reviewerMissedTarget = reviewerCoverage?.targetExecuted === false;
                                     const reviewerCoverageIncomplete = reviewerCoverage?.targetFullyCovered === false;
-                                    if (revCheck.ok && !reviewerMissedTarget && !reviewerCoverageIncomplete) {
+                                    const reviewerBranchesIncomplete = reviewerCoverage?.targetBranchesCovered === false;
+                                    if (revCheck.ok && !reviewerMissedTarget && !reviewerCoverageIncomplete && !reviewerBranchesIncomplete) {
                                         log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
                                         finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
                                         finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
@@ -1755,7 +1744,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             ? 'Coverage 顯示被測函式本體仍未執行。'
                                             : reviewerCoverageIncomplete
                                                 ? `Coverage 顯示被測函式本體仍有未覆蓋行：${reviewerCoverage?.missingTargetLines?.join(', ') || '未知'}。`
-                                            : revCheck.out.substring(0, 300);
+                                                : reviewerBranchesIncomplete
+                                                    ? `Coverage 顯示被測函式本體仍有未覆蓋分支：${reviewerCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
+                                                    : revCheck.out.substring(0, 300);
                                         log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${reviewerFailure}`);
                                         finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
                                     }
@@ -1797,7 +1788,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             const repairCoverage = assessExecution(result2.out);
                                             const repairMissedTarget = repairCoverage?.targetExecuted === false;
                                             const repairCoverageIncomplete = repairCoverage?.targetFullyCovered === false;
-                                            if (result2.ok && !repairMissedTarget && !repairCoverageIncomplete) {
+                                            const repairBranchesIncomplete = repairCoverage?.targetBranchesCovered === false;
+                                            if (result2.ok && !repairMissedTarget && !repairCoverageIncomplete && !repairBranchesIncomplete) {
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
                                                 finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
                                                 loopCoverage = extractCoverage(result2.out, params.filePath);
@@ -1809,7 +1801,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                     ? 'Coverage 顯示被測函式本體仍未執行。'
                                                     : repairCoverageIncomplete
                                                         ? `Coverage 顯示被測函式本體仍有未覆蓋行：${repairCoverage?.missingTargetLines?.join(', ') || '未知'}。`
-                                                    : result2.out.substring(0, 200);
+                                                        : repairBranchesIncomplete
+                                                            ? `Coverage 顯示被測函式本體仍有未覆蓋分支：${repairCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
+                                                            : result2.out.substring(0, 200);
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${repairFailure}`);
                                             }
                                         } else {
