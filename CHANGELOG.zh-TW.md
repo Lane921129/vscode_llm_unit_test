@@ -4,6 +4,12 @@
 
 ## 2026-08-31
 
+### 已驗證的相依函式行為語境
+
+- 深度 AST 相依解析現在會對可載入的專案內相依函式進行獨立 Dynamic Trace，將真實 Python I/O 事實傳給語意分析師與測試生成師。
+- 語意分析師輸出的相依回傳值不再被視為未經驗證的事實；缺少 Trace 時改以相依原始碼與 `mock.patch` 為準，避免將 Python dict 誤寫為 `[object Object]`。
+- Trace 失敗只記錄原因並保留靜態語境，不會中斷目標函式的測試生成流程。
+
 ### 目標函式簽名相容性閘門
 
 - 產生、Reviewer 與 Tier 4 自癒階段現在會以 AST 檢查測試對目標函式的呼叫；未定義 keyword 或超出 positional 上限的呼叫，若未明確以 `assertRaises(TypeError)` 驗證，會在寫檔前拒絕。

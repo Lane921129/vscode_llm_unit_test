@@ -404,6 +404,19 @@ export function getUserPrompt(
 
             prompt += `\nExternal dependencies:\n`;
             for (const dep of astContext.dependencyContexts) {
+                const dependencyTrace = dep.traceResult;
+                if (dependencyTrace && !dependencyTrace.load_error
+                    && ((dependencyTrace.examples?.length || 0) > 0 || (dependencyTrace.errors?.length || 0) > 0)) {
+                    prompt += `Verified Python observations for dependency ${dep.name} (facts, not exhaustive):\n`;
+                    for (const example of (dependencyTrace.examples || []).slice(0, 3)) {
+                        const keywords = Object.entries(example.kwargs || {}).map(([name, value]) => `${name}=${value}`);
+                        prompt += `  ${dep.name}(${[...(example.args || []), ...keywords].join(', ')}) => ${example.result}\n`;
+                    }
+                    for (const error of (dependencyTrace.errors || []).slice(0, 3)) {
+                        const keywords = Object.entries(error.kwargs || {}).map(([name, value]) => `${name}=${value}`);
+                        prompt += `  ${dep.name}(${[...(error.args || []), ...keywords].join(', ')}) raises ${error.exception}\n`;
+                    }
+                }
                 const remaining = budgetTokens - estimateTokens(prompt);
                 let level: 0 | 1 | 2 | 3;
                 const full = distillDependency(dep, 0);

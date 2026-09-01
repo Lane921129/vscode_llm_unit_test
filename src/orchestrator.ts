@@ -325,6 +325,7 @@ interface AstContext {
     property_context?: { name: string, getter?: unknown, setter?: unknown, deleter?: unknown } | null;
     is_async?: boolean;
     executable_lines?: number[];
+    traceResult?: DynamicTraceResult;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
     code: string;
@@ -1110,6 +1111,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 depAst.callerContexts = callers;
                                 log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
                             }
+                            const dependencyTrace = await runDynamicTrace(depFilePath, dep.name, callers);
+                            if (dependencyTrace && !dependencyTrace.load_error) {
+                                depAst.traceResult = dependencyTrace;
+                                log(`[Trace] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
+                            } else if (dependencyTrace?.load_error) {
+                                log(`[Trace] 相依 ${dep.name} 無法安全取得事實：${dependencyTrace.load_error}（保留原始碼語境，不中止分析）。`);
+                            }
                             astContext.dependencyContexts.push(depAst);
                             log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
                         }
@@ -1277,7 +1285,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const semSys = buildSemanticAnalyzerSystemPrompt();
             const semDeps = ((astContext.dependencyContexts || []) as any[])
                 .filter((d: any) => d.code)
-                .map((d: any) => ({ name: d.name as string, code: d.code as string }));
+                .map((d: any) => ({
+                    name: d.name as string,
+                    code: d.code as string,
+                    traceResult: d.traceResult
+                }));
             // 從 AST 的 callerContexts 擷取呼叫表達式
             const semCallSites = ((astContext.callerContexts) as any[] | undefined)
                 ?.map((c: any) => ({
@@ -1297,7 +1309,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     semResult.required_skills,
                     astContext as any
                 );
-                semanticContext = formatSemanticContextForPrompt(semResult);
+                semanticContext = formatSemanticContextForPrompt(semResult, semDeps);
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
                 finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;

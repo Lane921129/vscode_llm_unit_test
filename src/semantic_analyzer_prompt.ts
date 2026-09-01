@@ -56,6 +56,42 @@ export interface SemanticAnalysis {
     test_strategy: TestStrategy;     // AI-derived test data strategy for this specific function
 }
 
+export interface DependencyTraceForPrompt {
+    name: string;
+    traceResult?: {
+        examples?: Array<{ args?: string[]; kwargs?: Record<string, string>; result?: string }>;
+        errors?: Array<{ args?: string[]; kwargs?: Record<string, string>; exception?: string; message?: string }>;
+        load_error?: string | null;
+    };
+}
+
+function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[]): string {
+    const traced = dependencies.filter(dependency => {
+        const trace = dependency.traceResult;
+        return trace && !trace.load_error && ((trace.examples?.length || 0) > 0 || (trace.errors?.length || 0) > 0);
+    });
+    if (traced.length === 0) {
+        return '';
+    }
+
+    let out = '=== VERIFIED DEPENDENCY EXECUTION FACTS ===\n';
+    out += 'These observations were executed by Python. They take precedence over model inference and are not exhaustive.\n';
+    for (const dependency of traced.slice(0, 4)) {
+        const trace = dependency.traceResult!;
+        for (const example of (trace.examples || []).slice(0, 3)) {
+            const keywords = Object.entries(example.kwargs || {}).map(([name, value]) => `${name}=${value}`);
+            const input = [...(example.args || []), ...keywords].join(', ');
+            out += `  - ${dependency.name}(${input}) => ${example.result}\n`;
+        }
+        for (const error of (trace.errors || []).slice(0, 3)) {
+            const keywords = Object.entries(error.kwargs || {}).map(([name, value]) => `${name}=${value}`);
+            const input = [...(error.args || []), ...keywords].join(', ');
+            out += `  - ${dependency.name}(${input}) raises ${error.exception}${error.message ? `: ${error.message}` : ''}\n`;
+        }
+    }
+    return out + '\n';
+}
+
 // === System Prompt ===
 
 export function getSemanticAnalyzerSystemPrompt(skillLibrarySummary: string): string {
@@ -116,7 +152,8 @@ AVAILABLE SKILL IDs (for required_skills array):
 ${skillLibrarySummary}
 
 ANALYSIS RULES:
-- For dependency_behaviors: trace the dependency with the EXACT fixed args the target passes
+- When VERIFIED DEPENDENCY EXECUTION FACTS are provided, reproduce their Python repr values exactly. Never replace a Python dict/list/tuple with a JavaScript-style description such as "[object Object]".
+- Without verified dependency execution facts, do not claim a dependency "always returns" a concrete value; leave dependency_behaviors empty and let the Writer rely on source code or mock.patch.
 - For unreachable_paths: if dependency always returns X, which if-conditions are always True/False?
 - For required_skills: scan the source code and pick the IDs of ALL applicable skills:
     * Does it use len(x) < N? → add "string_length_boundary"
@@ -146,7 +183,7 @@ ANALYSIS RULES:
 
 export function getSemanticAnalyzerUserPrompt(
     targetSource: string,
-    dependencies: Array<{ name: string; code: string }>,
+    dependencies: Array<{ name: string; code: string; traceResult?: DependencyTraceForPrompt['traceResult'] }>,
     callSites?: Array<{ caller_func: string; call_expr: string }>
 ): string {
     let prompt = '=== TARGET FUNCTION SOURCE CODE ===\n```python\n' + targetSource.trim() + '\n```\n\n';
@@ -158,6 +195,8 @@ export function getSemanticAnalyzerUserPrompt(
         }
         prompt += '\n';
     }
+
+    prompt += formatVerifiedDependencyFacts(dependencies);
 
     if (callSites && callSites.length > 0) {
         prompt += '=== HOW TARGET CALLS DEPENDENCIES ===\n';
@@ -200,18 +239,16 @@ export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | n
     return null;
 }
 
-export function formatSemanticContextForPrompt(analysis: SemanticAnalysis): string {
-    let out = '=== SEMANTIC ANALYSIS (Pre-computed - do NOT guess, use these facts) ===\n';
+export function formatSemanticContextForPrompt(
+    analysis: SemanticAnalysis,
+    dependencies: DependencyTraceForPrompt[] = []
+): string {
+    let out = '=== SEMANTIC GUIDANCE ===\n';
+    out += 'Use verified execution facts and source code as evidence. Model-generated strategies are guidance, not proof.\n';
+    out += formatVerifiedDependencyFacts(dependencies);
 
     if (analysis.dependency_behaviors.length > 0) {
-        out += '\nDependency Behaviors in This Caller Context:\n';
-        for (const dep of analysis.dependency_behaviors) {
-            out += '  * ' + dep.name + ' (called with ' + dep.when_caller_passes + '):\n';
-            out += '    -> Always returns: ' + dep.always_returns + '\n';
-            if (dep.can_raise.length > 0) {
-                out += '    -> Can raise: ' + dep.can_raise.join('; ') + '\n';
-            }
-        }
+        out += '\nUnverified dependency-return claims were omitted. Use dependency source, verified facts, or mock.patch instead.\n';
     }
 
     if (analysis.unreachable_paths.length > 0) {
