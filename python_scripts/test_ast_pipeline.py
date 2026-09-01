@@ -284,6 +284,62 @@ def echo(value):
         self.assertIsNone(data['load_error'])
         self.assertTrue(data['examples'])
 
+    def test_dynamic_tracer_blocks_target_file_writes_without_recording_them_as_exceptions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            written = root / 'must_not_exist.txt'
+            target = root / 'writer.py'
+            target.write_text(
+                "def save(value):\n"
+                f"    with open({str(written)!r}, 'w', encoding='utf-8') as handle:\n"
+                "        handle.write(value)\n"
+                "    return value\n",
+                encoding='utf-8'
+            )
+            result = trace_function(str(target), 'save', [{'args': ['value'], 'kwargs': {}}])
+
+        self.assertFalse(written.exists())
+        self.assertEqual(result['examples'], [])
+        self.assertEqual(result['errors'], [])
+        self.assertIn('file write', result['blocked_operations'][0])
+
+    def test_dynamic_tracer_blocks_import_time_file_writes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            written = root / 'must_not_exist.txt'
+            target = root / 'import_writer.py'
+            target.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(written)!r}).write_text('unsafe', encoding='utf-8')\n"
+                "def value():\n"
+                "    return 1\n",
+                encoding='utf-8'
+            )
+            result = trace_function(str(target), 'value')
+
+        self.assertFalse(written.exists())
+        self.assertIn('Dynamic trace safety gate blocked', result['load_error'])
+        self.assertIn('Path.write_text', result['blocked_operations'][0])
+
+    def test_dynamic_tracer_blocks_network_and_process_operations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'external_effects.py'
+            target.write_text(
+                "import socket\n"
+                "import subprocess\n"
+                "def connect():\n"
+                "    return socket.create_connection(('example.invalid', 443))\n"
+                "def run_command():\n"
+                "    return subprocess.run(['echo', 'unsafe'])\n",
+                encoding='utf-8'
+            )
+            network_result = trace_function(str(target), 'connect')
+            process_result = trace_function(str(target), 'run_command')
+
+        self.assertIn('network connection', network_result['blocked_operations'][0])
+        self.assertIn('subprocess.run', process_result['blocked_operations'][0])
+
     def test_dynamic_tracer_loads_a_package_module_with_relative_imports(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

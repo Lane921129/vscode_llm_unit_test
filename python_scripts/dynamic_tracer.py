@@ -8,9 +8,13 @@ json_inputs: 可選，JSON 陣列，每個元素是傳給函式的 args list
 """
 import sys
 import ast
+import builtins
 import json
 import importlib.util
 import os
+import shutil
+import socket
+import subprocess
 import traceback
 import types
 import asyncio
@@ -18,8 +22,67 @@ import inspect
 import itertools
 import io
 import math
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
+
+
+class TraceSafetyError(RuntimeError):
+    """Raised when tracing would perform an external side effect."""
+
+
+def _blocked_trace_operation(operation):
+    def blocked(*_args, **_kwargs):
+        raise TraceSafetyError(f'Dynamic trace safety gate blocked {operation}')
+    return blocked
+
+
+@contextmanager
+def block_trace_side_effects():
+    """Prevent a traced module from mutating the host or contacting services.
+
+    Dynamic Trace is evidence gathering, not an authorization to perform the
+    target's real-world effects. Reads remain available so ordinary imports and
+    pure parsers can execute; writes, process launches and network access are
+    rejected and reported as unavailable trace evidence.
+    """
+    original_open = builtins.open
+    original_socket = socket.socket
+
+    def read_only_open(file, mode='r', *args, **kwargs):
+        if any(flag in str(mode) for flag in ('w', 'a', 'x', '+')):
+            raise TraceSafetyError('Dynamic trace safety gate blocked file write')
+        return original_open(file, mode, *args, **kwargs)
+
+    class TraceSocket(original_socket):
+        """Allow local asyncio plumbing but reject outbound connections."""
+        @staticmethod
+        def _is_loopback(address):
+            host = address[0] if isinstance(address, tuple) and address else address
+            return host in ('127.0.0.1', '::1', 'localhost')
+
+        def connect(self, address, *args, **kwargs):
+            if self._is_loopback(address):
+                return original_socket.connect(self, address, *args, **kwargs)
+            raise TraceSafetyError('Dynamic trace safety gate blocked network connection')
+
+        def connect_ex(self, address, *args, **kwargs):
+            if self._is_loopback(address):
+                return original_socket.connect_ex(self, address, *args, **kwargs)
+            raise TraceSafetyError('Dynamic trace safety gate blocked network connection')
+
+    with ExitStack() as stack:
+        stack.enter_context(patch('builtins.open', read_only_open))
+        for method in ('open', 'write_text', 'write_bytes', 'touch', 'mkdir', 'rename', 'replace', 'unlink', 'rmdir'):
+            stack.enter_context(patch.object(Path, method, _blocked_trace_operation(f'Path.{method}')))
+        for name in ('system', 'popen', 'remove', 'unlink', 'rmdir', 'replace'):
+            stack.enter_context(patch.object(os, name, _blocked_trace_operation(f'os.{name}')))
+        stack.enter_context(patch.object(shutil, 'rmtree', _blocked_trace_operation('shutil.rmtree')))
+        for name in ('run', 'call', 'check_call', 'check_output', 'Popen'):
+            stack.enter_context(patch.object(subprocess, name, _blocked_trace_operation(f'subprocess.{name}')))
+        stack.enter_context(patch.object(socket, 'socket', TraceSocket))
+        stack.enter_context(patch.object(socket, 'create_connection', _blocked_trace_operation('network connection')))
+        yield
 
 
 def _literal_value(node):
@@ -248,6 +311,9 @@ def load_module_from_file(file_path: str):
     try:
         sys.modules[module_name] = module
         spec.loader.exec_module(module)  # type: ignore
+    except TraceSafetyError:
+        sys.modules.pop(module_name, None)
+        raise
     except Exception:
         sys.modules.pop(module_name, None)
         return None
@@ -408,14 +474,20 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         "args": [],
         "examples": [],
         "errors": [],
-        "load_error": None
+        "load_error": None,
+        "blocked_operations": []
     }
 
     # 載入模組
     # The CLI protocol is JSON on stdout. Target modules may print or configure
     # noisy imports, but their output is trace evidence rather than protocol.
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        module = load_module_from_file(file_path)
+    try:
+        with block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            module = load_module_from_file(file_path)
+    except TraceSafetyError as error:
+        result["load_error"] = str(error)
+        result["blocked_operations"].append(str(error))
+        return result
     if module is None:
         result["load_error"] = f"Failed to load module from {file_path}"
         return result
@@ -526,12 +598,14 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         try:
             # Keep stdout/stderr from constructors, target calls and generator
             # materialisation out of the JSON document printed by this script.
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 if func_is_method or func_is_property:
                     # 將 class 實例化後呼叫 method
                     cls_obj = getattr(module, method_class_name)
                     try:
                         instance = cls_obj()
+                    except TraceSafetyError:
+                        raise
                     except Exception as constructor_error:
                         result["load_error"] = (
                             f"Cannot safely instantiate class '{method_class_name}' for dynamic trace: "
@@ -577,6 +651,11 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             if kwargs:
                 example["kwargs"] = {name: rendered for name, (rendered, _) in formatted_kwargs.items()}
             result["examples"].append(example)
+        except TraceSafetyError as error:
+            # A blocked operation is diagnostic only, never a claimed target
+            # exception that an LLM should turn into assertRaises(RuntimeError).
+            if str(error) not in result["blocked_operations"]:
+                result["blocked_operations"].append(str(error))
         except Exception as e:
             exc_type = type(e).__name__
             exc_msg = str(e)[:200]
