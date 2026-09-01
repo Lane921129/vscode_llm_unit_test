@@ -332,6 +332,25 @@ def echo(value):
         self.assertEqual(result['errors'], [])
         self.assertIn('file write', result['blocked_operations'][0])
 
+    def test_dynamic_tracer_blocks_io_open_file_writes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            written = root / 'must_not_exist.txt'
+            target = root / 'io_writer.py'
+            target.write_text(
+                "import io\n"
+                "def save(value):\n"
+                f"    with io.open({str(written)!r}, 'w', encoding='utf-8') as handle:\n"
+                "        handle.write(value)\n"
+                "    return value\n",
+                encoding='utf-8'
+            )
+            result = trace_function(str(target), 'save', [{'args': ['value'], 'kwargs': {}}])
+
+        self.assertFalse(written.exists())
+        self.assertEqual(result['examples'], [])
+        self.assertIn('file write', result['blocked_operations'][0])
+
     def test_dynamic_tracer_blocks_import_time_file_writes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

@@ -73,9 +73,10 @@ def block_trace_side_effects():
 
     with ExitStack() as stack:
         stack.enter_context(patch('builtins.open', read_only_open))
-        for method in ('open', 'write_text', 'write_bytes', 'touch', 'mkdir', 'rename', 'replace', 'unlink', 'rmdir'):
+        stack.enter_context(patch('io.open', read_only_open))
+        for method in ('open', 'write_text', 'write_bytes', 'touch', 'mkdir', 'rename', 'replace', 'unlink', 'rmdir', 'chmod', 'symlink_to', 'hardlink_to'):
             stack.enter_context(patch.object(Path, method, _blocked_trace_operation(f'Path.{method}')))
-        for name in ('system', 'popen', 'remove', 'unlink', 'rmdir', 'replace'):
+        for name in ('open', 'system', 'popen', 'remove', 'unlink', 'rmdir', 'replace'):
             stack.enter_context(patch.object(os, name, _blocked_trace_operation(f'os.{name}')))
         stack.enter_context(patch.object(shutil, 'rmtree', _blocked_trace_operation('shutil.rmtree')))
         for name in ('run', 'call', 'check_call', 'check_output', 'Popen'):
