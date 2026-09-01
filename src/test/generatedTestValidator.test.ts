@@ -140,6 +140,39 @@ test('rejects an unrelated assertion after a detached target call', () => {
     assert.match(result.reason || '', /同時呼叫被測函式/);
 });
 
+test('does not accept a commented-out target call and assertion as executable behavior', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        # result = add(1, 2)',
+        '        # self.assertEqual(result, 3)',
+        '        self.assertTrue(True)',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'add', 'calculator');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /沒有呼叫被測函式/);
+});
+
+test('does not accept target-looking text inside a string literal as behavior', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        note = "self.assertEqual(add(1, 2), 3)"',
+        '        self.assertTrue(True)',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'add', 'calculator');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /沒有呼叫被測函式/);
+});
+
 test('accepts an assertion over a value returned by the target', () => {
     const code = [
         'import unittest',

@@ -9,6 +9,78 @@ function escapeRegex(value: string): string {
     return value.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Preserve Python's executable layout while blanking comments and string
+ * contents. This validator runs before the Python AST process, so a small
+ * lexer keeps prose, docstrings, and commented-out examples from
+ * impersonating an assertion or target call in the regex behavior gate.
+ */
+function executablePythonText(code: string): string {
+    let result = '';
+    let quote: '\'' | '"' | undefined;
+    let triple = false;
+    let escaped = false;
+    let inComment = false;
+
+    for (let index = 0; index < code.length; index++) {
+        const char = code[index];
+        const nextThree = code.slice(index, index + 3);
+
+        if (inComment) {
+            if (char === '\n') {
+                inComment = false;
+                result += char;
+            } else {
+                result += ' ';
+            }
+            continue;
+        }
+        if (quote) {
+            if (char === '\n' && !triple) {
+                // Preserve an invalid unterminated string for Python's AST gate.
+                quote = undefined;
+                escaped = false;
+                result += char;
+                continue;
+            }
+            if (!escaped && triple && nextThree === quote.repeat(3)) {
+                result += '   ';
+                index += 2;
+                quote = undefined;
+                triple = false;
+                continue;
+            }
+            if (!escaped && !triple && char === quote) {
+                result += ' ';
+                quote = undefined;
+                continue;
+            }
+            result += char === '\n' ? '\n' : ' ';
+            escaped = !escaped && char === '\\';
+            if (char !== '\\') {
+                escaped = false;
+            }
+            continue;
+        }
+        if (char === '#') {
+            inComment = true;
+            result += ' ';
+            continue;
+        }
+        if (char === '\'' || char === '"') {
+            quote = char;
+            triple = nextThree === char.repeat(3);
+            result += triple ? '   ' : ' ';
+            if (triple) {
+                index += 2;
+            }
+            continue;
+        }
+        result += char;
+    }
+    return result;
+}
+
 function definesCallable(code: string, callableName: string): boolean {
     const escapedName = escapeRegex(callableName);
     return new RegExp(
@@ -293,25 +365,26 @@ export function validateUnittestStructure(
         };
     }
     if (targetCallable) {
-        const callReference = targetCallReference(trimmed, targetCallable, targetModule);
-        if (definesCallable(trimmed, targetCallable)) {
+        const executable = executablePythonText(trimmed);
+        const callReference = targetCallReference(executable, targetCallable, targetModule);
+        if (definesCallable(executable, targetCallable)) {
             return { valid: false, reason: '測試檔重新定義了被測函式 ' + targetCallable + '，可能沒有測到原始模組' };
         }
-        const shadowedAlias = shadowsImportedAlias(trimmed, callReference.importedAliases);
+        const shadowedAlias = shadowsImportedAlias(executable, callReference.importedAliases);
         if (shadowedAlias) {
             return { valid: false, reason: '測試檔重新定義了被測函式的匯入別名 ' + shadowedAlias + '，可能沒有測到原始模組' };
         }
-        if (targetUsage === 'property' ? !accessesProperty(trimmed, targetCallable) : !invokesTargetCall(trimmed, callReference)) {
+        if (targetUsage === 'property' ? !accessesProperty(executable, targetCallable) : !invokesTargetCall(executable, callReference)) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '測試沒有讀取被測 property ' + targetCallable
                 : '測試沒有呼叫被測函式 ' + targetCallable };
         }
-        if (!hasBehavioralTargetTest(trimmed, targetCallable, targetUsage, callReference)) {
+        if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference)) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
                 : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
         }
-        if (targetUsage === 'call' && testMethodBlocks(trimmed).some(block =>
+        if (targetUsage === 'call' && testMethodBlocks(executable).some(block =>
             hasIneffectiveLocalDependencyMutation(block, targetCallable, callReference)
         )) {
             return {
