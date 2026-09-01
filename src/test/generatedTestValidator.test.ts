@@ -160,6 +160,42 @@ test('allows a dynamic replacement for an external dependency, not the target mo
     assert.strictEqual(result.valid, true);
 });
 
+test('rejects a local dependency value mutation that cannot affect the target call', () => {
+    const code = [
+        'import unittest',
+        'from order_service import checkout',
+        'from auth import decode_credential',
+        '',
+        'class TestCheckout(unittest.TestCase):',
+        '    def test_invalid_partner(self):',
+        '        credential = decode_credential("abc")',
+        '        credential["partner"] = "wrong"',
+        '        self.assertFalse(checkout("order-1", "abc"))',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'checkout', 'order_service');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /本地相依物件/);
+});
+
+test('allows a dependency value when it is injected through a standard mock', () => {
+    const code = [
+        'import unittest',
+        'from unittest.mock import patch',
+        'from order_service import checkout',
+        '',
+        'class TestCheckout(unittest.TestCase):',
+        '    @patch("order_service.decode_credential")',
+        '    def test_invalid_partner(self, mock_decode):',
+        '        credential = build_credential()',
+        '        credential["partner"] = "wrong"',
+        '        mock_decode.return_value = credential',
+        '        self.assertFalse(checkout("order-1", "abc"))',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'checkout', 'order_service').valid, true);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');

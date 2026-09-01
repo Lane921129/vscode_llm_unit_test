@@ -54,6 +54,48 @@ function hasBehavioralTargetTest(code: string, callableName: string, targetUsage
     });
 }
 
+/**
+ * Detect a common LLM hallucination in dependency tests: it mutates a local
+ * object returned by some helper, then calls the target without ever passing
+ * that object to it or configuring it as a mock return value.  Such a change
+ * cannot affect the target invocation and therefore cannot validate the
+ * claimed dependency path.
+ */
+function hasIneffectiveLocalDependencyMutation(block: string, callableName: string): boolean {
+    const escapedTarget = escapeRegex(callableName);
+    const targetInvocation = new RegExp('\\b' + escapedTarget + '\\s*\\(');
+    const lines = block.split(/\r?\n/);
+    const targetLines = lines.filter(line => targetInvocation.test(line));
+    if (targetLines.length === 0) {
+        return false;
+    }
+
+    for (let index = 0; index < lines.length; index++) {
+        const assignment = lines[index].match(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\(/);
+        if (!assignment || assignment[2] === callableName) {
+            continue;
+        }
+        const localName = assignment[1];
+        const escapedLocal = escapeRegex(localName);
+        const localMutation = new RegExp(
+            '^\\s*' + escapedLocal + '(?:\\s*\\[[^\\]]+\\]|\\.[A-Za-z_]\\w*)\\s*='
+        );
+        const mutatesLocalValue = lines.slice(index + 1).some(line => localMutation.test(line));
+        if (!mutatesLocalValue) {
+            continue;
+        }
+        const reachesTarget = targetLines.some(line => new RegExp('\\b' + escapedLocal + '\\b').test(line));
+        const injectsIntoMock = lines.some(line =>
+            new RegExp('\\b' + escapedLocal + '\\b').test(line)
+            && /\b(?:patch|return_value|side_effect)\b/.test(line)
+        );
+        if (!reachesTarget && !injectsIntoMock) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function shadowsTargetModule(code: string, moduleName: string): boolean {
     const quotedModule = "['\"]" + escapeRegex(moduleName) + "['\"]";
     const moduleRegistryWrite = new RegExp(
@@ -120,6 +162,14 @@ export function validateUnittestStructure(
             return { valid: false, reason: targetUsage === 'property'
                 ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
                 : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
+        }
+        if (targetUsage === 'call' && testMethodBlocks(trimmed).some(block =>
+            hasIneffectiveLocalDependencyMutation(block, targetCallable)
+        )) {
+            return {
+                valid: false,
+                reason: '測試只修改未傳入被測函式、也未注入 mock 的本地相依物件，無法驗證相依路徑'
+            };
         }
     }
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
