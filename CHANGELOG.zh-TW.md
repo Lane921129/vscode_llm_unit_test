@@ -4,6 +4,11 @@
 
 ## 2026-09-01
 
+### 未探測模型的 Tier 品質閘門
+
+- 尚未透過「測試連線」驗證的 provider／model 現在會先限制為 Dynamic Trace 驅動的 Tier 1，不再因參數量猜測而直接進入 Tier 2–4。
+- 「測試連線」仍會讀取供應商可回報的模型參數量與 Context；另外以隔離的最小 unittest fixture 驗證模型是否真的能輸出並執行測試。兩種資料用途不同，會一併顯示於執行日誌與報告。
+
 ### 可執行的模型 unittest 探測
 
 - 「測試連線」不再只檢查模型輸出的 unittest 結構與 assertion；探測碼必須符合嚴格、無外部副作用的最小 fixture，並在 Python isolated mode 中實際執行通過。

@@ -7,6 +7,11 @@ test('routes an unqualified model to deterministic Tier 1 even when a higher Tie
     assert.strictEqual(resolveTier(30, 20, 'tier3', false), 1);
 });
 
+test('routes an unprobed model to Tier 1 until test connection verifies it', () => {
+    assert.strictEqual(resolveTier(70, 20, 'tier4'), 1);
+    assert.strictEqual(resolveTier(30, 20, 'auto', undefined), 1);
+});
+
 test('preserves an explicitly requested Tier after the selected model is qualified', () => {
     assert.strictEqual(resolveTier(3, 90, 'tier4', true), 4);
     assert.strictEqual(resolveTier(3, 90, 'tier2', true), 2);

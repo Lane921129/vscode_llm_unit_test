@@ -8,10 +8,12 @@ export function resolveTier(
     userTier: string,
     testGenerationReady?: boolean
 ): 1 | 2 | 3 | 4 {
-    // A probe failure is a quality boundary, not merely an Auto preference.
-    // Tier 1 remains usable because it derives assertions from verified trace
-    // data instead of asking that model to author test code.
-    if (testGenerationReady === false) {
+    // A missing or failed probe is a quality boundary, not merely an Auto
+    // preference. Tier 1 remains usable because it derives assertions from
+    // verified trace data instead of asking that model to author test code.
+    // This prevents a newly selected provider/model from inheriting a Tier
+    // decision based only on a possibly unavailable parameter-size estimate.
+    if (testGenerationReady !== true) {
         return 1;
     }
     if (userTier && userTier !== 'auto') {

@@ -1010,8 +1010,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         { envType: params.envType, modelName: params.modelName },
         currentModelProfile.testGenerationReady !== undefined
     );
-    if (!selectedStoredProfile && (currentModelProfile.envType !== params.envType || currentModelProfile.modelName !== params.modelName)) {
-        log('[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；不會沿用其他模型的結果。本機 Ollama 連線同時會讀取其回報的參數量與 Context。');
+    if (qualifiedForSelectedModel === undefined) {
+        log('[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；本次先限制為 Tier 1。測試連線會同時讀取供應商可提供的參數量／Context，並以無副作用 fixture 實測可執行 unittest。');
     }
     const resolvedTier = resolveTier(
         modelParamBillion,

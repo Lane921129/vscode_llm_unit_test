@@ -35,6 +35,7 @@
 - Google API Key 必須走 HTTP Header，不可放入 URL。
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
+- 尚未完成「測試連線」的 provider／model 視為尚未驗證，必須先使用有真實 Dynamic Trace 的 Tier 1；只有同一 provider／model 通過可執行 unittest 探測後，才可使用 Tier 2–4。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
 
 ## 品質、Git 與紀錄
 
