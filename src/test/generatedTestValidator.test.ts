@@ -91,6 +91,39 @@ test('accepts a target invocation and assertion in the same test method', () => 
     assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
 });
 
+test('accepts an imported target alias while rejecting an alias redefinition', () => {
+    const aliasedCode = [
+        'import unittest',
+        'from calculator import add as subject',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        self.assertEqual(subject(1, 2), 3)',
+    ].join('\n');
+    const shadowedAliasCode = aliasedCode.replace(
+        'class TestAdd(unittest.TestCase):',
+        'def subject(left, right):\n    return 999\n\nclass TestAdd(unittest.TestCase):'
+    );
+
+    assert.strictEqual(validateUnittestStructure(aliasedCode, 'add', 'calculator').valid, true);
+    const shadowed = validateUnittestStructure(shadowedAliasCode, 'add', 'calculator');
+    assert.strictEqual(shadowed.valid, false);
+    assert.match(shadowed.reason || '', /匯入別名/);
+});
+
+test('accepts a module import alias for the selected callable', () => {
+    const code = [
+        'import unittest',
+        'import calculator as calc',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        self.assertEqual(calc.add(1, 2), 3)',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'add', 'calculator').valid, true);
+});
+
 test('rejects an unrelated assertion after a detached target call', () => {
     const code = [
         'import unittest',

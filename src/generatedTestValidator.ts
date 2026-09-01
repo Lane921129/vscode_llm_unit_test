@@ -26,6 +26,71 @@ function invokesCallable(code: string, callableName: string): boolean {
     return code.split(/\r?\n/).some(line => !definition.test(line) && invocation.test(line));
 }
 
+interface TargetCallReference {
+    callableNames: string[];
+    moduleExpressions: string[];
+    importedAliases: string[];
+}
+
+function targetCallReference(code: string, callableName: string, targetModule?: string): TargetCallReference {
+    const importedAliases = new Set<string>();
+    const callableNames = new Set<string>([callableName]);
+    const moduleExpressions = new Set<string>();
+    const escapedCallable = escapeRegex(callableName);
+
+    for (const line of code.split(/\r?\n/)) {
+        if (/^\s*from\s+/.test(line)) {
+            const aliasMatch = line.match(new RegExp('\\b' + escapedCallable + '\\s+as\\s+([A-Za-z_]\\w*)'));
+            if (aliasMatch) {
+                callableNames.add(aliasMatch[1]);
+                importedAliases.add(aliasMatch[1]);
+            }
+        }
+
+        if (!targetModule || !/^\s*import\s+/.test(line)) {
+            continue;
+        }
+        const imported = line.replace(/^\s*import\s+/, '').split('#', 1)[0];
+        for (const part of imported.split(',')) {
+            const match = part.trim().match(/^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+            if (!match || match[1].split('.').pop() !== targetModule.split('.').pop()) {
+                continue;
+            }
+            moduleExpressions.add(match[2] || match[1]);
+            if (match[2]) {
+                importedAliases.add(match[2]);
+            }
+        }
+    }
+    return {
+        callableNames: [...callableNames],
+        moduleExpressions: [...moduleExpressions],
+        importedAliases: [...importedAliases],
+    };
+}
+
+function invokesTargetCall(code: string, reference: TargetCallReference): boolean {
+    return code.split(/\r?\n/).some(line => {
+        for (const name of reference.callableNames) {
+            if (invokesCallable(line, name)) {
+                return true;
+            }
+        }
+        return reference.moduleExpressions.some(moduleExpression =>
+            new RegExp('\\b' + escapeRegex(moduleExpression) + '\\s*\\.\\s*'
+                + escapeRegex(reference.callableNames[0]) + '\\s*\\(').test(line)
+        );
+    });
+}
+
+function shadowsImportedAlias(code: string, aliases: string[]): string | undefined {
+    return aliases.find(alias => {
+        const escapedAlias = escapeRegex(alias);
+        return new RegExp('^\\s*(?:async\\s+)?def\\s+' + escapedAlias + '\\s*\\(', 'm').test(code)
+            || new RegExp('^\\s*' + escapedAlias + '\\s*=(?!=)', 'm').test(code);
+    });
+}
+
 function accessesProperty(code: string, propertyName: string): boolean {
     const escapedName = escapeRegex(propertyName);
     const access = new RegExp('\\.\\s*' + escapedName + '\\b');
@@ -45,23 +110,25 @@ function hasAssertion(code: string): boolean {
     return /\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(code);
 }
 
-function lineUsesTarget(line: string, callableName: string, targetUsage: TargetUsage): boolean {
+function lineUsesTarget(line: string, callableName: string, targetUsage: TargetUsage,
+                        callReference?: TargetCallReference): boolean {
     return targetUsage === 'property'
         ? accessesProperty(line, callableName)
-        : invokesCallable(line, callableName);
+        : invokesTargetCall(line, callReference || targetCallReference('', callableName));
 }
 
-function hasTargetResultAssertion(block: string, callableName: string, targetUsage: TargetUsage): boolean {
+function hasTargetResultAssertion(block: string, callableName: string, targetUsage: TargetUsage,
+                                  callReference: TargetCallReference): boolean {
     const lines = block.split(/\r?\n/);
     const assignedResults = new Set<string>();
 
     for (const line of lines) {
-        if (hasAssertion(line) && lineUsesTarget(line, callableName, targetUsage)) {
+        if (hasAssertion(line) && lineUsesTarget(line, callableName, targetUsage, callReference)) {
             return true;
         }
 
         const assignment = line.match(/^\s*([A-Za-z_]\w*)\s*=(?!=)/);
-        if (assignment && lineUsesTarget(line, callableName, targetUsage)) {
+        if (assignment && lineUsesTarget(line, callableName, targetUsage, callReference)) {
             assignedResults.add(assignment[1]);
             continue;
         }
@@ -75,7 +142,8 @@ function hasTargetResultAssertion(block: string, callableName: string, targetUsa
     return false;
 }
 
-function hasTargetInAssertRaises(block: string, callableName: string, targetUsage: TargetUsage): boolean {
+function hasTargetInAssertRaises(block: string, callableName: string, targetUsage: TargetUsage,
+                                 callReference: TargetCallReference): boolean {
     const lines = block.split(/\r?\n/);
     for (let index = 0; index < lines.length; index++) {
         const context = lines[index].match(/^(\s*)with\s+.*\bself\.assertRaises(?:Regex)?\s*\(/);
@@ -92,7 +160,7 @@ function hasTargetInAssertRaises(block: string, callableName: string, targetUsag
             if (indent <= contextIndent) {
                 break;
             }
-            if (lineUsesTarget(line, callableName, targetUsage)) {
+            if (lineUsesTarget(line, callableName, targetUsage, callReference)) {
                 return true;
             }
         }
@@ -100,10 +168,11 @@ function hasTargetInAssertRaises(block: string, callableName: string, targetUsag
     return false;
 }
 
-function hasBehavioralTargetTest(code: string, callableName: string, targetUsage: TargetUsage): boolean {
+function hasBehavioralTargetTest(code: string, callableName: string, targetUsage: TargetUsage,
+                                 callReference: TargetCallReference): boolean {
     return testMethodBlocks(code).some(block =>
-        hasTargetResultAssertion(block, callableName, targetUsage)
-        || hasTargetInAssertRaises(block, callableName, targetUsage)
+        hasTargetResultAssertion(block, callableName, targetUsage, callReference)
+        || hasTargetInAssertRaises(block, callableName, targetUsage, callReference)
     );
 }
 
@@ -114,18 +183,17 @@ function hasBehavioralTargetTest(code: string, callableName: string, targetUsage
  * cannot affect the target invocation and therefore cannot validate the
  * claimed dependency path.
  */
-function hasIneffectiveLocalDependencyMutation(block: string, callableName: string): boolean {
-    const escapedTarget = escapeRegex(callableName);
-    const targetInvocation = new RegExp('\\b' + escapedTarget + '\\s*\\(');
+function hasIneffectiveLocalDependencyMutation(block: string, callableName: string,
+                                               callReference: TargetCallReference): boolean {
     const lines = block.split(/\r?\n/);
-    const targetLines = lines.filter(line => targetInvocation.test(line));
+    const targetLines = lines.filter(line => invokesTargetCall(line, callReference));
     if (targetLines.length === 0) {
         return false;
     }
 
     for (let index = 0; index < lines.length; index++) {
         const assignment = lines[index].match(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\(/);
-        if (!assignment || assignment[2] === callableName) {
+        if (!assignment || callReference.callableNames.includes(assignment[2])) {
             continue;
         }
         const localName = assignment[1];
@@ -225,21 +293,26 @@ export function validateUnittestStructure(
         };
     }
     if (targetCallable) {
+        const callReference = targetCallReference(trimmed, targetCallable, targetModule);
         if (definesCallable(trimmed, targetCallable)) {
             return { valid: false, reason: '測試檔重新定義了被測函式 ' + targetCallable + '，可能沒有測到原始模組' };
         }
-        if (targetUsage === 'property' ? !accessesProperty(trimmed, targetCallable) : !invokesCallable(trimmed, targetCallable)) {
+        const shadowedAlias = shadowsImportedAlias(trimmed, callReference.importedAliases);
+        if (shadowedAlias) {
+            return { valid: false, reason: '測試檔重新定義了被測函式的匯入別名 ' + shadowedAlias + '，可能沒有測到原始模組' };
+        }
+        if (targetUsage === 'property' ? !accessesProperty(trimmed, targetCallable) : !invokesTargetCall(trimmed, callReference)) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '測試沒有讀取被測 property ' + targetCallable
                 : '測試沒有呼叫被測函式 ' + targetCallable };
         }
-        if (!hasBehavioralTargetTest(trimmed, targetCallable, targetUsage)) {
+        if (!hasBehavioralTargetTest(trimmed, targetCallable, targetUsage, callReference)) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
                 : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
         }
         if (targetUsage === 'call' && testMethodBlocks(trimmed).some(block =>
-            hasIneffectiveLocalDependencyMutation(block, targetCallable)
+            hasIneffectiveLocalDependencyMutation(block, targetCallable, callReference)
         )) {
             return {
                 valid: false,

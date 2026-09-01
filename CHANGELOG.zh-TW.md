@@ -4,6 +4,11 @@
 
 ## 2026-09-01
 
+### 生成測試匯入別名相容性
+
+- 結構驗證現在可辨識 `from module import target as alias` 與 `import module as alias` 的合法目標呼叫，降低不同模型因程式風格不同而被誤拒絕的機率。
+- 匯入別名若在測試碼中被重新定義仍會拒絕，防止模型以假的 helper 冒充被測函式。
+
 ### Dynamic Trace 副作用隔離
 
 - Dynamic Trace 現在會在載入模組、建構實例與呼叫目標時阻擋檔案寫入、刪除、子程序、shell 與網路 socket 操作。
