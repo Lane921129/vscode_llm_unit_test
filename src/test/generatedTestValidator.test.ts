@@ -196,6 +196,38 @@ test('allows a dependency value when it is injected through a standard mock', ()
     assert.strictEqual(validateUnittestStructure(code, 'checkout', 'order_service').valid, true);
 });
 
+test('rejects generated tests that execute external commands or dynamic code', () => {
+    const commandCode = [
+        'import os',
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_add(self):',
+        '        os.system("echo unsafe")',
+        '        self.assertEqual(add(1, 1), 2)',
+    ].join('\n');
+    const dynamicCode = commandCode.replace('os.system("echo unsafe")', 'exec("value = 1")');
+
+    assert.match(validateUnittestStructure(commandCode, 'add').reason || '', /shell/);
+    assert.match(validateUnittestStructure(dynamicCode, 'add').reason || '', /動態執行/);
+});
+
+test('allows mock.patch for an external operation without executing it', () => {
+    const code = [
+        'import unittest',
+        'from unittest.mock import patch',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    @patch("os.system")',
+        '    def test_add(self, mock_system):',
+        '        self.assertEqual(add(1, 1), 2)',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');

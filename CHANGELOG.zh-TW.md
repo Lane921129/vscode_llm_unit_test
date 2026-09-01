@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 生成測試安全操作閘門
+
+- unittest 結構驗證現在會拒絕模型測試碼中的 shell／子程序啟動、直接網路存取、`eval`／`exec` 等動態程式碼執行，以及破壞性檔案操作。
+- 標準 `unittest.mock.patch("os.system")` 等 mock 字串不受影響；測試必須透過 mock 模擬外部與危險行為，而非在使用者環境直接執行。
+
 ### 突變分數隔離 Baseline 閘門
 
 - 內建 AST 突變引擎現在會在與 mutant 完全相同的暫存匯入環境中，先執行未修改原始碼的 unittest baseline。

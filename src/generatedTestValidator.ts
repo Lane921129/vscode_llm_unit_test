@@ -107,6 +107,18 @@ function shadowsTargetModule(code: string, moduleName: string): boolean {
     return moduleRegistryWrite.test(code) || dynamicTargetModule.test(code);
 }
 
+const UNSAFE_TEST_OPERATIONS: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /\b(?:os\.)?(?:system|popen)\s*\(/, label: '啟動 shell 指令' },
+    { pattern: /\bsubprocess\s*\.\s*(?:run|call|check_call|check_output|Popen)\s*\(/, label: '啟動子程序' },
+    { pattern: /\b(?:socket\s*\.\s*(?:create_connection|socket)|requests\s*\.\s*\w+|urllib\s*\.\s*request\s*\.\s*urlopen|http\s*\.\s*client)\s*\(/, label: '直接網路存取' },
+    { pattern: /\b(?:eval|exec|compile|__import__)\s*\(/, label: '動態執行程式碼' },
+    { pattern: /\b(?:shutil\s*\.\s*rmtree|os\s*\.\s*(?:remove|unlink|rmdir|replace)|pathlib\s*\.\s*Path\s*\([^\n]*\)\s*\.\s*(?:unlink|rmdir))\s*\(/, label: '破壞性檔案操作' },
+];
+
+function unsafeTestOperation(code: string): string | undefined {
+    return UNSAFE_TEST_OPERATIONS.find(operation => operation.pattern.test(code))?.label;
+}
+
 /** Extract code from the optional structured-output envelope used by capable APIs. */
 export function unwrapGeneratedCodeEnvelope(response: string): string {
     try {
@@ -148,6 +160,13 @@ export function validateUnittestStructure(
     }
     if (!hasAssertion(trimmed)) {
         return { valid: false, reason: '缺少可驗證行為的 assertion 或 assertRaises' };
+    }
+    const unsafeOperation = unsafeTestOperation(trimmed);
+    if (unsafeOperation) {
+        return {
+            valid: false,
+            reason: `測試包含不允許的${unsafeOperation}；請以 unittest.mock.patch 模擬外部或危險操作。`
+        };
     }
     if (targetCallable) {
         if (definesCallable(trimmed, targetCallable)) {
