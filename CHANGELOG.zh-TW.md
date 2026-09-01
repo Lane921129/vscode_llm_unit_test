@@ -12,6 +12,7 @@
 
 ### 可執行的模型 unittest 探測
 
+- 探測 fixture 從單一正向案例提升為正值與負值兩個已知行為案例；模型必須同時建立、assert 並在 isolated Python 中執行通過，才能開放 Tier 2–4。
 - 「測試連線」不再只檢查模型輸出的 unittest 結構與 assertion；探測碼必須符合嚴格、無外部副作用的最小 fixture，並在 Python isolated mode 中實際執行通過。
 - 連線資格結果因此能區分「格式看似正確」與「真的能產生可執行 unittest」，且不會執行模型任意輸出的程式碼。
 

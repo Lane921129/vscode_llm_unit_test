@@ -30,7 +30,35 @@ test('test-generation probe requires a complete unittest structure, not merely J
     assert.strictEqual(request.format, 'json');
     assert.ok(request.prompt.includes('def increment(value): return value + 1'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
+    assert.ok(request.prompt.includes('self.assertEqual(increment(-1), 0)'));
     assert.strictEqual(assessTestGenerationProbe({ response: '{"code":"string"}' }).capability, 'unverified');
+    assert.strictEqual(
+        assessTestGenerationProbe({
+            response: JSON.stringify({
+                code: [
+                    'import unittest',
+                    '',
+                    'def increment(value):',
+                    '    return value + 1',
+                    '',
+                    'class TestIncrement(unittest.TestCase):',
+                    '    def test_increment(self):',
+                    '        self.assertEqual(increment(1), 2)',
+                    '        self.assertEqual(increment(-1), 0)',
+                    ''
+                ].join('\n')
+            })
+        }).capability,
+        'verified'
+    );
+    assert.strictEqual(
+        assessTestGenerationProbe({
+            response: JSON.stringify({
+                code: 'import unittest\n\nclass TestIncrement(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(2, 2)\n'
+            })
+        }).capability,
+        'unverified'
+    );
     assert.strictEqual(
         assessTestGenerationProbe({
             response: JSON.stringify({
@@ -45,14 +73,6 @@ test('test-generation probe requires a complete unittest structure, not merely J
                     '        self.assertEqual(increment(1), 2)',
                     ''
                 ].join('\n')
-            })
-        }).capability,
-        'verified'
-    );
-    assert.strictEqual(
-        assessTestGenerationProbe({
-            response: JSON.stringify({
-                code: 'import unittest\n\nclass TestIncrement(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(2, 2)\n'
             })
         }).capability,
         'unverified'
@@ -82,6 +102,7 @@ test('plain test-generation probe does not require JSON mode and accepts fenced 
     assert.strictEqual('format' in request, false);
     assert.ok(request.prompt.startsWith('Return only one complete runnable Python unittest file.'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
+    assert.ok(request.prompt.includes('self.assertEqual(increment(-1), 0)'));
     assert.strictEqual(assessTestGenerationProbe({
         response: [
             '```python',
@@ -93,6 +114,7 @@ test('plain test-generation probe does not require JSON mode and accepts fenced 
             'class TestIncrement(unittest.TestCase):',
             '    def test_increment(self):',
             '        self.assertEqual(increment(1), 2)',
+            '        self.assertEqual(increment(-1), 0)',
             '```'
         ].join('\n')
     }).capability, 'verified');
@@ -108,6 +130,7 @@ test('runnable probe requires the safe fixture and an isolated execution pass', 
         'class TestIncrement(unittest.TestCase):',
         '    def test_increment(self):',
         '        self.assertEqual(increment(1), 2)',
+        '        self.assertEqual(increment(-1), 0)',
     ].join('\n');
     const payload = { response: JSON.stringify({ code }) };
 
@@ -116,7 +139,7 @@ test('runnable probe requires the safe fixture and an isolated execution pass', 
     assert.strictEqual(await runIsolatedProbe(code), true);
     assert.deepStrictEqual(
         await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code),
-        { capability: 'verified', reason: '模型已通過 unittest 結構、行為 assertion 與隔離執行驗證。' }
+        { capability: 'verified', reason: '模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。' }
     );
     assert.strictEqual(
         (await verifyRunnableTestGenerationProbe(payload, async () => false)).capability,

@@ -43,6 +43,8 @@ export function isIsolatedProbeCode(code: string): boolean {
         /^def test_[A-Za-z_]\w*\(self\):$/,
         /^self\.assertEqual\(increment\(1\), 2\)$/,
         /^self\.assertEqual\(2, increment\(1\)\)$/,
+        /^self\.assertEqual\(increment\(-1\), 0\)$/,
+        /^self\.assertEqual\(0, increment\(-1\)\)$/,
         /^if __name__ == ['"]__main__['"]:$/,
         /^unittest\.main\(\)$/,
     ];
@@ -87,6 +89,6 @@ export async function verifyRunnableTestGenerationProbe(
         return { capability: 'unverified', reason: '模型探測碼未符合可安全隔離執行的最小 unittest fixture。' };
     }
     return await executor(code)
-        ? { capability: 'verified', reason: '模型已通過 unittest 結構、行為 assertion 與隔離執行驗證。' }
+        ? { capability: 'verified', reason: '模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。' }
         : { capability: 'unverified', reason: '模型輸出的 unittest 未能在隔離 Python 環境執行通過。' };
 }
