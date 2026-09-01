@@ -16,6 +16,7 @@ import types
 import asyncio
 import inspect
 import itertools
+from pathlib import Path
 
 
 def _literal_value(node):
@@ -200,9 +201,27 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
             unique_results.append(value)
     return unique_results[:12]
 
+def package_module_context(file_path: str):
+    """Return an importable module name and its package-root search path.
+
+    Relative imports require ``__package__`` to be meaningful. A file inside
+    ``package/submodule.py`` must therefore be loaded as
+    ``package.submodule`` rather than merely ``submodule``.
+    """
+    target = Path(file_path).resolve()
+    package_parts = []
+    current = target.parent
+    while (current / '__init__.py').is_file():
+        package_parts.append(current.name)
+        current = current.parent
+    package_parts.reverse()
+    module_name = '.'.join(package_parts + [target.stem]) if package_parts else target.stem
+    return module_name, str(current), package_parts[0] if package_parts else None
+
+
 def load_module_from_file(file_path: str):
-    """動態載入 Python 模組"""
-    module_name = os.path.basename(file_path).replace('.py', '')
+    """Dynamically load a module while preserving Python package semantics."""
+    module_name, package_root, package_prefix = package_module_context(file_path)
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     if spec is None or spec.loader is None:
         return None
@@ -214,9 +233,20 @@ def load_module_from_file(file_path: str):
         sys.path.insert(0, target_dir)
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
+    if package_root not in sys.path:
+        sys.path.insert(0, package_root)
+    # A tracer process can inspect several temporary projects. Do not reuse a
+    # same-named package left by an earlier trace, or relative imports could
+    # silently resolve to that other project's source tree.
+    if package_prefix:
+        for loaded_name in list(sys.modules):
+            if loaded_name == package_prefix or loaded_name.startswith(package_prefix + '.'):
+                sys.modules.pop(loaded_name, None)
     try:
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)  # type: ignore
-    except Exception as e:
+    except Exception:
+        sys.modules.pop(module_name, None)
         return None
     return module
 

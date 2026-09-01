@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 相對匯入的動態追蹤
+
+- Dynamic Tracer 現在會沿著 `__init__.py` 找出 package 邊界，並以完整模組名稱載入目標，讓 `from .helper import ...` 的相對匯入能提供真實 I/O Trace。
+- 同名暫存 package 在不同追蹤間會被隔離，避免後一次 Trace 靜默使用前一個專案已快取的模組。
+
 ### 模型語意能力連線驗證
 
 - 「測試連線」中的最小 unittest 探針現在要求驗證明確事實 `increment(1) == 2`；只產生 unittest 外殼、呼叫函式或 `assertTrue` 的模型不再被誤判為可用於 Tier 2–4。

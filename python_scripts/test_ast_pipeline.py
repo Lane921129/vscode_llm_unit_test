@@ -193,6 +193,25 @@ class Worker:
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
 
+    def test_dynamic_tracer_loads_a_package_module_with_relative_imports(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            package = root / 'helpers_pkg'
+            package.mkdir()
+            (package / '__init__.py').write_text('', encoding='utf-8')
+            (package / 'normalizer.py').write_text(
+                'def normalize(value):\n    return value * 2\n', encoding='utf-8'
+            )
+            target = package / 'service.py'
+            target.write_text(
+                'from .normalizer import normalize\n\ndef transform(value):\n    return normalize(value) + 1\n',
+                encoding='utf-8'
+            )
+            result = trace_function(str(target), 'transform', [{'args': [3], 'kwargs': {}}])
+
+        self.assertIsNone(result['load_error'])
+        self.assertEqual(result['examples'][0]['result'], '7')
+
     def test_dynamic_tracer_materializes_generator_values_for_a_reproducible_oracle(self):
         source = '''def numbers(limit):
     for value in range(limit):
