@@ -16,6 +16,8 @@ import types
 import asyncio
 import inspect
 import itertools
+import io
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 
@@ -369,7 +371,10 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     }
 
     # 載入模組
-    module = load_module_from_file(file_path)
+    # The CLI protocol is JSON on stdout. Target modules may print or configure
+    # noisy imports, but their output is trace evidence rather than protocol.
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        module = load_module_from_file(file_path)
     if module is None:
         result["load_error"] = f"Failed to load module from {file_path}"
         return result
@@ -478,33 +483,36 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         if not isinstance(inp, (list, tuple)):
             inp = (inp,)
         try:
-            if func_is_method or func_is_property:
-                # 將 class 實例化後呼叫 method
-                cls_obj = getattr(module, method_class_name)
-                try:
-                    instance = cls_obj()
-                except Exception as constructor_error:
-                    result["load_error"] = (
-                        f"Cannot safely instantiate class '{method_class_name}' for dynamic trace: "
-                        f"{type(constructor_error).__name__}: {constructor_error}"
-                    )
-                    result["examples"] = []
-                    result["errors"] = []
-                    return result
-                if func_is_property:
-                    if inp or kwargs:
-                        raise TypeError(f"Property '{func_name}' does not accept call arguments")
-                    ret = getattr(instance, func_name)
+            # Keep stdout/stderr from constructors, target calls and generator
+            # materialisation out of the JSON document printed by this script.
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                if func_is_method or func_is_property:
+                    # 將 class 實例化後呼叫 method
+                    cls_obj = getattr(module, method_class_name)
+                    try:
+                        instance = cls_obj()
+                    except Exception as constructor_error:
+                        result["load_error"] = (
+                            f"Cannot safely instantiate class '{method_class_name}' for dynamic trace: "
+                            f"{type(constructor_error).__name__}: {constructor_error}"
+                        )
+                        result["examples"] = []
+                        result["errors"] = []
+                        return result
+                    if func_is_property:
+                        if inp or kwargs:
+                            raise TypeError(f"Property '{func_name}' does not accept call arguments")
+                        ret = getattr(instance, func_name)
+                    else:
+                        ret = getattr(instance, func_name)(*inp, **kwargs)
                 else:
-                    ret = getattr(instance, func_name)(*inp, **kwargs)
-            else:
-                ret = func(*inp, **kwargs)
-            if inspect.isasyncgen(ret):
-                ret, result_type, result_truncated = asyncio.run(materialize_async_generator(ret))
-            else:
-                if inspect.isawaitable(ret):
-                    ret = asyncio.run(ret)
-                ret, result_type, result_truncated = materialize_trace_result(ret)
+                    ret = func(*inp, **kwargs)
+                if inspect.isasyncgen(ret):
+                    ret, result_type, result_truncated = asyncio.run(materialize_async_generator(ret))
+                else:
+                    if inspect.isawaitable(ret):
+                        ret = asyncio.run(ret)
+                    ret, result_type, result_truncated = materialize_trace_result(ret)
             example = {
                 "args": [safe_repr(a) for a in inp],
                 "result": safe_repr(ret),

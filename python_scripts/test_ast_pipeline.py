@@ -193,6 +193,22 @@ class Worker:
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
 
+    def test_dynamic_tracer_cli_keeps_target_output_out_of_json_stdout(self):
+        source = '''import sys
+
+def echo(value):
+    print("ordinary output")
+    print("error output", file=sys.stderr)
+    return value
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'echo.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('dynamic_tracer.py', target, 'echo')
+
+        self.assertIsNone(data['load_error'])
+        self.assertTrue(data['examples'])
+
     def test_dynamic_tracer_loads_a_package_module_with_relative_imports(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

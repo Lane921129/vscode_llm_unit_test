@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### Dynamic Trace JSON 輸出隔離
+
+- Dynamic Tracer 現在會隔離目標模組載入、建構子與函式執行的 stdout/stderr，保證 CLI stdout 僅保留可解析 JSON。
+- 新增含 stdout 與 stderr 的被測函式回歸案例，防止 print／日誌再度破壞 Orchestrator 的 Trace 資料。
+
 ### 目標分支覆蓋品質閘門
 
 - 預先驗證現在以 `coverage run --branch` 收集分支資料；即使所有目標行都執行過，只要 `if`、loop 或其他控制流仍有未走分支，仍會交由 Reviewer／Tier 4 補測。
