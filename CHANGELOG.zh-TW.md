@@ -4,6 +4,12 @@
 
 ## 2026-09-01
 
+### Stub/Dummy 快速通道的結構式判定
+
+- 修正快速通道過度寬鬆的分類：短小的純計算或「賦值後回傳」函式不再被錯當成 Stub/Dummy 而略過測試與突變分析。
+- 判定不看任何業務字詞；除了 `pass`、空函式或移除 docstring 後的單一安全 literal 回傳外，函式名稱含明確 `dummy` token（如 `dummy_noise_function_001`）也視為使用者標記的雜訊／佔位函式，走最小 Smoke Test。
+- 新增回歸測試，涵蓋 `dummy_noise_function_*` 命名標記，以及 `add`、容器操作等仍應進入正常測試流程的案例。
+
 ### 未探測模型的 Tier 品質閘門
 
 - 尚未透過「測試連線」驗證的 provider／model 現在會先限制為 Dynamic Trace 驅動的 Tier 1，不再因參數量猜測而直接進入 Tier 2–4。
