@@ -660,6 +660,33 @@ class TestRoute(unittest.TestCase):
         self.assertTrue(all(mutant['status'] == 'KILLED' for mutant in match_mutants))
         self.assertEqual(result['survived'], 0)
 
+    def test_builtin_mutation_runner_uses_mutant_for_package_imports(self):
+        source = '''def choose(enabled):
+    if enabled:
+        return "yes"
+    return "no"
+'''
+        test_source = '''import unittest
+from src.choose import choose
+
+class TestChoose(unittest.TestCase):
+    def test_enabled(self):
+        self.assertEqual(choose(True), "yes")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            package = root / 'src'
+            package.mkdir()
+            source_path = package / 'choose.py'
+            test_path = root / 'test_choose.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='choose')
+
+        predicates = [mutant for mutant in result['mutants'] if mutant['kind'] == 'conditional_negation']
+        self.assertEqual(len(predicates), 1)
+        self.assertEqual(predicates[0]['status'], 'KILLED')
+
 
 if __name__ == '__main__':
     unittest.main()

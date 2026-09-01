@@ -10,6 +10,8 @@ import ast
 import copy
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -288,6 +290,55 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
     raise IndexError('Mutation candidate index was not found')
 
 
+def package_mutant_targets(source_file, test_file, temp_root):
+    """Mirror package imports from a test so they resolve to the mutant copy.
+
+    A generated unittest may import either ``module`` or ``package.module``.
+    Writing only ``temp_root/module.py`` handles the former, but silently loads
+    the original source for the latter.  We copy just the matching package root
+    into the isolated directory and return every mirrored target path.
+    """
+    source_stem = source_file.stem
+    source_chain = list(source_file.parents)
+    modules = set()
+    test_text = test_file.read_text(encoding='utf-8')
+    for raw_line in test_text.splitlines():
+        from_match = re.match(r'^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$', raw_line)
+        if from_match:
+            module_name, imported = from_match.groups()
+            names = [part.strip().split(' as ')[0].strip() for part in imported.split(',')]
+            if module_name.split('.')[-1] == source_stem:
+                modules.add(module_name)
+            elif source_stem in names:
+                modules.add(f'{module_name}.{source_stem}')
+            continue
+        import_match = re.match(r'^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)', raw_line)
+        if import_match and import_match.group(1).split('.')[-1] == source_stem:
+            modules.add(import_match.group(1))
+
+    targets = []
+    copied_roots = set()
+    for module_name in modules:
+        package_parts = module_name.split('.')[:-1]
+        if not package_parts or len(package_parts) > len(source_chain):
+            continue
+        if any(source_chain[index].name != package_parts[-1 - index] for index in range(len(package_parts))):
+            continue
+        package_root = source_chain[len(package_parts) - 1]
+        destination_root = temp_root / package_root.name
+        root_key = str(package_root)
+        if root_key not in copied_roots:
+            shutil.copytree(
+                package_root,
+                destination_root,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns('__pycache__', '*.pyc')
+            )
+            copied_roots.add(root_key)
+        targets.append(destination_root / source_file.relative_to(package_root))
+    return targets
+
+
 def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
                         target_function=None, target_class=None):
     source_file = Path(source_path).resolve()
@@ -321,6 +372,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         temp_root = Path(temp_dir)
         test_copy = temp_root / test_file.name
         test_copy.write_text(test_file.read_text(encoding='utf-8'), encoding='utf-8')
+        mirrored_targets = package_mutant_targets(source_file, test_file, temp_root)
         python_path = os.pathsep.join([
             str(temp_root),
             str(source_file.parent),
@@ -339,6 +391,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             ast.fix_missing_locations(mutant_tree)
             mutant_source = ast.unparse(mutant_tree) + '\n'
             (temp_root / source_file.name).write_text(mutant_source, encoding='utf-8')
+            for mirrored_target in mirrored_targets:
+                mirrored_target.write_text(mutant_source, encoding='utf-8')
 
             try:
                 completed = subprocess.run(
