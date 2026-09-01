@@ -23,6 +23,65 @@ class AstPipelineTests(unittest.TestCase):
         )
         return json.loads(completed.stdout)
 
+    def validate_target_calls(self, code, target, signature):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / 'validate_target_calls.py'),
+                target,
+                json.dumps(signature),
+            ],
+            check=True,
+            capture_output=True,
+            encoding='utf-8',
+            input=code,
+        )
+        return json.loads(completed.stdout)
+
+    def test_target_call_validator_rejects_unknown_keyword_outside_type_error_assertion(self):
+        signature = [
+            {'name': 'order_id', 'kind': 'positional_or_keyword'},
+            {'name': 'payment_token', 'kind': 'positional_or_keyword'},
+        ]
+        code = '''import unittest
+
+class TestCheckout(unittest.TestCase):
+    def test_unknown_keyword(self):
+        with self.assertRaises(ValueError):
+            checkout_order("id", "token", provider="unknown")
+'''
+
+        result = self.validate_target_calls(code, 'checkout_order', signature)
+
+        self.assertFalse(result['valid'])
+        self.assertIn('未定義的 keyword 引數 provider', result['reason'])
+
+    def test_target_call_validator_allows_explicit_type_error_signature_tests(self):
+        signature = [{'name': 'value', 'kind': 'positional_or_keyword'}]
+        code = '''import unittest
+
+class TestValue(unittest.TestCase):
+    def test_invalid_signature(self):
+        with self.assertRaises(TypeError):
+            transform("value", unexpected=True)
+'''
+
+        self.assertTrue(self.validate_target_calls(code, 'transform', signature)['valid'])
+
+    def test_target_call_validator_allows_var_keyword_signatures(self):
+        signature = [
+            {'name': 'value', 'kind': 'positional_or_keyword'},
+            {'name': 'extras', 'kind': 'var_keyword'},
+        ]
+        code = '''import unittest
+
+class TestValue(unittest.TestCase):
+    def test_keyword(self):
+        self.assertEqual(transform("value", mode="strict"), "value")
+'''
+
+        self.assertTrue(self.validate_target_calls(code, 'transform', signature)['valid'])
+
     def test_extractor_includes_context_needed_for_a_class_method(self):
         source = '''import os as operating_system
 from helpers import normalize as normalize_value
@@ -456,6 +515,34 @@ class TestClassify(unittest.TestCase):
         self.assertGreaterEqual(result['total'], 1)
         self.assertGreaterEqual(result['killed'], 1)
         self.assertEqual(result['survived'], 0)
+
+    def test_builtin_mutation_runner_tolerates_non_utf8_target_output(self):
+        source = '''import os
+
+def label(value):
+    os.write(1, b"\\xa9")
+    return "yes" if value else "no"
+'''
+        test_source = '''import unittest
+from target import label
+
+class TestLabel(unittest.TestCase):
+    def test_yes(self):
+        self.assertEqual(label(True), "yes")
+
+    def test_no(self):
+        self.assertEqual(label(False), "no")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'target.py'
+            test_file = root / 'test_target.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(target, test_file)
+
+        self.assertGreater(result['total'], 0)
+        self.assertEqual(result['errors'], 0)
 
     def test_builtin_mutation_runner_limits_candidates_to_selected_function(self):
         source = '''def target(value):

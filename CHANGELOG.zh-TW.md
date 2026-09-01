@@ -4,6 +4,12 @@
 
 ## 2026-08-31
 
+### 目標函式簽名相容性閘門
+
+- 產生、Reviewer 與 Tier 4 自癒階段現在會以 AST 檢查測試對目標函式的呼叫；未定義 keyword 或超出 positional 上限的呼叫，若未明確以 `assertRaises(TypeError)` 驗證，會在寫檔前拒絕。
+- 此閘門只使用函式簽名，並保留合法的錯誤簽名測試與 `**kwargs` 函式；可避免將相依函式的參數誤加到目標函式上。
+- 內建突變引擎的子測試輸出現在以 UTF-8 搭配替代解碼處理，且 CLI JSON 保持 ASCII-safe；被測程式輸出非 UTF-8 位元組時，不再讓 Reader thread 中斷整個突變流程。
+
 ### Dynamic Trace JSON 輸出隔離
 
 - Dynamic Tracer 現在會隔離目標模組載入、建構子與函式執行的 stdout/stderr，保證 CLI stdout 僅保留可解析 JSON。

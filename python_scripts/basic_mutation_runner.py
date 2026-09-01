@@ -415,6 +415,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                     env=environment,
                     capture_output=True,
                     text=True,
+                    encoding='utf-8',
+                    errors='replace',
                     timeout=timeout_seconds,
                 )
                 status = 'KILLED' if completed.returncode else 'SURVIVED'
@@ -451,5 +453,5 @@ if __name__ == '__main__':
     class_name = sys.argv[6] if len(sys.argv) >= 7 and sys.argv[6] else None
     print(json.dumps(
         run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name),
-        ensure_ascii=False
+        ensure_ascii=True
     ))

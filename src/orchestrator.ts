@@ -771,7 +771,8 @@ async function validateGeneratedTestCode(
     code: string,
     targetCallable?: string,
     targetModule?: string,
-    targetUsage: 'call' | 'property' = 'call'
+    targetUsage: 'call' | 'property' = 'call',
+    targetSignature?: unknown[]
 ): Promise<{ valid: boolean; reason?: string }> {
     const structure = validateUnittestStructure(code, targetCallable, targetModule, targetUsage);
     if (!structure.valid) {
@@ -786,6 +787,28 @@ async function validateGeneratedTestCode(
         );
         if (parsed.code !== 0) {
             return { valid: false, reason: `Python AST 無法解析：${(parsed.stderr || parsed.stdout).trim().slice(0, 300)}` };
+        }
+        if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature) && targetSignature.length > 0) {
+            const validatorScript = path.join(__dirname, '..', 'python_scripts', 'validate_target_calls.py');
+            const compatibility = await runSpawn(
+                'python',
+                [validatorScript, targetCallable, JSON.stringify(targetSignature)],
+                { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
+            );
+            if (compatibility.code !== 0) {
+                return {
+                    valid: false,
+                    reason: `目標函式簽名驗證無法執行：${(compatibility.stderr || compatibility.stdout).trim().slice(0, 300)}`
+                };
+            }
+            try {
+                const callValidation = JSON.parse(compatibility.stdout) as { valid?: boolean; reason?: string };
+                if (!callValidation.valid) {
+                    return { valid: false, reason: callValidation.reason || '呼叫不符合被測函式簽名' };
+                }
+            } catch {
+                return { valid: false, reason: '目標函式簽名驗證回傳了無法解析的內容' };
+            }
         }
         return { valid: true };
     } catch (error: any) {
@@ -1579,7 +1602,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         sanitizedCode,
                         params.funcName,
                         path.basename(params.filePath, '.py'),
-                        (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
+                        (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
+                        (astContext as any)?.signature
                     );
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
@@ -1637,7 +1661,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalCode,
                 params.funcName,
                 baseName,
-                (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
+                (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
+                (astContext as any)?.signature
             );
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
@@ -1718,7 +1743,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     revCode,
                                     params.funcName,
                                     path.basename(params.filePath, '.py'),
-                                    (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
+                                    (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
+                                    (astContext as any)?.signature
                                 );
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
@@ -1776,7 +1802,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             repairCode,
                                             params.funcName,
                                             path.basename(params.filePath, '.py'),
-                                            (astContext as any)?.method_kind === 'property' ? 'property' : 'call'
+                                            (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
+                                            (astContext as any)?.signature
                                         );
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
