@@ -83,10 +83,12 @@ export function getReviewerUserPrompt(
     const trace = astContext?.traceResult;
     if (trace && !trace.load_error && (trace.examples?.length > 0 || trace.errors?.length > 0)) {
         prompt += `=== VERIFIED REAL EXECUTION TRACE ===\n`;
-        for (const ex of (trace.examples || []).slice(0, 5)) {
+        for (const ex of (trace.examples || []).filter((example: any) =>
+            example.call_assertable !== false && example.result_assertable !== false
+        ).slice(0, 5)) {
             prompt += `  - Input: (${ex.args.join(', ')}) => Returned: ${ex.result}\n`;
         }
-        for (const er of (trace.errors || []).slice(0, 5)) {
+        for (const er of (trace.errors || []).filter((error: any) => error.call_assertable !== false).slice(0, 5)) {
             prompt += `  - Input: (${er.args.join(', ')}) => Raised: ${er.exception}("${er.message}")\n`;
         }
         prompt += `\n`;

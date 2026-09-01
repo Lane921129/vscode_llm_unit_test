@@ -252,6 +252,22 @@ class Worker:
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
 
+    def test_dynamic_tracer_marks_object_repr_as_non_deterministic_oracle(self):
+        source = '''class Result:
+    pass
+
+def build():
+    return Result()
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'object_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'build')
+
+        example = result['examples'][0]
+        self.assertIn('Result object at 0x', example['result'])
+        self.assertFalse(example['result_assertable'])
+
     def test_dynamic_tracer_cli_keeps_target_output_out_of_json_stdout(self):
         source = '''import sys
 

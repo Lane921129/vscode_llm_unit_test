@@ -294,10 +294,12 @@ export function getUserPrompt(
         const trace = astContext.traceResult;
         if (trace && !trace.load_error && (trace.examples.length > 0 || trace.errors.length > 0)) {
             prompt += `\nVerified Real Execution Results (Use these EXACT values in your test assertions):\n`;
-            for (const ex of trace.examples.slice(0, 5)) {
+            for (const ex of trace.examples.filter((example: any) =>
+                example.call_assertable !== false && example.result_assertable !== false
+            ).slice(0, 5)) {
                 prompt += `  - Input: (${ex.args.join(', ')}) => Returns: ${ex.result} (Use: self.assertEqual(...))\n`;
             }
-            for (const er of trace.errors.slice(0, 5)) {
+            for (const er of trace.errors.filter((error: any) => error.call_assertable !== false).slice(0, 5)) {
                 prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}("${er.message}") (MUST Use: with self.assertRaises(${er.exception}): ...)\n`;
             }
 
@@ -408,11 +410,13 @@ export function getUserPrompt(
                 if (dependencyTrace && !dependencyTrace.load_error
                     && ((dependencyTrace.examples?.length || 0) > 0 || (dependencyTrace.errors?.length || 0) > 0)) {
                     prompt += `Verified Python observations for dependency ${dep.name} (facts, not exhaustive):\n`;
-                    for (const example of (dependencyTrace.examples || []).slice(0, 3)) {
+                    for (const example of (dependencyTrace.examples || []).filter((item: any) =>
+                        item.call_assertable !== false && item.result_assertable !== false
+                    ).slice(0, 3)) {
                         const keywords = Object.entries(example.kwargs || {}).map(([name, value]) => `${name}=${value}`);
                         prompt += `  ${dep.name}(${[...(example.args || []), ...keywords].join(', ')}) => ${example.result}\n`;
                     }
-                    for (const error of (dependencyTrace.errors || []).slice(0, 3)) {
+                    for (const error of (dependencyTrace.errors || []).filter((item: any) => item.call_assertable !== false).slice(0, 3)) {
                         const keywords = Object.entries(error.kwargs || {}).map(([name, value]) => `${name}=${value}`);
                         prompt += `  ${dep.name}(${[...(error.args || []), ...keywords].join(', ')}) raises ${error.exception}\n`;
                     }
@@ -568,10 +572,12 @@ export function getUserPrompt(
             if (traceRemind && !traceRemind.load_error &&
                 ((traceRemind.examples && traceRemind.examples.length > 0) || (traceRemind.errors && traceRemind.errors.length > 0))) {
                 prompt += `\n⚠️ REMINDER — Verified Real Execution Results (MUST use these EXACT values in ALL new assertions):\n`;
-                for (const ex of ((traceRemind.examples || []) as any[]).slice(0, 5)) {
+                for (const ex of ((traceRemind.examples || []) as any[]).filter(example =>
+                    example.call_assertable !== false && example.result_assertable !== false
+                ).slice(0, 5)) {
                     prompt += `  - Input: (${ex.args.join(', ')}) => Returns: ${ex.result}  ← use assertEqual\n`;
                 }
-                for (const er of ((traceRemind.errors || []) as any[]).slice(0, 5)) {
+                for (const er of ((traceRemind.errors || []) as any[]).filter(error => error.call_assertable !== false).slice(0, 5)) {
                     prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}  ← use assertRaises\n`;
                 }
                 prompt += `  ← Do NOT invent inputs. Do NOT guess return values. Use ONLY the above.\n`;

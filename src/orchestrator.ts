@@ -529,6 +529,8 @@ interface TraceExample {
     kwargs?: Record<string, string>;
     result?: string;
     result_type?: string;
+    result_assertable?: boolean;
+    call_assertable?: boolean;
     exception?: string;
     message?: string;
 }

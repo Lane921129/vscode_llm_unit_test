@@ -41,11 +41,22 @@ export interface DeterministicTraceAvailability {
     errors?: unknown[];
 }
 
+function isDeterministicTraceItem(item: unknown, needsResult: boolean): boolean {
+    if (!item || typeof item !== 'object') {
+        return true;
+    }
+    const record = item as { call_assertable?: unknown; result_assertable?: unknown };
+    return record.call_assertable !== false && (!needsResult || record.result_assertable !== false);
+}
+
 /** Tier 1 is safe for an unqualified model only when verified trace data exists. */
 export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability | undefined): boolean {
     return Boolean(
         trace
         && !trace.load_error
-        && ((trace.examples?.length || 0) > 0 || (trace.errors?.length || 0) > 0)
+        && (
+            (trace.examples || []).some(example => isDeterministicTraceItem(example, true))
+            || (trace.errors || []).some(error => isDeterministicTraceItem(error, false))
+        )
     );
 }

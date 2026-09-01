@@ -4,6 +4,12 @@
 
 ## 2026-08-31
 
+### Dynamic Trace 非決定性 Oracle 隔離
+
+- Dynamic Trace 現在會辨識含記憶體位址的自訂物件、循環／過長容器、非有限浮點數等不可重現結果，將它們標示為不可作為 deterministic assertion 的語境資料。
+- Tier 1 只會從可重現的 Python literal I/O 建立機械式斷言；不可穩定的結果不再生成會在下一次程序失敗的 `assertEqual`。
+- 未通過模型能力驗證時，只有至少一筆可安全斷言的 Trace（或可安全呼叫的預期例外）才會啟用 Tier 1；其餘情況不會以不穩定資料誤判為可生成。
+
 ### 已驗證的相依函式行為語境
 
 - 深度 AST 相依解析現在會對可載入的專案內相依函式進行獨立 Dynamic Trace，將真實 Python I/O 事實傳給語意分析師與測試生成師。

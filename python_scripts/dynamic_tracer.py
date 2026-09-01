@@ -17,6 +17,7 @@ import asyncio
 import inspect
 import itertools
 import io
+import math
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -312,6 +313,42 @@ def safe_repr(val) -> str:
     return r
 
 
+def is_assertable_literal(value, seen=None):
+    """Whether a value has a bounded, portable Python-literal oracle.
+
+    Object repr values often include process-specific memory addresses. They
+    remain useful as trace context, but cannot be used as deterministic test
+    assertions. Keep the decision type-based instead of recognising domain
+    classes or field names.
+    """
+    if value is None or isinstance(value, (bool, int, str, bytes)):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, (tuple, list, dict)):
+        seen = seen if seen is not None else set()
+        identity = id(value)
+        if identity in seen:
+            return False
+        seen.add(identity)
+        try:
+            if isinstance(value, dict):
+                return all(is_assertable_literal(key, seen) and is_assertable_literal(item, seen)
+                           for key, item in value.items())
+            return all(is_assertable_literal(item, seen) for item in value)
+        finally:
+            seen.remove(identity)
+    return False
+
+
+def trace_repr_with_oracle(value):
+    """Return display repr and whether it is safe for a deterministic assertion."""
+    rendered = repr(value)
+    if len(rendered) > 100:
+        return safe_repr(value), False
+    return rendered, is_assertable_literal(value)
+
+
 TRACE_COLLECTION_LIMIT = 100
 
 
@@ -513,16 +550,28 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     if inspect.isawaitable(ret):
                         ret = asyncio.run(ret)
                     ret, result_type, result_truncated = materialize_trace_result(ret)
+            formatted_args = [trace_repr_with_oracle(argument) for argument in inp]
+            formatted_kwargs = {
+                name: trace_repr_with_oracle(value)
+                for name, value in kwargs.items()
+            }
+            formatted_result, result_assertable = trace_repr_with_oracle(ret)
             example = {
-                "args": [safe_repr(a) for a in inp],
-                "result": safe_repr(ret),
+                "args": [rendered for rendered, _ in formatted_args],
+                "result": formatted_result,
                 "result_type": result_type
             }
+            if not result_assertable:
+                example['result_assertable'] = False
+            if not all(assertable for _, assertable in formatted_args) or not all(
+                assertable for _, assertable in formatted_kwargs.values()
+            ):
+                example['call_assertable'] = False
             if result_type in ('generator', 'async_generator'):
                 example['result_truncated'] = result_truncated
                 example['result_collection_limit'] = TRACE_COLLECTION_LIMIT
             if kwargs:
-                example["kwargs"] = {name: safe_repr(value) for name, value in kwargs.items()}
+                example["kwargs"] = {name: rendered for name, (rendered, _) in formatted_kwargs.items()}
             result["examples"].append(example)
         except Exception as e:
             exc_type = type(e).__name__
@@ -531,13 +580,22 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             if exc_type in ('ValueError', 'TypeError', 'KeyError', 'AttributeError',
                             'IndexError', 'RuntimeError', 'PermissionError', 'FileNotFoundError',
                             'NotImplementedError', 'AssertionError', 'ZeroDivisionError'):
+                formatted_args = [trace_repr_with_oracle(argument) for argument in inp]
+                formatted_kwargs = {
+                    name: trace_repr_with_oracle(value)
+                    for name, value in kwargs.items()
+                }
                 error_record = {
-                    "args": [safe_repr(a) for a in inp],
+                    "args": [rendered for rendered, _ in formatted_args],
                     "exception": exc_type,
                     "message": exc_msg
                 }
+                if not all(assertable for _, assertable in formatted_args) or not all(
+                    assertable for _, assertable in formatted_kwargs.values()
+                ):
+                    error_record['call_assertable'] = False
                 if kwargs:
-                    error_record["kwargs"] = {name: safe_repr(value) for name, value in kwargs.items()}
+                    error_record["kwargs"] = {name: rendered for name, (rendered, _) in formatted_kwargs.items()}
                 result["errors"].append(error_record)
             # 其他例外（ImportError 等）靜默跳過
 

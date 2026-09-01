@@ -59,8 +59,8 @@ export interface SemanticAnalysis {
 export interface DependencyTraceForPrompt {
     name: string;
     traceResult?: {
-        examples?: Array<{ args?: string[]; kwargs?: Record<string, string>; result?: string }>;
-        errors?: Array<{ args?: string[]; kwargs?: Record<string, string>; exception?: string; message?: string }>;
+        examples?: Array<{ args?: string[]; kwargs?: Record<string, string>; result?: string; result_assertable?: boolean; call_assertable?: boolean }>;
+        errors?: Array<{ args?: string[]; kwargs?: Record<string, string>; exception?: string; message?: string; call_assertable?: boolean }>;
         load_error?: string | null;
     };
 }
@@ -78,12 +78,14 @@ function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[])
     out += 'These observations were executed by Python. They take precedence over model inference and are not exhaustive.\n';
     for (const dependency of traced.slice(0, 4)) {
         const trace = dependency.traceResult!;
-        for (const example of (trace.examples || []).slice(0, 3)) {
+        for (const example of (trace.examples || []).filter(example =>
+            example.call_assertable !== false && example.result_assertable !== false
+        ).slice(0, 3)) {
             const keywords = Object.entries(example.kwargs || {}).map(([name, value]) => `${name}=${value}`);
             const input = [...(example.args || []), ...keywords].join(', ');
             out += `  - ${dependency.name}(${input}) => ${example.result}\n`;
         }
-        for (const error of (trace.errors || []).slice(0, 3)) {
+        for (const error of (trace.errors || []).filter(error => error.call_assertable !== false).slice(0, 3)) {
             const keywords = Object.entries(error.kwargs || {}).map(([name, value]) => `${name}=${value}`);
             const input = [...(error.args || []), ...keywords].join(', ');
             out += `  - ${dependency.name}(${input}) raises ${error.exception}${error.message ? `: ${error.message}` : ''}\n`;

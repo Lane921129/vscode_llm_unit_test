@@ -31,6 +31,14 @@ test('builds property getter assertions without calling the descriptor as a func
     assert.ok(!methods[0].includes('enabled('));
 });
 
+test('does not build deterministic assertions from process-specific object repr values', () => {
+    const methods = buildTier1TestMethods('build', [{
+        args: [], result: '<sample.Result object at 0x1234>', result_type: 'Result', result_assertable: false
+    }], []);
+
+    assert.deepStrictEqual(methods, []);
+});
+
 test('materializes finite generators before asserting their traced values', () => {
     const methods = buildTier1TestMethods('numbers', [
         { args: ['3'], result: '[0, 2, 4]', result_type: 'generator', result_truncated: false }

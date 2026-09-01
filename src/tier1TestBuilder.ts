@@ -5,6 +5,8 @@ export interface Tier1TraceExample {
     kwargs?: Record<string, string>;
     result?: string;
     result_type?: string;
+    result_assertable?: boolean;
+    call_assertable?: boolean;
     result_truncated?: boolean;
     result_collection_limit?: number;
     exception?: string;
@@ -60,7 +62,7 @@ export function buildTier1TestMethods(
 ): string[] {
     const methods: string[] = [];
 
-    examples.forEach((example, index) => {
+    examples.filter(example => example.call_assertable !== false && example.result_assertable !== false).forEach((example, index) => {
         const funcCall = buildTraceCall(funcName, example);
         methods.push([
             `    def test_case_${index + 1}(self):`,
@@ -68,13 +70,14 @@ export function buildTier1TestMethods(
         ].join('\n'));
     });
 
-    errors.forEach((error, index) => {
+    const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
+    errors.filter(error => error.call_assertable !== false).forEach((error, index) => {
         const funcCall = buildTraceCall(funcName, error);
         const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
             ? error.exception
             : 'Exception';
         methods.push([
-            `    def test_case_${examples.length + index + 1}(self):`,
+            `    def test_case_${assertableExamples.length + index + 1}(self):`,
             `        with self.assertRaises(${exception}):`,
             `            ${funcCall}`
         ].join('\n'));
@@ -92,7 +95,7 @@ export function buildTier1PropertyTestMethods(
 ): string[] {
     const propertyAccess = `${instanceName}.${propertyName}`;
     const methods: string[] = [];
-    examples.forEach((example, index) => {
+    examples.filter(example => example.call_assertable !== false && example.result_assertable !== false).forEach((example, index) => {
         const assertion = example.result === 'None' || example.result_type === 'NoneType'
             ? 'self.assertIsNone(result)'
             : `self.assertEqual(result, ${toPythonAssertionLiteral(example.result, example.result_type)})`;
@@ -102,12 +105,13 @@ export function buildTier1PropertyTestMethods(
             `        ${assertion}`
         ].join('\n'));
     });
-    errors.forEach((error, index) => {
+    const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
+    errors.filter(error => error.call_assertable !== false).forEach((error, index) => {
         const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
             ? error.exception
             : 'Exception';
         methods.push([
-            `    def test_case_${examples.length + index + 1}(self):`,
+            `    def test_case_${assertableExamples.length + index + 1}(self):`,
             `        with self.assertRaises(${exception}):`,
             `            _ = ${propertyAccess}`
         ].join('\n'));

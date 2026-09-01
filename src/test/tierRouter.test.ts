@@ -29,4 +29,10 @@ test('requires verified examples or errors before an unqualified model may use T
     }), true);
     assert.strictEqual(canUseDeterministicTierOne({ examples: [], errors: [] }), false);
     assert.strictEqual(canUseDeterministicTierOne({ load_error: 'import failed' }), false);
+    assert.strictEqual(canUseDeterministicTierOne({
+        examples: [{ result_assertable: false }], errors: []
+    }), false);
+    assert.strictEqual(canUseDeterministicTierOne({
+        examples: [], errors: [{ call_assertable: false, exception: 'ValueError' }]
+    }), false);
 });
