@@ -111,7 +111,16 @@ def mutation_candidates(tree, scope=None):
     candidates = []
     target_scope = scope or tree
     for node in mutation_scope_walk(target_scope):
-        if isinstance(node, ast.If):
+        if isinstance(node, ast.Return) and node.value is not None:
+            candidates.append({
+                'kind': 'return_value',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'return_value',
+                'to': 'None',
+            })
+        elif isinstance(node, ast.If):
             candidates.append({
                 'kind': 'conditional_negation',
                 'line': getattr(node, 'lineno', 0),
@@ -223,7 +232,12 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
         raise IndexError('Mutation target scope was not found')
     current = 0
     for node in mutation_scope_walk(copied_scope):
-        if isinstance(node, ast.If):
+        if isinstance(node, ast.Return) and node.value is not None:
+            if current == candidate_index:
+                node.value = ast.Constant(value=None)
+                return copied
+            current += 1
+        elif isinstance(node, ast.If):
             if current == candidate_index:
                 node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
                 return copied

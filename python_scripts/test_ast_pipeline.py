@@ -453,8 +453,8 @@ class TestTarget(unittest.TestCase):
 
         self.assertTrue(result['scope_found'])
         self.assertEqual(result['scope'], 'target')
-        self.assertEqual(result['total'], 3)
-        self.assertEqual(result['killed'], 3)
+        self.assertEqual(result['total'], 4)
+        self.assertEqual(result['killed'], 4)
 
     def test_builtin_mutation_runner_mutates_numeric_constants(self):
         source = '''def increment(value):
@@ -479,14 +479,14 @@ class TestIncrement(unittest.TestCase):
                 target_function='increment'
             )
 
-        self.assertEqual(result['total'], 2)
+        self.assertEqual(result['total'], 3)
         numeric_mutants = [
             mutant for mutant in result['mutants']
             if mutant['kind'] == 'numeric_constant'
         ]
         self.assertEqual(len(numeric_mutants), 1)
         self.assertEqual(numeric_mutants[0]['status'], 'KILLED')
-        self.assertEqual(result['killed'], 2)
+        self.assertEqual(result['killed'], 3)
 
     def test_builtin_mutation_runner_mutates_boolean_operators(self):
         source = '''def both_enabled(left, right):
@@ -620,7 +620,7 @@ class TestIncrement(unittest.TestCase):
             test_path.write_text(test_source, encoding='utf-8')
             result = run_mutation_trials(source_path, test_path, target_function='increment')
 
-        self.assertEqual(result['total'], 2)
+        self.assertEqual(result['total'], 3)
         self.assertEqual(result['survived'], 0)
         self.assertTrue(all(mutant['line'] != 3 for mutant in result['mutants']))
 
@@ -659,6 +659,34 @@ class TestRoute(unittest.TestCase):
         self.assertEqual(len(match_mutants), 2)
         self.assertTrue(all(mutant['status'] == 'KILLED' for mutant in match_mutants))
         self.assertEqual(result['survived'], 0)
+
+    def test_builtin_mutation_runner_mutates_structured_return_values(self):
+        source = '''def describe(enabled):
+    if enabled:
+        return {"state": "enabled"}
+    return {"state": "disabled"}
+'''
+        test_source = '''import unittest
+from sample import describe
+
+class TestDescribe(unittest.TestCase):
+    def test_enabled(self):
+        self.assertEqual(describe(True), {"state": "enabled"})
+
+    def test_disabled(self):
+        self.assertEqual(describe(False), {"state": "disabled"})
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='describe')
+
+        return_mutants = [mutant for mutant in result['mutants'] if mutant['kind'] == 'return_value']
+        self.assertEqual(len(return_mutants), 2)
+        self.assertTrue(all(mutant['status'] == 'KILLED' for mutant in return_mutants))
 
     def test_builtin_mutation_runner_uses_mutant_for_package_imports(self):
         source = '''def choose(enabled):
