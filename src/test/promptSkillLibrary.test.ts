@@ -76,3 +76,23 @@ test('evidence-bound skill cart keeps dependency mocking only when dependencies 
     );
     assert.ok(ids.includes('mock_external_dependency'));
 });
+
+test('class instance skill is not injected for static or class-bound methods', () => {
+    const staticIds = mergeEvidenceBoundSkillIds(
+        'def render(value):\n    return value',
+        ['class_method_testing'],
+        { class_name: 'Renderer', method_kind: 'static' }
+    );
+    const classIds = inferSkillIdsFromCode(
+        'def render(cls, value):\n    return value',
+        { class_name: 'Renderer', method_kind: 'class' }
+    );
+    const instanceIds = inferSkillIdsFromCode(
+        'def render(self, value):\n    return value',
+        { class_name: 'Renderer', method_kind: 'instance' }
+    );
+
+    assert.ok(!staticIds.includes('class_method_testing'));
+    assert.ok(!classIds.includes('class_method_testing'));
+    assert.ok(instanceIds.includes('class_method_testing'));
+});

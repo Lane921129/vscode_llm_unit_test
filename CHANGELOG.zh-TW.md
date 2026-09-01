@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 類別綁定的技能卡精準化
+
+- 「需要實例」技能卡現在只會套用至 instance method 與 property；`staticmethod`、`classmethod` 不再收到相互矛盾的實例化指令。
+- property 的卡片明確要求以屬性存取而非加上括號，並新增 static、class 與 instance binding 的回歸測試。
+
 ### 相對匯入的動態追蹤
 
 - Dynamic Tracer 現在會沿著 `__init__.py` 找出 package 邊界，並以完整模組名稱載入目標，讓 `from .helper import ...` 的相對匯入能提供真實 I/O Trace。

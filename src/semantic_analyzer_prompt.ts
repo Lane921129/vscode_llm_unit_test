@@ -129,7 +129,8 @@ ANALYSIS RULES:
     * Does it have raise statements? → add "assert_raises_syntax"
     * Does it use try/except and return error strings? → add "try_except_returns_string"
     * Does it do division? → add "zero_division"
-    * Is it a class method? → add "class_method_testing"
+    * Is it an instance method or property that needs an object instance? → add "class_method_testing"
+      Do not add it for staticmethod or classmethod; their binding is supplied by AST context.
     * Does it call external modules/IO/DB? → add "mock_external_dependency"
     * Is it declared with async def or does it await a coroutine? → add "async_coroutine_testing"
     * Does it open, read, or write files? → add "file_io_mocking"

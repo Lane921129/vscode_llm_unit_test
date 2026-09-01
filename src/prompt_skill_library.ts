@@ -152,13 +152,14 @@ export const SKILL_LIBRARY: SkillCard[] = [
     },
     {
         id: 'class_method_testing',
-        title: 'Class Method Testing',
-        trigger_hint: 'Use when the target function is a method of a class (has self parameter)',
+        title: 'Instance and Property Testing',
+        trigger_hint: 'Use when the target is an instance method or property that needs an object instance',
         rules: [
-            'CLASS METHOD TESTING:',
+            'INSTANCE / PROPERTY TESTING:',
             '  - Instantiate the class in setUp: self.obj = ClassName()',
             '  - Call method via instance: result = self.obj.method_name(...)',
-            '  - Do NOT call as standalone function: method_name(...) — NameError!',
+            '  - Read a property as self.obj.property_name without parentheses.',
+            '  - Do NOT call an instance method or property as a standalone function.',
         ]
     },
     {
@@ -220,7 +221,13 @@ export function getSkillCards(skillIds: string[]): SkillCard[] {
  */
 export function inferSkillIdsFromCode(
     sourceCode: string,
-    context?: { class_name?: string; class_context?: unknown; calls?: string[]; dependencies?: unknown[] }
+    context?: {
+        class_name?: string;
+        class_context?: unknown;
+        method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+        calls?: string[];
+        dependencies?: unknown[];
+    }
 ): string[] {
     const ids = new Set<string>(['import_module_name']);
     const source = sourceCode || '';
@@ -236,7 +243,9 @@ export function inferSkillIdsFromCode(
     if (/\braise\s+[A-Za-z_]/.test(source)) { ids.add('assert_raises_syntax'); }
     if (/\btry\s*:[\s\S]*\bexcept\b[\s\S]*\breturn\b/.test(source)) { ids.add('try_except_returns_string'); }
     if (/(?:\b\w+\s*\/\s*(?:\w+|\d+)|\b\d+\s*\/\s*\w+)/.test(source)) { ids.add('zero_division'); }
-    if (context?.class_name || context?.class_context) { ids.add('class_method_testing'); }
+    const needsInstance = context?.method_kind === 'instance' || context?.method_kind === 'property';
+    const bindingUnknown = (context?.class_name || context?.class_context) && !context?.method_kind;
+    if (needsInstance || bindingUnknown) { ids.add('class_method_testing'); }
     if ((context?.dependencies?.length || 0) > 0) { ids.add('mock_external_dependency'); }
     if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
@@ -254,7 +263,13 @@ export function inferSkillIdsFromCode(
 export function mergeEvidenceBoundSkillIds(
     sourceCode: string,
     semanticSkillIds: unknown,
-    context?: { class_name?: string; class_context?: unknown; calls?: string[]; dependencies?: unknown[] }
+    context?: {
+        class_name?: string;
+        class_context?: unknown;
+        method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+        calls?: string[];
+        dependencies?: unknown[];
+    }
 ): string[] {
     const baseline = inferSkillIdsFromCode(sourceCode, context);
     const allowed = new Set(baseline);
