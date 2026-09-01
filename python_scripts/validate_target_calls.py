@@ -32,9 +32,21 @@ def has_type_error_guard(ancestors):
     return False
 
 
-def target_call(node, target_name):
+def imported_target_names(tree, target_name):
+    """Return direct names that are proven aliases of the selected target."""
+    names = {target_name}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if alias.name == target_name:
+                names.add(alias.asname or alias.name)
+    return names
+
+
+def target_call(node, target_names, target_name):
     return (
-        isinstance(node.func, ast.Name) and node.func.id == target_name
+        isinstance(node.func, ast.Name) and node.func.id in target_names
     ) or (
         isinstance(node.func, ast.Attribute) and node.func.attr == target_name
     )
@@ -50,6 +62,8 @@ def validate_target_calls(code, target_name, signature):
     if not target_name or not parameters:
         return {'valid': True}
 
+    target_names = imported_target_names(tree, target_name)
+
     positional = [
         param for param in parameters
         if param.get('kind') in ('positional_only', 'positional_or_keyword')
@@ -63,7 +77,7 @@ def validate_target_calls(code, target_name, signature):
     failures = []
 
     def visit(node, ancestors):
-        if isinstance(node, ast.Call) and target_call(node, target_name):
+        if isinstance(node, ast.Call) and target_call(node, target_names, target_name):
             invalid = None
             fixed_positional_count = sum(not isinstance(argument, ast.Starred) for argument in node.args)
             if not accepts_varargs and fixed_positional_count > len(positional):

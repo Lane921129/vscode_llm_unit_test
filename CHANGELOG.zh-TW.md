@@ -4,6 +4,11 @@
 
 ## 2026-09-01
 
+### 匯入別名的簽名驗證
+
+- 目標函式以 `from module import target as alias` 匯入時，Python AST 簽名閘門現在同樣會檢查別名呼叫的 positional 與 keyword 引數。
+- 合法別名不再成為繞過未知 keyword／多餘 positional 引數防護的途徑；`assertRaises(TypeError)` 的明確錯誤簽名測試仍可保留。
+
 ### Package 模組一致匯入與 Mock Patch
 
 - 目標檔位於 package／namespace package 時，系統會依 AST imports 推導一致的模組路徑，例如 `src.service_order`，不再強制以檔名 `service_order` 匯入。

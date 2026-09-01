@@ -68,6 +68,21 @@ class TestValue(unittest.TestCase):
 
         self.assertTrue(self.validate_target_calls(code, 'transform', signature)['valid'])
 
+    def test_target_call_validator_validates_imported_target_aliases(self):
+        signature = [{'name': 'value', 'kind': 'positional_or_keyword'}]
+        code = '''import unittest
+from utility import transform as subject
+
+class TestTransform(unittest.TestCase):
+    def test_invalid_alias_call(self):
+        self.assertEqual(subject('value', unexpected=True), 'value')
+'''
+
+        result = self.validate_target_calls(code, 'transform', signature)
+
+        self.assertFalse(result['valid'])
+        self.assertIn('未定義的 keyword', result['reason'])
+
     def test_target_call_validator_allows_var_keyword_signatures(self):
         signature = [
             {'name': 'value', 'kind': 'positional_or_keyword'},
