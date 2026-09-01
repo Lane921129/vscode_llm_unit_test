@@ -39,6 +39,13 @@ test('writer prompt calls static methods through the class without inventing an 
     assert.match(writerSource, /Verified Python observations for dependency/);
 });
 
+test('writer prompt preserves the canonical package import path from AST context', () => {
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+
+    assert.match(writerSource, /astContext\?\.target_import_module/);
+    assert.match(writerSource, /from \$\{moduleName\} import \$\{funcName\}/);
+});
+
 test('semantic prompt supplies verified dependency repr facts instead of JavaScript object descriptions', () => {
     const prompt = getSemanticAnalyzerUserPrompt(
         'def render(value):\n    return normalize(value)',

@@ -227,7 +227,8 @@ export function getUserPrompt(
     budgetTokens: number = 20000,
     modelName: string = ''
 ): string {
-    const moduleName = fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
+    const moduleName = astContext?.target_import_module
+        || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
     const thinking = useThinkingTag(modelName);
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;

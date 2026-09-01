@@ -13,7 +13,7 @@ import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './genera
 import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
 import { canUseDeterministicTierOne, resolveTier } from './tierRouter';
-import { formatPythonImport, resolvePythonDependencyPath } from './dependencyResolver';
+import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
 import { assessTargetCoverage } from './targetCoverage';
 import { formatReportProvenance } from './reportProvenance';
@@ -137,14 +137,19 @@ function isStubFunction(complexityScore: number, astContext: any | null): boolea
 async function runMockScaffold(
     filePath: string,
     funcName: string,
-    traceResult: any
+    traceResult: any,
+    targetModule?: string
 ): Promise<{ scaffold: string; patches: string[]; mock_names: string[]; class_name?: string | null; is_async?: boolean } | null> {
     const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
-    const args = ['python', script, filePath, funcName];
-    if (traceResult) args.push(JSON.stringify(traceResult));
+    const scriptArgs = [script, filePath, funcName];
+    if (traceResult || targetModule) {
+        scriptArgs.push(JSON.stringify(traceResult || {}));
+    }
+    if (targetModule) {
+        scriptArgs.push(targetModule);
+    }
     try {
-        const { stdout } = await runSpawn('python',
-            traceResult ? [script, filePath, funcName, JSON.stringify(traceResult)] : [script, filePath, funcName],
+        const { stdout } = await runSpawn('python', scriptArgs,
             { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }
         );
         const parsed = JSON.parse(stdout.trim());
@@ -847,8 +852,8 @@ function stripUniformIndent(code: string): string {
 /**
  * 將 AI 亂輸出的程式碼（REPL格式、裸assert、甚至原始碼）自動包裝成合法的 unittest.TestCase 結構
  */
-function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string): string {
-    const moduleName = path.basename(srcFilePath, '.py');
+function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string, importModule?: string): string {
+    const moduleName = importModule || path.basename(srcFilePath, '.py');
     const targetFunc = funcName || moduleName;
 
     // 去除 >>> 前綴，逐行整理
@@ -1205,12 +1210,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         }
         else { log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`); }
     }
+    const targetImportModule = inferTargetImportModule(params.filePath, (astContext as any)?.file_imports || []);
+    if (astContext && !astContext.error) {
+        (astContext as any).target_import_module = targetImportModule;
+    }
 
     // ─── 優化一：Stub/Dummy 函式快速通道 ───
     // 若函式為純 Stub（pass/return None/return <literal>），跳過 LLM + 突變測試
     if (params.funcName && isStubFunction(complexityScore, astContext)) {
         log(`[快速通道] 🚀 偵測到 Stub/Dummy 函式（複雜度 ${complexityScore}/100），直接生成最小 Smoke Test，跳過 LLM 呼叫與突變測試。`);
-        const moduleName = path.basename(params.filePath, '.py');
+        const moduleName = targetImportModule;
         const className = (astContext as any)?.class_name as string | undefined;
         const args: string[] = (astContext as any)?.args || [];
         // 生成呼叫用的引數預設值
@@ -1411,7 +1420,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     log('[Tier 1 退回] 動態追蹤失敗，改走標準 LLM 生成與預先驗證流程。');
                 } else {
                     log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
-                    const moduleName = path.basename(params.filePath, '.py');
+                    const moduleName = targetImportModule;
                     const isProperty = (astContext as any)?.method_kind === 'property';
                     const tier1Methods = isProperty
                         ? buildTier1PropertyTestMethods(params.funcName, traceResult.examples, traceResult.errors)
@@ -1469,10 +1478,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (currentTier === 3 && !sanitizedCode && !survivedMutants) {
                 log(`[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…`);
                 const traceResult = (astContext as any)?.traceResult;
-                const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult);
+                const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult, targetImportModule);
                 if (scaffoldResult && scaffoldResult.scaffold) {
                     log(`[Tier 3] 骨架產生完成！patches: ${scaffoldResult.patches.join(', ') || '(無外部依賴)'}`);
-                    const moduleName = path.basename(params.filePath, '.py');
+                    const moduleName = targetImportModule;
                     const traceExamples = traceResult?.examples || [];
                     const sysP = getTier3SystemPrompt();
                     const usrP = getTier3UserPrompt(params.funcName, scaffoldResult.scaffold, moduleName, traceExamples);
@@ -1482,7 +1491,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
                             // 將 AI 補全的方法裹入完整類別
-                    const moduleName2 = path.basename(params.filePath, '.py');
+                    const moduleName2 = targetImportModule;
                             const className3 = (astContext as any)?.class_name as string | null;
                             const importLine3 = className3 ? `from ${moduleName2} import ${className3}` : `from ${moduleName2} import *`;
                             const patchImport = scaffoldResult.patches.length > 0 ? `from unittest.mock import patch, MagicMock\n` : '';
@@ -1601,7 +1610,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
                     if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
                         log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                        const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName);
+                        const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName, targetImportModule);
                         if (!rescued) {
                             if (llmRetry === 0) {
                                 log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
@@ -1658,12 +1667,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 })
                 .join('\n');
 
-            if (!finalCode.includes(`from ${baseName} import`)) {
+            if (!finalCode.includes(`from ${targetImportModule} import`)
+                && !finalCode.includes(`import ${targetImportModule}`)) {
                 log(`[警告] AI 遺漏了 import 目標模組的語句，系統自動補齊...`);
                 if (finalCode.includes('import unittest')) {
-                    finalCode = finalCode.replace('import unittest', `import unittest\nfrom ${baseName} import *`);
+                    finalCode = finalCode.replace('import unittest', `import unittest\nfrom ${targetImportModule} import *`);
                 } else {
-                    finalCode = `import unittest\nfrom ${baseName} import *\n\n` + finalCode;
+                    finalCode = `import unittest\nfrom ${targetImportModule} import *\n\n` + finalCode;
                 }
             }
 
@@ -1742,7 +1752,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             try {
                                 const brokenCode = fs.readFileSync(testPath, 'utf8');
                                 const revSys = getReviewerSystemPrompt();
-                                const moduleName = path.basename(params.filePath, '.py');
+                                const moduleName = targetImportModule;
                                 const targetSource = (astContext as any)?.code || targetCode;
                                 const revUsr = getReviewerUserPrompt(
                                     brokenCode,
@@ -2195,7 +2205,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             try {
                 const triageSys = getMutantTriageSystemPrompt();
                 const currentTestCode = fs.existsSync(testPath) ? fs.readFileSync(testPath, 'utf8') : '';
-                const moduleName = path.basename(params.filePath, '.py');
+                const moduleName = targetImportModule;
                 const triageUsr = getMutantTriageUserPrompt(
                     survivedMutants,
                     (astContext as any)?.code || '',

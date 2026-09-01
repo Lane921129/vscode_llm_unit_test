@@ -4,6 +4,11 @@
 
 ## 2026-09-01
 
+### Package 模組一致匯入與 Mock Patch
+
+- 目標檔位於 package／namespace package 時，系統會依 AST imports 推導一致的模組路徑，例如 `src.service_order`，不再強制以檔名 `service_order` 匯入。
+- Tier 1、Tier 3、救援、Reviewer 與自動補 import 現在共用此路徑；Mock Scaffold 的 `patch` 也會對準實際載入的模組命名空間，避免 patch 到另一份模組實例。
+
 ### 生成測試匯入別名相容性
 
 - 結構驗證現在可辨識 `from module import target as alias` 與 `import module as alias` 的合法目標呼叫，降低不同模型因程式風格不同而被誤拒絕的機率。

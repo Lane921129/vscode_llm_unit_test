@@ -86,7 +86,8 @@ def get_method_kind(func_node, class_node):
     return 'instance'
 
 
-def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None) -> dict:
+def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
+                      target_module: str = None) -> dict:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             source = f.read()
@@ -125,7 +126,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None)
 
     # 找 import 映射
     import_bindings = find_import_bindings(tree)
-    target_module = os.path.splitext(os.path.basename(file_path))[0]
+    target_module = target_module or os.path.splitext(os.path.basename(file_path))[0]
 
     # 找外部呼叫
     external_calls = find_external_calls(target_func, import_bindings, target_module)
@@ -215,5 +216,6 @@ if __name__ == '__main__':
         except Exception:
             pass
 
-    result = generate_scaffold(file_path, func_name, trace_result)
+    target_module = sys.argv[4] if len(sys.argv) >= 5 and sys.argv[4] else None
+    result = generate_scaffold(file_path, func_name, trace_result, target_module)
     print(json.dumps(result, ensure_ascii=False))

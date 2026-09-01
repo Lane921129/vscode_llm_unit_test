@@ -238,6 +238,20 @@ class Worker:
         self.assertIn('instance = Worker(...)', result['scaffold'])
         self.assertIn('result = await instance.process(value)', result['scaffold'])
 
+    def test_mock_scaffold_uses_the_canonical_module_name_for_patch_paths(self):
+        source = '''from shared import load
+
+def process(value):
+    return load(value)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'service.py'
+            target.write_text(source, encoding='utf-8')
+            result = generate_scaffold(str(target), 'process', target_module='src.service')
+
+        self.assertEqual(result['patches'], ['src.service.load'])
+        self.assertIn("@patch('src.service.load')", result['scaffold'])
+
     def test_dynamic_tracer_awaits_async_target_before_recording_the_result(self):
         source = '''async def double(value):
     return value * 2
