@@ -91,6 +91,50 @@ test('accepts a target invocation and assertion in the same test method', () => 
     assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
 });
 
+test('rejects an unrelated assertion after a detached target call', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        add(1, 2)',
+        '        self.assertTrue(True)',
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'add');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /同時呼叫被測函式/);
+});
+
+test('accepts an assertion over a value returned by the target', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_adds_numbers(self):',
+        '        result = add(1, 2)',
+        '        self.assertEqual(result, 3)',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
+});
+
+test('accepts a target invocation nested under assertRaises', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_rejects_invalid_values(self):',
+        '        with self.assertRaises(ValueError):',
+        '            add(1, "invalid")',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
+});
+
 test('accepts a property read when the selected target is a descriptor', () => {
     const code = [
         'import unittest',

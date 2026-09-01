@@ -45,13 +45,66 @@ function hasAssertion(code: string): boolean {
     return /\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(code);
 }
 
+function lineUsesTarget(line: string, callableName: string, targetUsage: TargetUsage): boolean {
+    return targetUsage === 'property'
+        ? accessesProperty(line, callableName)
+        : invokesCallable(line, callableName);
+}
+
+function hasTargetResultAssertion(block: string, callableName: string, targetUsage: TargetUsage): boolean {
+    const lines = block.split(/\r?\n/);
+    const assignedResults = new Set<string>();
+
+    for (const line of lines) {
+        if (hasAssertion(line) && lineUsesTarget(line, callableName, targetUsage)) {
+            return true;
+        }
+
+        const assignment = line.match(/^\s*([A-Za-z_]\w*)\s*=(?!=)/);
+        if (assignment && lineUsesTarget(line, callableName, targetUsage)) {
+            assignedResults.add(assignment[1]);
+            continue;
+        }
+
+        if (hasAssertion(line) && [...assignedResults].some(name =>
+            new RegExp('\\b' + escapeRegex(name) + '\\b').test(line)
+        )) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hasTargetInAssertRaises(block: string, callableName: string, targetUsage: TargetUsage): boolean {
+    const lines = block.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+        const context = lines[index].match(/^(\s*)with\s+.*\bself\.assertRaises(?:Regex)?\s*\(/);
+        if (!context) {
+            continue;
+        }
+        const contextIndent = context[1].length;
+        for (let nested = index + 1; nested < lines.length; nested++) {
+            const line = lines[nested];
+            if (!line.trim()) {
+                continue;
+            }
+            const indent = line.match(/^\s*/)?.[0].length ?? 0;
+            if (indent <= contextIndent) {
+                break;
+            }
+            if (lineUsesTarget(line, callableName, targetUsage)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function hasBehavioralTargetTest(code: string, callableName: string, targetUsage: TargetUsage): boolean {
-    return testMethodBlocks(code).some(block => {
-        const usesTarget = targetUsage === 'property'
-            ? accessesProperty(block, callableName)
-            : invokesCallable(block, callableName);
-        return usesTarget && hasAssertion(block);
-    });
+    return testMethodBlocks(code).some(block =>
+        hasTargetResultAssertion(block, callableName, targetUsage)
+        || hasTargetInAssertRaises(block, callableName, targetUsage)
+    );
 }
 
 /**
