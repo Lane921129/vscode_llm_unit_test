@@ -4,6 +4,11 @@
 
 ## 2026-08-31
 
+### 模型語意能力連線驗證
+
+- 「測試連線」中的最小 unittest 探針現在要求驗證明確事實 `increment(1) == 2`；只產生 unittest 外殼、呼叫函式或 `assertTrue` 的模型不再被誤判為可用於 Tier 2–4。
+- 結構化 JSON 與純 Python 相容回退均採用相同的領域無關行為契約，讓本地、Cloud 與 Custom API 的資格判定一致。
+
 ### 回傳值 assertion 的突變驗證
 
 - 內建 AST 突變引擎新增通用 `return_value → None` 突變，會檢驗生成測試是否真的驗證函式的回傳結果，而不只覆蓋控制流程。

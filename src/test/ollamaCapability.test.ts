@@ -28,6 +28,7 @@ test('test-generation probe requires a complete unittest structure, not merely J
     const request = buildOllamaTestGenerationProbe('local-model');
     assert.strictEqual(request.format, 'json');
     assert.ok(request.prompt.includes('def increment(value): return value + 1'));
+    assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
     assert.strictEqual(assessTestGenerationProbe({ response: '{"code":"string"}' }).capability, 'unverified');
     assert.strictEqual(
         assessTestGenerationProbe({
@@ -55,12 +56,31 @@ test('test-generation probe requires a complete unittest structure, not merely J
         }).capability,
         'unverified'
     );
+    assert.strictEqual(
+        assessTestGenerationProbe({
+            response: JSON.stringify({
+                code: [
+                    'import unittest',
+                    '',
+                    'def increment(value):',
+                    '    return value + 1',
+                    '',
+                    'class TestIncrement(unittest.TestCase):',
+                    '    def test_increment(self):',
+                    '        self.assertTrue(increment(1))',
+                    ''
+                ].join('\n')
+            })
+        }).capability,
+        'unverified'
+    );
 });
 
 test('plain test-generation probe does not require JSON mode and accepts fenced Python', () => {
     const request = buildOllamaPlainTestGenerationProbe('local-model');
     assert.strictEqual('format' in request, false);
     assert.ok(request.prompt.startsWith('Return only one complete runnable Python unittest file.'));
+    assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
     assert.strictEqual(assessTestGenerationProbe({
         response: [
             '```python',

@@ -17,11 +17,11 @@ export const STRUCTURED_OUTPUT_PROBE_SCHEMA = {
 };
 
 export const TEST_GENERATION_PROBE_PROMPT =
-    'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file: import unittest, include this fixture exactly as the function under test: def increment(value): return value + 1, define a unittest.TestCase class, and include a test assertion that calls increment. Do not include Markdown or explanations.';
+    'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file: import unittest, include this fixture exactly as the function under test: def increment(value): return value + 1, define a unittest.TestCase class, and include self.assertEqual(increment(1), 2). Do not include Markdown or explanations.';
 
 /** A compatibility probe for models that can write tests but do not support JSON mode. */
 export const PLAIN_TEST_GENERATION_PROBE_PROMPT =
-    'Return only one complete runnable Python unittest file. Include this fixture exactly as the function under test: def increment(value): return value + 1. Import unittest, define a unittest.TestCase class, and include a test assertion that calls increment. Do not include explanations.';
+    'Return only one complete runnable Python unittest file. Include this fixture exactly as the function under test: def increment(value): return value + 1. Import unittest, define a unittest.TestCase class, and include self.assertEqual(increment(1), 2). Do not include explanations.';
 
 export const TEST_GENERATION_PROBE_SCHEMA = {
     type: 'object',
@@ -69,6 +69,13 @@ function extractProbeCode(response: string): string {
     const unwrapped = unwrapGeneratedCodeEnvelope(response).trim();
     const fenced = unwrapped.match(/^```(?:python)?\s*\r?\n([\s\S]*?)\r?\n?```\s*$/i);
     return (fenced ? fenced[1] : unwrapped).trim();
+}
+
+/** Require the tiny probe's known behavior, not merely a syntactic call. */
+function hasProbeBehaviorAssertion(code: string): boolean {
+    const exactForward = /\bself\.assertEqual\s*\(\s*increment\s*\(\s*1\s*\)\s*,\s*2\s*\)/;
+    const exactReverse = /\bself\.assertEqual\s*\(\s*2\s*,\s*increment\s*\(\s*1\s*\)\s*\)/;
+    return exactForward.test(code) || exactReverse.test(code);
 }
 
 /** Validates the provider-neutral JSON response used by every connection probe. */
@@ -121,5 +128,11 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
             reason: '模型沒有產生可自我驗證的 increment 測試程式。'
         };
     }
-    return { capability: 'verified', reason: '模型已通過 unittest 結構與目標呼叫驗證。' };
+    if (!hasProbeBehaviorAssertion(code)) {
+        return {
+            capability: 'unverified',
+            reason: '模型未驗證已知行為 increment(1) == 2，僅呼叫函式不足以通過。'
+        };
+    }
+    return { capability: 'verified', reason: '模型已通過 unittest 結構、目標呼叫與行為 assertion 驗證。' };
 }
