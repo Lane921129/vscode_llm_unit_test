@@ -110,12 +110,20 @@ def extract_class_context(class_node, lines):
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == '__init__':
             init_signature = extract_parameters(item.args, ('self', 'cls'))
             init_params = [param['name'] for param in init_signature]
-            for node in ast.walk(item):
+            def visit_init_statement(node):
+                # A nested helper has its own execution scope. Its assignments
+                # are not constructor state and must not become test setup facts.
+                if node is not item and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                    return
                 if isinstance(node, (ast.Assign, ast.AnnAssign)):
                     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                     for target in targets:
                         if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == 'self':
                             init_assigns.append({'name': target.attr, 'code': source_for(lines, node)})
+                for child in ast.iter_child_nodes(node):
+                    visit_init_statement(child)
+            for statement in item.body:
+                visit_init_statement(statement)
     return {
         'name': class_node.name,
         'bases': [unparse(base) for base in class_node.bases],

@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### 精確的 `__init__` 初始化語境
+
+- 修正 AST 擷取器會走進 `__init__` 內部巢狀 helper 的問題；helper 中的 `self.xxx` 不會再被當成建構子完成後可用的實例欄位。
+- Class Method 的 Prompt、Mock Scaffold 與 Reviewer 因此只會收到可由真正建構子建立的狀態事實，降低模型憑錯誤欄位猜測 setup 的機率。
+- 新增回歸測試，確認 `self.config`、`self.ready` 會保留，而巢狀 helper 中的 `self.transient` 會被排除。
+- 驗證：123 個 TypeScript 單元測試、47 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### 可執行目標的函式清單
 
 - 修正函式選單與批次掃描把局部 helper、函式內非同步 helper、巢狀類別方法也列為可分析目標的問題。

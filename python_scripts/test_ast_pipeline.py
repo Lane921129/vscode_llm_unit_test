@@ -147,6 +147,27 @@ class Worker:
 
         self.assertEqual(data['executable_lines'], [2, 3, 6])
 
+    def test_extractor_does_not_treat_nested_helper_state_as_constructor_state(self):
+        source = '''class Worker:
+    def __init__(self, config):
+        self.config = config
+        def deferred_setup():
+            self.transient = "not initialized"
+        self.ready = True
+
+    def process(self):
+        return self.ready
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'Worker.process')
+
+        self.assertEqual(
+            [item['name'] for item in data['class_context']['init']['assigns']],
+            ['config', 'ready']
+        )
+
     def test_extractor_reports_only_explicit_target_exceptions(self):
         source = '''def validate(value):
     if not value:
