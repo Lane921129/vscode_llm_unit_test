@@ -21,9 +21,10 @@ import { formatReportProvenance, ReportProvenance } from './reportProvenance';
 import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
 import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './pythonTestEnvironment';
+import { buildExternalMutationExecution } from './mutationExecution';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec, spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 
 
 // ─────────────────────────────────────────────────────────────
@@ -121,7 +122,6 @@ async function runMockScaffold(
 // ── 並行與 Process 管理 ──────────────────────────────────────
 const activeAbortControllers = new Set<AbortController>();
 const activeProcesses = new Set<ChildProcess>();
-let currentMutpyProcess: ChildProcess | null = null;
 let isAborted = false;
 
 /** 跨平台安全終止 Process Tree（含子行程） */
@@ -425,7 +425,6 @@ export function activate(context: vscode.ExtensionContext) {
             for (const ctrl of activeAbortControllers) ctrl.abort();
             activeAbortControllers.clear();
             // 跨平台終止所有追蹤中的 Python 子行程
-            if (currentMutpyProcess) killProcessTree(currentMutpyProcess);
             for (const proc of activeProcesses) killProcessTree(proc);
             activeProcesses.clear();
         }
@@ -1904,7 +1903,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             // 動態偵測 mutation engine；無外部工具時使用安全的 AST 後備引擎。
             let engine: 'mutatest' | 'mutmut' | 'builtin' = 'mutatest';
-            const isWin = process.platform === 'win32';
             let pyVer = '';
             try {
                 // 取得 Python 版本
@@ -1996,47 +1994,34 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
                 mutpyResult = JSON.stringify(builtinMutation, null, 2);
             } else {
-            mutpyResult = await new Promise<string>((resolve, reject) => {
                 const targetDir = path.dirname(params.filePath);
                 const parentDir = path.dirname(targetDir);
                 const grandParentDir = path.dirname(parentDir);
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
-                
-                const pythonPath = isWin
-                    ? `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`
-                    : `${targetDir}:${parentDir}:${grandParentDir}:${testDir}:$PYTHONPATH`;
-
-                const setPythonPath = isWin 
-                    ? `set PYTHONIOENCODING=utf8 && set PYTHONPATH=${pythonPath}` 
-                    : `export PYTHONIOENCODING=utf8 && export PYTHONPATH="${pythonPath}"`;
-                const chcp = isWin ? `chcp 65001 && ` : ``;
-                const cdCmd = isWin ? `cd /d "${testDir}"` : `cd "${testDir}"`;
-
-                let cmd = "";
-                if (engine === 'mutmut') {
-                    const timeoutArg = params.mutpyTimeout ? `--test-time-multiplier ${params.mutpyTimeout}` : '';
-                    cmd = `${chcp}${setPythonPath} && ${cdCmd} && mutmut run --paths-to-mutate "${params.filePath}" --runner "python -m unittest ${testModule}" ${timeoutArg}`;
-                } else {
-                    const timeoutArg = params.mutpyTimeout ? `--timeout_factor ${params.mutpyTimeout}` : '';
-                    const mutatestPatch = `import random; orig_sample=random.sample; random.sample=lambda p,k: orig_sample(list(p) if isinstance(p,set) else p,k); import sys; from mutatest.cli import cli_main; sys.argv[0]=__name__; sys.exit(cli_main())`;
-                    const mutatestRunCmd = `python -c "${mutatestPatch}"`;
-                    cmd = `${chcp}${setPythonPath} && ${cdCmd} && ${mutatestRunCmd} -s "${params.filePath}" -t "python -m unittest ${testModule}" -o "${reportDir}.rst" ${timeoutArg}`;
-                }
-                
-                currentMutpyProcess = exec(cmd, { timeout: params.timeoutSeconds * 1000, killSignal: 'SIGTERM' }, (error, stdout, stderr) => {
-                    currentMutpyProcess = null;
-                    if (isAborted) {return reject(new Error("使用者強制中止"));}
-                    if (error && error.killed) {return reject(new Error(`系統執行超時 (超過 ${params.timeoutSeconds} 秒)`));}
-                    
-                    if (error) {
-                        const cleanMsg = error.message.replace(/^Command failed: .*?\n/s, '');
-                        resolve(`[${engine} 系統錯誤訊息]\n${cleanMsg}\n[Stderr]\n${stderr}\n[Stdout]\n${stdout}`);
-                    } else {
-                        resolve(stdout || stderr || "無輸出內容");
-                    }
+                const mutationPlan = buildExternalMutationExecution(
+                    engine,
+                    params.filePath,
+                    testModule,
+                    reportDir,
+                    params.mutpyTimeout
+                );
+                const mutationEnvironment = buildGeneratedTestEnvironment(process.env, [
+                    targetDir, parentDir, grandParentDir, testDir
+                ]);
+                const externalRun = await runSpawn(mutationPlan.command, mutationPlan.args, {
+                    cwd: testDir,
+                    env: mutationEnvironment,
+                    timeout: params.timeoutSeconds * 1000
                 });
-            });
+                if (isAborted) {
+                    throw new Error('使用者強制中止');
+                }
+                if (externalRun.code !== 0) {
+                    mutpyResult = `[${engine} 系統錯誤訊息]\n結束碼: ${externalRun.code ?? 'unknown'}\n[Stderr]\n${externalRun.stderr}\n[Stdout]\n${externalRun.stdout}`;
+                } else {
+                    mutpyResult = externalRun.stdout || externalRun.stderr || '無輸出內容';
+                }
             }
 
             log(`[${engine}] 突變分析執行完畢！正在解析報告與分數...`);

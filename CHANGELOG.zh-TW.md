@@ -11,6 +11,13 @@
 - 新增跨平台環境與引數組合回歸測試，確認不含 `%PYTHONPATH%`、`$PYTHONPATH` 等 shell placeholder；coverage 失敗仍會保留輸出供 Reviewer 修復。
 - 驗證：112 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 仍為既有 44 個 warning、0 error。
 
+### 可攜式原生突變引擎執行
+
+- `mutatest` 與 `mutmut` 的啟動流程不再以 Windows／Unix shell 字串組合 `chcp`、`set`、`export` 或 `cd`。
+- 兩者現在共用直接執行的命令計畫、明確工作目錄與隔離 Python 環境；目標與報告路徑作為獨立引數傳遞，支援含空白或非 ASCII 的專案位置。
+- 原生引擎若回傳非零結束碼，stdout 與 stderr 仍會完整納入報告，讓分數解析、診斷與下一輪修復保有事實依據。
+- 驗證：114 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
 ### 儀表板結果直達與 Dummy 前置略過
 
 - 覆蓋率儀表板中已完成的函式卡片現在可直接點擊，會在 VS Code 開啟該函式的 `final_report.md`；鍵盤 Enter／Space 也可開啟，勾選框不會誤觸。

@@ -46,6 +46,7 @@
 - 覆蓋率儀表板的完成項目必須可直接開啟同一項的 `final_report.md`；開啟前需確認檔案存在且名稱正確，執行中項目不可假裝有可用報告。
 - 報告的擴充功能追溯資料必須使用可攜的 extension ID、版本、建置識別與執行模式；不得寫入使用者帳號、絕對檔案路徑或工作目錄。
 - 生成測試的預先驗證必須透過引數陣列、明確 `cwd` 與 `PYTHONPATH` 環境變數直接啟動 Python；不得依賴 `chcp`、`set`、`cd /d`、磁碟代號或 shell 字串串接。
+- 原生突變引擎（`mutatest`／`mutmut`）同樣必須使用引數陣列、明確 `cwd` 與隔離 Python 環境；路徑不得內插至 shell 命令。突變工具的非零結束碼必須保留 stdout／stderr 供報告與後續修復判讀。
 - 偵測到資料庫 driver 的函式必須以資料庫隔離技能卡生成測試：每個測試使用 mock、in-memory 或暫存資料庫；禁止碰觸預設／共享資料庫、猜測驗證例外，或裸用未匯入的私有連線 helper。
 - 生成測試結構驗證必須拒絕非隔離的 SQLite 連線與未匯入／直接呼叫被測模組私有 helper；`sqlite3.connect(':memory:')` 與標準 `mock.patch` 得以保留。
 - Mock Scaffold 必須追蹤被測函式呼叫的同模組 side-effect helper；helper 若到達 imported I/O boundary，必須 patch helper 的 module use point，避免因只看目標函式本體而遺漏資料庫連線。
