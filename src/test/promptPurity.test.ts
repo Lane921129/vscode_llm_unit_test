@@ -10,6 +10,7 @@ import {
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
 } from '../semantic_analyzer_prompt';
+import { getUserPrompt } from '../unittest_writer_prompt';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -46,6 +47,26 @@ test('writer prompt calls static methods through the class without inventing an 
     assert.match(writerSource, /Do NOT instantiate the class/);
     assert.match(writerSource, /\$\{astContext\.class_name\}\.\$\{funcName\}/);
     assert.match(writerSource, /Verified Python observations for dependency/);
+});
+
+test('writer prompt reuses verified constructor literals for instance-method trace assertions', () => {
+    const prompt = getUserPrompt('worker.py', 'render', 'def render(value): pass', 'small', {
+        name: 'render',
+        args: ['value'],
+        class_name: 'Service',
+        method_kind: 'instance',
+        callerContexts: [{
+            args: ["'value'"],
+            kwargs: {},
+            trace_constructor_args: ['prefix:'],
+            trace_constructor_kwargs: {},
+            constructor_args: ["'prefix:'"],
+            constructor_kwargs: {}
+        }]
+    });
+
+    assert.match(prompt, /self\._obj = Service\('prefix:'\)/);
+    assert.match(prompt, /do NOT pass these constructor values to render\(\)/);
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {

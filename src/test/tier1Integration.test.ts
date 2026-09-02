@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { test } from 'node:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildTier1TestMethods } from '../tier1TestBuilder';
+import { buildTier1InstanceSetup, buildTier1TestMethods } from '../tier1TestBuilder';
 
 test('Tier 1 generated tests execute against a dependency that returns exact strings', () => {
     const methods = buildTier1TestMethods('format_value', [
@@ -64,6 +64,48 @@ test('Tier 1 generated tests execute keyword-only calls from verified trace data
     const result = spawnSync('python', ['-c', runner, encodedTest], { encoding: 'utf8' });
 
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+});
+
+test('Tier 1 generated instance-method tests reuse verified constructor literals', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tier1-instance-'));
+    try {
+        writeFileSync(join(tempDir, 'worker.py'), [
+            'class Service:',
+            '    def __init__(self, prefix):',
+            '        self.prefix = prefix',
+            '',
+            '    def render(self, value):',
+            '        return self.prefix + value',
+            ''
+        ].join('\n'), 'utf8');
+        const setup = buildTier1InstanceSetup('Service', [{
+            trace_constructor_args: ['prefix:'],
+            trace_constructor_kwargs: {},
+            constructor_args: ["'prefix:'"],
+            constructor_kwargs: {}
+        }]);
+        const methods = buildTier1TestMethods('render', [
+            { args: ["'value'"], result: "'prefix:value'", result_type: 'str' }
+        ], []).map(method => method.replace(/(?<![._])\brender\(/g, 'self._instance.render('));
+        writeFileSync(join(tempDir, 'test_worker.py'), [
+            'import unittest',
+            'from worker import Service',
+            '',
+            'class TestService(unittest.TestCase):',
+            setup,
+            '',
+            methods.join('\n\n'),
+            ''
+        ].join('\n'), 'utf8');
+
+        const result = spawnSync('python', ['-m', 'unittest', 'test_worker.py'], {
+            cwd: tempDir,
+            encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test('Tier 1 generated tests execute finite sync and async generator assertions', () => {

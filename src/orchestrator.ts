@@ -10,7 +10,7 @@ import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
-import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
+import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
 import { appendTraceMethodsToUnittestClass } from './traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
 import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tierRouter';
@@ -282,6 +282,8 @@ interface CallerContext {
     trace_kwargs?: Record<string, unknown> | null;
     trace_constructor_args?: unknown[] | null;
     trace_constructor_kwargs?: Record<string, unknown> | null;
+    constructor_args?: string[] | null;
+    constructor_kwargs?: Record<string, string> | null;
 }
 
 interface AstContext {
@@ -1416,7 +1418,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const directClassCall = className && (methodKind === 'static' || methodKind === 'class');
                         const constructorParams = ((astContext as any)?.class_context?.init?.required_params
                             || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
-                        if (className && !directClassCall && constructorParams && constructorParams.length > 0) {
+                        const verifiedInstanceSetup = className && !directClassCall
+                            ? buildTier1InstanceSetup(className, astContext?.callerContexts)
+                            : null;
+                        if (className && !directClassCall && constructorParams && constructorParams.length > 0 && !verifiedInstanceSetup) {
                             if (!mayUseModelAuthoredTests) {
                                 throw new Error(
                                     `Tier 1 無法安全建立 ${className}：建構子需要 ${constructorParams.join(', ')}，`
@@ -1425,10 +1430,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             }
                             log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），已驗證模型可改走一般生成流程。`);
                         } else if (className) {
-                            const setupBlock = directClassCall ? '' : [
+                            const setupBlock = directClassCall ? '' : (verifiedInstanceSetup || [
                                 `    def setUp(self):`,
                                 `        self._instance = ${className}()`,
-                            ].join('\n');
+                            ].join('\n'));
                             const callPrefix = directClassCall ? `${className}.${targetFuncName}(` : `self._instance.${targetFuncName}(`;
                             // Property methods already use self._instance.<property> access.
                             const classMethodsMapped = isProperty ? tier1Methods : tier1Methods.map(m =>

@@ -12,6 +12,40 @@ export interface Tier1TraceExample {
     exception?: string;
 }
 
+/**
+ * Static caller facts for a selected instance method. Source spellings are
+ * emitted by the Python AST scanner only after their corresponding values
+ * pass literal evaluation, so generated Tier 1 setup never needs to guess a
+ * constructor contract.
+ */
+export interface Tier1ConstructorContext {
+    trace_constructor_args?: unknown[] | null;
+    trace_constructor_kwargs?: Record<string, unknown> | null;
+    constructor_args?: string[] | null;
+    constructor_kwargs?: Record<string, string> | null;
+}
+
+/** Build an instance setup block from verified caller constructor literals. */
+export function buildTier1InstanceSetup(
+    className: string,
+    callerContexts: Tier1ConstructorContext[] | undefined
+): string | null {
+    const context = (callerContexts || []).find(candidate =>
+        Array.isArray(candidate.trace_constructor_args)
+        && candidate.trace_constructor_kwargs !== null
+        && Array.isArray(candidate.constructor_args)
+        && candidate.constructor_kwargs !== null
+    );
+    if (!context) {
+        return null;
+    }
+    const kwargs = Object.entries(context.constructor_kwargs || {})
+        .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
+        .map(([name, value]) => `${name}=${value}`);
+    const args = [...(context.constructor_args || []), ...kwargs].join(', ');
+    return `    def setUp(self):\n        self._instance = ${className}(${args})`;
+}
+
 function buildTraceCall(funcName: string, example: Tier1TraceExample): string {
     const kwargs = Object.entries(example.kwargs || {})
         .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))

@@ -4,6 +4,14 @@
 
 ## 2026-09-02
 
+### Tier 1 類別實例的可執行建構子設定
+
+- 修正 Tier 1 在 Dynamic Trace 已成功執行實例方法後，仍因 `__init__` 有必要參數而拒絕產生測試的問題。
+- AST 呼叫端會把「已 literal 驗證」的建構子原始碼表示與實際值分開保存；Tier 1 只在兩者皆存在時，將相同設定寫入 `setUp`，例如 `self._instance = Service('prefix:')`，再呼叫該實例方法。
+- Writer Prompt 同步看到這個已驗證建構子設定，明確禁止把建構子值誤傳給方法本身；沒有此證據時仍維持保守停止／要求 source-supported setup 的行為。
+- 新增確定性 setUp、Prompt 與實際執行 unittest 的整合回歸測試。
+- 驗證：126 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### 局部實例變數的安全呼叫端追蹤
 
 - 呼叫端掃描現在支援同一函式作用域的直接實例建立模式，例如 `subject = Service("prefix")` 後的 `subject.render("value")`；可用的建構子與方法字面值仍會分開提供給 Dynamic Trace。

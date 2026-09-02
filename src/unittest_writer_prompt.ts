@@ -246,7 +246,22 @@ export function getUserPrompt(
                 prompt += `  - Binding: ${astContext.method_kind} method. Do NOT instantiate the class.\n`;
                 prompt += `  - Call method as: ${astContext.class_name}.${funcName}(...).\n`;
             } else {
-                prompt += `  - Instantiate in setUp: self._obj = ${astContext.class_name}()\n`;
+                const constructorCaller = (astContext.callerContexts || []).find((caller: any) =>
+                    Array.isArray(caller.trace_constructor_args)
+                    && caller.trace_constructor_kwargs !== null
+                    && Array.isArray(caller.constructor_args)
+                    && caller.constructor_kwargs !== null
+                );
+                if (constructorCaller) {
+                    const kwargs = Object.entries(constructorCaller.constructor_kwargs || {})
+                        .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
+                        .map(([name, value]) => `${name}=${value}`);
+                    const constructorArgs = [...constructorCaller.constructor_args, ...kwargs].join(', ');
+                    prompt += `  - Verified constructor setup from an actual call site: self._obj = ${astContext.class_name}(${constructorArgs})\n`;
+                    prompt += `  - Use that setup for trace-derived assertions; do NOT pass these constructor values to ${funcName}().\n`;
+                } else {
+                    prompt += `  - Instantiate in setUp using source-supported constructor values; do not guess required dependencies.\n`;
+                }
                 prompt += `  - Call method as: self._obj.${funcName}(...)  NOT as a standalone function.\n`;
             }
             const init = astContext.class_context?.init;

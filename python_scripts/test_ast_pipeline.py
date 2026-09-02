@@ -304,6 +304,8 @@ def render_value():
         self.assertEqual(render_calls[0]['trace_args'], ['value'])
         self.assertEqual(render_calls[0]['trace_constructor_args'], ['prefix:'])
         self.assertEqual(render_calls[0]['trace_constructor_kwargs'], {})
+        self.assertEqual(render_calls[0]['constructor_args'], ["'prefix:'"])
+        self.assertEqual(render_calls[0]['constructor_kwargs'], {})
         self.assertEqual(render_calls[1]['trace_args'], ['value'])
         self.assertEqual(render_calls[1]['trace_constructor_args'], ['bound:'])
         self.assertEqual([call['caller_file'] for call in decorate_calls], ['consumer.py'])

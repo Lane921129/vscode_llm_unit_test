@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildTier1PropertyTestMethods, buildTier1TestMethods } from '../tier1TestBuilder';
+import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods } from '../tier1TestBuilder';
 
 test('builds exact value and exception assertions without asking an LLM', () => {
     const methods = buildTier1TestMethods('format_value', [
@@ -21,6 +21,23 @@ test('preserves traced keyword arguments in deterministic calls', () => {
     ], []);
 
     assert.ok(methods[0].includes('result = multiply(3, factor=2)'));
+});
+
+test('builds instance setup only from verified constructor literal facts', () => {
+    const setup = buildTier1InstanceSetup('Service', [{
+        trace_constructor_args: ['prefix:'],
+        trace_constructor_kwargs: { enabled: true },
+        constructor_args: ["'prefix:'"],
+        constructor_kwargs: { enabled: 'True' }
+    }]);
+
+    assert.strictEqual(setup, "    def setUp(self):\n        self._instance = Service('prefix:', enabled=True)");
+    assert.strictEqual(buildTier1InstanceSetup('Service', [{
+        trace_constructor_args: null,
+        trace_constructor_kwargs: null,
+        constructor_args: ["'unsafe'"],
+        constructor_kwargs: {}
+    }]), null);
 });
 
 test('builds property getter assertions without calling the descriptor as a function', () => {

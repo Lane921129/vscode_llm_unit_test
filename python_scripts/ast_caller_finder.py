@@ -37,6 +37,15 @@ def literal_arguments(call):
         return None, None
 
 
+def source_arguments(call):
+    """Return source spelling for arguments already confirmed as literals."""
+    render = ast.unparse if hasattr(ast, 'unparse') else repr
+    return (
+        [render(argument) for argument in call.args],
+        {(keyword.arg or '**'): render(keyword.value) for keyword in call.keywords}
+    )
+
+
 def find_call_sites(func_name, project_root, target_path=None):
     """Find calls resolving to the supplied target module; avoid same-name collisions."""
     results = []
@@ -148,6 +157,7 @@ def find_call_sites(func_name, project_root, target_path=None):
 
                 is_target_call = not target_module or os.path.abspath(filepath) == target_absolute
                 constructor_args, constructor_kwargs = None, None
+                constructor_code_args, constructor_code_kwargs = None, None
                 if target_class and attribute_call:
                     receiver = node.func.value
                     constructor_call = (
@@ -157,6 +167,8 @@ def find_call_sites(func_name, project_root, target_path=None):
                     if constructor_call is not None:
                         is_target_call = True
                         constructor_args, constructor_kwargs = literal_arguments(constructor_call)
+                        if constructor_args is not None:
+                            constructor_code_args, constructor_code_kwargs = source_arguments(constructor_call)
                     elif is_target_class_reference(receiver):
                         # staticmethod/classmethod called as Class.member(...)
                         is_target_call = True
@@ -185,7 +197,9 @@ def find_call_sites(func_name, project_root, target_path=None):
                     # arguments: Dynamic Trace needs them only to construct an
                     # instance, never to call the selected member itself.
                     'trace_constructor_args': constructor_args,
-                    'trace_constructor_kwargs': constructor_kwargs
+                    'trace_constructor_kwargs': constructor_kwargs,
+                    'constructor_args': constructor_code_args,
+                    'constructor_kwargs': constructor_code_kwargs
                 })
     return results
 
