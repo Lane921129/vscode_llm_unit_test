@@ -280,6 +280,8 @@ interface CallerContext {
     call_expr?: string;
     trace_args?: unknown[] | null;
     trace_kwargs?: Record<string, unknown> | null;
+    trace_constructor_args?: unknown[] | null;
+    trace_constructor_kwargs?: Record<string, unknown> | null;
 }
 
 interface AstContext {
@@ -541,11 +543,21 @@ async function runDynamicTrace(
 ): Promise<DynamicTraceResult | null> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
     const baseArgs = [pythonScript, filePath, funcName];
-    let literalInputs: Array<{ args: unknown[] | null | undefined; kwargs: Record<string, unknown> }> = [];
+    let literalInputs: Array<{
+        args: unknown[] | null | undefined;
+        kwargs: Record<string, unknown>;
+        constructor_args?: unknown[] | null;
+        constructor_kwargs?: Record<string, unknown> | null;
+    }> = [];
     if (callerArgs && callerArgs.length > 0) {
         literalInputs = callerArgs
             .filter(ctx => Array.isArray(ctx.trace_args) && ctx.trace_kwargs !== null)
-            .map(ctx => ({ args: ctx.trace_args, kwargs: ctx.trace_kwargs || {} }));
+            .map(ctx => ({
+                args: ctx.trace_args,
+                kwargs: ctx.trace_kwargs || {},
+                constructor_args: ctx.trace_constructor_args,
+                constructor_kwargs: ctx.trace_constructor_kwargs || {}
+            }));
     }
     try {
         const runTrace = async (inputs?: typeof literalInputs): Promise<DynamicTraceResult> => {

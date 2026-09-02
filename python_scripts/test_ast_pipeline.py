@@ -242,6 +242,63 @@ def process(value):
         self.assertIsNone(by_file['variable_consumer.py']['trace_args'])
         self.assertIsNone(by_file['variable_consumer.py']['trace_kwargs'])
 
+    def test_caller_finder_resolves_qualified_class_members_and_constructor_literals(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'worker.py'
+            target.write_text(
+                '''def render(value):
+    return "module:" + value
+
+class Service:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def render(self, value):
+        return self.prefix + value
+
+    @staticmethod
+    def decorate(value):
+        return "[" + value + "]"
+''',
+                encoding='utf-8'
+            )
+            (root / 'consumer.py').write_text(
+                '''from worker import Service as Subject
+import worker as worker_module
+
+def render_value():
+    return Subject("prefix:").render("value")
+
+def decorate_value():
+    return worker_module.Service.decorate("value")
+
+def module_render():
+    return worker_module.render("wrong")
+''',
+                encoding='utf-8'
+            )
+            (root / 'collision.py').write_text(
+                '''class Service:
+    def render(self, value):
+        return "wrong:" + value
+
+def render_value():
+    return Service("wrong:").render("value")
+''',
+                encoding='utf-8'
+            )
+            render_calls = self.run_script('ast_caller_finder.py', 'Service.render', root, target)
+            decorate_calls = self.run_script('ast_caller_finder.py', 'Service.decorate', root, target)
+
+        self.assertEqual([call['caller_file'] for call in render_calls], ['consumer.py'])
+        self.assertEqual(render_calls[0]['trace_args'], ['value'])
+        self.assertEqual(render_calls[0]['trace_constructor_args'], ['prefix:'])
+        self.assertEqual(render_calls[0]['trace_constructor_kwargs'], {})
+        self.assertEqual([call['caller_file'] for call in decorate_calls], ['consumer.py'])
+        self.assertEqual(decorate_calls[0]['trace_args'], ['value'])
+        self.assertIsNone(decorate_calls[0]['trace_constructor_args'])
+
     def test_extractor_preserves_required_defaults_and_keyword_only_parameters(self):
         source = '''def combine(left, /, middle, right=3, *, flag=True, required_option, **extras):
     return left + middle + right
@@ -581,6 +638,31 @@ class TestSecond(unittest.TestCase):
         self.assertTrue(mutation['scope_found'])
         self.assertGreater(mutation['total'], 0)
         self.assertEqual(mutation['survived'], 0)
+
+    def test_dynamic_tracer_uses_literal_constructor_context_for_qualified_instance_methods(self):
+        source = '''class Service:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def render(self, value):
+        if value == "other":
+            return self.prefix + "fallback"
+        return self.prefix + value
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'Service.render', [{
+                'args': ['known'],
+                'kwargs': {},
+                'constructor_args': ['prefix:'],
+                'constructor_kwargs': {},
+            }])
+
+        self.assertIsNone(result['load_error'])
+        observed = {(item['args'][0], item['result']) for item in result['examples']}
+        self.assertIn(("'known'", "'prefix:known'"), observed)
+        self.assertIn(("'other'", "'prefix:fallback'"), observed)
 
     def test_dynamic_tracer_preserves_required_keyword_only_arguments(self):
         source = '''def multiply(value: int, *, factor: int):

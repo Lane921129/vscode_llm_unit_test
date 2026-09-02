@@ -631,6 +631,22 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     # when no caller information exists, but would otherwise add noisy samples
     # without improving a fixed caller trace.
     caller_inputs = list(test_inputs) if test_inputs is not None else []
+    constructor_template = None
+    # Call-site AST facts can safely establish how to instantiate the selected
+    # class. Keep them separate from the member arguments: ``Service('x').run
+    # (1)`` means constructor=['x'] and method=[1], never run('x', 1).
+    if func_is_method or func_is_property:
+        for candidate in caller_inputs:
+            if not isinstance(candidate, dict):
+                continue
+            constructor_args = candidate.get('constructor_args')
+            constructor_kwargs = candidate.get('constructor_kwargs')
+            if isinstance(constructor_args, (list, tuple)) and isinstance(constructor_kwargs, dict):
+                constructor_template = {
+                    'constructor_args': list(constructor_args),
+                    'constructor_kwargs': dict(constructor_kwargs)
+                }
+                break
     coverage_inputs = list(guided_inputs)
     if test_inputs is None:
         coverage_inputs.extend(infer_boundary_inputs(
@@ -638,6 +654,17 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             inferred_annotations,
             keyword_only
         ))
+    if constructor_template:
+        enriched_coverage_inputs = []
+        for candidate in coverage_inputs:
+            if isinstance(candidate, dict):
+                enriched = dict(candidate)
+            else:
+                enriched = {'args': list(candidate) if isinstance(candidate, tuple) else candidate, 'kwargs': {}}
+            enriched.setdefault('constructor_args', constructor_template['constructor_args'])
+            enriched.setdefault('constructor_kwargs', constructor_template['constructor_kwargs'])
+            enriched_coverage_inputs.append(enriched)
+        coverage_inputs = enriched_coverage_inputs
     seen_inputs = set()
     merged_inputs = []
     for candidate in caller_inputs + coverage_inputs:
@@ -651,11 +678,18 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     # 仍相容，避免將 AST 變數名稱當成真實字串輸入。
     for inp in test_inputs:
         kwargs = {}
+        constructor_args, constructor_kwargs = [], {}
         if isinstance(inp, dict):
             kwargs = inp.get('kwargs', {})
+            constructor_args = inp.get('constructor_args', [])
+            constructor_kwargs = inp.get('constructor_kwargs', {})
             inp = inp.get('args', [])
         if not isinstance(inp, (list, tuple)):
             inp = (inp,)
+        if not isinstance(constructor_args, (list, tuple)):
+            constructor_args = []
+        if not isinstance(constructor_kwargs, dict):
+            constructor_kwargs = {}
         try:
             # Keep stdout/stderr from constructors, target calls and generator
             # materialisation out of the JSON document printed by this script.
@@ -664,7 +698,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     # 將 class 實例化後呼叫 method
                     cls_obj = getattr(module, method_class_name)
                     try:
-                        instance = cls_obj()
+                        instance = cls_obj(*constructor_args, **constructor_kwargs)
                     except TraceSafetyError:
                         raise
                     except Exception as constructor_error:
