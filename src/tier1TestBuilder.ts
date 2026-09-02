@@ -25,8 +25,8 @@ export interface Tier1ConstructorContext {
     constructor_kwargs?: Record<string, string> | null;
 }
 
-/** Build an instance setup block from verified caller constructor literals. */
-export function buildTier1InstanceSetup(
+/** Return a target-class constructor expression from verified caller literals. */
+export function buildVerifiedConstructorCall(
     className: string,
     callerContexts: Tier1ConstructorContext[] | undefined
 ): string | null {
@@ -43,7 +43,16 @@ export function buildTier1InstanceSetup(
         .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
         .map(([name, value]) => `${name}=${value}`);
     const args = [...(context.constructor_args || []), ...kwargs].join(', ');
-    return `    def setUp(self):\n        self._instance = ${className}(${args})`;
+    return `${className}(${args})`;
+}
+
+/** Build an instance setup block from verified caller constructor literals. */
+export function buildTier1InstanceSetup(
+    className: string,
+    callerContexts: Tier1ConstructorContext[] | undefined
+): string | null {
+    const constructorCall = buildVerifiedConstructorCall(className, callerContexts);
+    return constructorCall ? `    def setUp(self):\n        self._instance = ${constructorCall}` : null;
 }
 
 function buildTraceCall(funcName: string, example: Tier1TraceExample): string {

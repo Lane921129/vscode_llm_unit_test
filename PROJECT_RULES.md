@@ -53,6 +53,7 @@
 - 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
 - 未驗證模型的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。
 - 若 `Class.method` 的成功 Dynamic Trace 使用了呼叫端已驗證的建構子字面值，Tier 1 必須以相同字面值建立實例後才可寫入 assertion；不得因建構子有必要參數而丟棄已驗證 Trace，也不得猜測建構子依賴。
+- Tier 3 Mock Scaffold 若有已驗證的 caller constructor literal，必須將其作為明確 setup 事實提供給模型，並禁止將該設定誤傳給被測方法；沒有事實時不得憑空補出 constructor dependency。
 - 未驗證模型不得呼叫 LLM 語意分析師、Reviewer、Tier 4 修補或突變體分流師。若 deterministic Tier 1 仍有存活變異體，必須保留測試與報告後停止，不得以猜測性修補灌水分數。
 - Stub/Dummy 快速通道只能依函式本體的結構（`pass` 或單一安全 literal 回傳）或函式名稱中明確的 `dummy` token 判定；不得依短小行數或複雜度分數略過具有可觀察行為的程式碼。`dummy` 是使用者標記的雜訊／佔位約定，不是業務領域關鍵字。
 - Stub 快速通道必須依目標的 module／instance／static／class／property 綁定方式建立可執行 smoke test；有必要建構子參數時僅可重用已驗證 caller literal，沒有事實則記錄原因並略過，不得寫入必定失敗的 `Class()` 測試。

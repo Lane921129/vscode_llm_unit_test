@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### Tier 3 Scaffold 的已驗證建構子設定
+
+- 修正 Tier 3 Mock Scaffold 只提供 `Class(...)` TODO、沒有把 caller 已驗證的建構子設定傳給模型的問題。
+- 現在會將可靜態驗證且已用於 Trace 的 constructor expression（例如 `Service('prefix:')`）明確提供給 Tier 3，並標示它不可作為被測方法的引數。
+- 新增 constructor expression 與 Tier 3 Prompt 的回歸測試，維持純量／結構證據導向，不依模型、供應商或業務名稱特化。
+- 驗證：138 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### 合格非同步實例方法的隔離突變驗證
 
 - 新增內建 AST 突變 runner 的端到端回歸案例：必要建構子、限定 `Class.method` scope、`asyncio.run` 的成功與例外測試會在每個隔離 mutant 上執行。

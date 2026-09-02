@@ -40,6 +40,7 @@ CI 只可使用 GitHub Secrets 注入的環境變數，例如 `LLM_UNIT_TEST_GOO
 - 維護 Stub／Dummy 快速通道時，需以選取成員的實際 binding 產生 smoke test；必要建構子沒有已驗證 caller literal 時須安全略過並寫入報告，不能生成硬編碼的空建構子呼叫。
 - 維護 Tier 1 Trace 產生器時，要以 AST 的 coroutine／generator 類型選擇正確執行方式；普通 coroutine 的成功與例外測試都必須 await/run 後再驗證，並以頂層與必要建構子實例方法的可執行整合測試保護。
 - 維護內建突變 runner 時，`Class.method`、必要建構子與 coroutine 的組合必須以隔離 baseline 和 mutant 實際執行驗證；不可用僅比對 scope 或靜態候選數量取代可執行分數。
+- 維護 Tier 3 Mock Scaffold 時，若 AST caller 有經 literal 驗證的 constructor expression，必須把它以「建構子設定、非方法引數」提供給 Prompt；不得以 `Class(...)` TODO 強迫模型猜測相依。
 - 調整函式選單或批次列舉時，只能輸出下游流程可獨立執行的頂層函式與直接 `Class.method`；局部 helper 與巢狀類別成員必須排除，並以回歸測試保護。
 - 維護 Class Context 擷取時，`__init__` 的屬性清單只能來自建構子本體，不可遞迴採集巢狀 helper、lambda 或內部類別的狀態；每次調整都要測試這些 scope 邊界。
 - 調整 Tier 複雜度評估時，只採可驗證 AST 結構、Imports 與呼叫關係；不得加入業務領域或資源名稱關鍵字作為捷徑。

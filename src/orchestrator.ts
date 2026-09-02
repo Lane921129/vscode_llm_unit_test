@@ -10,7 +10,7 @@ import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
-import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
+import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from './tier1TestBuilder';
 import { appendTraceMethodsToUnittestClass } from './traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
 import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tierRouter';
@@ -1494,7 +1494,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const moduleName = targetImportModule;
                     const traceExamples = traceResult?.examples || [];
                     const sysP = getTier3SystemPrompt();
-                    const usrP = getTier3UserPrompt(targetFuncName, scaffoldResult.scaffold, moduleName, traceExamples);
+                    const verifiedConstructorCall = scaffoldResult.class_name
+                        ? buildVerifiedConstructorCall(scaffoldResult.class_name, astContext?.callerContexts)
+                        : null;
+                    const usrP = getTier3UserPrompt(
+                        targetFuncName,
+                        scaffoldResult.scaffold,
+                        moduleName,
+                        traceExamples,
+                        verifiedConstructorCall
+                    );
                     try {
                         const raw = await requestLlmApi(params, sysP, usrP, log, 'test-code-json');
                         rawCode = raw;

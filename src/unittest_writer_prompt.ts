@@ -61,7 +61,8 @@ export function getTier3UserPrompt(
     funcName: string,
     scaffold: string,
     moduleName: string,
-    traceExamples: Array<{args: string[], result: string}> = []
+    traceExamples: Array<{args: string[], result: string}> = [],
+    verifiedConstructorCall?: string | null
 ): string {
     let prompt = `Target function: ${funcName} (from module: ${moduleName})\n\n`;
     if (traceExamples.length > 0) {
@@ -70,6 +71,11 @@ export function getTier3UserPrompt(
             prompt += `  - Input(${ex.args.join(', ')}) => ${ex.result}\n`;
         }
         prompt += `\n`;
+    }
+    if (verifiedConstructorCall) {
+        prompt += `Verified constructor setup from a real call site:\n`;
+        prompt += `  - Use exactly: instance = ${verifiedConstructorCall}\n`;
+        prompt += `  - These are constructor arguments only. Do NOT pass them to ${funcName}(...).\n\n`;
     }
     prompt += `Test scaffold (fill in the TODO sections):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nFill in the TODO sections now:`;
     return prompt;

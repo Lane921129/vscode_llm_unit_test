@@ -10,7 +10,7 @@ import {
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
 } from '../semantic_analyzer_prompt';
-import { getUserPrompt } from '../unittest_writer_prompt';
+import { getTier3UserPrompt, getUserPrompt } from '../unittest_writer_prompt';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -67,6 +67,19 @@ test('writer prompt reuses verified constructor literals for instance-method tra
 
     assert.match(prompt, /self\._obj = Service\('prefix:'\)/);
     assert.match(prompt, /do NOT pass these constructor values to render\(\)/);
+});
+
+test('Tier 3 scaffold prompt distinguishes verified constructor setup from method arguments', () => {
+    const prompt = getTier3UserPrompt(
+        'render',
+        'def test_render(self):\n    pass',
+        'worker',
+        [{ args: ["'value'"], result: "'prefix:value'" }],
+        "Service('prefix:')"
+    );
+
+    assert.match(prompt, /instance = Service\('prefix:'\)/);
+    assert.match(prompt, /Do NOT pass them to render\(\.\.\.\)/);
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {
