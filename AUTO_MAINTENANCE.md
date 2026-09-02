@@ -33,5 +33,6 @@ CI 只可使用 GitHub Secrets 注入的環境變數，例如 `LLM_UNIT_TEST_GOO
 - 發現模型猜測例外類型時，優先把 AST／Dynamic Trace 例外事實接入結構驗證並加入回歸測試；不得只用更強硬的 Prompt 要求掩蓋錯誤。
 - 新增模型或調整 Prompt 路由時，只能使用探測能力資料與程式碼特徵；不得新增模型名稱白名單、黑名單或品牌特化分支。
 - 維護 Python 分析腳本時，合格的 `Class.method` 必須在 AST、Trace、Scaffold、複雜度與突變流程維持一致；遇到同名方法要新增整合測試，確認不會誤選其他類別或頂層函式。
+- 調整函式選單或批次列舉時，只能輸出下游流程可獨立執行的頂層函式與直接 `Class.method`；局部 helper 與巢狀類別成員必須排除，並以回歸測試保護。
 - 調整 Tier 複雜度評估時，只採可驗證 AST 結構、Imports 與呼叫關係；不得加入業務領域或資源名稱關鍵字作為捷徑。
 - 維護 Writer Prompt 時，所有模型與 Tier（含 Tier 3、Tier 4、Self-repair）一律使用同一個純 Python code fence 輸出契約；不要因模型名稱要求或解析 `<thinking>` 等額外標籤，並須以擷取／驗證回歸測試保護此規則。

@@ -23,8 +23,13 @@ class FunctionVisitor(ast.NodeVisitor):
     def __init__(self):
         self.functions = []
         self.scope_stack = []
+        self.function_depth = 0
 
     def visit_ClassDef(self, node):
+        # Nested classes and classes declared inside functions are not valid
+        # selectors for the current Class.method execution protocol.
+        if self.function_depth or self.scope_stack:
+            return
         self.scope_stack.append(node.name)
         self.generic_visit(node)
         self.scope_stack.pop()
@@ -49,12 +54,18 @@ class FunctionVisitor(ast.NodeVisitor):
         })
 
     def visit_FunctionDef(self, node):
-        self._process_func(node, is_async=False)
+        if self.function_depth == 0:
+            self._process_func(node, is_async=False)
+        self.function_depth += 1
         self.generic_visit(node)
+        self.function_depth -= 1
 
     def visit_AsyncFunctionDef(self, node):
-        self._process_func(node, is_async=True)
+        if self.function_depth == 0:
+            self._process_func(node, is_async=True)
+        self.function_depth += 1
         self.generic_visit(node)
+        self.function_depth -= 1
 
 try:
     with open(sys.argv[1], 'r', encoding='utf-8') as f:

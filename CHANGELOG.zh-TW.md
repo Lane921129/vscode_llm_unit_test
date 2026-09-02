@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### 可執行目標的函式清單
+
+- 修正函式選單與批次掃描把局部 helper、函式內非同步 helper、巢狀類別方法也列為可分析目標的問題。
+- 現在僅列出頂層函式與直接 `Class.method`；這些名稱與 AST、Dynamic Trace、Mock Scaffold、Tier 路由及突變測試支援的目標協定一致，不會再排入必定失敗的任務。
+- 新增回歸測試，驗證局部函式與巢狀類別會被排除，而正常的模組函式與直接類別方法仍會保留。
+- 驗證：123 個 TypeScript 單元測試、46 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### Class Method 的合格名稱端到端解析
 
 - 修正 UI 傳入 `Class.method` 時，多個 Python 分析工具只比對裸函式名稱的問題；這會讓同名方法被錯誤的類別或頂層函式取代。
