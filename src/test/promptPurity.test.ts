@@ -30,6 +30,14 @@ test('writer prompt source does not retain legacy application-specific examples'
     assert.ok(!/payment_token|login_user|validate_and_format_token/i.test(writerSource));
 });
 
+test('writer output contract does not branch on a provider or model name', () => {
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+
+    assert.ok(!/useThinkingTag|noThinkingModels|qwen|tinyllama|gemma|mistral/i.test(writerSource));
+    assert.match(writerSource, /const thinking = false;/);
+    assert.match(writerSource, /\\`\\`\\`python/);
+});
+
 test('writer prompt calls static methods through the class without inventing an instance', () => {
     const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
 

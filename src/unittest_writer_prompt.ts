@@ -114,20 +114,6 @@ Fix ONLY the failing test methods. Output the complete corrected test file.`;
 
 
 
-/**
- * 某些小模型（Qwen、llama 系列等）對 <thinking> 標籤有副作用（無限迴圈輸出）
- * 這些模型不使用 thinking 標籤，改成直接輸出 code block
- */
-function useThinkingTag(modelName: string): boolean {
-    const m = modelName.toLowerCase();
-    // 已知對 thinking 標籤有副作用的模型家族
-    const noThinkingModels = ['qwen', 'llama', 'phi', 'tinyllama', 'gemma', 'mistral'];
-    for (const bad of noThinkingModels) {
-        if (m.includes(bad)) return false;
-    }
-    return true;
-}
-
 export function getSystemPrompt(
     loopCount: number,
     strategy: 'small' | 'large',
@@ -135,7 +121,10 @@ export function getSystemPrompt(
     modelName: string = ''
 ): string {
     const langName = getPromptLanguageName();
-    const thinking = useThinkingTag(modelName);
+    // A single code-fence contract is portable across providers. Model names
+    // are not a reliable capability signal and thinking tags often leak prose
+    // into generated Python, so every model receives the same output shape.
+    const thinking = false;
 
     if (strategy === 'small') {
         const formatBlock = thinking
@@ -229,7 +218,7 @@ export function getUserPrompt(
 ): string {
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
-    const thinking = useThinkingTag(modelName);
+    const thinking = false;
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;
 
