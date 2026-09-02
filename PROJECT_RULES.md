@@ -49,12 +49,12 @@
 - Google API Key 必須走 HTTP Header，不可放入 URL。
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
-- 尚未完成「測試連線」的 provider／model 視為尚未驗證，必須先使用有真實 Dynamic Trace 的 Tier 1；只有同一 provider／model 通過可執行 unittest 探測後，才可使用 Tier 2–4。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
+- 尚未完成「測試連線」的 provider／model 視為尚未驗證；**Auto** 必須先使用有真實 Dynamic Trace 的 Tier 1，且只有同一 provider／model 通過可執行 unittest 探測後，Auto 才可使用 Tier 2–4。使用者明確選擇 Tier 1–4 時必須保留其選擇，不得因探測缺失強制降階；其模型輸出仍必須通過結構、隔離執行、覆蓋率與突變閘門。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
 - 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
-- 未驗證模型的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。
+- 未驗證模型在 **Auto** 的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。使用者明確選擇任一 Tier 時，可走 LLM fallback／高階流程，但不得略過既有的輸出結構、Python 執行、覆蓋率與突變驗證。
 - 若 `Class.method` 的成功 Dynamic Trace 使用了呼叫端已驗證的建構子字面值，Tier 1 必須以相同字面值建立實例後才可寫入 assertion；不得因建構子有必要參數而丟棄已驗證 Trace，也不得猜測建構子依賴。
 - Tier 3 Mock Scaffold 若有已驗證的 caller constructor literal，必須將其作為明確 setup 事實提供給模型，並禁止將該設定誤傳給被測方法；沒有事實時不得憑空補出 constructor dependency。
-- 未驗證模型不得呼叫 LLM 語意分析師、Reviewer、Tier 4 修補或突變體分流師。若 deterministic Tier 1 仍有存活變異體，必須保留測試與報告後停止，不得以猜測性修補灌水分數。
+- 未驗證模型在 **Auto** 不得呼叫 LLM 語意分析師、Reviewer、Tier 4 修補或突變體分流師；若 deterministic Tier 1 仍有存活變異體，必須保留測試與報告後停止，不得以猜測性修補灌水分數。手動 Tier 可使用這些流程，但每一輪的產物必須接受相同的可執行驗證，不得以模型宣稱取代證據。
 - Stub/Dummy 快速通道只能依函式本體的結構（`pass` 或單一安全 literal 回傳）或函式名稱中明確的 `dummy` token 判定；不得依短小行數或複雜度分數略過具有可觀察行為的程式碼。`dummy` 是使用者標記的雜訊／佔位約定，不是業務領域關鍵字。
 - Stub 快速通道必須依目標的 module／instance／static／class／property 綁定方式建立可執行 smoke test；有必要建構子參數時僅可重用已驗證 caller literal，沒有事實則記錄原因並略過，不得寫入必定失敗的 `Class()` 測試。
 - 名稱含明確 `dummy` token 的使用者標記函式，必須在複雜度、AST、Dynamic Trace、LLM 與突變測試之前直接略過；報告須清楚標示略過原因，且不得生成未驗證的 Smoke Test。

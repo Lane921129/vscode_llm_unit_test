@@ -977,9 +977,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         { envType: params.envType, modelName: params.modelName },
         currentModelProfile.testGenerationReady !== undefined
     );
-    const mayUseModelAuthoredTests = canUseTierOneLlmFallback(qualifiedForSelectedModel);
+    const mayUseModelAuthoredTests = canUseTierOneLlmFallback(qualifiedForSelectedModel, userTierSetting);
     if (qualifiedForSelectedModel === undefined) {
-        log('[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；本次先限制為 Tier 1。測試連線會同時讀取供應商可提供的參數量／Context，並以無副作用 fixture 實測可執行 unittest。');
+        log(userTierSetting === 'auto'
+            ? '[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。'
+            : `[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier ${userTierSetting.replace('tier', '')} 選擇繼續執行。輸出仍須通過結構、執行、覆蓋率與突變驗證。`);
     }
     const resolvedTier = resolveTier(
         modelParamBillion,
@@ -994,8 +996,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         activeModelProfile.contextLength,
         resolvedTier
     );
-    if (qualifiedForSelectedModel === false && userTierSetting !== 'auto' && resolvedTier !== Number(userTierSetting.replace('tier', ''))) {
-        log('[模型能力] 目前模型未通過 unittest 生成驗證；已覆蓋手動高階策略並安全改用 Tier 1。');
+    if (qualifiedForSelectedModel === false && userTierSetting !== 'auto') {
+        log('[模型能力] 此模型尚未通過 unittest 探測；保留你的手動 Tier 選擇，並以既有結構、執行、覆蓋率與突變閘門驗證每次輸出。');
     }
     log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 
@@ -1413,8 +1415,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
                     if (!mayUseModelAuthoredTests) {
                         throw new Error(
-                            'Tier 1 無法取得可驗證的動態 Trace；目前模型尚未通過 unittest 生成資格，'
-                            + '無法安全改用 LLM 猜測測試。請先執行「測試連線」，或改用已通過探測的模型後重試。'
+                            'Tier 1 無法取得可驗證的動態 Trace；Auto 模式下模型尚未通過 unittest 生成探測，'
+                            + '因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 2–4 後以既有驗證閘門執行。'
                         );
                     }
                     log('[Tier 1 退回] 動態追蹤失敗，改走標準 LLM 生成與預先驗證流程。');
@@ -1440,10 +1442,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             if (!mayUseModelAuthoredTests) {
                                 throw new Error(
                                     `Tier 1 無法安全建立 ${className}：建構子需要 ${constructorParams.join(', ')}，`
-                                    + '而目前模型尚未通過 unittest 生成資格。請先執行「測試連線」後再使用 LLM fallback。'
+                                    + '而 Auto 模式下模型尚未通過 unittest 生成探測。請先執行「測試連線」，或明確選擇 Tier 2–4 後使用受驗證閘門保護的 LLM fallback。'
                                 );
                             }
-                            log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），已驗證模型可改走一般生成流程。`);
+                            log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），改走一般生成與預先驗證流程。`);
                         } else if (className) {
                             const setupBlock = directClassCall ? '' : (verifiedInstanceSetup || [
                                 `    def setUp(self):`,
@@ -2212,7 +2214,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 break;
             }
             if (survivedMutants && !mayUseModelAuthoredTests) {
-                const note = '目前模型尚未通過 unittest 生成驗證；已保留 deterministic Tier 1 測試與存活變異體報告，停止 LLM 修補以避免猜測性測試。請先執行「測試連線」後再啟用 Tier 2–4 自我修復。';
+                const note = 'Auto 模式下目前模型尚未通過 unittest 生成探測；已保留 deterministic Tier 1 測試與存活變異體報告，停止 LLM 修補以避免猜測性測試。請先執行「測試連線」，或明確選擇 Tier 2–4 後再啟用受驗證閘門保護的自我修復。';
                 log(`[優化] ${note}`);
                 finalReportMarkdown += `> [!NOTE]\n> ${note}\n\n`;
                 break;

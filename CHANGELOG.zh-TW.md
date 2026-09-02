@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### 手動 Tier 不再被模型探測強制降階
+
+- 修正模型尚未探測或探測失敗時，即使使用者明確選擇 Tier 2、3、4 仍被強制改成 Tier 1 的行為；這會讓新模型與本地模型無法實際使用完整系統。
+- 現在模型 unittest 探測只控制 **Auto** 路由：Auto 仍會保守選用 Dynamic Trace 驅動的 Tier 1；手動選擇則會被保留，並以既有的測試結構、隔離 Python 執行、coverage 與突變閘門驗證輸出。
+- 未探測模型在手動 Tier 可使用語意分析、Reviewer 與突變修補；沒有使用者明確授權時，Auto 仍不會用未驗證模型猜測測試，保留穩定性與可控成本。
+- 驗證：138 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### Tier 3 Scaffold 的已驗證建構子設定
 
 - 修正 Tier 3 Mock Scaffold 只提供 `Class(...)` TODO、沒有把 caller 已驗證的建構子設定傳給模型的問題。

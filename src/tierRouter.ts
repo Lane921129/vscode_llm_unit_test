@@ -8,19 +8,21 @@ export function resolveTier(
     userTier: string,
     testGenerationReady?: boolean
 ): 1 | 2 | 3 | 4 {
-    // A missing or failed probe is a quality boundary, not merely an Auto
-    // preference. Tier 1 remains usable because it derives assertions from
-    // verified trace data instead of asking that model to author test code.
-    // This prevents a newly selected provider/model from inheriting a Tier
-    // decision based only on a possibly unavailable parameter-size estimate.
-    if (testGenerationReady !== true) {
-        return 1;
-    }
+    // An explicit tier is a user choice, not a model-name inference.  The
+    // generated file still has to pass the existing structural, execution,
+    // coverage, and mutation gates.  Qualification only informs Auto mode;
+    // otherwise a newly added or offline model could never use Tier 2–4.
     if (userTier && userTier !== 'auto') {
         const requested = parseInt(userTier.replace('tier', ''));
         if (requested >= 1 && requested <= 4) {
             return requested as 1 | 2 | 3 | 4;
         }
+    }
+    // Auto must remain conservative until this exact provider/model has
+    // completed the harmless executable unittest probe.  It must never
+    // borrow an estimate or capability result from a different model.
+    if (testGenerationReady !== true) {
+        return 1;
     }
     if (isNaN(modelParamBillion)) {
         return 4;
@@ -66,9 +68,13 @@ export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability
 /**
  * Tier 1 may need a model-written fallback when tracing cannot create a safe
  * deterministic test (for example, an opaque required constructor argument).
- * That fallback is only safe after the exact provider/model has passed the
- * executable unittest probe; "unprobed" is deliberately not treated as true.
+ * Auto may use that fallback only after the exact provider/model has passed
+ * the executable unittest probe.  A manual Tier selection opts into the same
+ * fallback, subject to the normal executable validation gates.
  */
-export function canUseTierOneLlmFallback(testGenerationReady?: boolean): boolean {
-    return testGenerationReady === true;
+export function canUseTierOneLlmFallback(testGenerationReady?: boolean, userTier = 'auto'): boolean {
+    // A manual tier selection authorizes a best-effort model fallback.  Its
+    // output is still rejected unless the normal validation pipeline proves
+    // it executable; Auto mode keeps the stricter probe-first behavior.
+    return testGenerationReady === true || userTier !== 'auto';
 }

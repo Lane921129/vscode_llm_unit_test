@@ -2,14 +2,15 @@ import * as assert from 'assert';
 import { test } from 'node:test';
 import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from '../tierRouter';
 
-test('routes an unqualified model to deterministic Tier 1 even when a higher Tier is requested', () => {
-    assert.strictEqual(resolveTier(70, 90, 'tier4', false), 1);
-    assert.strictEqual(resolveTier(30, 20, 'tier3', false), 1);
+test('preserves a manual Tier selection even when a model is unqualified', () => {
+    assert.strictEqual(resolveTier(70, 90, 'tier4', false), 4);
+    assert.strictEqual(resolveTier(30, 20, 'tier3', false), 3);
 });
 
-test('routes an unprobed model to Tier 1 until test connection verifies it', () => {
-    assert.strictEqual(resolveTier(70, 20, 'tier4'), 1);
+test('uses Tier 1 only for unprobed Auto routing', () => {
+    assert.strictEqual(resolveTier(70, 20, 'tier4'), 4);
     assert.strictEqual(resolveTier(30, 20, 'auto', undefined), 1);
+    assert.strictEqual(resolveTier(30, 20, 'auto', false), 1);
 });
 
 test('preserves an explicitly requested Tier after the selected model is qualified', () => {
@@ -42,8 +43,10 @@ test('requires verified examples or errors before an unqualified model may use T
     }), false);
 });
 
-test('permits the non-deterministic Tier 1 fallback only for an executed model probe', () => {
+test('permits model fallback after a probe or an explicit Tier choice', () => {
     assert.strictEqual(canUseTierOneLlmFallback(true), true);
     assert.strictEqual(canUseTierOneLlmFallback(false), false);
     assert.strictEqual(canUseTierOneLlmFallback(undefined), false);
+    assert.strictEqual(canUseTierOneLlmFallback(false, 'tier2'), true);
+    assert.strictEqual(canUseTierOneLlmFallback(undefined, 'tier4'), true);
 });
