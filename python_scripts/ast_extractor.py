@@ -15,6 +15,14 @@ def source_for(lines, node):
 
 def find_function_in_tree(tree, func_name):
     """Prefer module functions, then class methods, then nested functions."""
+    if '.' in func_name:
+        class_name, method_name = func_name.rsplit('.', 1)
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == method_name:
+                        return item, node.name, node
+        return None, None, None
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
             return node, None, None

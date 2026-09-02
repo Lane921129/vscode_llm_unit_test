@@ -92,6 +92,12 @@ def find_target_scope(tree, function_name=None, class_name=None):
     if not function_name:
         return tree
 
+    if '.' in function_name:
+        selected_class, function_name = function_name.rsplit('.', 1)
+        if class_name and class_name != selected_class:
+            return None
+        class_name = selected_class
+
     if class_name:
         for node in tree.body:
             if isinstance(node, ast.ClassDef) and node.name == class_name:

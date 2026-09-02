@@ -4,6 +4,14 @@
 
 ## 2026-09-02
 
+### Class Method 的合格名稱端到端解析
+
+- 修正 UI 傳入 `Class.method` 時，多個 Python 分析工具只比對裸函式名稱的問題；這會讓同名方法被錯誤的類別或頂層函式取代。
+- AST Context、Dynamic Trace、Mock Scaffold、複雜度評估與內建 AST 突變引擎現在都接受合格名稱，並維持同一個選定類別範圍；生成／Reviewer 驗證則使用 AST 已確認的實際方法名建立 Python 呼叫。
+- 複雜度評估移除依 `db`、`http`、`file` 等關鍵字猜測外部資源的邏輯，改保留可驗證的 AST 匯入與呼叫結構，避免領域污染 Tier 路由。
+- 新增同名 `First.label`／`Second.label` 的整合測試，驗證選取 `Second.label` 不會誤追蹤、Mock 或突變另一個類別。
+- 驗證：122 個 TypeScript 單元測試、46 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### 模型無關的 Writer 輸出契約
 
 - 測試生成師不再根據模型名稱決定是否要求 `<thinking>` 分析標籤；所有 Cloud、Ollama 與 Custom API 模型統一只需回傳一個 `python` code fence。

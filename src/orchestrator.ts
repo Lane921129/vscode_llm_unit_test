@@ -925,6 +925,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let bestScore = -1;
     let bestCode = '';
     let bestTestPath = '';
+    // Keep the qualified selection for reports and output paths, while using
+    // the AST-confirmed leaf name when building Python calls and assertions.
+    let targetFuncName = params.funcName;
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
     const userTierSetting = params.promptStrategy || 'auto';
@@ -1062,6 +1065,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
         astContext = await extractAstContext(params.filePath, params.funcName);
         if (astContext && !astContext.error) {
+            targetFuncName = astContext.name || targetFuncName;
             log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
             
             // 深度跨檔案 AST 解析 (Deep Dependency Resolution)
@@ -1192,10 +1196,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const defaultArgs = args.map((_a: string, i: number) => i === 0 && className ? 'None' : 'None');
         const importLine = className
             ? `from ${moduleName} import ${className}`
-            : `from ${moduleName} import ${params.funcName}`;
+            : `from ${moduleName} import ${targetFuncName}`;
         const callLine = className
-            ? `self._obj = ${className}()\n        result = self._obj.${params.funcName}(${defaultArgs.join(', ')})`
-            : `result = ${params.funcName}(${defaultArgs.join(', ')})`;
+            ? `self._obj = ${className}()\n        result = self._obj.${targetFuncName}(${defaultArgs.join(', ')})`
+            : `result = ${targetFuncName}(${defaultArgs.join(', ')})`;
         const setupClass = className ? `\n    def setUp(self):\n        self._obj = ${className}()\n` : '';
         const smokeAssertion = buildStubSmokeAssertion((astContext as any)?.code || '');
         const smokeBody = smokeAssertion
@@ -1214,7 +1218,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             `import unittest`,
             importLine,
             ``,
-            `class TestStub${params.funcName}(unittest.TestCase):`,
+            `class TestStub${targetFuncName}(unittest.TestCase):`,
             setupClass,
             `    def test_smoke_no_exception(self):`,
             `        """Smoke test with an exact assertion when the stub body is static."""`,
@@ -1348,7 +1352,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         const userPrompt = getUserPrompt(
             params.filePath,
-            params.funcName,
+            targetFuncName,
             targetCode,
             evalStrategy as 'small' | 'large',
             astContext,
@@ -1391,8 +1395,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const moduleName = targetImportModule;
                     const isProperty = (astContext as any)?.method_kind === 'property';
                     const tier1Methods = isProperty
-                        ? buildTier1PropertyTestMethods(params.funcName, traceResult.examples, traceResult.errors)
-                        : buildTier1TestMethods(params.funcName, traceResult.examples, traceResult.errors);
+                        ? buildTier1PropertyTestMethods(targetFuncName, traceResult.examples, traceResult.errors)
+                        : buildTier1TestMethods(targetFuncName, traceResult.examples, traceResult.errors);
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
@@ -1413,16 +1417,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 `    def setUp(self):`,
                                 `        self._instance = ${className}()`,
                             ].join('\n');
-                            const callPrefix = directClassCall ? `${className}.${params.funcName}(` : `self._instance.${params.funcName}(`;
+                            const callPrefix = directClassCall ? `${className}.${targetFuncName}(` : `self._instance.${targetFuncName}(`;
                             // Property methods already use self._instance.<property> access.
                             const classMethodsMapped = isProperty ? tier1Methods : tier1Methods.map(m =>
-                                m.replace(new RegExp(`(?<![._])\\b${params.funcName}\\(`, 'g'), callPrefix)
+                                m.replace(new RegExp(`(?<![._])\\b${targetFuncName}\\(`, 'g'), callPrefix)
                             );
                             sanitizedCode = [
                                 `import unittest`,
                                 `from ${moduleName} import ${className}`,
                                 ``,
-                                `class TestTier1${params.funcName || 'Auto'}(unittest.TestCase):`,
+                                `class TestTier1${targetFuncName || 'Auto'}(unittest.TestCase):`,
                                 setupBlock,
                                 ``,
                                 classMethodsMapped.join('\n\n'),
@@ -1435,7 +1439,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 `import unittest`,
                                 `from ${moduleName} import *`,
                                 ``,
-                                `class TestTier1${params.funcName || 'Auto'}(unittest.TestCase):`,
+                                `class TestTier1${targetFuncName || 'Auto'}(unittest.TestCase):`,
                                 tier1Methods.join('\n\n'),
                                 ``,
                                 `if __name__ == '__main__':`,
@@ -1443,7 +1447,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             ].join('\n');
                         }
                         rawCode = `[Tier 1] Generated ${tier1Methods.length} fill-in test methods`;
-                        log(`[Tier 1] 填空法完成！共產出 ${tier1Methods.length} 個測試方法。${className ? ` (Class method: ${className}.${params.funcName})` : ''}`);
+                        log(`[Tier 1] 填空法完成！共產出 ${tier1Methods.length} 個測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
                     }
                 }
             }
@@ -1458,7 +1462,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const moduleName = targetImportModule;
                     const traceExamples = traceResult?.examples || [];
                     const sysP = getTier3SystemPrompt();
-                    const usrP = getTier3UserPrompt(params.funcName, scaffoldResult.scaffold, moduleName, traceExamples);
+                    const usrP = getTier3UserPrompt(targetFuncName, scaffoldResult.scaffold, moduleName, traceExamples);
                     try {
                         const raw = await requestLlmApi(params, sysP, usrP, log, 'test-code-json');
                         rawCode = raw;
@@ -1475,7 +1479,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 importLine3,
                                 patchImport.trim(),
                                 ``,
-                                `class TestTier3${params.funcName || 'Auto'}(${testBase3}):`,
+                                `class TestTier3${targetFuncName || 'Auto'}(${testBase3}):`,
                                 extracted.split('\n').map(l => '    ' + l).join('\n'),
                                 ``,
                                 `if __name__ == '__main__':`,
@@ -1509,7 +1513,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const subAstContext = { ...astContext, callerContexts: [ctx] };
                     const subUserPrompt = getUserPrompt(
                         params.filePath,
-                        params.funcName,
+                        targetFuncName,
                         targetCode,
                         'small',
                         subAstContext,
@@ -1536,7 +1540,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                 if (subSnippets.length > 0) {
                     log(`[分治合流] 成功取得 ${subSnippets.length} 個單一呼叫點測試，正在進行 AST/正則機械式合併...`);
-                    const mergeRes = mergeTestSnippets(subSnippets, `Test${params.funcName || 'Merged'}`);
+                    const mergeRes = mergeTestSnippets(subSnippets, `Test${targetFuncName || 'Merged'}`);
                     sanitizedCode = mergeRes.mergedCode;
                     log(`[分治合流] 🎉 成功重組為單一類別，共包含 ${mergeRes.totalMethodsCount} 個獨立測試方法！`);
                 }
@@ -1571,7 +1575,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                     // 🚨 偵測 AI 是否在複製原始碼（小模型常見的注意力崩潰）
                     const hasTestMethods = sanitizedCode.includes('def test_') || sanitizedCode.includes('self.assert');
-                    const looksLikeSourceCopy = !hasTestMethods && params.funcName && sanitizedCode.includes(`def ${params.funcName}`);
+                    const looksLikeSourceCopy = !hasTestMethods && targetFuncName && sanitizedCode.includes(`def ${targetFuncName}`);
                     if (looksLikeSourceCopy) {
                         if (llmRetry === 0) {
                             log(`[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試...`);
@@ -1584,7 +1588,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
                     if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
                         log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                        const rescued = rescueToUnittest(sanitizedCode, params.filePath, params.funcName, targetImportModule);
+                        const rescued = rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule);
                         if (!rescued) {
                             if (llmRetry === 0) {
                                 log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
@@ -1599,7 +1603,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                     const candidateValidation = await validateGeneratedTestCode(
                         sanitizedCode,
-                        params.funcName,
+                        targetFuncName,
                         path.basename(params.filePath, '.py'),
                         (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                         (astContext as any)?.signature,
@@ -1666,7 +1670,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const isTopLevelFunction = !(astContext as any)?.class_name;
             if (currentTier > 1 && isTopLevelFunction && canUseDeterministicTierOne(traceForAugmentation)) {
                 const traceMethods = buildTier1TestMethods(
-                    params.funcName,
+                    targetFuncName,
                     traceForAugmentation!.examples,
                     traceForAugmentation!.errors
                 );
@@ -1679,7 +1683,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             const generatedValidation = await validateGeneratedTestCode(
                 finalCode,
-                params.funcName,
+                targetFuncName,
                 baseName,
                 (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                 (astContext as any)?.signature,
@@ -1771,7 +1775,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 const revUsr = getReviewerUserPrompt(
                                     brokenCode,
                                     out,
-                                    params.funcName || '',
+                                    targetFuncName || '',
                                     funcArgs,
                                     targetSource,
                                     astContext,
@@ -1781,7 +1785,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 const revCode = sanitizeLlmResponse(revRaw);
                                 const reviewValidation = await validateGeneratedTestCode(
                                     revCode,
-                                    params.funcName,
+                                    targetFuncName,
                                     path.basename(params.filePath, '.py'),
                                     (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                                     (astContext as any)?.signature,
@@ -1836,7 +1840,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         const repairCode = sanitizeLlmResponse(repairRaw);
                                         const repairValidation = await validateGeneratedTestCode(
                                             repairCode,
-                                            params.funcName,
+                                            targetFuncName,
                                             path.basename(params.filePath, '.py'),
                                             (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                                             (astContext as any)?.signature,
@@ -1975,7 +1979,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         testPath,
                         '30',
                         String(perMutationTimeout),
-                        params.funcName || '',
+                        targetFuncName || '',
                         selectedClassName || ''
                     ],
                     { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: params.timeoutSeconds * 1000 }
@@ -2207,7 +2211,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     (astContext as any)?.code || '',
                     currentTestCode,
                     moduleName,
-                    params.funcName || '',
+                    targetFuncName || '',
                     semanticContext
                 );
                 const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log, 'json');

@@ -7,15 +7,6 @@ complexity_assessor.py
 import sys
 import ast
 import json
-import os
-
-EXTERNAL_RESOURCE_KEYWORDS = [
-    'db', 'database', 'sql', 'query', 'session',
-    'http', 'request', 'response', 'url', 'fetch', 'get', 'post',
-    'redis', 'cache', 'queue', 'kafka', 'rabbitmq',
-    'file', 'open', 'write', 'read', 'path',
-    'email', 'smtp', 'send', 'socket',
-]
 
 
 def assess_complexity(file_path: str, func_name: str) -> dict:
@@ -36,21 +27,36 @@ def assess_complexity(file_path: str, func_name: str) -> dict:
     target_func = None
     class_name = None
 
-    # 優先找頂層函式，再找 class method
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-            target_func = node
-            break
-    if target_func is None:
+    # A qualified selection (Class.method) must never silently resolve to a
+    # same-named module function or a different class method.
+    if '.' in func_name:
+        selected_class, selected_method = func_name.rsplit('.', 1)
         for node in tree.body:
-            if isinstance(node, ast.ClassDef):
+            if isinstance(node, ast.ClassDef) and node.name == selected_class:
                 for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == selected_method:
                         target_func = item
                         class_name = node.name
                         break
             if target_func:
                 break
+    else:
+        # Prefer a module function, then an unqualified class method for the
+        # legacy CLI protocol.
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                target_func = node
+                break
+        if target_func is None:
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
+                            target_func = item
+                            class_name = node.name
+                            break
+                if target_func:
+                    break
     if target_func is None:
         return {"score": 0, "level": "Unknown", "reasons": [f"Function '{func_name}' not found"]}
 
@@ -118,21 +124,6 @@ def assess_complexity(file_path: str, func_name: str) -> dict:
         pts = len(external_deps) * 10
         score += pts
         reasons.append(f"+{pts} 外部依賴呼叫: {', '.join(sorted(external_deps))} (每個 +10)")
-
-    # --- 6. 外部資源關鍵字（高危）---
-    func_source_lower = ast.get_source_segment(source, target_func) or ''
-    func_source_lower = func_source_lower.lower()
-    found_resources = []
-    for kw in EXTERNAL_RESOURCE_KEYWORDS:
-        if kw in func_source_lower and kw not in found_resources:
-            # 避免重複計算相似關鍵字
-            found_resources.append(kw)
-    if found_resources:
-        # 最多計 3 個關鍵字，避免分數爆炸
-        unique_res = found_resources[:3]
-        pts = len(unique_res) * 20
-        score += pts
-        reasons.append(f"+{pts} 外部資源關鍵字: {', '.join(unique_res)} (每個 +20)")
 
     # --- 上限 100 ---
     score = min(score, 100)

@@ -111,6 +111,25 @@ def _condition_subject(node, parameter_names):
     return None
 
 
+def find_selected_ast_function(tree, selector):
+    """Resolve a module function or an explicit top-level Class.method."""
+    if '.' in selector:
+        class_name, method_name = selector.rsplit('.', 1)
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == method_name:
+                        return item
+        return None
+    return next(
+        (
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == selector
+        ),
+        None
+    )
+
+
 def _match_pattern_literals(pattern):
     """Extract only scalar literals from safe Python structural patterns."""
     match_value_type = getattr(ast, 'MatchValue', ())
@@ -148,13 +167,7 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
     except (OSError, SyntaxError, UnicodeError):
         return []
 
-    target = next(
-        (
-            node for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name
-        ),
-        None
-    )
+    target = find_selected_ast_function(tree, func_name)
     if target is None:
         return []
 
@@ -512,20 +525,48 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         result["load_error"] = f"Failed to load module from {file_path}"
         return result
 
+    # Resolve an explicit Class.method before falling back to the legacy bare
+    # method search. This prevents same-named methods from another class from
+    # supplying trace facts for the selected target.
+    selected_class_name = None
+    selected_method_name = func_name
+    if '.' in func_name:
+        selected_class_name, selected_method_name = func_name.rsplit('.', 1)
+
     # 取得函式（支援頂層函式與 class method）
-    func = getattr(module, func_name, None)
+    func = getattr(module, selected_method_name, None) if selected_class_name is None else None
     func_is_method = False
     func_is_property = False
     method_class_name = None
     method_kind = 'module'
 
-    if func is None or not callable(func):
+    if selected_class_name is not None:
+        cls_obj = getattr(module, selected_class_name, None)
+        if isinstance(cls_obj, type):
+            descriptor = cls_obj.__dict__.get(selected_method_name)
+            method = getattr(cls_obj, selected_method_name, None)
+            if (isinstance(descriptor, property) and callable(descriptor.fget)) or is_cached_property_descriptor(descriptor):
+                func = descriptor.fget if isinstance(descriptor, property) else descriptor.func
+                method_kind = 'property'
+                func_is_property = True
+                method_class_name = selected_class_name
+            elif method and callable(method):
+                func = method
+                method_kind = (
+                    'static' if isinstance(descriptor, staticmethod)
+                    else 'class' if isinstance(descriptor, classmethod)
+                    else 'instance'
+                )
+                func_is_method = method_kind == 'instance'
+                method_class_name = selected_class_name
+
+    if (func is None or not callable(func)) and selected_class_name is None:
         # 在模組中找 class method
         for attr_name in dir(module):
             cls_obj = getattr(module, attr_name, None)
             if isinstance(cls_obj, type):
-                descriptor = cls_obj.__dict__.get(func_name)
-                method = getattr(cls_obj, func_name, None)
+                descriptor = cls_obj.__dict__.get(selected_method_name)
+                method = getattr(cls_obj, selected_method_name, None)
                 if (isinstance(descriptor, property) and callable(descriptor.fget)) or is_cached_property_descriptor(descriptor):
                     func = descriptor.fget if isinstance(descriptor, property) else descriptor.func
                     method_kind = 'property'
@@ -637,9 +678,9 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     if func_is_property:
                         if inp or kwargs:
                             raise TypeError(f"Property '{func_name}' does not accept call arguments")
-                        ret = getattr(instance, func_name)
+                        ret = getattr(instance, selected_method_name)
                     else:
-                        ret = getattr(instance, func_name)(*inp, **kwargs)
+                        ret = getattr(instance, selected_method_name)(*inp, **kwargs)
                 else:
                     ret = func(*inp, **kwargs)
                 if inspect.isasyncgen(ret):

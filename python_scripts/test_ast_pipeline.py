@@ -11,6 +11,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from mock_scaffold_generator import generate_scaffold
 from dynamic_tracer import trace_function
 from basic_mutation_runner import run_mutation_trials
+from complexity_assessor import assess_complexity
 
 
 class AstPipelineTests(unittest.TestCase):
@@ -517,6 +518,48 @@ def echo(value):
         self.assertEqual(scaffold['method_kind'], 'static')
         self.assertIn('result = Worker.static_double(value)', scaffold['scaffold'])
         self.assertNotIn('instance = Worker(...)', scaffold['scaffold'])
+
+    def test_qualified_class_method_selection_stays_with_the_selected_class(self):
+        source = '''class First:
+    @staticmethod
+    def label(value):
+        return "first:" + value
+
+class Second:
+    @staticmethod
+    def label(value):
+        return "second:" + value
+'''
+        test_source = '''import unittest
+from worker import Second
+
+class TestSecond(unittest.TestCase):
+    def test_label(self):
+        self.assertEqual(Second.label("x"), "second:x")
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'worker.py'
+            test_file = root / 'test_worker.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            ast_data = self.run_script('ast_extractor.py', target, 'Second.label')
+            trace = trace_function(str(target), 'Second.label', [{'args': ['x'], 'kwargs': {}}])
+            scaffold = generate_scaffold(str(target), 'Second.label')
+            complexity = assess_complexity(str(target), 'Second.label')
+            mutation = run_mutation_trials(target, test_file, target_function='Second.label')
+
+        self.assertEqual(ast_data['class_name'], 'Second')
+        self.assertEqual(ast_data['name'], 'label')
+        self.assertIsNone(trace['load_error'])
+        self.assertEqual(trace['examples'][0]['result'], "'second:x'")
+        self.assertEqual(scaffold['class_name'], 'Second')
+        self.assertIn('result = Second.label(value)', scaffold['scaffold'])
+        self.assertNotIn('First.label', scaffold['scaffold'])
+        self.assertNotEqual(complexity['level'], 'Unknown')
+        self.assertTrue(mutation['scope_found'])
+        self.assertGreater(mutation['total'], 0)
+        self.assertEqual(mutation['survived'], 0)
 
     def test_dynamic_tracer_preserves_required_keyword_only_arguments(self):
         source = '''def multiply(value: int, *, factor: int):

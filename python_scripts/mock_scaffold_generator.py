@@ -126,25 +126,40 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     except SyntaxError as e:
         return {"scaffold": "", "patches": [], "mock_names": [], "error": str(e)}
 
-    # 找目標函式（優先頂層，後並對 class method）
+    # A qualified Class.method selection takes precedence over any same-named
+    # module function or sibling class method.
     target_func = None
     class_name = None
     class_node = None
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-            target_func = node
-            break
-    if target_func is None:
+    selected_method_name = func_name.rsplit('.', 1)[-1]
+    if '.' in func_name:
+        selected_class_name = func_name.rsplit('.', 1)[0]
         for node in tree.body:
-            if isinstance(node, ast.ClassDef):
+            if isinstance(node, ast.ClassDef) and node.name == selected_class_name:
                 for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == selected_method_name:
                         target_func = item
                         class_name = node.name
                         class_node = node
                         break
             if target_func:
                 break
+    else:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                target_func = node
+                break
+        if target_func is None:
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == func_name:
+                            target_func = item
+                            class_name = node.name
+                            class_node = node
+                            break
+                if target_func:
+                    break
 
     if not target_func:
         return {"scaffold": "", "patches": [], "mock_names": [], "error": f"Function '{func_name}' not found"}
@@ -186,7 +201,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     # 方法簽章（加上 mock 參數）
     mock_param_str = ", ".join(["self"] + mock_names)
     test_prefix = 'async def' if isinstance(target_func, ast.AsyncFunctionDef) else 'def'
-    lines.append(f"{test_prefix} test_{func_name}({mock_param_str}):")
+    lines.append(f"{test_prefix} test_{selected_method_name}({mock_param_str}):")
 
     # Mock return value hints
     for mock_name, ec in zip(mock_names, external_calls):
@@ -208,11 +223,11 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
             lines.append(f"    instance = {class_name}(...)  # TODO: provide valid values for: {', '.join(required_init)}")
         else:
             lines.append(f"    instance = {class_name}()")
-        call_target = f"instance.{func_name}({call_args})"
+        call_target = f"instance.{selected_method_name}({call_args})"
     elif class_name:
-        call_target = f"{class_name}.{func_name}({call_args})"
+        call_target = f"{class_name}.{selected_method_name}({call_args})"
     else:
-        call_target = f"{func_name}({call_args})"
+        call_target = f"{selected_method_name}({call_args})"
     if isinstance(target_func, ast.AsyncFunctionDef):
         lines.append(f"    result = await {call_target}")
     else:
