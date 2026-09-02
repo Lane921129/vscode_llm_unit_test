@@ -11,6 +11,13 @@
 - 新增跨平台環境與引數組合回歸測試，確認不含 `%PYTHONPATH%`、`$PYTHONPATH` 等 shell placeholder；coverage 失敗仍會保留輸出供 Reviewer 修復。
 - 驗證：112 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 仍為既有 44 個 warning、0 error。
 
+### 例外斷言的 AST／Trace 事實閘門
+
+- AST 語境新增 `raised_exceptions`，只擷取被測函式本體中明確 `raise` 的類型，不會把巢狀 helper 的例外混入。
+- 生成、Reviewer 與 Tier 4 Self-repair 在寫入前，會將 AST 例外和可 assertion 的 Dynamic Trace 例外合併為可用事實。
+- 沒有這些事實的 `assertRaises(ValueError)` 等猜測性斷言會被拒絕；明確的 mock `side_effect` 仍能安全測試相依錯誤傳播。
+- 驗證：120 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
 ### 模型資格探針的獨立時限
 
 - 所有 provider 的基本連線、模型清單與 Ollama 模型列表請求已統一至少 30 秒，不再使用 2／5／10 秒的短時限。

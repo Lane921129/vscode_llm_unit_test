@@ -201,6 +201,40 @@ test('accepts a target invocation nested under assertRaises', () => {
     assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
 });
 
+test('requires evidence before accepting a model-invented exception assertion', () => {
+    const code = [
+        'import unittest',
+        'from calculator import add',
+        '',
+        'class TestAdd(unittest.TestCase):',
+        '    def test_invalid(self):',
+        '        with self.assertRaises(ValueError):',
+        '            add(1, 2)',
+    ].join('\n');
+
+    const rejected = validateUnittestStructure(code, 'add', 'calculator', 'call', []);
+    assert.strictEqual(rejected.valid, false);
+    assert.match(rejected.reason || '', /沒有目標原始碼.*例外事實/);
+    assert.strictEqual(validateUnittestStructure(code, 'add', 'calculator', 'call', ['ValueError']).valid, true);
+});
+
+test('allows a mock side effect to define an explicit propagated exception', () => {
+    const code = [
+        'import unittest',
+        'from unittest.mock import patch',
+        'from service import process',
+        '',
+        'class TestProcess(unittest.TestCase):',
+        '    @patch("service.client.fetch")',
+        '    def test_dependency_error(self, mock_fetch):',
+        '        mock_fetch.side_effect = ConnectionError',
+        '        with self.assertRaises(ConnectionError):',
+        '            process()',
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'process', 'service', 'call', []).valid, true);
+});
+
 test('accepts a property read when the selected target is a descriptor', () => {
     const code = [
         'import unittest',

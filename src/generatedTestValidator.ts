@@ -357,6 +357,34 @@ function invokesTargetPrivateHelper(code: string, callableName: string,
     return undefined;
 }
 
+function unsupportedAssertRaisesException(
+    code: string,
+    allowedExceptionNames: string[] | undefined
+): string | undefined {
+    // Omitted evidence preserves the standalone validator's compatibility.
+    // An explicit empty list means the target has no verified exception facts.
+    if (allowedExceptionNames === undefined) {
+        return undefined;
+    }
+    const allowed = new Set([...allowedExceptionNames, 'TypeError']);
+    const matches = code.matchAll(/\bself\.assertRaises(?:Regex)?\s*\(\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/g);
+    for (const match of matches) {
+        const fullName = match[1];
+        const name = fullName.split('.').pop() || fullName;
+        if (allowed.has(name)) {
+            continue;
+        }
+        const escaped = escapeRegex(fullName);
+        const mockProvidesException = new RegExp(
+            '\\bside_effect\\s*=\\s*' + escaped + '\\b'
+        ).test(code);
+        if (!mockProvidesException) {
+            return name;
+        }
+    }
+    return undefined;
+}
+
 /** Extract code from the optional structured-output envelope used by capable APIs. */
 export function unwrapGeneratedCodeEnvelope(response: string): string {
     try {
@@ -406,7 +434,8 @@ export function validateUnittestStructure(
     code: string,
     targetCallable?: string,
     targetModule?: string,
-    targetUsage: TargetUsage = 'call'
+    targetUsage: TargetUsage = 'call',
+    allowedExceptionNames?: string[]
 ): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -436,6 +465,13 @@ export function validateUnittestStructure(
     }
     if (targetCallable) {
         const executable = executablePythonText(trimmed);
+        const unsupportedException = unsupportedAssertRaisesException(executable, allowedExceptionNames);
+        if (unsupportedException) {
+            return {
+                valid: false,
+                reason: `assertRaises(${unsupportedException}) 沒有目標原始碼、Dynamic Trace 或 mock side_effect 的例外事實依據。`
+            };
+        }
         const callReference = targetCallReference(executable, targetCallable, targetModule);
         const barePrivateHelper = unimportedPrivateHelperCall(executable);
         if (barePrivateHelper) {

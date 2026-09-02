@@ -22,6 +22,7 @@ import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
 import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutationExecution';
+import { exceptionNamesFromEvidence } from './exceptionEvidence';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
@@ -295,6 +296,7 @@ interface AstContext {
     property_context?: { name: string, getter?: unknown, setter?: unknown, deleter?: unknown } | null;
     is_async?: boolean;
     executable_lines?: number[];
+    raised_exceptions?: string[];
     traceResult?: DynamicTraceResult;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];
@@ -729,9 +731,10 @@ async function validateGeneratedTestCode(
     targetCallable?: string,
     targetModule?: string,
     targetUsage: 'call' | 'property' = 'call',
-    targetSignature?: unknown[]
+    targetSignature?: unknown[],
+    allowedExceptionNames?: string[]
 ): Promise<{ valid: boolean; reason?: string }> {
-    const structure = validateUnittestStructure(code, targetCallable, targetModule, targetUsage);
+    const structure = validateUnittestStructure(code, targetCallable, targetModule, targetUsage, allowedExceptionNames);
     if (!structure.valid) {
         return structure;
     }
@@ -1599,7 +1602,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         params.funcName,
                         path.basename(params.filePath, '.py'),
                         (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                        (astContext as any)?.signature
+                        (astContext as any)?.signature,
+                        exceptionNamesFromEvidence(astContext)
                     );
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
@@ -1678,7 +1682,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 params.funcName,
                 baseName,
                 (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                (astContext as any)?.signature
+                (astContext as any)?.signature,
+                exceptionNamesFromEvidence(astContext)
             );
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
@@ -1779,7 +1784,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     params.funcName,
                                     path.basename(params.filePath, '.py'),
                                     (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                                    (astContext as any)?.signature
+                                    (astContext as any)?.signature,
+                                    exceptionNamesFromEvidence(astContext)
                                 );
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
@@ -1833,7 +1839,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             params.funcName,
                                             path.basename(params.filePath, '.py'),
                                             (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                                            (astContext as any)?.signature
+                                            (astContext as any)?.signature,
+                                            exceptionNamesFromEvidence(astContext)
                                         );
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');

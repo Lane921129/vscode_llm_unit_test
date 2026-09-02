@@ -146,6 +146,21 @@ class Worker:
 
         self.assertEqual(data['executable_lines'], [2, 3, 6])
 
+    def test_extractor_reports_only_explicit_target_exceptions(self):
+        source = '''def validate(value):
+    if not value:
+        raise ValueError("missing")
+    def deferred():
+        raise RuntimeError("not part of validate")
+    return value
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'validate.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'validate')
+
+        self.assertEqual(data['raised_exceptions'], ['ValueError'])
+
     def test_extractor_preserves_relative_import_levels(self):
         source = '''from .helpers import normalize as normalize_value
 from ..shared import validate

@@ -198,6 +198,29 @@ def executable_body_lines(func_node):
     return sorted(result)
 
 
+def raised_exception_names(func_node):
+    """Return explicit exception classes raised by the selected callable.
+
+    Nested callables are excluded because their errors are not necessarily
+    observable when exercising the selected function itself.
+    """
+    names = []
+
+    def visit(node):
+        if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return
+        if isinstance(node, ast.Raise) and node.exc is not None:
+            exception = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+            if isinstance(exception, (ast.Name, ast.Attribute)):
+                names.append(attribute_name(exception))
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in func_node.body:
+        visit(statement)
+    return list(dict.fromkeys(names))
+
+
 def extract_info(filepath, func_name):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -275,6 +298,7 @@ def extract_info(filepath, func_name):
             'property_context': extract_property_context(class_node, lines, func_node.name),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
             'executable_lines': executable_body_lines(func_node),
+            'raised_exceptions': raised_exception_names(func_node),
             'code': source_for(lines, func_node)
         }, ensure_ascii=False))
     except Exception as error:
