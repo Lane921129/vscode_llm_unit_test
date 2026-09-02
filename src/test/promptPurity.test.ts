@@ -36,6 +36,7 @@ test('writer output contract does not branch on a provider or model name', () =>
     assert.ok(!/useThinkingTag|noThinkingModels|qwen|tinyllama|gemma|mistral/i.test(writerSource));
     assert.match(writerSource, /const thinking = false;/);
     assert.match(writerSource, /\\`\\`\\`python/);
+    assert.doesNotMatch(writerSource, /<thinking>|<\/thinking>/);
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {

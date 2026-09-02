@@ -1,5 +1,4 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './few_shot_examples';
-import { getPromptLanguageName } from './i18n';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 1：填空法 Prompt（2–3B 極小模型）
@@ -44,7 +43,6 @@ Complete ONE line: self.assertEqual(result, ${valRepr})`;
 // ─────────────────────────────────────────────────────────────
 
 export function getTier3SystemPrompt(): string {
-    const langName = getPromptLanguageName();
     return `You are an expert Python unit test engineer.
 You will receive a pre-built test scaffold with @patch mock decorators already configured.
 Your task: fill in the TODO sections only.
@@ -82,17 +80,14 @@ export function getTier3UserPrompt(
 // ─────────────────────────────────────────────────────────────
 
 export function getTier4SystemPrompt(): string {
-    const langName = getPromptLanguageName();
     return `You are an expert Python unit test engineer. Write a complete, production-quality unittest.TestCase.
 
 Output format:
-<thinking>
-(analysis in ${langName.toUpperCase()})
-</thinking>
-
 \`\`\`python
 (complete unittest file)
 \`\`\`
+
+Output only that single Python code fence. Do not include analysis, reasoning, headings, or other prose.
 
 Guidelines:
 - Use absolute imports (e.g. from module_name import target_function).
@@ -120,16 +115,13 @@ export function getSystemPrompt(
     survivedMutants?: string,
     modelName: string = ''
 ): string {
-    const langName = getPromptLanguageName();
     // A single code-fence contract is portable across providers. Model names
     // are not a reliable capability signal and thinking tags often leak prose
     // into generated Python, so every model receives the same output shape.
     const thinking = false;
 
     if (strategy === 'small') {
-        const formatBlock = thinking
-            ? `Output format:\n<thinking>\n(brief analysis in ${langName.toUpperCase()})\n</thinking>\n\n\`\`\`python\n(your unittest code)\n\`\`\``
-            : `Output format:\n\`\`\`python\n(your unittest code)\n\`\`\``;
+        const formatBlock = `Output format:\n\`\`\`python\n(your unittest code)\n\`\`\``;
 
         let prompt = `You are a Python unit test writer. Write a unittest.TestCase for the given function.
 
@@ -156,13 +148,11 @@ Rules:
     let prompt = `You are an expert Python Unit Testing Engineer. Write a comprehensive unittest.TestCase to kill all mutation testing survivors.
 
 Output format:
-<thinking>
-(analysis in ${langName.toUpperCase()})
-</thinking>
-
 \`\`\`python
 (complete unittest code)
 \`\`\`
+
+Output only that single Python code fence. Do not include analysis, reasoning, headings, or other prose.
 
 Guidelines:
 - Use absolute import (e.g. from module_name import target_function).
@@ -173,7 +163,7 @@ Guidelines:
 - ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values.
 `;
 
-    prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), thinking)}\n`;
+    prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), false)}\n`;
 
     if (loopCount > 1 && survivedMutants) {
         prompt += `\nSome mutants survived. Analyze and kill them:\n${survivedMutants}`;
@@ -218,7 +208,6 @@ export function getUserPrompt(
 ): string {
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
-    const thinking = false;
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;
 
@@ -455,7 +444,7 @@ export function getUserPrompt(
                 const examples = getDynamicFewShotExamples(astContext, astContext.code || code);
                 if (examples.length > 0) {
                     const subset = remaining > 800 ? examples : examples.slice(0, 1);
-                    prompt += `\nExamples:\n${formatFewShotForPrompt(subset, thinking)}\n`;
+                    prompt += `\nExamples:\n${formatFewShotForPrompt(subset, false)}\n`;
                 }
             }
         }
@@ -595,10 +584,7 @@ export function getUserPrompt(
                     ? `from ${moduleName} import ${className}  # use self._obj = ${className}(); then read self._obj.${funcName} without parentheses`
                 : `from ${moduleName} import ${className}  # instance method — use self._obj = ${className}(); self._obj.${funcName}(...)`
             : `from ${moduleName} import ${funcName}`;
-        const trigger = thinking
-            ? `\n\nImport from: ${importHint}\n\nWrite the test file now:\n<thinking>\n`
-            : `\n\nImport from: ${importHint}\n\nWrite the test file now:\n\`\`\`python\n`;
-        prompt += trigger;
+        prompt += `\n\nImport from: ${importHint}\n\nWrite the test file now:\n\`\`\`python\n`;
     } else {
         prompt += `\n\nWrite the complete unittest test file now.\n`;
     }

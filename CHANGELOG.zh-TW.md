@@ -7,8 +7,9 @@
 ### 模型無關的 Writer 輸出契約
 
 - 測試生成師不再根據模型名稱決定是否要求 `<thinking>` 分析標籤；所有 Cloud、Ollama 與 Custom API 模型統一只需回傳一個 `python` code fence。
+- 補齊大型 Prompt、Tier 4 全自主生成與 Self-repair 的固定輸出文字；這些路徑不再要求分析標籤，避免部分 Tier 仍把推理內容混入測試檔。
 - 這可避免模型把推理文字混入測試檔，並讓既有程式碼區塊擷取、unittest 結構檢查與 Python AST 驗證以同一套規則處理所有 Tier。
-- 新增回歸測試，防止重新引入供應商或模型名稱黑白名單。
+- 新增回歸測試，防止重新引入供應商／模型名稱黑白名單或任何 Writer 的 `<thinking>` 標籤。
 - 驗證：122 個 TypeScript 單元測試、45 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
 
 ### 可攜式 Python 預先驗證
