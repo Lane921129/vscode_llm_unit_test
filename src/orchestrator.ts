@@ -20,6 +20,7 @@ import { assessTargetCoverage } from './targetCoverage';
 import { formatReportProvenance, ReportProvenance } from './reportProvenance';
 import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
+import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './pythonTestEnvironment';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -1689,13 +1690,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
 
             // 【預先驗證】先距行一次 unittest 確認測試檔能跟上
-            await new Promise<void>(async (resolve, reject) => {
+            {
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
                 const targetDir = path.dirname(params.filePath);
                 const parentDir = path.dirname(targetDir);
                 const grandParentDir = path.dirname(parentDir);
-                const pythonPath = `${targetDir};${parentDir};${grandParentDir};${testDir};%PYTHONPATH%`;
                 const coverageProbe = await runSpawn('python', ['-c', 'import coverage'], {
                     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
                     timeout: 5000
@@ -1704,11 +1704,31 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (!hasCoverage) {
                     log('[預先驗證] 未安裝 coverage，改以 unittest 執行驗證；本輪覆蓋率將標示為 N/A。');
                 }
-                const preCheckCmd = hasCoverage
-                    ? `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m coverage run --branch --source="${targetDir}" -m unittest ${testModule} && python -m coverage report -m`
-                    : `chcp 65001 && set PYTHONPATH=${pythonPath} && cd /d "${testDir}" && python -m unittest ${testModule}`;
-                exec(preCheckCmd, { timeout: 30000 }, async (err, stdout, stderr) => {
-                    let out = (stdout + stderr).trim();
+                const testExecutionEnv = buildGeneratedTestEnvironment(process.env, [
+                    targetDir, parentDir, grandParentDir, testDir
+                ]);
+                const runPrecheck = async (): Promise<{ ok: boolean; out: string }> => {
+                    const testRun = await runSpawn(
+                        'python',
+                        generatedUnittestArguments(testModule, targetDir, hasCoverage),
+                        { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
+                    );
+                    let output = `${testRun.stdout}${testRun.stderr}`.trim();
+                    if (hasCoverage && testRun.code === 0) {
+                        const coverageReport = await runSpawn(
+                            'python', ['-m', 'coverage', 'report', '-m'],
+                            { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
+                        );
+                        output = [output, coverageReport.stdout, coverageReport.stderr]
+                            .filter(Boolean)
+                            .join('\n')
+                            .trim();
+                        return { ok: coverageReport.code === 0, out: output };
+                    }
+                    return { ok: testRun.code === 0, out: output };
+                };
+                const initialRun = await runPrecheck();
+                let out = initialRun.out;
                     const assessExecution = (coverageOutput: string) => hasCoverage
                         ? assessTargetCoverage(coverageOutput, params.filePath, astContext?.executable_lines || [])
                         : undefined;
@@ -1728,7 +1748,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         log(`[預先驗證失敗] ${coverageError}`);
                         finalReportMarkdown += `### ⚠️ 目標覆蓋驗證失敗\n\n${coverageError}\n\n`;
                     }
-                    if (err || coverageError) {
+                    if (!initialRun.ok || coverageError) {
                         log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
 
@@ -1764,11 +1784,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 );
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
-                                    const revCheck = await new Promise<{ ok: boolean; out: string }>((res2) => {
-                                        exec(preCheckCmd, { timeout: 30000 }, (e2, o2a, o2b) => {
-                                            res2({ ok: !e2, out: (o2a + o2b).trim() });
-                                        });
-                                    });
+                                    const revCheck = await runPrecheck();
                                     const reviewerCoverage = assessExecution(revCheck.out);
                                     const reviewerMissedTarget = reviewerCoverage?.targetExecuted === false;
                                     const reviewerCoverageIncomplete = reviewerCoverage?.targetFullyCovered === false;
@@ -1779,7 +1795,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
                                         loopCoverage = extractCoverage(revCheck.out, params.filePath);
                                         reviewerFixed = true;
-                                        resolve();
                                         break;
                                     } else {
                                         const reviewerFailure = reviewerMissedTarget
@@ -1823,11 +1838,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         );
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
-                                            const result2 = await new Promise<{ ok: boolean; out: string }>((res2) => {
-                                                exec(preCheckCmd, { timeout: 30000 }, (err2, out2a, out2b) => {
-                                                    res2({ ok: !err2, out: (out2a + out2b).trim() });
-                                                });
-                                            });
+                                            const result2 = await runPrecheck();
                                             const repairCoverage = assessExecution(result2.out);
                                             const repairMissedTarget = repairCoverage?.targetExecuted === false;
                                             const repairCoverageIncomplete = repairCoverage?.targetFullyCovered === false;
@@ -1837,7 +1848,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                 finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
                                                 loopCoverage = extractCoverage(result2.out, params.filePath);
                                                 repaired = true;
-                                                resolve();
                                                 break;
                                             } else {
                                                 const repairFailure = repairMissedTarget
@@ -1857,10 +1867,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     }
                                 }
                                 if (!repaired) {
-                                    reject(new Error(`測試檔預先驗證失敗（Reviewer + Tier 4 Self-repair 均無法修正）: ${out.substring(0, 200)}`));
+                                    throw new Error(`測試檔預先驗證失敗（Reviewer + Tier 4 Self-repair 均無法修正）: ${out.substring(0, 200)}`);
                                 }
                             } else {
-                                reject(new Error(`測試檔預先驗證失敗（Reviewer 無法修正）: ${out.substring(0, 200)}`));
+                                throw new Error(`測試檔預先驗證失敗（Reviewer 無法修正）: ${out.substring(0, 200)}`);
                             }
                         }
                     } else {
@@ -1868,15 +1878,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         if (ran && parseInt(ran[1]) > 0) {
                             log(`[預先驗證通過] 執行了 ${ran[1]} 個測試，即將進行突變測試...`);
                             loopCoverage = extractCoverage(out, params.filePath);
-                            resolve();
                         } else {
                             const msg = `測試檔都沒有跟 0 個測試（\`Ran 0 tests\`），測試名稱必須以 test_ 開頭`;
                             finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n${msg}\n\n`;
-                            reject(new Error(msg));
+                            throw new Error(msg);
                         }
                     }
-                });
-            });
+                }
 
             tierSuccess = true;
             break; // 預先驗證成功，跳出 Tier 降階迴圈

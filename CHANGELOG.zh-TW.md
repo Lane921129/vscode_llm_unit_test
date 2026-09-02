@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### 可攜式 Python 預先驗證
+
+- 生成測試的 unittest／coverage 預先驗證不再執行 Windows 專用的 `chcp`、`set PYTHONPATH`、`cd /d` shell 字串。
+- 改由直接啟動 Python，透過明確工作目錄與繼承、去重後的 `PYTHONPATH` 傳入被測模組、父 package 與測試輸出位置。
+- 新增跨平台環境與引數組合回歸測試，確認不含 `%PYTHONPATH%`、`$PYTHONPATH` 等 shell placeholder；coverage 失敗仍會保留輸出供 Reviewer 修復。
+- 驗證：112 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 仍為既有 44 個 warning、0 error。
+
 ### 儀表板結果直達與 Dummy 前置略過
 
 - 覆蓋率儀表板中已完成的函式卡片現在可直接點擊，會在 VS Code 開啟該函式的 `final_report.md`；鍵盤 Enter／Space 也可開啟，勾選框不會誤觸。

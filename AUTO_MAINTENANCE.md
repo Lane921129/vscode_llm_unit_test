@@ -6,7 +6,7 @@
 
 1. 讀取 `PROJECT_RULES.md` 與目前的 `CHANGELOG.zh-TW.md`。
 2. 實作可獨立驗證的一個變更單位。
-3. 執行 `npm run check-types`、`npm run lint`、`npm run test:unit`、`python python_scripts/test_ast_pipeline.py`、`npm run compile` 與 `git diff --check`。
+3. 執行 `npm run check-types`、`npm run lint`、`npm run test:unit`、`npm run compile` 與 `git diff --check`；其中 `test:unit` 已包含 Python AST pipeline。
 4. 將改動、測試結果與限制寫入中文 Log。
 5. 建立一則含英文與繁體中文的 Git commit。
 
@@ -28,3 +28,4 @@ CI 只可使用 GitHub Secrets 注入的環境變數，例如 `LLM_UNIT_TEST_GOO
 - `test/result` 是執行產物，分析時須把 Stub／Noise 函式與可評估函式分開統計。
 - `test/result` 中的歷史批次產物應定期歸檔與清理，已確認驗證完畢之測試快取（如 `.pyc`）與無效中斷日誌可安全移除，僅保留具代表性之基準對比紀錄。
 - 發現 LLM 輸出格式失敗時，優先補充回歸測試與結構驗證，不以放寬輸出條件掩蓋問題。
+- 變更生成測試的執行流程時，維持 `spawn` 引數、明確 `cwd` 與環境變數的可攜式做法；不得新增 Windows shell、硬碟代號或未跳脫的路徑字串相依。
