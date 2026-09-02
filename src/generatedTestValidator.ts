@@ -102,12 +102,17 @@ interface TargetCallReference {
     callableNames: string[];
     moduleExpressions: string[];
     importedAliases: string[];
+    classExpressions: string[];
+    instanceExpressions: string[];
 }
 
-function targetCallReference(code: string, callableName: string, targetModule?: string): TargetCallReference {
+function targetCallReference(code: string, callableName: string, targetModule?: string,
+                             targetClassName?: string): TargetCallReference {
     const importedAliases = new Set<string>();
     const callableNames = new Set<string>([callableName]);
     const moduleExpressions = new Set<string>();
+    const classExpressions = new Set<string>();
+    const instanceExpressions = new Set<string>();
     const escapedCallable = escapeRegex(callableName);
 
     for (const line of code.split(/\r?\n/)) {
@@ -116,6 +121,15 @@ function targetCallReference(code: string, callableName: string, targetModule?: 
             if (aliasMatch) {
                 callableNames.add(aliasMatch[1]);
                 importedAliases.add(aliasMatch[1]);
+            }
+            if (targetClassName && targetModule) {
+                const classImport = line.match(new RegExp(
+                    '^\\s*from\\s+' + escapeRegex(targetModule) + '\\s+import\\s+[^#]*\\b'
+                    + escapeRegex(targetClassName) + '(?:\\s+as\\s+([A-Za-z_]\\w*))?'
+                ));
+                if (classImport) {
+                    classExpressions.add(classImport[1] || targetClassName);
+                }
             }
         }
 
@@ -134,14 +148,48 @@ function targetCallReference(code: string, callableName: string, targetModule?: 
             }
         }
     }
+    if (targetClassName) {
+        for (const moduleExpression of moduleExpressions) {
+            classExpressions.add(`${moduleExpression}.${targetClassName}`);
+        }
+        const classPattern = [...classExpressions].map(escapeRegex).join('|');
+        if (classPattern) {
+            const assignment = new RegExp(
+                '^\\s*((?:self\\.)?[A-Za-z_]\\w*)\\s*=\\s*(?:' + classPattern + ')\\s*\\('
+            );
+            for (const line of code.split(/\r?\n/)) {
+                const match = line.match(assignment);
+                if (match) {
+                    instanceExpressions.add(match[1]);
+                }
+            }
+        }
+    }
     return {
         callableNames: [...callableNames],
         moduleExpressions: [...moduleExpressions],
         importedAliases: [...importedAliases],
+        classExpressions: [...classExpressions],
+        instanceExpressions: [...instanceExpressions],
     };
 }
 
 function invokesTargetCall(code: string, reference: TargetCallReference): boolean {
+    if (reference.classExpressions.length > 0) {
+        const method = escapeRegex(reference.callableNames[0]);
+        const classCall = reference.classExpressions.some(classExpression => {
+            const escapedClass = escapeRegex(classExpression);
+            return new RegExp('\\b' + escapedClass + '\\s*\\.\\s*' + method + '\\s*\\(').test(code)
+                || new RegExp('\\b' + escapedClass + '\\s*\\([^\\n]*?\\)\\s*\\.\\s*'
+                    + method + '\\s*\\(').test(code);
+        });
+        if (classCall) {
+            return true;
+        }
+        return reference.instanceExpressions.some(instanceExpression =>
+            new RegExp('\\b' + escapeRegex(instanceExpression) + '\\s*\\.\\s*' + method + '\\s*\\(').test(code)
+        );
+    }
     return code.split(/\r?\n/).some(line => {
         for (const name of reference.callableNames) {
             if (invokesCallable(line, name)) {
@@ -435,7 +483,8 @@ export function validateUnittestStructure(
     targetCallable?: string,
     targetModule?: string,
     targetUsage: TargetUsage = 'call',
-    allowedExceptionNames?: string[]
+    allowedExceptionNames?: string[],
+    targetClassName?: string
 ): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -472,7 +521,7 @@ export function validateUnittestStructure(
                 reason: `assertRaises(${unsupportedException}) 沒有目標原始碼、Dynamic Trace 或 mock side_effect 的例外事實依據。`
             };
         }
-        const callReference = targetCallReference(executable, targetCallable, targetModule);
+        const callReference = targetCallReference(executable, targetCallable, targetModule, targetClassName);
         const barePrivateHelper = unimportedPrivateHelperCall(executable);
         if (barePrivateHelper) {
             return {

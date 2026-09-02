@@ -747,9 +747,12 @@ async function validateGeneratedTestCode(
     targetModule?: string,
     targetUsage: 'call' | 'property' = 'call',
     targetSignature?: unknown[],
-    allowedExceptionNames?: string[]
+    allowedExceptionNames?: string[],
+    targetClassName?: string
 ): Promise<{ valid: boolean; reason?: string }> {
-    const structure = validateUnittestStructure(code, targetCallable, targetModule, targetUsage, allowedExceptionNames);
+    const structure = validateUnittestStructure(
+        code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName
+    );
     if (!structure.valid) {
         return structure;
     }
@@ -1624,7 +1627,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         path.basename(params.filePath, '.py'),
                         (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                         (astContext as any)?.signature,
-                        exceptionNamesFromEvidence(astContext)
+                        exceptionNamesFromEvidence(astContext),
+                        (astContext as any)?.class_name
                     );
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
@@ -1704,7 +1708,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 baseName,
                 (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                 (astContext as any)?.signature,
-                exceptionNamesFromEvidence(astContext)
+                exceptionNamesFromEvidence(astContext),
+                (astContext as any)?.class_name
             );
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
@@ -1806,7 +1811,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     path.basename(params.filePath, '.py'),
                                     (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                                     (astContext as any)?.signature,
-                                    exceptionNamesFromEvidence(astContext)
+                                    exceptionNamesFromEvidence(astContext),
+                                    (astContext as any)?.class_name
                                 );
                                 if (reviewValidation.valid) {
                                     fs.writeFileSync(testPath, revCode, 'utf8');
@@ -1861,7 +1867,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             path.basename(params.filePath, '.py'),
                                             (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                                             (astContext as any)?.signature,
-                                            exceptionNamesFromEvidence(astContext)
+                                            exceptionNamesFromEvidence(astContext),
+                                            (astContext as any)?.class_name
                                         );
                                         if (repairValidation.valid) {
                                             fs.writeFileSync(testPath, repairCode, 'utf8');

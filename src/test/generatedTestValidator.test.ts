@@ -247,6 +247,55 @@ test('accepts a property read when the selected target is a descriptor', () => {
     assert.strictEqual(validateUnittestStructure(code, 'enabled', 'feature', 'property').valid, true);
 });
 
+test('accepts an instance-method assertion only when the instance comes from the selected class', () => {
+    const code = [
+        'import unittest',
+        'from worker import Service',
+        '',
+        'class TestService(unittest.TestCase):',
+        '    def setUp(self):',
+        "        self._instance = Service('prefix:')",
+        '',
+        '    def test_render(self):',
+        "        result = self._instance.render('value')",
+        "        self.assertEqual(result, 'prefix:value')",
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'render', 'worker', 'call', undefined, 'Service').valid, true);
+});
+
+test('rejects a same-named method on an unrelated instance for a selected class method', () => {
+    const code = [
+        'import unittest',
+        'from worker import Service',
+        'from unrelated import Other',
+        '',
+        'class TestService(unittest.TestCase):',
+        '    def setUp(self):',
+        '        self._other = Other()',
+        '',
+        '    def test_render(self):',
+        "        self.assertEqual(self._other.render('value'), 'value')",
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'render', 'worker', 'call', undefined, 'Service');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /沒有呼叫被測函式/);
+});
+
+test('accepts a selected static or class method through a target module alias', () => {
+    const code = [
+        'import unittest',
+        'import worker as subject_module',
+        '',
+        'class TestService(unittest.TestCase):',
+        '    def test_render(self):',
+        "        self.assertEqual(subject_module.Service.render('value'), 'value')",
+    ].join('\n');
+
+    assert.strictEqual(validateUnittestStructure(code, 'render', 'worker', 'call', undefined, 'Service').valid, true);
+});
+
 test('rejects a generated test that shadows the requested callable', () => {
     const code = [
         'import unittest',
