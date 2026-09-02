@@ -11,6 +11,13 @@
 - 新增跨平台環境與引數組合回歸測試，確認不含 `%PYTHONPATH%`、`$PYTHONPATH` 等 shell placeholder；coverage 失敗仍會保留輸出供 Reviewer 修復。
 - 驗證：112 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 仍為既有 44 個 warning、0 error。
 
+### 模型無關的 Prompt 詳細度路由
+
+- 移除依 `gpt-4`、`claude`、`gemini`、`pro`、`opus` 等模型名稱片段判斷 Prompt 大小的舊邏輯。
+- 現在只根據探測到的參數量、Context 與已解析 Tier 決定 small／large Prompt；例如本地 31B 與未來新增模型不會因名稱不在清單內而被當作小模型。
+- Tier 2 的分治策略也使用相同的能力資料，避免供應商品牌造成策略分歧。
+- 驗證：121 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
 ### 例外斷言的 AST／Trace 事實閘門
 
 - AST 語境新增 `raised_exceptions`，只擷取被測函式本體中明確 `raise` 的類型，不會把巢狀 helper 的例外混入。

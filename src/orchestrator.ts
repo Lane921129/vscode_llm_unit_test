@@ -23,6 +23,7 @@ import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClass
 import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutationExecution';
 import { exceptionNamesFromEvidence } from './exceptionEvidence';
+import { selectPromptDetail } from './promptDetailStrategy';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
@@ -927,14 +928,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
     const userTierSetting = params.promptStrategy || 'auto';
-    // evalStrategy 僅用於舊版 Tier 2 內部的 small/large 分流，不再暴露給使用者
-    let evalStrategy: 'small' | 'large' = 'small';
-    {
-        const nameLower = params.modelName.toLowerCase();
-        if (nameLower.includes('gpt-4') || nameLower.includes('claude') || nameLower.includes('gemini') || nameLower.includes('pro') || nameLower.includes('opus')) {
-            evalStrategy = 'large';
-        }
-    }
     // 複雜度評估（對無選擇函式時用預設分數）
     const dummyNameMarked = hasDummyFunctionNameMarker(params.funcName);
     let complexityScore = 30;
@@ -972,6 +965,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         complexityScore,
         userTierSetting,
         qualifiedForSelectedModel
+    );
+    // Tier 2 uses this for divide-and-conquer; it must derive from measured
+    // capability, never from a finite list of vendor/model name fragments.
+    let evalStrategy = selectPromptDetail(
+        activeModelProfile.paramSize,
+        activeModelProfile.contextLength,
+        resolvedTier
     );
     if (qualifiedForSelectedModel === false && userTierSetting !== 'auto' && resolvedTier !== Number(userTierSetting.replace('tier', ''))) {
         log('[模型能力] 目前模型未通過 unittest 生成驗證；已覆蓋手動高階策略並安全改用 Tier 1。');
