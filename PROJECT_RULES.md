@@ -39,6 +39,7 @@
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 - 尚未完成「測試連線」的 provider／model 視為尚未驗證，必須先使用有真實 Dynamic Trace 的 Tier 1；只有同一 provider／model 通過可執行 unittest 探測後，才可使用 Tier 2–4。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
+- 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
 - 未驗證模型的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。
 - 未驗證模型不得呼叫 LLM 語意分析師、Reviewer、Tier 4 修補或突變體分流師。若 deterministic Tier 1 仍有存活變異體，必須保留測試與報告後停止，不得以猜測性修補灌水分數。
 - Stub/Dummy 快速通道只能依函式本體的結構（`pass` 或單一安全 literal 回傳）或函式名稱中明確的 `dummy` token 判定；不得依短小行數或複雜度分數略過具有可觀察行為的程式碼。`dummy` 是使用者標記的雜訊／佔位約定，不是業務領域關鍵字。

@@ -9,6 +9,7 @@ import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCred
 import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
 import { verifyRunnableTestGenerationProbe } from './modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from './connectionTimeout';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -272,28 +273,32 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         cancellable: false
                     }, async () => {
                         try {
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 5000);
+                            const timedFetch = (url: string, init: RequestInit, timeoutMs: number) =>
+                                fetchWithTimeout<Response>(
+                                    (input, options) => fetch(input, options),
+                                    url,
+                                    init,
+                                    timeoutMs
+                                );
 
                             if (message.envType === 'local') {
                                 const config = vscode.workspace.getConfiguration('llmUnitTest');
                                 const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-                                const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal as any });
-                                clearTimeout(timeoutId);
+                                const response = await timedFetch(
+                                    `${baseUrl}/api/tags`,
+                                    {},
+                                    CONNECTION_DISCOVERY_TIMEOUT_MS
+                                );
                                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                                 // 🔍 Model Probe: 查詢模型詳細資訊
                                 if (message.modelName) {
                                     try {
-                                        const probeController = new AbortController();
-                                        const probeTimeout = setTimeout(() => probeController.abort(), 10000);
-                                        const showResponse = await fetch(`${baseUrl}/api/show`, {
+                                        const showResponse = await timedFetch(`${baseUrl}/api/show`, {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ model: message.modelName }),
-                                            signal: probeController.signal as any
-                                        });
-                                        clearTimeout(probeTimeout);
+                                            body: JSON.stringify({ model: message.modelName })
+                                        }, CONNECTION_DISCOVERY_TIMEOUT_MS);
 
                                         if (showResponse.ok) {
                                             const modelData = await showResponse.json() as any;
@@ -319,25 +324,21 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                             // 同時傳給 extension 主程式
                                             vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                            const outputController = new AbortController();
-                                            const outputTimeout = setTimeout(() => outputController.abort(), 15000);
                                             try {
-                                                const outputResponse = await fetch(`${baseUrl}/api/generate`, {
+                                                const outputResponse = await timedFetch(`${baseUrl}/api/generate`, {
                                                     method: 'POST',
                                                     headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify(buildOllamaTestGenerationProbe(message.modelName)),
-                                                    signal: outputController.signal as any
-                                                });
+                                                    body: JSON.stringify(buildOllamaTestGenerationProbe(message.modelName))
+                                                }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                                 const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
                                                 let capability = await verifyRunnableTestGenerationProbe(outputPayload);
                                                 let plainPythonVerified = false;
                                                 if (capability.capability !== 'verified') {
-                                                    const plainResponse = await fetch(`${baseUrl}/api/generate`, {
+                                                    const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
                                                         method: 'POST',
                                                         headers: { 'Content-Type': 'application/json' },
-                                                        body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName)),
-                                                        signal: outputController.signal as any
-                                                    });
+                                                        body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName))
+                                                    }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                                     capability = await verifyRunnableTestGenerationProbe(
                                                         plainResponse.ok ? await plainResponse.json() : undefined
                                                     );
@@ -368,8 +369,6 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 vscode.window.showWarningMessage(
                                                     '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
                                                 );
-                                            } finally {
-                                                clearTimeout(outputTimeout);
                                             }
                                         } else {
                                             vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
@@ -386,7 +385,6 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
                                 const credential = keys[message.cloudKeyName];
                                 if (!credential) {
-                                    clearTimeout(timeoutId);
                                     throw new Error("找不到對應的 API Key");
                                 }
 
@@ -394,12 +392,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 let nextPageToken: string | undefined;
                                 for (let page = 0; page < 10; page++) {
                                     const listRequest = buildGoogleListModelsRequest(credential.key, nextPageToken);
-                                    const listResponse = await fetch(listRequest.url, {
-                                        headers: listRequest.headers,
-                                        signal: controller.signal as any
-                                    });
+                                    const listResponse = await timedFetch(listRequest.url, {
+                                        headers: listRequest.headers
+                                    }, CONNECTION_DISCOVERY_TIMEOUT_MS);
                                     if (!listResponse.ok) {
-                                        clearTimeout(timeoutId);
                                         throw new Error(`無法讀取 Google 可用模型清單（HTTP ${listResponse.status}）`);
                                     }
                                     const modelList = await listResponse.json() as { models?: unknown[]; nextPageToken?: string };
@@ -410,7 +406,6 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const usableModels = getGenerateContentModelNames(listedModels as any[]);
                                 const selectedModel = normalizeGoogleModelName(credential.model);
                                 if (!usableModels.includes(selectedModel)) {
-                                    clearTimeout(timeoutId);
                                     const suggestions = usableModels.slice(0, 12).join(', ') || '無';
                                     throw new Error(`模型「${selectedModel}」不存在、目前 API Key 無權使用，或不支援 generateContent。請改用可用模型：${suggestions}`);
                                 }
@@ -422,12 +417,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     TEST_GENERATION_PROBE_PROMPT,
                                     { responseMimeType: 'application/json', responseSchema: TEST_GENERATION_PROBE_SCHEMA }
                                 );
-                                const response = await fetch(request.url, {
+                                const response = await timedFetch(request.url, {
                                     method: 'POST',
                                     headers: request.headers,
-                                    body: JSON.stringify(request.body),
-                                    signal: controller.signal as any
-                                });
+                                    body: JSON.stringify(request.body)
+                                }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                 let capability = await verifyRunnableTestGenerationProbe(response.ok
                                     ? { response: getGoogleGeneratedText(await response.json()) }
                                     : undefined);
@@ -438,12 +432,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         credential.key,
                                         PLAIN_TEST_GENERATION_PROBE_PROMPT
                                     );
-                                    const plainResponse = await fetch(plainRequest.url, {
+                                    const plainResponse = await timedFetch(plainRequest.url, {
                                         method: 'POST',
                                         headers: plainRequest.headers,
-                                        body: JSON.stringify(plainRequest.body),
-                                        signal: controller.signal as any
-                                    });
+                                        body: JSON.stringify(plainRequest.body)
+                                    }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                     if (!response.ok && !plainResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
@@ -452,7 +445,6 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         : undefined);
                                     plainPythonVerified = capability.capability === 'verified';
                                 }
-                                clearTimeout(timeoutId);
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,
                                     contextLength: connectionMetadata.contextLength,
@@ -480,7 +472,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
                                 if (message.customKey) headers['Authorization'] = `Bearer ${message.customKey}`;
                                 
-                                const response = await fetch(message.customUrl, {
+                                const response = await timedFetch(message.customUrl, {
                                     method: 'POST',
                                     headers: headers,
                                     body: JSON.stringify(buildCustomChatCompletionBody(
@@ -488,15 +480,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         'Return only the requested structured output.',
                                         TEST_GENERATION_PROBE_PROMPT,
                                         'json'
-                                    )),
-                                    signal: controller.signal as any
-                                });
+                                    ))
+                                }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                 let capability = await verifyRunnableTestGenerationProbe(response.ok
                                     ? { response: getCustomChatCompletionText(await response.json()) }
                                     : undefined);
                                 let plainPythonVerified = false;
                                 if (capability.capability !== 'verified') {
-                                    const plainResponse = await fetch(message.customUrl, {
+                                    const plainResponse = await timedFetch(message.customUrl, {
                                         method: 'POST',
                                         headers,
                                         body: JSON.stringify(buildCustomChatCompletionBody(
@@ -504,9 +495,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             'Return only runnable Python unittest code.',
                                             PLAIN_TEST_GENERATION_PROBE_PROMPT,
                                             'text'
-                                        )),
-                                        signal: controller.signal as any
-                                    });
+                                        ))
+                                    }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                     if (!response.ok && !plainResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
@@ -515,7 +505,6 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         : undefined);
                                     plainPythonVerified = capability.capability === 'verified';
                                 }
-                                clearTimeout(timeoutId);
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
                                     paramSize: 'Custom API',
                                     contextLength: 8192,
@@ -610,10 +599,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         try {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
             const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2000);
-            const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal as any });
-            clearTimeout(timeoutId);
+            const response = await fetchWithTimeout<Response>(
+                (input, options) => fetch(input, options),
+                `${baseUrl}/api/tags`,
+                {},
+                CONNECTION_DISCOVERY_TIMEOUT_MS
+            );
             if (response.ok) {
                 const data = await response.json() as any;
                 if (data && data.models) {

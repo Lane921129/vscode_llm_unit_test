@@ -11,6 +11,13 @@
 - 新增跨平台環境與引數組合回歸測試，確認不含 `%PYTHONPATH%`、`$PYTHONPATH` 等 shell placeholder；coverage 失敗仍會保留輸出供 Reviewer 修復。
 - 驗證：112 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 仍為既有 44 個 warning、0 error。
 
+### 模型資格探針的獨立時限
+
+- 所有 provider 的基本連線、模型清單與 Ollama 模型列表請求已統一至少 30 秒，不再使用 2／5／10 秒的短時限。
+- Cloud、Local Ollama、Custom API 的結構化 unittest 探針與純 Python 回退各自有獨立 60 秒時限；前一步列模型或結構化輸出較慢，不會消耗回退驗證的時間。
+- 此修正避免把延遲較高、首次載入較慢或經 RDP／實驗室網路使用的可用模型，錯誤標示為未通過 Tier 2–4 資格。
+- 驗證：116 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
 ### 可攜式原生突變引擎執行
 
 - `mutatest` 與 `mutmut` 的啟動流程不再以 Windows／Unix shell 字串組合 `chcp`、`set`、`export` 或 `cd`。
