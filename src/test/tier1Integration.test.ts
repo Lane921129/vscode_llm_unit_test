@@ -108,6 +108,40 @@ test('Tier 1 generated instance-method tests reuse verified constructor literals
     }
 });
 
+test('Tier 1 generated tests execute ordinary coroutine targets from verified trace facts', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tier1-coroutine-'));
+    try {
+        writeFileSync(join(tempDir, 'async_target.py'), [
+            'async def double(value):',
+            '    if value < 0:',
+            '        raise ValueError("negative")',
+            '    return value * 2',
+            ''
+        ].join('\n'), 'utf8');
+        const methods = buildTier1TestMethods('double', [
+            { args: ['3'], result: '6', result_type: 'int' }
+        ], [
+            { args: ['-1'], exception: 'ValueError' }
+        ], true);
+        writeFileSync(join(tempDir, 'test_async_target.py'), [
+            'import unittest',
+            'from async_target import double',
+            '',
+            'class TestDouble(unittest.TestCase):',
+            methods.join('\n\n'),
+            ''
+        ].join('\n'), 'utf8');
+
+        const result = spawnSync('python', ['-m', 'unittest', 'test_async_target.py'], {
+            cwd: tempDir,
+            encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('Tier 1 generated tests execute finite sync and async generator assertions', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'tier1-generator-'));
     try {

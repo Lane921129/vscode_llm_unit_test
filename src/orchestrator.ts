@@ -1422,9 +1422,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const moduleName = targetImportModule;
                     const isProperty = (astContext as any)?.method_kind === 'property';
+                    const isAsyncTarget = Boolean((astContext as any)?.is_async);
                     const tier1Methods = isProperty
-                        ? buildTier1PropertyTestMethods(targetFuncName, traceResult.examples, traceResult.errors)
-                        : buildTier1TestMethods(targetFuncName, traceResult.examples, traceResult.errors);
+                        ? buildTier1PropertyTestMethods(targetFuncName, traceResult.examples, traceResult.errors, 'self._instance', isAsyncTarget)
+                        : buildTier1TestMethods(targetFuncName, traceResult.examples, traceResult.errors, isAsyncTarget);
 
                     if (tier1Methods.length > 0) {
                         const className = (astContext as any)?.class_name as string | null;
@@ -1704,7 +1705,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const traceMethods = buildTier1TestMethods(
                     targetFuncName,
                     traceForAugmentation!.examples,
-                    traceForAugmentation!.errors
+                    traceForAugmentation!.errors,
+                    Boolean((astContext as any)?.is_async)
                 );
                 const augmented = appendTraceMethodsToUnittestClass(finalCode, traceMethods);
                 finalCode = augmented.code;

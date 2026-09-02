@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### Tier 1 一般 Coroutine 的可執行斷言
+
+- 修正一般 `async def` 目標的 Dynamic Trace 已等待並取得真實結果，但 Tier 1 測試直接對 coroutine 物件做 assertion 的問題。
+- Tier 1 現在根據 AST 的 `is_async` 事實，以標準 library event loop 執行一般 coroutine 的成功與例外呼叫；同步與 async generator 的既有流程不受影響。
+- 新增正常回傳、`assertRaises` 與實際執行 unittest 的 coroutine 整合回歸測試。
+- 驗證：136 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### Stub 快速通道的類別綁定安全性
 
 - 修正 Stub 快速通道一律使用 `Class()` 與實例方法呼叫的問題；這會讓必要建構子參數、靜態／類別方法與 property 產生不正確或無法執行的 smoke test。

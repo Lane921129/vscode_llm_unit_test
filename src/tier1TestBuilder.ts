@@ -53,7 +53,7 @@ function buildTraceCall(funcName: string, example: Tier1TraceExample): string {
     return `${funcName}(${[...example.args, ...kwargs].join(', ')})`;
 }
 
-function buildTraceResultAssignment(funcCall: string, example: Tier1TraceExample): string[] {
+function buildTraceResultAssignment(funcCall: string, example: Tier1TraceExample, isAsync = false): string[] {
     const expected = toPythonAssertionLiteral(example.result, example.result_type);
     const limit = Number.isSafeInteger(example.result_collection_limit) && (example.result_collection_limit || 0) > 0
         ? example.result_collection_limit
@@ -82,17 +82,19 @@ function buildTraceResultAssignment(funcCall: string, example: Tier1TraceExample
             `        self.assertEqual(result, ${expected})`
         ];
     }
+    const executedCall = isAsync ? `__import__('asyncio').run(${funcCall})` : funcCall;
     const assertion = example.result === 'None' || example.result_type === 'NoneType'
         ? 'self.assertIsNone(result)'
         : `self.assertEqual(result, ${expected})`;
-    return [`        result = ${funcCall}`, `        ${assertion}`];
+    return [`        result = ${executedCall}`, `        ${assertion}`];
 }
 
 /** Build Tier 1 tests deterministically from verified dynamic-trace facts. */
 export function buildTier1TestMethods(
     funcName: string,
     examples: Tier1TraceExample[],
-    errors: Tier1TraceExample[]
+    errors: Tier1TraceExample[],
+    isAsync = false
 ): string[] {
     const methods: string[] = [];
 
@@ -100,7 +102,7 @@ export function buildTier1TestMethods(
         const funcCall = buildTraceCall(funcName, example);
         methods.push([
             `    def test_case_${index + 1}(self):`,
-            ...buildTraceResultAssignment(funcCall, example)
+            ...buildTraceResultAssignment(funcCall, example, isAsync)
         ].join('\n'));
     });
 
@@ -113,7 +115,7 @@ export function buildTier1TestMethods(
         methods.push([
             `    def test_case_${assertableExamples.length + index + 1}(self):`,
             `        with self.assertRaises(${exception}):`,
-            `            ${funcCall}`
+            `            ${isAsync ? `__import__('asyncio').run(${funcCall})` : funcCall}`
         ].join('\n'));
     });
 
@@ -125,9 +127,11 @@ export function buildTier1PropertyTestMethods(
     propertyName: string,
     examples: Tier1TraceExample[],
     errors: Tier1TraceExample[],
-    instanceName = 'self._instance'
+    instanceName = 'self._instance',
+    isAsync = false
 ): string[] {
     const propertyAccess = `${instanceName}.${propertyName}`;
+    const executedAccess = isAsync ? `__import__('asyncio').run(${propertyAccess})` : propertyAccess;
     const methods: string[] = [];
     examples.filter(example => example.call_assertable !== false && example.result_assertable !== false).forEach((example, index) => {
         const assertion = example.result === 'None' || example.result_type === 'NoneType'
@@ -135,7 +139,7 @@ export function buildTier1PropertyTestMethods(
             : `self.assertEqual(result, ${toPythonAssertionLiteral(example.result, example.result_type)})`;
         methods.push([
             `    def test_case_${index + 1}(self):`,
-            `        result = ${propertyAccess}`,
+            `        result = ${executedAccess}`,
             `        ${assertion}`
         ].join('\n'));
     });
@@ -147,7 +151,7 @@ export function buildTier1PropertyTestMethods(
         methods.push([
             `    def test_case_${assertableExamples.length + index + 1}(self):`,
             `        with self.assertRaises(${exception}):`,
-            `            _ = ${propertyAccess}`
+            `            _ = ${executedAccess}`
         ].join('\n'));
     });
     return methods;
