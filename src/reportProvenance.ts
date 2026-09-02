@@ -1,6 +1,8 @@
 export interface ReportProvenance {
-    extensionEntry: string;
-    workingDirectory: string;
+    extensionId: string;
+    extensionVersion: string;
+    buildTimestamp: string;
+    extensionMode: 'development' | 'production' | 'test' | 'unknown';
     modelName: string;
     requestedTier: string;
     resolvedTier: number;
@@ -9,7 +11,7 @@ export interface ReportProvenance {
     qualificationMode?: string;
 }
 
-/** Render execution facts that distinguish an installed extension from a stale build. */
+/** Render portable execution facts without disclosing a user's local paths. */
 export function formatReportProvenance(provenance: ReportProvenance): string {
     const qualification = provenance.qualified === true
         ? '通過'
@@ -22,8 +24,9 @@ export function formatReportProvenance(provenance: ReportProvenance): string {
         : [];
     return [
         '### 執行環境追溯',
-        `- **擴充功能執行檔**: \`${provenance.extensionEntry}\``,
-        `- **工作目錄**: \`${provenance.workingDirectory}\``,
+        `- **擴充功能**: \`${provenance.extensionId}@${provenance.extensionVersion}\``,
+        `- **建置識別**: \`${provenance.buildTimestamp}\``,
+        `- **執行模式**: ${provenance.extensionMode}`,
         `- **模型**: \`${provenance.modelName}\``,
         `- **策略**: 請求 ${provenance.requestedTier}，實際 Tier ${provenance.resolvedTier}`, 
         `- **模型 unittest 生成能力（測試連線驗證）**: ${qualification}`,

@@ -17,7 +17,7 @@ import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } fro
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
 import { assessTargetCoverage } from './targetCoverage';
-import { formatReportProvenance } from './reportProvenance';
+import { formatReportProvenance, ReportProvenance } from './reportProvenance';
 import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
 import * as path from 'path';
@@ -207,6 +207,12 @@ let currentModelProfile: ModelProfile = {
 
 const MODEL_PROFILE_STORE_KEY = 'llmUnitTest.modelProfiles.v1';
 let storedModelProfiles: StoredModelProfile[] = [];
+let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVersion' | 'buildTimestamp' | 'extensionMode'> = {
+    extensionId: 'unknown',
+    extensionVersion: 'unknown',
+    buildTimestamp: 'unknown',
+    extensionMode: 'unknown'
+};
 
 function defaultModelProfile(): ModelProfile {
     return {
@@ -296,6 +302,20 @@ interface AstContext {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    let buildTimestamp = 'unknown';
+    try {
+        buildTimestamp = fs.statSync(__filename).mtime.toISOString();
+    } catch {
+        // Keep reports portable even when a host cannot expose bundle metadata.
+    }
+    extensionBuildIdentity = {
+        extensionId: context.extension.id,
+        extensionVersion: String(context.extension.packageJSON.version || 'unknown'),
+        buildTimestamp,
+        extensionMode: context.extensionMode === vscode.ExtensionMode.Development
+            ? 'development'
+            : context.extensionMode === vscode.ExtensionMode.Test ? 'test' : 'production'
+    };
     storedModelProfiles = restoreModelProfiles(
         context.globalState.get<unknown>(MODEL_PROFILE_STORE_KEY)
     );
@@ -996,8 +1016,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let currentTier = resolvedTier;
     let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **使用的策略**: Tier ${currentTier} (${userTierSetting === 'auto' ? 'Auto 自動路由' : '使用者指定 Tier ' + currentTier})\n- **日期**: ${reportDateStr}\n\n`;
     finalReportMarkdown += formatReportProvenance({
-        extensionEntry: __filename,
-        workingDirectory: process.cwd(),
+        ...extensionBuildIdentity,
         modelName: params.modelName,
         requestedTier: userTierSetting,
         resolvedTier,
