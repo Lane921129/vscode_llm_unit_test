@@ -371,6 +371,34 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
 }
 
 /**
+ * Extract the most plausible Python unittest fence from model output.
+ * Models differ on whether they label a fence as python, Python, py, or leave
+ * it blank.  The extractor never accepts prose: it returns a fence only when
+ * it contains unittest/TestCase evidence, otherwise it leaves the response
+ * for the normal structural validator to reject.
+ */
+export function extractPythonTestCode(response: string): string {
+    const unwrapped = unwrapGeneratedCodeEnvelope(response).trim();
+    const fencedBlocks: Array<{ language: string; code: string }> = [];
+    const fence = /```([^\r\n`]*)\r?\n([\s\S]*?)```/g;
+    let match: RegExpExecArray | null;
+    while ((match = fence.exec(unwrapped)) !== null) {
+        fencedBlocks.push({ language: match[1].trim().toLowerCase(), code: match[2].trim() });
+    }
+    if (fencedBlocks.length === 0) {
+        const bracket = unwrapped.match(/\[PYTHON\]([\s\S]*?)\[\/PYTHON\]/i);
+        return bracket ? bracket[1].trim() : unwrapped;
+    }
+
+    const hasUnittestEvidence = (block: { language: string; code: string }) =>
+        /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(block.code);
+    const preferred = fencedBlocks.find(block =>
+        (block.language === 'python' || block.language === 'py') && hasUnittestEvidence(block)
+    ) || fencedBlocks.find(hasUnittestEvidence);
+    return preferred ? preferred.code : unwrapped;
+}
+
+/**
  * Fast, deterministic guard before invoking Python's parser. This keeps prose,
  * Markdown plans, and incomplete snippets out of the generated test path.
  */

@@ -23,6 +23,7 @@
 - 同時禁止裸用未匯入的私有連線 helper，並限制例外斷言只能依明確原始碼或 Verified Dynamic Trace 產生。
 - 結構驗證新增硬性保護：拒絕連至檔案型 SQLite 的生成測試與直接操弄被測模組私有 helper；保留 `:memory:` 與 mock 的安全測試做法。
 - Mock Scaffold 現在可追蹤同模組內、實際會碰到 imported I/O 的 helper，會自動產生該 helper 的 point-of-use patch；例如目標呼叫連線 helper 時，不再漏掉 SQLite 隔離。
+- 跨模型輸出清理現在可辨識 `python`、`Python`、`py` 與未標記 code fence，僅擷取含 unittest 證據的區塊；模型分析文字不會再混入 Python 驗證造成 Markdown／缺 import 類錯誤。
 
 ## 2026-09-01
 

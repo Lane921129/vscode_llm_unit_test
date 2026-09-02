@@ -9,7 +9,7 @@ import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } f
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
-import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
+import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1PropertyTestMethods, buildTier1TestMethods } from './tier1TestBuilder';
 import { appendTraceMethodsToUnittestClass } from './traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
@@ -708,38 +708,7 @@ function sanitizeLlmResponse(rawCode: string): string {
     const emojiLoopMatch = cleanCode.match(/([\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF])\1{7,}/u);
     if (emojiLoopMatch) { return ''; }
 
-    const blocks: string[] = [];
-    
-    const pyRegex = /```python([\s\S]*?)```/g;
-    let match;
-    while ((match = pyRegex.exec(cleanCode)) !== null) {
-        blocks.push(match[1].trim());
-    }
-
-    if (blocks.length === 0) {
-        const bracketPyRegex = /\[PYTHON\]([\s\S]*?)\[\/PYTHON\]/gi;
-        while ((match = bracketPyRegex.exec(cleanCode)) !== null) {
-            blocks.push(match[1].trim());
-        }
-    }
-    
-    if (blocks.length === 0) {
-        const genericRegex = /```([\s\S]*?)```/g;
-        while ((match = genericRegex.exec(cleanCode)) !== null) {
-            blocks.push(match[1].trim());
-        }
-    }
-    
-    if (blocks.length > 0) {
-        for (const block of blocks) {
-            if (block.includes('unittest') || block.includes('TestCase')) {
-                return cleanCodeBlock(block);
-            }
-        }
-        return cleanCodeBlock(blocks[blocks.length - 1]);
-    }
-
-    return cleanCodeBlock(cleanCode);
+    return cleanCodeBlock(extractPythonTestCode(cleanCode));
 }
 
 interface BasicMutationResult {

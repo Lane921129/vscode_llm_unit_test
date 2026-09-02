@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../generatedTestValidator';
+import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../generatedTestValidator';
 
 test('rejects a Markdown test plan even when it mentions unittest', () => {
     const result = validateUnittestStructure('* Import unittest\n* Use unittest.TestCase');
@@ -407,4 +407,13 @@ test('rejects bare or direct module private helper calls used to manipulate test
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');
+});
+
+test('extracts a labeled or unlabeled unittest code fence without preserving model prose', () => {
+    const pythonFence = 'Analysis first.\n```Python\nimport unittest\nclass TestValue(unittest.TestCase):\n    pass\n```\nDone.';
+    const multipleFences = '```text\nexplanation\n```\n```py\nimport unittest\nclass TestValue(unittest.TestCase):\n    pass\n```';
+
+    assert.ok(extractPythonTestCode(pythonFence).startsWith('import unittest'));
+    assert.ok(extractPythonTestCode(multipleFences).startsWith('import unittest'));
+    assert.strictEqual(extractPythonTestCode('plain response'), 'plain response');
 });
