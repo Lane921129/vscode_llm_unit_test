@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### Stub 快速通道的類別綁定安全性
+
+- 修正 Stub 快速通道一律使用 `Class()` 與實例方法呼叫的問題；這會讓必要建構子參數、靜態／類別方法與 property 產生不正確或無法執行的 smoke test。
+- 新增通用測試計畫器，依 module、instance、static、class、property 綁定方式產生正確呼叫；實例 Stub 僅能重用已驗證的 constructor literal。
+- 必要建構子沒有可驗證設定時，快速通道會在報告標示安全略過，且不會呼叫 LLM 或寫入必定失敗的測試。
+- 驗證：134 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### 類別方法的目標綁定結構驗證
 
 - 修正寫入前驗證器只要看到任意 `.method()` 就視為已測到選取類別方法的漏洞；這會讓錯誤物件上的同名方法通過行為驗證。

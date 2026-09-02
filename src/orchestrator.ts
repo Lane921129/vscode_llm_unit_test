@@ -20,6 +20,7 @@ import { assessTargetCoverage } from './targetCoverage';
 import { formatReportProvenance, ReportProvenance } from './reportProvenance';
 import { buildStubSmokeAssertion } from './stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
+import { buildStubTestPlan } from './stubTestPlan';
 import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutationExecution';
 import { exceptionNamesFromEvidence } from './exceptionEvidence';
@@ -1209,34 +1210,44 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const moduleName = targetImportModule;
         const className = (astContext as any)?.class_name as string | undefined;
         const args: string[] = (astContext as any)?.args || [];
-        // 生成呼叫用的引數預設值
-        const defaultArgs = args.map((_a: string, i: number) => i === 0 && className ? 'None' : 'None');
-        const importLine = className
-            ? `from ${moduleName} import ${className}`
-            : `from ${moduleName} import ${targetFuncName}`;
-        const callLine = className
-            ? `self._obj = ${className}()\n        result = self._obj.${targetFuncName}(${defaultArgs.join(', ')})`
-            : `result = ${targetFuncName}(${defaultArgs.join(', ')})`;
-        const setupClass = className ? `\n    def setUp(self):\n        self._obj = ${className}()\n` : '';
+        const methodKind = ((astContext as any)?.method_kind || 'module') as
+            'module' | 'instance' | 'static' | 'class' | 'property';
+        const requiredConstructorParams = ((astContext as any)?.class_context?.init?.required_params || []) as string[];
+        const stubPlan = buildStubTestPlan(
+            moduleName,
+            targetFuncName,
+            args,
+            className,
+            methodKind,
+            requiredConstructorParams,
+            astContext?.callerContexts
+        );
+        if (!stubPlan) {
+            const reason = `類別 ${className} 的建構子需要 ${requiredConstructorParams.join(', ')}，但找不到可驗證的 caller literal 設定。`;
+            finalReportMarkdown += `## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：${reason} 未產生測試，也未呼叫 LLM。\n`;
+            fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
+            log(`[快速通道] ⏭️ ${reason} 已安全略過。`);
+            return;
+        }
         const smokeAssertion = buildStubSmokeAssertion((astContext as any)?.code || '');
         const smokeBody = smokeAssertion
             ? [
-                `        ${callLine}`,
+                `        ${stubPlan.callLine}`,
                 `        ${smokeAssertion}`,
             ]
             : [
                 `        try:`,
-                `            ${callLine}`,
+                `            ${stubPlan.callLine}`,
                 `        except Exception as e:`,
                 `            self.fail(f"Stub function raised an exception: {e}")`,
             ];
 
         const smokeTest = [
             `import unittest`,
-            importLine,
+            stubPlan.importLine,
             ``,
             `class TestStub${targetFuncName}(unittest.TestCase):`,
-            setupClass,
+            stubPlan.setupBlock,
             `    def test_smoke_no_exception(self):`,
             `        """Smoke test with an exact assertion when the stub body is static."""`,
             ...smokeBody,
