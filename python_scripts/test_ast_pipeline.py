@@ -267,6 +267,25 @@ def process(value):
         self.assertEqual(result['patches'], ['src.service.load'])
         self.assertIn("@patch('src.service.load')", result['scaffold'])
 
+    def test_mock_scaffold_patches_same_module_database_boundary_helpers(self):
+        source = '''import sqlite3
+
+def open_connection():
+    return sqlite3.connect("application.db")
+
+def add_record(value):
+    connection = open_connection()
+    connection.execute("INSERT INTO records(value) VALUES (?)", (value,))
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'repository.py'
+            target.write_text(source, encoding='utf-8')
+            result = generate_scaffold(str(target), 'add_record', target_module='app.repository')
+
+        self.assertEqual(result['patches'], ['app.repository.open_connection'])
+        self.assertEqual(result['mock_names'], ['mock_open_connection'])
+        self.assertIn("@patch('app.repository.open_connection')", result['scaffold'])
+
     def test_dynamic_tracer_awaits_async_target_before_recording_the_result(self):
         source = '''async def double(value):
     return value * 2

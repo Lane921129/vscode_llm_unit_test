@@ -39,22 +39,49 @@ def expression_path(node):
     return None
 
 
-def find_external_calls(func_node, import_bindings, target_module):
-    """找出外部呼叫，並在「被測模組的使用點」建立 patch 路徑。"""
+def helper_has_side_effect_boundary(helper_node, import_bindings):
+    """Whether a same-module helper reaches an imported I/O boundary.
+
+    A target that calls such a helper must patch the helper at its use point;
+    otherwise a generated test may touch the application's real database,
+    network, or filesystem even though the target itself has no direct import
+    call in its body.
+    """
+    for node in ast.walk(helper_node):
+        if not isinstance(node, ast.Call):
+            continue
+        call_path = expression_path(node.func)
+        if call_path and call_path[0] in import_bindings:
+            return True
+        if isinstance(node.func, ast.Name) and node.func.id == 'open':
+            return True
+    return False
+
+
+def find_external_calls(func_node, import_bindings, target_module, local_helpers=None):
+    """Find imported calls and side-effecting local helpers to patch at use point."""
     external_calls = []
     seen = set()
+    local_helpers = local_helpers or {}
     for node in ast.walk(func_node):
         if isinstance(node, ast.Call):
             call_path = expression_path(node.func)
-            if call_path and call_path[0] in import_bindings:
+            if not call_path:
+                continue
+            if call_path[0] in import_bindings:
                 patch_path = f"{target_module}." + '.'.join(call_path)
-                if patch_path in seen:
-                    continue
-                seen.add(patch_path)
-                external_calls.append({
-                    "name": call_path[-1],
-                    "patch_path": patch_path
-                })
+            elif (len(call_path) == 1 and call_path[0] in local_helpers
+                  and helper_has_side_effect_boundary(local_helpers[call_path[0]], import_bindings)):
+                patch_path = f"{target_module}.{call_path[0]}"
+            else:
+                continue
+            if patch_path in seen:
+                continue
+            seen.add(patch_path)
+            external_calls.append({
+                "name": call_path[-1],
+                "patch_path": patch_path
+            })
     return external_calls
 
 
@@ -127,9 +154,13 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     # 找 import 映射
     import_bindings = find_import_bindings(tree)
     target_module = target_module or os.path.splitext(os.path.basename(file_path))[0]
+    local_helpers = {
+        node.name: node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not target_func
+    }
 
     # 找外部呼叫
-    external_calls = find_external_calls(target_func, import_bindings, target_module)
+    external_calls = find_external_calls(target_func, import_bindings, target_module, local_helpers)
 
     # 取得函式參數名稱（如果在 class 內，去除 self/cls）
     all_params = [arg.arg for arg in target_func.args.args]
