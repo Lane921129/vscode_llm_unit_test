@@ -16,6 +16,12 @@
 - 報告不再寫入本機的擴充功能絕對路徑與工作目錄；改為 extension ID、版本、建置時間識別與 development／production／test 執行模式。
 - 開源與跨平台使用者可用版本與建置識別確認實際執行的擴充功能，同時不會暴露磁碟代號、帳號或資料夾結構。
 
+### 資料庫測試隔離技能卡
+
+- 新增以資料庫 driver 靜態證據觸發的技能卡；不依專案、資料表或函式名稱判斷，因此不會污染一般測試 Prompt。
+- 技能卡要求使用 module point-of-use patch、每測試獨立的 mock／in-memory／暫存資料庫，避免共用 SQLite 資料造成重複資料、鎖定與跨測試污染。
+- 同時禁止裸用未匯入的私有連線 helper，並限制例外斷言只能依明確原始碼或 Verified Dynamic Trace 產生。
+
 ## 2026-09-01
 
 ### Stub/Dummy 快速通道的結構式判定

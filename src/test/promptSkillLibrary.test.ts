@@ -77,6 +77,20 @@ test('evidence-bound skill cart keeps dependency mocking only when dependencies 
     assert.ok(ids.includes('mock_external_dependency'));
 });
 
+test('database isolation skill uses driver evidence rather than application naming', () => {
+    const ids = inferSkillIdsFromCode(
+        'def add_record(value):\n    return value',
+        { file_imports: [{ module: 'sqlite3', name: null }] }
+    );
+    const ordinary = inferSkillIdsFromCode('def database_label(value):\n    return value');
+
+    assert.ok(ids.includes('database_state_isolation'));
+    assert.ok(ids.includes('mock_external_dependency'));
+    assert.ok(!ordinary.includes('database_state_isolation'));
+    assert.ok(getSkillCards(ids).find(card => card.id === 'database_state_isolation')?.rules
+        .some(rule => rule.includes('Never connect to the application default')));
+});
+
 test('class instance skill is not injected for static or class-bound methods', () => {
     const staticIds = mergeEvidenceBoundSkillIds(
         'def render(value):\n    return value',

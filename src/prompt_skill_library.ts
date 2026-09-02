@@ -174,6 +174,19 @@ export const SKILL_LIBRARY: SkillCard[] = [
         ]
     },
     {
+        id: 'database_state_isolation',
+        title: 'Database State Isolation',
+        trigger_hint: 'Use when the source file imports or calls a database driver such as sqlite3 or SQLAlchemy',
+        rules: [
+            'DATABASE STATE ISOLATION:',
+            '  - Never connect to the application default, configured, or shared database from a generated test.',
+            '  - Patch the connection boundary at the module-under-test point of use; use a fresh in-memory database, temporary database, or MagicMock per test.',
+            '  - Do not call a private helper by bare name (for example `_connect()`) unless it was explicitly imported. Prefer `import module_under_test` and patch `module_under_test._connect`.',
+            '  - Keep setup and teardown independent so one test cannot leave rows, locks, or configuration that change another test.',
+            '  - Only use assertRaises for an explicit source `raise` or a verified Dynamic Trace exception. Never infer validation exceptions from parameter names.',
+        ]
+    },
+    {
         id: 'async_coroutine_testing',
         title: 'Async Coroutine Testing',
         trigger_hint: 'Use when the target is async or awaits another coroutine',
@@ -227,6 +240,7 @@ export function inferSkillIdsFromCode(
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
         calls?: string[];
         dependencies?: unknown[];
+        file_imports?: Array<{ module?: string | null; name?: string | null }>;
     }
 ): string[] {
     const ids = new Set<string>(['import_module_name']);
@@ -247,6 +261,13 @@ export function inferSkillIdsFromCode(
     const bindingUnknown = (context?.class_name || context?.class_context) && !context?.method_kind;
     if (needsInstance || bindingUnknown) { ids.add('class_method_testing'); }
     if ((context?.dependencies?.length || 0) > 0) { ids.add('mock_external_dependency'); }
+    const importedModuleText = (context?.file_imports || [])
+        .map(item => `${item.module || ''} ${item.name || ''}`)
+        .join(' ');
+    if (/\b(?:sqlite3|sqlalchemy|psycopg(?:2|3)?|pymysql|mysql\.connector|asyncpg)\b/i.test(`${source}\n${importedModuleText}`)) {
+        ids.add('database_state_isolation');
+        ids.add('mock_external_dependency');
+    }
     if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
     if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
@@ -269,6 +290,7 @@ export function mergeEvidenceBoundSkillIds(
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
         calls?: string[];
         dependencies?: unknown[];
+        file_imports?: Array<{ module?: string | null; name?: string | null }>;
     }
 ): string[] {
     const baseline = inferSkillIdsFromCode(sourceCode, context);
