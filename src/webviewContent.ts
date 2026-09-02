@@ -433,6 +433,23 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         function createResultCard(item, showFileName = true) {
             const card = document.createElement('div');
             card.className = 'result-card';
+            const canOpenReport = !!item.reportPath;
+            if (canOpenReport) {
+                card.tabIndex = 0;
+                card.title = '點擊開啟此函式的測試結果報告';
+                card.style.cursor = 'pointer';
+                const openReport = () => vscode.postMessage({ command: 'openTestResult', reportPath: item.reportPath });
+                card.onclick = event => {
+                    if (event.target instanceof HTMLInputElement) return;
+                    openReport();
+                };
+                card.onkeydown = event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openReport();
+                    }
+                };
+            }
 
             const header = document.createElement('div');
             header.className = 'result-header';
@@ -446,6 +463,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             cb.style.margin = '0';
             cb.className = 'row-sel';
             cb.checked = !!item.checked;
+            cb.onclick = event => event.stopPropagation();
             cb.onchange = () => toggleItemCheck(item.id, cb.checked);
             titleBox.appendChild(cb);
 
@@ -579,9 +597,18 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         score: msg.score,
                         coverage: msg.coverage,
                         reason: msg.reason,
+                        reportPath: resultsMap.get(fileName)?.reportPath || msg.reportPath || '',
                         checked: resultsMap.get(fileName)?.checked || false
                     });
                     renderDashboard();
+                    break;
+                }
+                case 'attachResultReport': {
+                    const item = resultsMap.get(msg.fileName);
+                    if (item) {
+                        item.reportPath = msg.reportPath || '';
+                        renderDashboard();
+                    }
                     break;
                 }
                 case 'setCustomKeys':

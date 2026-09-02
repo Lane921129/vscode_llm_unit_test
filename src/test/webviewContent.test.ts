@@ -12,3 +12,11 @@ test('cloud credential editor has separate name, model, and key inputs and clear
     assert.ok(html.includes("document.getElementById('new-key-model').value = '';"));
     assert.ok(!html.includes("new-key-value').value = currentKeys[name]"));
 });
+
+test('coverage dashboard cards can open their completed function report', () => {
+    const html = getWebviewContent(key => key);
+
+    assert.ok(html.includes("command: 'openTestResult'"));
+    assert.ok(html.includes("case 'attachResultReport'"));
+    assert.ok(html.includes('點擊開啟此函式的測試結果報告'));
+});

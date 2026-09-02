@@ -169,6 +169,17 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'openTestResult': {
+                    const reportPath = typeof message.reportPath === 'string' ? message.reportPath : '';
+                    if (!reportPath || path.basename(reportPath) !== 'final_report.md' || !fs.existsSync(reportPath)) {
+                        vscode.window.showWarningMessage('找不到此函式的測試結果報告。請先等待本次測試完成。');
+                        break;
+                    }
+                    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(reportPath));
+                    await vscode.window.showTextDocument(document, { preview: true });
+                    break;
+                }
+
                 case 'updateApiKey': {
                     const rawKeys = await this.secretStorage.get('llm_api_keys');
                     const currentKeys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});

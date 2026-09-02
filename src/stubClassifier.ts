@@ -34,9 +34,14 @@ export function isStructurallyInertStub(sourceCode: string | undefined): boolean
     return executableLines.length === 1 && isSafeLiteralReturn(executableLines[0]);
 }
 
+/** Returns whether a function name explicitly opts into the dummy fast path. */
+export function hasDummyFunctionNameMarker(functionName: string | undefined): boolean {
+    return Boolean(functionName && /(?:^|_)dummy(?:_|$)/i.test(functionName));
+}
+
 function hasDummyNameMarker(definitionLine: string): boolean {
     const functionName = definitionLine.match(/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/)?.[1];
-    return Boolean(functionName && /(?:^|_)dummy(?:_|$)/i.test(functionName));
+    return hasDummyFunctionNameMarker(functionName);
 }
 
 function removeLeadingDocstring(lines: string[]): string[] {

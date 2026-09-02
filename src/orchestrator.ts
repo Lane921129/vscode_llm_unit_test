@@ -19,7 +19,7 @@ import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
 import { assessTargetCoverage } from './targetCoverage';
 import { formatReportProvenance } from './reportProvenance';
 import { buildStubSmokeAssertion } from './stubSmokeAssertion';
-import { isStructurallyInertStub } from './stubClassifier';
+import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -944,11 +944,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         }
     }
     // 複雜度評估（對無選擇函式時用預設分數）
+    const dummyNameMarked = hasDummyFunctionNameMarker(params.funcName);
     let complexityScore = 30;
-    if (params.funcName) {
+    if (params.funcName && !dummyNameMarked) {
         const comp = await assessFunctionComplexity(params.filePath, params.funcName);
         complexityScore = comp.score;
         log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
+    } else if (dummyNameMarked) {
+        log(`[快速通道] 偵測到 dummy 名稱標記，跳過複雜度評估與後續 AST 分析。`);
     }
     const selectedStoredProfile = findModelProfile(storedModelProfiles, {
         envType: params.envType,
@@ -1044,9 +1047,22 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 func: params.funcName || '',
                 score: scoreMatch ? scoreMatch[1].trim() : '已完成',
                 coverage: covMatch ? covMatch[1].trim() : null,
-                reason: '跳過 (已存在報告)'
+                reason: '跳過 (已存在報告)',
+                reportPath: existingReport
             });
         } catch {}
+        return;
+    }
+
+    // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
+    // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
+    if (dummyNameMarked) {
+        finalReportMarkdown += `## 🚀 Dummy 標記快速通道\n\n`;
+        finalReportMarkdown += `> [!NOTE]\n> 函式名稱包含明確 \`dummy\` token，已依使用者標記略過 AST、Dynamic Trace、LLM 與突變測試。\n\n`;
+        finalReportMarkdown += `- **測試狀態**: 已略過（Dummy／雜訊函式）\n`;
+        finalReportMarkdown += `- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n`;
+        fs.writeFileSync(existingReport, finalReportMarkdown, 'utf-8');
+        log(`[快速通道] ✅ Dummy 函式 ${params.funcName} 已略過；結果已寫入 ${existingReport}`);
         return;
     }
 
@@ -2244,6 +2260,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     const finalReportPath = path.join(sessionDir, `final_report.md`);
     fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');
+    sidebarProvider.webview?.postMessage({
+        command: 'attachResultReport',
+        fileName: displayName,
+        reportPath: finalReportPath
+    });
     log(`[系統] 分析結束！測試檔與最終報告已儲存至:\n${sessionDir}`);
     
     const doc = await vscode.workspace.openTextDocument(finalReportPath);
