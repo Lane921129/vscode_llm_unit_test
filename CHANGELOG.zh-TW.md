@@ -4,6 +4,13 @@
 
 ## 2026-09-02
 
+### 局部實例變數的安全呼叫端追蹤
+
+- 呼叫端掃描現在支援同一函式作用域的直接實例建立模式，例如 `subject = Service("prefix")` 後的 `subject.render("value")`；可用的建構子與方法字面值仍會分開提供給 Dynamic Trace。
+- 只採用明確、同 scope 且呼叫前的直接賦值；條件式／巢狀 scope／factory／屬性鏈不會被猜測為目標類別。若同一變數已被重新賦值成未知物件，也會排除，降低將錯誤 caller 參數注入 Trace 的風險。
+- 補充同名頂層函式、同名本地類別、模組屬性、匯入別名、局部實例與重新賦值的回歸測試。
+- 驗證：123 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### 類別方法的呼叫端與建構子 Trace 語境
 
 - 修正選取合格名稱 `Class.method` 時，呼叫端掃描無法辨識 `from module import Class`、模組別名與 `Class(...).method(...)` 的問題；同名但未匯入目標模組的本地類別不會被誤認。

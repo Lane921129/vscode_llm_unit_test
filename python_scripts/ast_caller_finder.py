@@ -95,6 +95,42 @@ def find_call_sites(func_name, project_root, target_path=None):
                     and path[0] == target_class
                 )
 
+            # A variable is evidence of a target instance only when it is
+            # assigned directly in the same lexical callable.  This small,
+            # syntax-only dataflow pass deliberately does not guess through
+            # conditions, factories, attributes or outer scopes.
+            scope_ranges = [(tree, 1, float('inf'))]
+            scope_ranges.extend(
+                (node, node.lineno, getattr(node, 'end_lineno', node.lineno))
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+
+            def scope_for_line(lineno):
+                containing = [item for item in scope_ranges if item[1] <= lineno <= item[2]]
+                return min(containing, key=lambda item: item[2] - item[1])[0]
+
+            instance_bindings = {}
+            for scope, _, _ in scope_ranges:
+                bindings = {}
+                for statement in getattr(scope, 'body', []):
+                    if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                        continue
+                    targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                    value = statement.value
+                    constructor = value if isinstance(value, ast.Call) and is_target_class_reference(value.func) else None
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            bindings.setdefault(target.id, []).append((statement.lineno, constructor))
+                instance_bindings[id(scope)] = bindings
+
+            def bound_constructor_call(receiver, call_line):
+                if not isinstance(receiver, ast.Name):
+                    return None
+                bindings = instance_bindings.get(id(scope_for_line(call_line)), {}).get(receiver.id, [])
+                earlier = [binding for binding in bindings if binding[0] < call_line]
+                return earlier[-1][1] if earlier else None
+
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
@@ -114,9 +150,13 @@ def find_call_sites(func_name, project_root, target_path=None):
                 constructor_args, constructor_kwargs = None, None
                 if target_class and attribute_call:
                     receiver = node.func.value
-                    if isinstance(receiver, ast.Call) and is_target_class_reference(receiver.func):
+                    constructor_call = (
+                        receiver if isinstance(receiver, ast.Call) and is_target_class_reference(receiver.func)
+                        else bound_constructor_call(receiver, node.lineno)
+                    )
+                    if constructor_call is not None:
                         is_target_call = True
-                        constructor_args, constructor_kwargs = literal_arguments(receiver)
+                        constructor_args, constructor_kwargs = literal_arguments(constructor_call)
                     elif is_target_class_reference(receiver):
                         # staticmethod/classmethod called as Class.member(...)
                         is_target_call = True

@@ -270,6 +270,15 @@ import worker as worker_module
 def render_value():
     return Subject("prefix:").render("value")
 
+def render_bound_value():
+    subject = Subject("bound:")
+    return subject.render("value")
+
+def ignore_rebound_value():
+    subject = Subject("unused:")
+    subject = object()
+    return subject.render("value")
+
 def decorate_value():
     return worker_module.Service.decorate("value")
 
@@ -291,10 +300,12 @@ def render_value():
             render_calls = self.run_script('ast_caller_finder.py', 'Service.render', root, target)
             decorate_calls = self.run_script('ast_caller_finder.py', 'Service.decorate', root, target)
 
-        self.assertEqual([call['caller_file'] for call in render_calls], ['consumer.py'])
+        self.assertEqual([call['caller_file'] for call in render_calls], ['consumer.py', 'consumer.py'])
         self.assertEqual(render_calls[0]['trace_args'], ['value'])
         self.assertEqual(render_calls[0]['trace_constructor_args'], ['prefix:'])
         self.assertEqual(render_calls[0]['trace_constructor_kwargs'], {})
+        self.assertEqual(render_calls[1]['trace_args'], ['value'])
+        self.assertEqual(render_calls[1]['trace_constructor_args'], ['bound:'])
         self.assertEqual([call['caller_file'] for call in decorate_calls], ['consumer.py'])
         self.assertEqual(decorate_calls[0]['trace_args'], ['value'])
         self.assertIsNone(decorate_calls[0]['trace_constructor_args'])
