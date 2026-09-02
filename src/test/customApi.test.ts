@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable } from '../customApi';
+import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from '../customApi';
 
 test('custom API requests JSON mode only when the caller needs a structured result', () => {
     const textRequest = buildCustomChatCompletionBody('model-a', 'system', 'user', 'text');
@@ -27,6 +27,17 @@ test('detects malformed successful structured responses before they reach a Tier
     assert.ok(isStructuredResponseUsable('{"required_skills": []}', 'json'));
     assert.ok(isStructuredResponseUsable('{"code":"import unittest"}', 'test-code-json'));
     assert.ok(isStructuredResponseUsable('import unittest', 'test-code-json'));
+});
+
+test('retries known structured-output rejections as plain text without hiding account failures', () => {
+    for (const status of [400, 415, 422, 501]) {
+        assert.ok(shouldRetryStructuredOutputAsText(status, 'json'));
+        assert.ok(shouldRetryStructuredOutputAsText(status, 'test-code-json'));
+    }
+    assert.ok(!shouldRetryStructuredOutputAsText(422, 'text'));
+    for (const status of [401, 403, 404, 408, 429, 500, 503]) {
+        assert.ok(!shouldRetryStructuredOutputAsText(status, 'json'));
+    }
 });
 
 test('extracts Custom assistant text without trusting malformed payloads', () => {

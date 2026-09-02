@@ -1,5 +1,10 @@
 export type CustomOutputFormat = 'text' | 'json' | 'test-code-json';
 
+// These client-error statuses are commonly used by compatible providers when
+// a response-format / JSON-schema option is unsupported.  Authentication,
+// model-not-found, rate-limit, and server failures deliberately stay errors.
+const STRUCTURED_OUTPUT_REJECTION_STATUSES = new Set([400, 415, 422, 501]);
+
 /** Safely obtains the assistant text from a standard Chat Completions response. */
 export function getCustomChatCompletionText(payload: unknown): string | undefined {
     if (!payload || typeof payload !== 'object') {
@@ -71,4 +76,13 @@ export function isStructuredResponseUsable(response: string, outputFormat: Custo
     } catch {
         return false;
     }
+}
+
+/**
+ * Retry only known structured-output rejection statuses as ordinary text.
+ * This keeps providers that can write Python but cannot enforce JSON usable,
+ * without hiding credential, selected-model, or quota problems.
+ */
+export function shouldRetryStructuredOutputAsText(status: number, outputFormat: CustomOutputFormat): boolean {
+    return outputFormat !== 'text' && STRUCTURED_OUTPUT_REJECTION_STATUSES.has(status);
 }

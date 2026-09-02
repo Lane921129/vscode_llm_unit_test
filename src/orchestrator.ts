@@ -8,7 +8,7 @@ import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTria
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
 import { mergeTestSnippets } from './testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
-import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable } from './customApi';
+import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
 import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from './tier1TestBuilder';
 import { appendTraceMethodsToUnittestClass } from './traceTestAugmenter';
@@ -664,8 +664,8 @@ async function requestLlmApi(
     if (isAborted) throw new Error("使用者強制中止");
     if (!response.ok) {
         const errText = await response.text();
-        if (outputFormat !== 'text' && response.status === 400) {
-            log(`[格式回退] 模型不支援結構化輸出，改用一般文字輸出：${errText.substring(0, 180)}`);
+        if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
+            log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），改用一般文字輸出：${errText.substring(0, 180)}`);
             return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
         }
         throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);

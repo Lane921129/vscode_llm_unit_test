@@ -46,3 +46,4 @@ CI 只可使用 GitHub Secrets 注入的環境變數，例如 `LLM_UNIT_TEST_GOO
 - 維護 Class Context 擷取時，`__init__` 的屬性清單只能來自建構子本體，不可遞迴採集巢狀 helper、lambda 或內部類別的狀態；每次調整都要測試這些 scope 邊界。
 - 調整 Tier 複雜度評估時，只採可驗證 AST 結構、Imports 與呼叫關係；不得加入業務領域或資源名稱關鍵字作為捷徑。
 - 維護 Writer Prompt 時，所有模型與 Tier（含 Tier 3、Tier 4、Self-repair）一律使用同一個純 Python code fence 輸出契約；不要因模型名稱要求或解析 `<thinking>` 等額外標籤，並須以擷取／驗證回歸測試保護此規則。
+- 維護供應商的結構化輸出回退時，僅針對明確格式不支援狀態（400、415、422、501）重試純文字；不得將認證、模型不存在、限流或 5xx 服務錯誤當作格式問題而吞掉。
