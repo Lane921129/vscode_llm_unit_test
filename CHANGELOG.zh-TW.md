@@ -4,6 +4,12 @@
 
 ## 2026-09-02
 
+### 合格非同步實例方法的隔離突變驗證
+
+- 新增內建 AST 突變 runner 的端到端回歸案例：必要建構子、限定 `Class.method` scope、`asyncio.run` 的成功與例外測試會在每個隔離 mutant 上執行。
+- 驗證原始 baseline 可通過、選取 scope 存在、所有候選 mutant 都被測試殺死，且沒有 runner error 或 survived mutant；防止類別／非同步情境只在測試生成通過、但突變分數失真的問題。
+- 驗證：137 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
 ### Tier 1 一般 Coroutine 的可執行斷言
 
 - 修正一般 `async def` 目標的 Dynamic Trace 已等待並取得真實結果，但 Tier 1 測試直接對 coroutine 物件做 assertion 的問題。

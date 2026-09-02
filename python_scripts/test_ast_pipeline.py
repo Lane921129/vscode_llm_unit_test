@@ -652,6 +652,45 @@ class TestSecond(unittest.TestCase):
         self.assertGreater(mutation['total'], 0)
         self.assertEqual(mutation['survived'], 0)
 
+    def test_builtin_mutation_runner_scores_qualified_async_instance_methods(self):
+        source = '''class Service:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    async def render(self, value):
+        if value == "bad":
+            raise ValueError("bad")
+        return self.prefix + value
+'''
+        test_source = '''import asyncio
+import unittest
+from worker import Service
+
+class TestService(unittest.TestCase):
+    def setUp(self):
+        self.subject = Service("prefix:")
+
+    def test_render(self):
+        self.assertEqual(asyncio.run(self.subject.render("value")), "prefix:value")
+
+    def test_bad_value(self):
+        with self.assertRaises(ValueError):
+            asyncio.run(self.subject.render("bad"))
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'worker.py'
+            test_file = root / 'test_worker.py'
+            target.write_text(source, encoding='utf-8')
+            test_file.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(target, test_file, target_function='Service.render')
+
+        self.assertTrue(result['scope_found'])
+        self.assertTrue(result['baseline_passed'])
+        self.assertGreater(result['total'], 0)
+        self.assertEqual(result['errors'], 0)
+        self.assertEqual(result['survived'], 0)
+
     def test_dynamic_tracer_uses_literal_constructor_context_for_qualified_instance_methods(self):
         source = '''class Service:
     def __init__(self, prefix):
