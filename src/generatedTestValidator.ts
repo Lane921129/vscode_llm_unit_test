@@ -309,10 +309,52 @@ const UNSAFE_TEST_OPERATIONS: Array<{ pattern: RegExp; label: string }> = [
     { pattern: /\b(?:pathlib\s*\.\s*)?Path\s*\([^\n]*\)\s*\.\s*(?:open|read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace)\s*\(/, label: '直接檔案存取' },
     { pattern: /\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace|unlink|rmdir)\s*\(/, label: '直接檔案存取' },
     { pattern: /\b(?:shutil\s*\.\s*rmtree|os\s*\.\s*(?:remove|unlink|rmdir|replace)|pathlib\s*\.\s*Path\s*\([^\n]*\)\s*\.\s*(?:unlink|rmdir))\s*\(/, label: '破壞性檔案操作' },
+    { pattern: /\bsqlite3\s*\.\s*connect\s*\(\s*(?!['\"]:memory:['\"]\s*\))/, label: '非隔離 SQLite 資料庫連線' },
 ];
 
 function unsafeTestOperation(code: string): string | undefined {
     return UNSAFE_TEST_OPERATIONS.find(operation => operation.pattern.test(code))?.label;
+}
+
+function unimportedPrivateHelperCall(code: string): string | undefined {
+    const importedOrDefined = new Set<string>();
+    for (const line of code.split(/\r?\n/)) {
+        const definition = line.match(/^\s*(?:async\s+)?def\s+(_[A-Za-z_]\w*)\s*\(/);
+        if (definition) {
+            importedOrDefined.add(definition[1]);
+        }
+        const imported = line.match(/^\s*from\s+[^\s]+\s+import\s+(.+)$/);
+        if (imported) {
+            for (const item of imported[1].split(',')) {
+                const name = item.trim().match(/^(_[A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+                if (name) {
+                    importedOrDefined.add(name[2] || name[1]);
+                }
+            }
+        }
+    }
+    for (const line of code.split(/\r?\n/)) {
+        if (/^\s*(?:from|import|(?:async\s+)?def)\b/.test(line)) {
+            continue;
+        }
+        const call = line.match(/(?:^|[^\w.])(_[A-Za-z_]\w*)\s*\(/);
+        if (call && !importedOrDefined.has(call[1])) {
+            return call[1];
+        }
+    }
+    return undefined;
+}
+
+function invokesTargetPrivateHelper(code: string, callableName: string,
+                                    callReference: TargetCallReference): string | undefined {
+    for (const moduleExpression of callReference.moduleExpressions) {
+        const match = code.match(new RegExp('\\b' + escapeRegex(moduleExpression)
+            + '\\s*\\.\\s*(_[A-Za-z_]\\w*)\\s*\\('));
+        if (match && match[1] !== callableName) {
+            return match[1];
+        }
+    }
+    return undefined;
 }
 
 /** Extract code from the optional structured-output envelope used by capable APIs. */
@@ -367,6 +409,20 @@ export function validateUnittestStructure(
     if (targetCallable) {
         const executable = executablePythonText(trimmed);
         const callReference = targetCallReference(executable, targetCallable, targetModule);
+        const barePrivateHelper = unimportedPrivateHelperCall(executable);
+        if (barePrivateHelper) {
+            return {
+                valid: false,
+                reason: `測試呼叫未匯入的私有 helper ${barePrivateHelper}；請改用 module point-of-use patch 或明確匯入。`
+            };
+        }
+        const targetPrivateHelper = invokesTargetPrivateHelper(executable, targetCallable, callReference);
+        if (targetPrivateHelper) {
+            return {
+                valid: false,
+                reason: `測試直接呼叫被測模組私有 helper ${targetPrivateHelper}；請 patch 該使用點而非直接操作內部狀態。`
+            };
+        }
         if (definesCallable(executable, targetCallable)) {
             return { valid: false, reason: '測試檔重新定義了被測函式 ' + targetCallable + '，可能沒有測到原始模組' };
         }

@@ -368,6 +368,42 @@ test('rejects direct file access while allowing mock_open patches', () => {
     assert.strictEqual(validateUnittestStructure(mockedFileCode, 'add').valid, true);
 });
 
+test('rejects shared SQLite connections while allowing an explicitly isolated memory database', () => {
+    const sharedDatabase = [
+        'import sqlite3',
+        'import unittest',
+        'from repository import save',
+        '',
+        'class TestSave(unittest.TestCase):',
+        '    def test_save(self):',
+        '        sqlite3.connect("application.db")',
+        '        self.assertIsNone(save("value"))',
+    ].join('\n');
+    const memoryDatabase = sharedDatabase.replace('"application.db"', '":memory:"');
+
+    assert.match(validateUnittestStructure(sharedDatabase, 'save', 'repository').reason || '', /SQLite/);
+    assert.strictEqual(validateUnittestStructure(memoryDatabase, 'save', 'repository').valid, true);
+});
+
+test('rejects bare or direct module private helper calls used to manipulate test state', () => {
+    const bareHelper = [
+        'import unittest',
+        'from repository import save',
+        '',
+        'class TestSave(unittest.TestCase):',
+        '    def test_save(self):',
+        '        conn = _connect()',
+        '        self.assertIsNone(save("value"))',
+    ].join('\n');
+    const moduleHelper = bareHelper
+        .replace('from repository import save', 'import repository')
+        .replace('_connect()', 'repository._connect()')
+        .replace('save("value")', 'repository.save("value")');
+
+    assert.match(validateUnittestStructure(bareHelper, 'save', 'repository').reason || '', /未匯入的私有 helper/);
+    assert.match(validateUnittestStructure(moduleHelper, 'save', 'repository').reason || '', /私有 helper/);
+});
+
 test('unwraps a structured code response while preserving plain-code compatibility', () => {
     assert.strictEqual(unwrapGeneratedCodeEnvelope('{"code":"import unittest"}'), 'import unittest');
     assert.strictEqual(unwrapGeneratedCodeEnvelope('import unittest'), 'import unittest');

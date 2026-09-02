@@ -21,6 +21,7 @@
 - 新增以資料庫 driver 靜態證據觸發的技能卡；不依專案、資料表或函式名稱判斷，因此不會污染一般測試 Prompt。
 - 技能卡要求使用 module point-of-use patch、每測試獨立的 mock／in-memory／暫存資料庫，避免共用 SQLite 資料造成重複資料、鎖定與跨測試污染。
 - 同時禁止裸用未匯入的私有連線 helper，並限制例外斷言只能依明確原始碼或 Verified Dynamic Trace 產生。
+- 結構驗證新增硬性保護：拒絕連至檔案型 SQLite 的生成測試與直接操弄被測模組私有 helper；保留 `:memory:` 與 mock 的安全測試做法。
 
 ## 2026-09-01
 
