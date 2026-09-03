@@ -13,6 +13,21 @@ mutants/
 .mutmut-cache/
 __pycache__/
 
+# Local credentials and certificates must never enter the repository.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated local runs; source fixtures and tracked reports stay available.
+tmp/
+test/result/
+.vscode/settings.local.json
+.vscode/*.local.json
+
 # 本機 Agent／執行期日誌：保留說明檔，避免將工作階段、提示與診斷內容提交。
 log/*
 !log/README.md
