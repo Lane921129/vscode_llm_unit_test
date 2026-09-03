@@ -4,6 +4,12 @@
 
 ## 2026-09-03
 
+### 公開前的密鑰歷史稽核
+
+- 以不輸出疑似密鑰內容的方式，掃描目前工作目錄與 `git rev-list --all` 的完整 Git 歷史，檢查常見 Google、GitHub、OpenAI、Slack API Key／Token 格式；結果為 0 個命中。
+- 此稽核為公開前基準，不能取代後續 CI secret scan，亦不會讓曾在對話中揭露過的 Key 重新安全；該 Key 仍須由專案擁有者撤銷並重建。
+- 驗證：工作目錄與完整 Git 歷史高可信格式掃描通過，未輸出或保存密鑰內容。
+
 ### 開源 v1.0 本機實作待辦
 
 - 在被 Git 忽略的 `log/OPEN_SOURCE_V1_TODO.md` 建立一個月開源 v1.0 待辦清單，將安全、CI、公開 fixture、AST／Trace、多模型驗收、技能卡、突變與 Release Candidate 分為可單獨驗證的項目。
