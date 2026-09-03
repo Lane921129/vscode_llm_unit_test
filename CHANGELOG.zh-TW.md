@@ -4,6 +4,12 @@
 
 ## 2026-09-03
 
+### 零 lint warning 的公開 CI 基準
+
+- 以 ESLint 的機械修正補齊 7 個 TypeScript 檔案中 42 處單行控制流程的大括號；修正只改變格式，不改變條件、呼叫或回傳行為。
+- `npm run lint` 現在達到 0 warnings、0 errors，讓公開 CI 可以把 lint 視為真正的品質 Gate。
+- 驗證：139 個 TypeScript 單元測試、53 個 Python 測試、TypeScript 型別檢查、lint 與 extension 建置皆通過。
+
 ### 無密鑰的 GitHub CI 與歷史掃描
 
 - 新增公開 GitHub Actions workflow：在讀取權限下執行 Node／Python 依賴安裝、完整 Git 歷史密鑰掃描、TypeScript／Python 回歸測試與 extension 建置，不注入雲端模型 API Key。

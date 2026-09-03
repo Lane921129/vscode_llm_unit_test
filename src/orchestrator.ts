@@ -68,7 +68,7 @@ async function runWithConcurrencyLimit<T>(
     let idx = 0;
     async function worker() {
         while (idx < tasks.length) {
-            if (isAborted) break;
+            if (isAborted) {break;}
             const i = idx++;
             try {
                 results[i] = await tasks[i]();
@@ -129,7 +129,7 @@ let isAborted = false;
 
 /** 跨平台安全終止 Process Tree（含子行程） */
 function killProcessTree(proc: ChildProcess) {
-    if (!proc.pid) return;
+    if (!proc.pid) {return;}
     if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', proc.pid.toString(), '/T', '/F']);
     } else {
@@ -151,7 +151,7 @@ function runSpawn(
     options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; input?: string }
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
     return new Promise((resolve, reject) => {
-        if (isAborted) return reject(new Error('使用者強制中止'));
+        if (isAborted) {return reject(new Error('使用者強制中止'));}
 
         const proc = spawn(command, args, {
             cwd: options.cwd,
@@ -179,13 +179,13 @@ function runSpawn(
         }
 
         proc.on('close', (code) => {
-            if (timer) clearTimeout(timer);
+            if (timer) {clearTimeout(timer);}
             activeProcesses.delete(proc);
             resolve({ stdout, stderr, code });
         });
 
         proc.on('error', (err) => {
-            if (timer) clearTimeout(timer);
+            if (timer) {clearTimeout(timer);}
             activeProcesses.delete(proc);
             reject(err);
         });
@@ -245,9 +245,9 @@ function getContextBudget(profile: ModelProfile): number {
     // 根據參數量再限制：小模型即使 ctx 大也不要塞太多
     const paramBillion = parseFloat(profile.paramSize);
     if (!isNaN(paramBillion)) {
-        if (paramBillion <= 2)  return Math.min(usable, 1800);
-        if (paramBillion <= 7)  return Math.min(usable, 3500);
-        if (paramBillion <= 13) return Math.min(usable, 6000);
+        if (paramBillion <= 2)  {return Math.min(usable, 1800);}
+        if (paramBillion <= 7)  {return Math.min(usable, 3500);}
+        if (paramBillion <= 13) {return Math.min(usable, 6000);}
         return Math.min(usable, 12000);
     }
     // Cloud / unknown -> 充裕 budget
@@ -353,7 +353,7 @@ export function activate(context: vscode.ExtensionContext) {
                     const PARALLEL_LIMIT = 3;
                     log(`[系統] 開啟「全檔案掃描模式」！共找到 ${funcs.length} 個函式，準備以最多 ${PARALLEL_LIMIT} 個並行作業進行處理...`);
                     const tasks = funcs.map((fName, i) => async () => {
-                        if (isAborted) return;
+                        if (isAborted) {return;}
                         log(`\n======================================================`);
                         log(`[系統] 正在處理函式 (${i+1}/${funcs.length}): ${fName}`);
                         log(`======================================================`);
@@ -396,7 +396,7 @@ export function activate(context: vscode.ExtensionContext) {
                 // 收集所有 (file, funcName) 對
                 const allTasks: Array<{ file: string; fName: string; fileIdx: number; funcIdx: number; totalFuncs: number }> = [];
                 for (let i = 0; i < pyFiles.length; i++) {
-                    if (isAborted) break;
+                    if (isAborted) {break;}
                     const file = pyFiles[i];
                     const funcInfos = await extractFunctionsWithAst(file);
                     const funcs = funcInfos.map(f => f.fullName);
@@ -410,7 +410,7 @@ export function activate(context: vscode.ExtensionContext) {
                 }
                 log(`[系統] 批次掃描完成，共 ${allTasks.length} 個函式任務，以最多 ${PARALLEL_LIMIT} 個並行作業處理...`);
                 const batchTaskFns = allTasks.map(({ file, fName, fileIdx, funcIdx, totalFuncs }) => async () => {
-                    if (isAborted) return;
+                    if (isAborted) {return;}
                     log(`\n--- 批次任務進度: 檔案 ${fileIdx+1}/${pyFiles.length}, 函式 ${funcIdx+1}/${totalFuncs} ---`);
                     log(`[系統] 目標函式: ${fName}`);
                     const singleParams: AnalysisParams = { ...params, filePath: file, funcName: fName, projectName: projectName, sessionDate: dateStr };
@@ -430,10 +430,10 @@ export function activate(context: vscode.ExtensionContext) {
         if (!isAborted) {
             isAborted = true;
             // 立刻中止所有進行中的 LLM API 請求
-            for (const ctrl of activeAbortControllers) ctrl.abort();
+            for (const ctrl of activeAbortControllers) {ctrl.abort();}
             activeAbortControllers.clear();
             // 跨平台終止所有追蹤中的 Python 子行程
-            for (const proc of activeProcesses) killProcessTree(proc);
+            for (const proc of activeProcesses) {killProcessTree(proc);}
             activeProcesses.clear();
         }
     });
@@ -565,7 +565,7 @@ async function runDynamicTrace(
     try {
         const runTrace = async (inputs?: typeof literalInputs): Promise<DynamicTraceResult> => {
             const args = [...baseArgs];
-            if (inputs && inputs.length > 0) args.push(JSON.stringify(inputs));
+            if (inputs && inputs.length > 0) {args.push(JSON.stringify(inputs));}
             const { stdout } = await runSpawn('python', args, {
                 env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
                 timeout: 15000
@@ -661,7 +661,7 @@ async function requestLlmApi(
         activeAbortControllers.delete(controller);
     }
 
-    if (isAborted) throw new Error("使用者強制中止");
+    if (isAborted) {throw new Error("使用者強制中止");}
     if (!response.ok) {
         const errText = await response.text();
         if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
@@ -802,13 +802,13 @@ async function validateGeneratedTestCode(
 function stripUniformIndent(code: string): string {
     const lines = code.split('\n');
     const nonEmptyLines = lines.filter(l => l.trim().length > 0);
-    if (nonEmptyLines.length === 0) return code;
+    if (nonEmptyLines.length === 0) {return code;}
 
     // 計算所有非空行最小的前導空格數
     let minIndent = Infinity;
     for (const line of nonEmptyLines) {
         const leadingSpaces = line.match(/^( *)/)?.[1].length || 0;
-        if (leadingSpaces < minIndent) minIndent = leadingSpaces;
+        if (leadingSpaces < minIndent) {minIndent = leadingSpaces;}
     }
 
     // 只有大於 0 才有意義
@@ -1575,7 +1575,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 break;
                             }
                         } catch (err: any) {
-                            if (retry === 1) log(`[警告] 呼叫點 ${cIdx + 1} 生成失敗: ${err.message}`);
+                            if (retry === 1) {log(`[警告] 呼叫點 ${cIdx + 1} 生成失敗: ${err.message}`);}
                         }
                     }
                     rawCode += `\n--- [Call Site ${cIdx + 1}: ${ctx.caller_func}] ---\n` + subRaw;
@@ -1593,7 +1593,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (!sanitizedCode) {
                 let generationPrompt = userPrompt;
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
-                    if (llmRetry === 0) log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);
+                    if (llmRetry === 0) {log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);}
                     try {
                         rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log, 'test-code-json');
                     } catch (err: any) {
@@ -1679,13 +1679,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 .split('\n')
                 .filter(line => {
                     const t = line.trim();
-                    if (!t.startsWith('from ') && !t.startsWith('import ')) return true;
+                    if (!t.startsWith('from ') && !t.startsWith('import ')) {return true;}
                     // 移除 placeholder imports
                     if (t.includes('module_name') || t.includes('MODULE_NAME') ||
                         t.includes('<module>') || t.includes('your_module') ||
-                        t.includes('FUNCTION_NAME')) return false;
+                        t.includes('FUNCTION_NAME')) {return false;}
                     // 移除相對 import（from .. import, from .x import）
-                    if (/^from\s+\./.test(t)) return false;
+                    if (/^from\s+\./.test(t)) {return false;}
                     return true;
                 })
                 .join('\n');
@@ -1811,7 +1811,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         let reviewerFixed = false;
                         const funcArgs: string[] = (astContext as any)?.args || [];
                         for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
-                            if (isAborted) break;
+                            if (isAborted) {break;}
                             log(`[Reviewer] 第 ${reviewAttempt} 次修復嘗試...`);
                             try {
                                 const brokenCode = fs.readFileSync(testPath, 'utf8');
@@ -1878,7 +1878,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 log(`[Tier 4 Self-repair] Reviewer 無法修復，嘗試 Tier 4 自我修正（最多 2 次）...`);
                                 let repaired = false;
                                 for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
-                                    if (isAborted) break;
+                                    if (isAborted) {break;}
                                     log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
                                     try {
                                         const repairSys = getTier4SystemPrompt();
@@ -2317,15 +2317,15 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
  * 從存活突變體日誌中解析出行號，並提取該行前後的程式碼作為焦點切片。
  */
 function extractFocusContext(survivedMutants: string, targetCode: string): string {
-    if (!survivedMutants) return "";
+    if (!survivedMutants) {return "";}
     const lines = targetCode.split('\n');
     const focusSnippets: string[] = [];
     const mutantLines = survivedMutants.split('\n');
     
     let processedCount = 0;
     for (const mLine of mutantLines) {
-        if (processedCount >= 3) break; // 最多只取前 3 個焦點，避免 Prompt 過載
-        if (!mLine.trim() || !mLine.includes('mutation')) continue;
+        if (processedCount >= 3) {break;} // 最多只取前 3 個焦點，避免 Prompt 過載
+        if (!mLine.trim() || !mLine.includes('mutation')) {continue;}
         
         let lineNum = -1;
         // 優先匹配 mutatest 格式: (l: 5, c: 11)

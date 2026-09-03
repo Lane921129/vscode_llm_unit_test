@@ -13,9 +13,9 @@ export function shouldRetryTraceWithoutCallerInputs(
     trace: TraceRecoveryResult | undefined,
     suppliedInputCount: number
 ): boolean {
-    if (!trace || suppliedInputCount <= 0 || trace.load_error) return false;
-    if ((trace.examples?.length || 0) > 0) return false;
+    if (!trace || suppliedInputCount <= 0 || trace.load_error) {return false;}
+    if ((trace.examples?.length || 0) > 0) {return false;}
     const errors = trace.errors || [];
-    if (errors.length === 0) return true;
+    if (errors.length === 0) {return true;}
     return errors.every(error => error.exception === 'TypeError');
 }

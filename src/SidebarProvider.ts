@@ -289,7 +289,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     {},
                                     CONNECTION_DISCOVERY_TIMEOUT_MS
                                 );
-                                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                                if (!response.ok) {throw new Error(`HTTP ${response.status}`);}
 
                                 // 🔍 Model Probe: 查詢模型詳細資訊
                                 if (message.modelName) {
@@ -470,7 +470,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 }
                             } else if (message.envType === 'custom') {
                                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-                                if (message.customKey) headers['Authorization'] = `Bearer ${message.customKey}`;
+                                if (message.customKey) {headers['Authorization'] = `Bearer ${message.customKey}`;}
                                 
                                 const response = await timedFetch(message.customUrl, {
                                     method: 'POST',

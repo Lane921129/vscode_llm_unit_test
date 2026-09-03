@@ -20,7 +20,7 @@ export function mergeTestSnippets(snippets: string[], className: string = 'TestM
         let currentMethodLines: string[] = [];
 
         const flushCurrentMethod = () => {
-            if (!currentMethodName || currentMethodLines.length === 0) return;
+            if (!currentMethodName || currentMethodLines.length === 0) {return;}
             const body = currentMethodLines.join('\n');
 
             if (currentMethodName === 'setUp') {
@@ -83,7 +83,7 @@ export function mergeTestSnippets(snippets: string[], className: string = 'TestM
         mergedClassLines.push(`    def setUp(self):`);
         for (const s of setupBodies) {
             const inner = s.split('\n').slice(1).map(l => '    ' + l).join('\n');
-            if (inner.trim()) mergedClassLines.push(inner);
+            if (inner.trim()) {mergedClassLines.push(inner);}
         }
     }
 
@@ -91,7 +91,7 @@ export function mergeTestSnippets(snippets: string[], className: string = 'TestM
         mergedClassLines.push(`    def tearDown(self):`);
         for (const t of teardownBodies) {
             const inner = t.split('\n').slice(1).map(l => '    ' + l).join('\n');
-            if (inner.trim()) mergedClassLines.push(inner);
+            if (inner.trim()) {mergedClassLines.push(inner);}
         }
     }
 

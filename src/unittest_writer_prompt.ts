@@ -426,10 +426,10 @@ export function getUserPrompt(
                 const full = distillDependency(dep, 0);
                 const l1   = distillDependency(dep, 1);
                 const l2   = distillDependency(dep, 2);
-                if (remaining > estimateTokens(full) + 300) level = 0;
-                else if (remaining > estimateTokens(l1) + 200) level = 1;
-                else if (remaining > estimateTokens(l2) + 100) level = 2;
-                else level = 3;
+                if (remaining > estimateTokens(full) + 300) {level = 0;}
+                else if (remaining > estimateTokens(l1) + 200) {level = 1;}
+                else if (remaining > estimateTokens(l2) + 100) {level = 2;}
+                else {level = 3;}
                 prompt += distillDependency(dep, level);
 
                 // Caller contexts for this dependency

@@ -14,7 +14,7 @@ export interface FunctionAstInfo {
  * 透過 Python 原生 AST 完整解析檔案內所有函式、Class Method、Async 函式
  */
 export async function extractFunctionsWithAst(filePath: string): Promise<FunctionAstInfo[]> {
-    if (!fs.existsSync(filePath)) return [];
+    if (!fs.existsSync(filePath)) {return [];}
 
     const pythonScript = `
 import sys, ast, json
@@ -108,7 +108,7 @@ export async function findPythonFilesInDir(dir: string): Promise<string[]> {
         for (const item of list) {
             const fullPath = path.join(dir, item.name);
             if (item.isDirectory()) {
-                if (ignored.has(item.name)) continue;
+                if (ignored.has(item.name)) {continue;}
                 results.push(...await findPythonFilesInDir(fullPath));
             } else if (item.name.endsWith('.py')) {
                 results.push(fullPath);

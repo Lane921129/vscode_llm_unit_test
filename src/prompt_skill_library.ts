@@ -302,7 +302,7 @@ export function mergeEvidenceBoundSkillIds(
 }
 
 export function formatSkillCardsForPrompt(cards: SkillCard[]): string {
-    if (cards.length === 0) return '';
+    if (cards.length === 0) {return '';}
     let out = '=== FUNCTION-SPECIFIC RULES (Selected for this function) ===\n';
     out += '(Derived from actual source code analysis — follow them precisely)\n\n';
     for (const card of cards) {
