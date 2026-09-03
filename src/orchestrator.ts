@@ -343,7 +343,8 @@ export function activate(context: vscode.ExtensionContext) {
             const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
             params.sessionDate = dateStr;
 
-            if (!params.funcName) {
+            try {
+                if (!params.funcName) {
                 // 全檔案模式：萃取所有函式，並行處理（最多 3 個同時執行）
                 const funcInfos = await extractFunctionsWithAst(params.filePath);
                 const funcs = funcInfos.map(f => f.fullName);
@@ -366,8 +367,11 @@ export function activate(context: vscode.ExtensionContext) {
             } else {
                 await executeSingleFileAnalysis(params, log, sidebarProvider);
             }
-            
-            sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
+            } catch (err: any) {
+                log(`[錯誤] 測試執行發生異常: ${err?.message ?? err}`);
+            } finally {
+                sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
+            }
         }
     );
 
@@ -414,7 +418,11 @@ export function activate(context: vscode.ExtensionContext) {
                     log(`\n--- 批次任務進度: 檔案 ${fileIdx+1}/${pyFiles.length}, 函式 ${funcIdx+1}/${totalFuncs} ---`);
                     log(`[系統] 目標函式: ${fName}`);
                     const singleParams: AnalysisParams = { ...params, filePath: file, funcName: fName, projectName: projectName, sessionDate: dateStr };
-                    await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                    try {
+                        await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
+                    } catch (taskErr: any) {
+                        log(`[錯誤] 批次函式 ${fName} 執行失敗: ${taskErr?.message ?? taskErr}`);
+                    }
                 });
                 await runWithConcurrencyLimit(batchTaskFns, PARALLEL_LIMIT);
                 log(`\n[系統] 🎉 批次自動化測試執行完畢！`);
@@ -435,6 +443,8 @@ export function activate(context: vscode.ExtensionContext) {
             // 跨平台終止所有追蹤中的 Python 子行程
             for (const proc of activeProcesses) {killProcessTree(proc);}
             activeProcesses.clear();
+            sidebarProvider.webview?.postMessage({ command: 'appendLog', text: '\n[系統] ⚠️ 收到終止測試信號，已中止所有進行中的任務。' });
+            sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
         }
     });
 

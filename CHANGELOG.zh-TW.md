@@ -4,6 +4,13 @@
 
 ## 2026-09-03
 
+### 修正批次測試缺失 API Key 與終止時 UI 凍結
+
+- 修正 Cloud 模式下若未取得 API Key 提早中斷時，未通知 Webview 復原狀態，導致畫面永久停留在「Batch Testing...」的問題。
+- 在 `SidebarProvider` 的 `startAnalysis` 與 `startBatchAnalysis` 補上 `analysisFinished` 通知，確保缺少 Key 彈錯後按鈕立即可重試。
+- 在 `abortTest` 指令執行時發送 `analysisFinished` 與中斷日誌，使手動點擊「終止測試」時能立即恢復按鈕可點擊狀態。
+- 將 `runTestCmd` 納入 `try...finally` 防護，並在批次並行任務補上錯誤日誌，避免未捕捉異常造成流程卡死。
+
 ### 公開前的本機憑證與產物忽略規則
 
 - 補齊 `.gitignore`：忽略 `.env`、衍生 `.env.*`、私鑰／憑證副檔名、本機暫存目錄、`test/result/` 與本機 VS Code settings，同時保留可提交的 `.env.example`。

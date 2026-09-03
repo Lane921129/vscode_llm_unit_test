@@ -240,6 +240,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const credential = keys[params.cloudKeyName];
                         if (!credential) {
                             vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
+                            this.webview?.postMessage({ command: 'analysisFinished' });
                             break;
                         }
                         params.modelName = credential.model;
@@ -257,6 +258,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const credential = keys[params.cloudKeyName];
                         if (!credential) {
                             vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
+                            this.webview?.postMessage({ command: 'analysisFinished' });
                             break;
                         }
                         params.modelName = credential.model;
@@ -534,6 +536,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'abortTest': {
                     vscode.commands.executeCommand('llm-unit-test.abortTest');
+                    this.webview?.postMessage({ command: 'analysisFinished' });
                     break;
                 }
 
