@@ -46,6 +46,7 @@
 ## 憑證與外部服務
 
 - API Key 只能放在 VS Code SecretStorage、CI Secret 或執行環境變數；禁止寫入原始碼、設定檔、報告與 Git。
+- 公開 CI 必須在不取得雲端模型 Key 的條件下掃描 tracked files 與可達 Git 歷史的高可信密鑰格式；掃描失敗只可輸出 pattern 類型與檔案／commit 位置，不得輸出疑似憑證內容。此掃描不可取代已揭露憑證的撤銷與重建。
 - Google API Key 必須走 HTTP Header，不可放入 URL。
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。

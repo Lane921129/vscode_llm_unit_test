@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+# This workflow only reads source code and never receives cloud-model keys.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify extension and Python pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out complete history for secret scanning
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Scan tracked files and reachable Git history for secrets
+        run: python python_scripts/secret_scan.py --history
+
+      - name: Run TypeScript and Python regression tests
+        run: npm run test:unit
+
+      - name: Build extension
+        run: npm run compile

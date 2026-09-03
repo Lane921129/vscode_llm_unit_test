@@ -4,6 +4,13 @@
 
 ## 2026-09-03
 
+### 無密鑰的 GitHub CI 與歷史掃描
+
+- 新增公開 GitHub Actions workflow：在讀取權限下執行 Node／Python 依賴安裝、完整 Git 歷史密鑰掃描、TypeScript／Python 回歸測試與 extension 建置，不注入雲端模型 API Key。
+- 新增可於本機與 CI 共用的 Python 密鑰掃描器；只檢查高可信 Google、GitHub、OpenAI、Slack 格式，失敗時只回報 pattern 類型和安全位置，絕不列印匹配內容。
+- `npm run test:python` 現在會執行 scanner 的正反回歸測試與完整歷史掃描，避免安全檢查只存在於 CI。
+- 驗證：139 個 TypeScript 單元測試、53 個 Python 測試（含 3 個 scanner 回歸）、完整 Git 歷史掃描、TypeScript 型別檢查與 extension 建置皆通過；Lint 為既有 42 個 warning、0 error。GitHub Actions 遠端執行待下一次明確推送後確認。
+
 ### 公開前的密鑰歷史稽核
 
 - 以不輸出疑似密鑰內容的方式，掃描目前工作目錄與 `git rev-list --all` 的完整 Git 歷史，檢查常見 Google、GitHub、OpenAI、Slack API Key／Token 格式；結果為 0 個命中。
