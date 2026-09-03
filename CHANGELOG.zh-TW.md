@@ -4,6 +4,13 @@
 
 ## 2026-09-03
 
+### 修正 Webview 開始測試時遺漏傳遞 Cloud Key 名稱
+
+- 修正前端 `btn-run` 與 `btn-batch-run` 點擊時，從 `getStartParams()` 取得的 `cloudKeyName` 未被納入 `vscode.postMessage`，導致後端收到空值並誤報「找不到此模型的 Google AI Studio API Key」的缺陷。
+- 在前端檢查若為 Cloud 模式但未選擇 Key 設定時提早提示，避免無效請求。
+- 在 `src/test/webviewContent.test.ts` 新增合約測試，驗證 `startAnalysis` 與 `startBatchAnalysis` 均完整傳遞 `cloudKeyName`。
+- 驗證：單元測試通過、ESLint 0 warnings、型別檢查與 extension 編譯完成。
+
 ### 修正批次測試缺失 API Key 與終止時 UI 凍結
 
 - 修正 Cloud 模式下若未取得 API Key 提早中斷時，未通知 Webview 復原狀態，導致畫面永久停留在「Batch Testing...」的問題。

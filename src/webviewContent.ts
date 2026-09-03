@@ -736,10 +736,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
 
         document.getElementById('btn-run').onclick = () => {
-            const { envType, modelName } = getStartParams();
+            const { envType, modelName, cloudKeyName } = getStartParams();
             const filePath = document.getElementById('file-select').value;
             
-            if(!envType || !modelName || !filePath) {
+            if(!envType || !modelName || !filePath || (envType === 'cloud' && !cloudKeyName)) {
                 vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and File.' });
                 return;
             }
@@ -758,7 +758,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
             vscode.postMessage({
                 command: 'startAnalysis',
-                envType, modelName, filePath,
+                envType, modelName, cloudKeyName, filePath,
                 ollamaUrl: document.getElementById('ollama-url').value,
                 funcName: document.getElementById('func-select').value,
                 promptStrategy: document.getElementById('prompt-strategy').value,
@@ -772,10 +772,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
 
         document.getElementById('btn-batch-run').onclick = () => {
-            const { envType, modelName } = getStartParams();
+            const { envType, modelName, cloudKeyName } = getStartParams();
             let batchPath = document.getElementById('batch-path').value || document.getElementById('project-path').value;
             
-            if(!envType || !modelName || !batchPath) {
+            if(!envType || !modelName || !batchPath || (envType === 'cloud' && !cloudKeyName)) {
                 vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Batch Path.' });
                 return;
             }
@@ -794,7 +794,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
             vscode.postMessage({
                 command: 'startBatchAnalysis',
-                envType, modelName, batchPath,
+                envType, modelName, cloudKeyName, batchPath,
                 ollamaUrl: document.getElementById('ollama-url').value,
                 promptStrategy: document.getElementById('prompt-strategy').value,
                 maxLoops: parseInt(document.getElementById('max-loop').value),

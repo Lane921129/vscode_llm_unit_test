@@ -20,3 +20,11 @@ test('coverage dashboard cards can open their completed function report', () => 
     assert.ok(html.includes("case 'attachResultReport'"));
     assert.ok(html.includes('點擊開啟此函式的測試結果報告'));
 });
+
+test('startAnalysis and startBatchAnalysis include cloudKeyName in payload', () => {
+    const html = getWebviewContent(key => key);
+
+    assert.ok(html.includes("const { envType, modelName, cloudKeyName } = getStartParams();"));
+    assert.ok(html.includes("command: 'startAnalysis',\n                envType, modelName, cloudKeyName, filePath,"));
+    assert.ok(html.includes("command: 'startBatchAnalysis',\n                envType, modelName, cloudKeyName, batchPath,"));
+});
