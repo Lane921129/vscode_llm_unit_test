@@ -1,3 +1,4 @@
+import { requireSuccessfulProbeResponse } from '../llm/probeResponse';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -439,9 +440,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         headers: plainRequest.headers,
                                         body: JSON.stringify(plainRequest.body)
                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    if (!plainResponse.ok) {
-                                        throw new Error(`HTTP ${response.status} - ${await response.text()}`);
-                                    }
+                                    await requireSuccessfulProbeResponse(plainResponse);
                                     capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
                                         ? { response: getGoogleGeneratedText(await plainResponse.json()) }
                                         : undefined);
@@ -499,9 +498,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             'text'
                                         ))
                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    if (!plainResponse.ok) {
-                                        throw new Error(`HTTP ${response.status} - ${await response.text()}`);
-                                    }
+                                    await requireSuccessfulProbeResponse(plainResponse);
                                     capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
                                         ? { response: getCustomChatCompletionText(await plainResponse.json()) }
                                         : undefined);

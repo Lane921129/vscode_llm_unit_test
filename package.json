@@ -38,6 +38,14 @@
       {
         "command": "llm-unit-test.runCaptureAndTest",
         "title": "執行自動化測試循環"
+      },
+      {
+        "command": "llm-unit-test.runBatchAnalysis",
+        "title": "設定批次突變測試"
+      },
+      {
+        "command": "llm-unit-test.abortTest",
+        "title": "中止突變測試"
       }
     ],
     "configuration": {
@@ -65,13 +73,21 @@
         },
         "llmUnitTest.language": {
           "type": "string",
-          "enum": ["auto", "en", "zh-tw"],
+          "enum": [
+            "auto",
+            "en",
+            "zh-tw"
+          ],
           "default": "auto",
           "description": "UI and output language (auto will follow VS Code language)"
         },
         "llmUnitTest.promptStrategy": {
           "type": "string",
-          "enum": ["auto", "small", "large"],
+          "enum": [
+            "auto",
+            "small",
+            "large"
+          ],
           "default": "auto",
           "description": "Prompt strategy: small (strict formatting) vs large (advanced reasoning)"
         },
@@ -96,8 +112,8 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:python": "python -m unittest python_scripts/test_ast_pipeline.py python_scripts/test_secret_scan.py && python python_scripts/secret_scan.py --history",
-    "test:unit": "npm run compile-tests && node --test out/test/cloudApi.test.js out/test/cloudCredentials.test.js out/test/connectionTimeout.test.js out/test/customApi.test.js out/test/dependencyResolver.test.js out/test/exceptionEvidence.test.js out/test/generatedTestValidator.test.js out/test/modelProfileRegistry.test.js out/test/modelQualification.test.js out/test/mutationExecution.test.js out/test/ollamaCapability.test.js out/test/promptDetailStrategy.test.js out/test/promptPurity.test.js out/test/promptSkillLibrary.test.js out/test/pythonTestEnvironment.test.js out/test/reportProvenance.test.js out/test/stubClassifier.test.js out/test/stubSmokeAssertion.test.js out/test/stubTestPlan.test.js out/test/targetCoverage.test.js out/test/tier1Integration.test.js out/test/tier1Literals.test.js out/test/tier1TestBuilder.test.js out/test/tierRouter.test.js out/test/traceRecovery.test.js out/test/traceTestAugmenter.test.js out/test/utils.test.js out/test/webviewContent.test.js && npm run test:python"
+    "test:python": "python -m unittest python_scripts/test_rescue_unittest.py python_scripts/test_ast_pipeline.py python_scripts/test_secret_scan.py && python python_scripts/secret_scan.py --history",
+    "test:unit": "npm run compile-tests && node --test out/test/probeResponse.test.js out/test/orchestratorCommands.test.js out/test/cloudApi.test.js out/test/cloudCredentials.test.js out/test/connectionTimeout.test.js out/test/customApi.test.js out/test/dependencyResolver.test.js out/test/exceptionEvidence.test.js out/test/generatedTestValidator.test.js out/test/modelProfileRegistry.test.js out/test/modelQualification.test.js out/test/mutationExecution.test.js out/test/ollamaCapability.test.js out/test/promptDetailStrategy.test.js out/test/promptPurity.test.js out/test/promptSkillLibrary.test.js out/test/pythonTestEnvironment.test.js out/test/reportProvenance.test.js out/test/stubClassifier.test.js out/test/stubSmokeAssertion.test.js out/test/stubTestPlan.test.js out/test/targetCoverage.test.js out/test/tier1Integration.test.js out/test/tier1Literals.test.js out/test/tier1TestBuilder.test.js out/test/tierRouter.test.js out/test/traceRecovery.test.js out/test/traceTestAugmenter.test.js out/test/utils.test.js out/test/webviewContent.test.js && npm run test:python"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

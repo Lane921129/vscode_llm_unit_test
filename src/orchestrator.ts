@@ -340,7 +340,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     const runTestCmd = vscode.commands.registerCommand(
         'llm-unit-test.runCaptureAndTest',
-        async (params: AnalysisParams) => {
+        async (params?: AnalysisParams) => {
+            if (!params) {
+                await vscode.commands.executeCommand('mutation-test-view.focus');
+                return;
+            }
             isAborted = false;
             const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
             
@@ -384,7 +388,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     const runBatchCmd = vscode.commands.registerCommand(
         'llm-unit-test.runBatchAnalysis',
-        async (params: BatchAnalysisParams) => {
+        async (params?: BatchAnalysisParams) => {
+            if (!params) {
+                await vscode.commands.executeCommand('mutation-test-view.focus');
+                return;
+            }
             isAborted = false;
             const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
             try {
@@ -830,78 +838,17 @@ function stripUniformIndent(code: string): string {
     return code;
 }
 
-/**
- * 將 AI 亂輸出的程式碼（REPL格式、裸assert、甚至原始碼）自動包裝成合法的 unittest.TestCase 結構
- */
-function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string, importModule?: string): string {
+/** Parse bare asserts with Python AST; the normal validation gates still apply. */
+async function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string, importModule?: string): Promise<string> {
     const moduleName = importModule || path.basename(srcFilePath, '.py');
-    const targetFunc = funcName || moduleName;
-
-    // 去除 >>> 前綴，逐行整理
-    const lines = rawCode
-        .split('\n')
-        .map(l => l.replace(/^>>>\s?/, '').trim())
-        .filter(l => l.length > 0 && !l.startsWith('#') && !l.startsWith('...'));
-
-    const testMethods: string[] = [];
-    let methodIndex = 1;
-    let currentContext: string[] = [];
-
-    for (const line of lines) {
-        let testBody = '';
-
-        if (line.startsWith('assert ')) {
-            const assertBody = line.substring(7).trim();
-            // Handle assert with messages: assert x == y, "message"
-            const parts = assertBody.split(',');
-            const expr = parts[0].trim();
-            const msg = parts.length > 1 ? `, ${parts.slice(1).join(',').trim()}` : '';
-
-            const eqMatch = expr.match(/^(.+?)\s*==\s*(.+)$/);
-            const neqMatch = expr.match(/^(.+?)\s*!=\s*(.+)$/);
-            
-            if (eqMatch) {
-                testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()}${msg})`;
-            } else if (neqMatch) {
-                testBody = `self.assertNotEqual(${neqMatch[1].trim()}, ${neqMatch[2].trim()}${msg})`;
-            } else {
-                testBody = `self.assertTrue(${expr}${msg})`;
-            }
-        } else if (line.startsWith('print(') || line.startsWith('import ') || line.startsWith('from ')) {
-            continue;
-        } else if (line.startsWith('def ') || line.startsWith('class ') || line.startsWith('@')) {
-            continue;
-        } else if (line.includes('==') && !line.includes('(')) {
-            // Bare `==` without function calls: treat as context rather than a testable assertion
-            currentContext.push(line);
-            continue;
-        } else {
-            currentContext.push(line);
-            continue;
-        }
-
-        if (testBody) {
-            const bodyLines = [...currentContext, testBody].map(l => `        ${l}`).join('\n');
-            testMethods.push(`    def test_case_${methodIndex}(self):\n${bodyLines}`);
-            methodIndex++;
-            currentContext = []; // Reset for next assert
-        }
-    }
-
-
-
-    if (testMethods.length === 0) { return ''; }
-
-    return [
-        `import unittest`,
-        `from ${moduleName} import *`,
-        ``,
-        `class TestAuto(unittest.TestCase):`,
-        testMethods.join('\n\n'),
-        ``,
-        `if __name__ == '__main__':`,
-        `    unittest.main()`,
-    ].join('\n');
+    const script = path.join(__dirname, '..', 'python_scripts', 'rescue_unittest.py');
+    const result = await runSpawn('python', [script], {
+        input: JSON.stringify({ code: rawCode, module: moduleName }),
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        timeout: 5000
+    });
+    if (result.code !== 0) { return ''; }
+    return (JSON.parse(result.stdout) as { code: string }).code;
 }
 
 function extractCoverage(output: string, targetFile: string): { coverageText: string, missingLines: string } {
@@ -1637,7 +1584,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
                     if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
                         log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                        const rescued = rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule);
+                        const rescued = await rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule);
                         if (!rescued) {
                             if (llmRetry === 0) {
                                 log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
