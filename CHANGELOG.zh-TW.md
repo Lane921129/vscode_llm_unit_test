@@ -4,6 +4,12 @@
 
 ## 2026-09-07
 
+### 補齊 MIT 授權檔
+
+- 補上 `LICENSE` 的標準 MIT 條文，與 `package.json` 已宣告的 MIT 授權及 README 連結一致。
+- Copyright holder 使用本機 Git 作者設定 `Lane`；本次不改變程式行為、依賴或模型流程。
+- 驗證：授權檔存在、README 的 `LICENSE` 連結目標存在，且 Markdown／差異格式檢查通過。
+
 ### 清理失效開發工具與同步進度
 
 - Webview 擷取工具改讀 src/ui/webviewContent.ts，提供翻譯 callback，統一由腳本位置解析來源與 out 產物位置，並直接檢查實際生成 JavaScript 的語法；test:unit 納入 test:webview。
