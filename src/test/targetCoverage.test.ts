@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { assessTargetCoverage } from '../targetCoverage';
+import { assessTargetCoverage } from '../mutation/targetCoverage';
 
 test('detects that every executable target line was missed', () => {
     const assessment = assessTargetCoverage([

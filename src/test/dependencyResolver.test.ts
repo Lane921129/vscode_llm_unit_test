@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
 import * as path from 'path';
-import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from '../dependencyResolver';
+import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from '../utils/dependencyResolver';
 
 test('resolves an absolute Python import from the project root', () => {
     const resolved = resolvePythonDependencyPath(

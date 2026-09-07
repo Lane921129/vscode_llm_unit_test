@@ -2,6 +2,15 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-07
+
+### 固定模組分層重構基準
+
+- 將 34 個 TypeScript 模組分至 llm、tier、prompts、validation、mutation、ui 與 utils，統一提示詞檔名並同步修正正式程式與測試的引用。
+- 保留本次既有的中英文 README、虛擬環境排除、Python 啟動錯誤處理、UTC session 日期及重複邏輯整理；移除既有暫存修補檔。
+- 驗證：140 個 TypeScript 測試、53 個 Python 測試、tracked files／Git 歷史密鑰掃描、型別檢查、lint、extension 建置與 git diff --check 通過。
+- 限制：此為既有修改的回歸基準；裸 assert 複合表達式救援、命令無參數入口、連線重試錯誤回報與跨批次中止隔離將分階段修復；未進行真實雲端模型或 VS Code 手動驗收。
+
 ## 2026-09-03
 
 ### 修正 Webview 開始測試時遺漏傳遞 Cloud Key 名稱

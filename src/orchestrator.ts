@@ -1,30 +1,30 @@
 import * as vscode from 'vscode';
-import { MutationViewProvider } from './SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './unittest_writer_prompt';
-import { getReviewerSystemPrompt, getReviewerUserPrompt } from './bug_fixer_prompt';
-import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './semantic_analyzer_prompt';
-import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompt_skill_library';
-import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './mutant_triage_prompt';
-import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils';
-import { mergeTestSnippets } from './testMerger';
-import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './cloudApi';
-import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './customApi';
-import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
-import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from './tier1TestBuilder';
-import { appendTraceMethodsToUnittestClass } from './traceTestAugmenter';
-import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './modelProfileRegistry';
-import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tierRouter';
-import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './dependencyResolver';
-import { shouldRetryTraceWithoutCallerInputs } from './traceRecovery';
-import { assessTargetCoverage } from './targetCoverage';
-import { formatReportProvenance, ReportProvenance } from './reportProvenance';
-import { buildStubSmokeAssertion } from './stubSmokeAssertion';
-import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './stubClassifier';
-import { buildStubTestPlan } from './stubTestPlan';
-import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './pythonTestEnvironment';
-import { buildExternalMutationExecution } from './mutationExecution';
-import { exceptionNamesFromEvidence } from './exceptionEvidence';
-import { selectPromptDetail } from './promptDetailStrategy';
+import { MutationViewProvider } from './ui/SidebarProvider';
+import { getSystemPrompt, getUserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './prompts/unittestWriterPrompt';
+import { getReviewerSystemPrompt, getReviewerUserPrompt } from './prompts/bugFixerPrompt';
+import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './prompts/semanticAnalyzerPrompt';
+import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompts/promptSkillLibrary';
+import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './prompts/mutantTriagePrompt';
+import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
+import { mergeTestSnippets } from './validation/testMerger';
+import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './llm/cloudApi';
+import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './llm/customApi';
+import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
+import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
+import { appendTraceMethodsToUnittestClass } from './tier/traceTestAugmenter';
+import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
+import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tier/tierRouter';
+import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
+import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
+import { assessTargetCoverage } from './mutation/targetCoverage';
+import { formatReportProvenance, ReportProvenance } from './utils/reportProvenance';
+import { buildStubSmokeAssertion } from './tier/stubSmokeAssertion';
+import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stubClassifier';
+import { buildStubTestPlan } from './tier/stubTestPlan';
+import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './utils/pythonTestEnvironment';
+import { buildExternalMutationExecution } from './mutation/mutationExecution';
+import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
+import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
@@ -88,7 +88,7 @@ async function runWithConcurrencyLimit<T>(
  * 接受真正沒有可觀察運算的函式本體（pass 或安全 literal 回傳），
  * 或使用者明確以 dummy token 標記的雜訊／佔位函式；不使用複雜度分數。
  */
-function isStubFunction(astContext: any | null): boolean {
+function isStubFunction(astContext: AstContext | null): boolean {
     if (!astContext || astContext.error) {
         return false;
     }
@@ -203,13 +203,15 @@ interface ModelProfile {
     testGenerationMode?: string;
 }
 
-let currentModelProfile: ModelProfile = {
-    paramSize: 'unknown',
-    contextLength: 4096,
-    budgetTokens: 2000  // safe default
-};
+function defaultModelProfile(): ModelProfile {
+    return {
+        paramSize: 'unknown',
+        contextLength: 4096,
+        budgetTokens: 2000
+    };
+}
 
-const MODEL_PROFILE_STORE_KEY = 'llmUnitTest.modelProfiles.v1';
+let currentModelProfile: ModelProfile = defaultModelProfile();
 let storedModelProfiles: StoredModelProfile[] = [];
 let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVersion' | 'buildTimestamp' | 'extensionMode'> = {
     extensionId: 'unknown',
@@ -218,13 +220,7 @@ let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVer
     extensionMode: 'unknown'
 };
 
-function defaultModelProfile(): ModelProfile {
-    return {
-        paramSize: 'unknown',
-        contextLength: 4096,
-        budgetTokens: 2000
-    };
-}
+const MODEL_PROFILE_STORE_KEY = 'llmUnitTest.modelProfiles.v1';
 
 function withBudget(profile: StoredModelProfile): ModelProfile {
     return {
@@ -310,6 +306,15 @@ interface AstContext {
     error?: string;
 }
 
+/** 產生可用於檔名的 session 日期時間字串（格式：YYYY_MM_DD_HH_MM，不依賴 locale） */
+function formatSessionDate(now: Date = new Date()): string {
+    const iso = now.toISOString(); // e.g. "2026-09-05T11:30:00.000Z"
+    const [datePart, timePart] = iso.split('T');
+    const date = datePart.replace(/-/g, '_');
+    const time = timePart.substring(0, 5).replace(':', '_'); // "HH:MM" → "HH_MM"
+    return `${date}_${time}`;
+}
+
 export function activate(context: vscode.ExtensionContext) {
     let buildTimestamp = 'unknown';
     try {
@@ -339,9 +344,7 @@ export function activate(context: vscode.ExtensionContext) {
             isAborted = false;
             const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
             
-            const now = new Date();
-            const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
-            params.sessionDate = dateStr;
+            params.sessionDate = formatSessionDate();
 
             try {
                 if (!params.funcName) {
@@ -385,8 +388,7 @@ export function activate(context: vscode.ExtensionContext) {
             isAborted = false;
             const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
             try {
-                const now = new Date();
-                const dateStr = now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_');
+                const dateStr = formatSessionDate();
                 
                 const pyFiles = await findPythonFilesInDir(params.batchPath);
                 if (pyFiles.length === 0) {
@@ -870,14 +872,9 @@ function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string
         } else if (line.startsWith('def ') || line.startsWith('class ') || line.startsWith('@')) {
             continue;
         } else if (line.includes('==') && !line.includes('(')) {
-            // Ignore bare == without function calls to prevent bad parsing
-            const eqMatch = line.match(/^(.+?)\s*==\s*(.+)$/);
-            if (eqMatch && eqMatch[1].includes('(')) {
-                testBody = `self.assertEqual(${eqMatch[1].trim()}, ${eqMatch[2].trim()})`;
-            } else {
-                currentContext.push(line);
-                continue;
-            }
+            // Bare `==` without function calls: treat as context rather than a testable assertion
+            currentContext.push(line);
+            continue;
         } else {
             currentContext.push(line);
             continue;
@@ -923,7 +920,7 @@ function parseMutatestSurvived(mutatestResult: string): string {
         // 移除有些情況下沒有 \x1B 但只有 [0m 的殘留字元（這是在日誌中常見的亂碼）
         line = line.replace(/\[\d+m/g, '');
 
-        if (line === 'SURVIVED' && lines[i+1]?.replace(/\[\d+m/g, '').trim() === '--------') {
+        if (line === 'SURVIVED' && lines[i+1]?.replace(/\x1B\[\d+m/g, '').replace(/\[\d+m/g, '').trim() === '--------') {
             isSurvivedSection = true;
             i++; continue;
         }
@@ -1210,7 +1207,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         }
         else { log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`); }
     }
-    const targetImportModule = inferTargetImportModule(params.filePath, (astContext as any)?.file_imports || []);
+    const targetImportModule = inferTargetImportModule(params.filePath, astContext?.file_imports || []);
     if (astContext && !astContext.error) {
         (astContext as any).target_import_module = targetImportModule;
     }
@@ -1220,11 +1217,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     if (params.funcName && isStubFunction(astContext)) {
         log(`[快速通道] 🚀 偵測到 Stub/Dummy 函式（複雜度 ${complexityScore}/100），直接生成最小 Smoke Test，跳過 LLM 呼叫與突變測試。`);
         const moduleName = targetImportModule;
-        const className = (astContext as any)?.class_name as string | undefined;
-        const args: string[] = (astContext as any)?.args || [];
-        const methodKind = ((astContext as any)?.method_kind || 'module') as
+        const className = astContext?.class_context?.name as string | undefined;
+        const args: string[] = astContext?.args || [];
+        const methodKind = (astContext?.method_kind || 'module') as
             'module' | 'instance' | 'static' | 'class' | 'property';
-        const requiredConstructorParams = ((astContext as any)?.class_context?.init?.required_params || []) as string[];
+        const requiredConstructorParams = (astContext?.class_context?.init?.required_params || []) as string[];
         const stubPlan = buildStubTestPlan(
             moduleName,
             targetFuncName,
@@ -1522,9 +1519,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
                             // 將 AI 補全的方法裹入完整類別
-                    const moduleName2 = targetImportModule;
-                            const className3 = (astContext as any)?.class_name as string | null;
-                            const importLine3 = className3 ? `from ${moduleName2} import ${className3}` : `from ${moduleName2} import *`;
+                            const className3 = astContext?.class_context?.name ?? null;
+                            const importLine3 = className3 ? `from ${targetImportModule} import ${className3}` : `from ${targetImportModule} import *`;
                             const patchImport = scaffoldResult.patches.length > 0 ? `from unittest.mock import patch, MagicMock\n` : '';
                             const testBase3 = scaffoldResult.is_async ? 'unittest.IsolatedAsyncioTestCase' : 'unittest.TestCase';
                             sanitizedCode = [

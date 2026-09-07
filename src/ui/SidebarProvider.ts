@@ -2,14 +2,14 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
-import { initI18n, t } from './i18n';
-import { extractFunctionsWithAst } from './utils';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from './cloudApi';
-import { normalizeCloudCredentials, toCloudCredentialOptions } from './cloudCredentials';
-import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from './ollamaCapability';
-import { verifyRunnableTestGenerationProbe } from './modelProbeExecution';
-import { buildCustomChatCompletionBody, getCustomChatCompletionText } from './customApi';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from './connectionTimeout';
+import { initI18n, t } from '../i18n';
+import { extractFunctionsWithAst } from '../utils/utils';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from '../llm/cloudApi';
+import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
+import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from '../llm/ollamaCapability';
+import { verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
+import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -439,7 +439,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         headers: plainRequest.headers,
                                         body: JSON.stringify(plainRequest.body)
                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    if (!response.ok && !plainResponse.ok) {
+                                    if (!plainResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
                                     capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
@@ -499,7 +499,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             'text'
                                         ))
                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    if (!response.ok && !plainResponse.ok) {
+                                    if (!plainResponse.ok) {
                                         throw new Error(`HTTP ${response.status} - ${await response.text()}`);
                                     }
                                     capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
@@ -556,7 +556,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         }
 
         const files: { name: string; path: string }[] = [];
-        const ignoredDirs = new Set(['node_modules', 'venv', 'env', '.env', '.git', '__pycache__', '.pytest_cache']);
+        const ignoredDirs = new Set(['node_modules', 'venv', 'env', '.env', '.venv', '.git', '__pycache__', '.pytest_cache']);
 
         const walkAsync = async (dir: string) => {
             let list: fs.Dirent[];

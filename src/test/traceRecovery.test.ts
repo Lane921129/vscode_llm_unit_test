@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { shouldRetryTraceWithoutCallerInputs } from '../traceRecovery';
+import { shouldRetryTraceWithoutCallerInputs } from '../tier/traceRecovery';
 
 test('retries source-guided tracing when caller literals only cause arity TypeErrors', () => {
     assert.strictEqual(shouldRetryTraceWithoutCallerInputs({

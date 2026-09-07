@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { selectPromptDetail } from '../promptDetailStrategy';
+import { selectPromptDetail } from '../prompts/promptDetailStrategy';
 
 test('chooses prompt detail from capability metadata without vendor naming', () => {
     assert.strictEqual(selectPromptDetail('31B', 8192, 2), 'large');

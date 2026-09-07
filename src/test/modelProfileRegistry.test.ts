@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { findModelProfile, modelProfileKey, qualificationForSelectedProfile, restoreModelProfiles, upsertModelProfile } from '../modelProfileRegistry';
+import { findModelProfile, modelProfileKey, qualificationForSelectedProfile, restoreModelProfiles, upsertModelProfile } from '../llm/modelProfileRegistry';
 
 const localProfile = {
     envType: 'local' as const,

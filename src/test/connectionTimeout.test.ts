@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithTimeout } from '../connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithTimeout } from '../llm/connectionTimeout';
 
 test('uses a fresh active AbortSignal for an individual provider request', async () => {
     let seenSignal: AbortSignal | undefined;

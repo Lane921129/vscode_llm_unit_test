@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildStubSmokeAssertion } from '../stubSmokeAssertion';
+import { buildStubSmokeAssertion } from '../tier/stubSmokeAssertion';
 
 test('builds exact smoke assertions for pass and safe literal returns', () => {
     assert.strictEqual(buildStubSmokeAssertion('def pending(): pass'), 'self.assertIsNone(result)');

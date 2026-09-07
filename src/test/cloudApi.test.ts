@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName, resolveGoogleApiKey } from '../cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName, resolveGoogleApiKey } from '../llm/cloudApi';
 
 test('buildGoogleGenerateContentRequest uses the selected model and a key header', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'hello');

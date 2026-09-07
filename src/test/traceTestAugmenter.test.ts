@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { appendTraceMethodsToUnittestClass } from '../traceTestAugmenter';
+import { appendTraceMethodsToUnittestClass } from '../tier/traceTestAugmenter';
 
 const traceMethod = [
     '    def test_case_1(self):',

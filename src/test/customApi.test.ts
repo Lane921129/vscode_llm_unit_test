@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from '../customApi';
+import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from '../llm/customApi';
 
 test('custom API requests JSON mode only when the caller needs a structured result', () => {
     const textRequest = buildCustomChatCompletionBody('model-a', 'system', 'user', 'text');

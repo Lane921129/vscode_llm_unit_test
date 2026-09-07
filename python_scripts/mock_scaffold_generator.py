@@ -188,8 +188,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     # 從 trace_result 取得真實回傳值
     return_value_hints = []
     if trace_result and trace_result.get("examples"):
-        for ex in trace_result["examples"][:2]:
-            return_value_hints.append(f"# Real return: {ex['result']}")
+        first_ex = trace_result["examples"][0]
+        return_value_hints.append(f"# Real return: {first_ex['result']}")
 
     # 建立 scaffold 字串
     lines = []

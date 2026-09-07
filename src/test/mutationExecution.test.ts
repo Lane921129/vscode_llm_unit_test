@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildExternalMutationExecution } from '../mutationExecution';
+import { buildExternalMutationExecution } from '../mutation/mutationExecution';
 
 test('builds a shell-free mutmut execution plan with literal paths', () => {
     const plan = buildExternalMutationExecution(

@@ -99,7 +99,7 @@ function parseMutatestSurvived(mutatestResult: string): string {
         line = line.replace(/\x1B\[\d+m/g, '');
         line = line.replace(/\[\d+m/g, '');
 
-        if (line === 'SURVIVED' && lines[i+1]?.replace(/\[\d+m/g, '').trim() === '--------') {
+        if (line === 'SURVIVED' && lines[i+1]?.replace(/\x1B\[\d+m/g, '').replace(/\[\d+m/g, '').trim() === '--------') {
             isSurvivedSection = true;
             i++; continue;
         }

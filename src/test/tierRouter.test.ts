@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from '../tierRouter';
+import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from '../tier/tierRouter';
 
 test('preserves a manual Tier selection even when a model is unqualified', () => {
     assert.strictEqual(resolveTier(70, 90, 'tier4', false), 4);

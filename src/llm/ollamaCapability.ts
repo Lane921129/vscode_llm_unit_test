@@ -1,4 +1,4 @@
-import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './generatedTestValidator';
+import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../validation/generatedTestValidator';
 
 export type StructuredOutputCapability = 'verified' | 'unverified';
 

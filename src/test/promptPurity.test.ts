@@ -2,15 +2,15 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { test } from 'node:test';
-import { getReviewerSystemPrompt, getReviewerUserPrompt } from '../bug_fixer_prompt';
-import { getBaseFewShotExamples } from '../few_shot_examples';
+import { getReviewerSystemPrompt, getReviewerUserPrompt } from '../prompts/bugFixerPrompt';
+import { getBaseFewShotExamples } from '../prompts/fewShotExamples';
 import {
     buildSemanticAnalyzerSystemPrompt,
     formatSemanticContextForPrompt,
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
-} from '../semantic_analyzer_prompt';
-import { getTier3UserPrompt, getUserPrompt } from '../unittest_writer_prompt';
+} from '../prompts/semanticAnalyzerPrompt';
+import { getTier3UserPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -26,13 +26,13 @@ test('shared prompts and active base examples contain no project-domain vocabula
 });
 
 test('writer prompt source does not retain legacy application-specific examples', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 
     assert.ok(!/payment_token|login_user|validate_and_format_token/i.test(writerSource));
 });
 
 test('writer output contract does not branch on a provider or model name', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 
     assert.ok(!/useThinkingTag|noThinkingModels|qwen|tinyllama|gemma|mistral/i.test(writerSource));
     assert.match(writerSource, /const thinking = false;/);
@@ -41,7 +41,7 @@ test('writer output contract does not branch on a provider or model name', () =>
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 
     assert.match(writerSource, /method_kind === 'static'.*method_kind === 'class'/s);
     assert.match(writerSource, /Do NOT instantiate the class/);
@@ -83,7 +83,7 @@ test('Tier 3 scaffold prompt distinguishes verified constructor setup from metho
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/unittest_writer_prompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 
     assert.match(writerSource, /astContext\?\.target_import_module/);
     assert.match(writerSource, /from \$\{moduleName\} import \$\{funcName\}/);

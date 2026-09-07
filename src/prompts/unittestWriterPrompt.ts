@@ -1,4 +1,4 @@
-import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './few_shot_examples';
+import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 1：填空法 Prompt（2–3B 極小模型）

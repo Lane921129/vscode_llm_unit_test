@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildStubTestPlan } from '../stubTestPlan';
+import { buildStubTestPlan } from '../tier/stubTestPlan';
 
 test('builds a module stub smoke-test plan with placeholder method arguments', () => {
     assert.deepStrictEqual(buildStubTestPlan('sample', 'pending', ['value']), {

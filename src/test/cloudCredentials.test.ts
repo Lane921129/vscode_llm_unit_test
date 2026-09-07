@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { normalizeCloudCredentials, toCloudCredentialOptions } from '../cloudCredentials';
+import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 
 test('normalizes legacy named-key credentials without losing them', () => {
     const credentials = normalizeCloudCredentials({ 'gemma-4-31b-it': 'legacy-key' });

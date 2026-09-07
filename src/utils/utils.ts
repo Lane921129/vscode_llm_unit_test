@@ -85,6 +85,8 @@ except Exception as e:
 
         let stdout = '';
         py.stdout.on('data', data => stdout += data.toString());
+        py.stderr.on('data', () => { /* suppress stderr; parse errors are handled via close code */ });
+        py.on('error', () => resolve([]));
         py.on('close', code => {
             if (code === 0 && stdout.trim()) {
                 try {

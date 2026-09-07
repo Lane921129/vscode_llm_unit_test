@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import { test } from 'node:test';
-import { buildGeneratedTestEnvironment, generatedUnittestArguments } from '../pythonTestEnvironment';
+import { buildGeneratedTestEnvironment, generatedUnittestArguments } from '../utils/pythonTestEnvironment';
 
 test('builds a portable Python environment without shell placeholders', () => {
     const environment = buildGeneratedTestEnvironment(

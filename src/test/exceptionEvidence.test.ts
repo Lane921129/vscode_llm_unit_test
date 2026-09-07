@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { exceptionNamesFromEvidence } from '../exceptionEvidence';
+import { exceptionNamesFromEvidence } from '../validation/exceptionEvidence';
 
 test('combines explicit AST raises with assertable dynamic-trace exceptions', () => {
     assert.deepStrictEqual(exceptionNamesFromEvidence({

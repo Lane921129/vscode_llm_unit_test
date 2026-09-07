@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { formatReportProvenance } from '../reportProvenance';
+import { formatReportProvenance } from '../utils/reportProvenance';
 
 test('report provenance identifies a portable extension build without local paths', () => {
     const text = formatReportProvenance({

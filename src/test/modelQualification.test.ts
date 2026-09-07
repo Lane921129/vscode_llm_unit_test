@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { qualificationForRequest } from '../modelQualification';
+import { qualificationForRequest } from '../llm/modelQualification';
 
 test('uses a generation qualification only for the exact probed model', () => {
     const profile = {

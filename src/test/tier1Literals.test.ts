@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { toPythonAssertionLiteral } from '../tier1Literals';
+import { toPythonAssertionLiteral } from '../tier/tier1Literals';
 
 test('preserves a traced Python string repr without adding nested quotes', () => {
     assert.strictEqual(toPythonAssertionLiteral("'Input rejected'", 'str'), "'Input rejected'");

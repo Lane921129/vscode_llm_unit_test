@@ -107,15 +107,14 @@ export function buildTier1TestMethods(
 ): string[] {
     const methods: string[] = [];
 
-    examples.filter(example => example.call_assertable !== false && example.result_assertable !== false).forEach((example, index) => {
+    const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
+    assertableExamples.forEach((example, index) => {
         const funcCall = buildTraceCall(funcName, example);
         methods.push([
             `    def test_case_${index + 1}(self):`,
             ...buildTraceResultAssignment(funcCall, example, isAsync)
         ].join('\n'));
     });
-
-    const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
     errors.filter(error => error.call_assertable !== false).forEach((error, index) => {
         const funcCall = buildTraceCall(funcName, error);
         const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
@@ -142,7 +141,8 @@ export function buildTier1PropertyTestMethods(
     const propertyAccess = `${instanceName}.${propertyName}`;
     const executedAccess = isAsync ? `__import__('asyncio').run(${propertyAccess})` : propertyAccess;
     const methods: string[] = [];
-    examples.filter(example => example.call_assertable !== false && example.result_assertable !== false).forEach((example, index) => {
+    const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
+    assertableExamples.forEach((example, index) => {
         const assertion = example.result === 'None' || example.result_type === 'NoneType'
             ? 'self.assertIsNone(result)'
             : `self.assertEqual(result, ${toPythonAssertionLiteral(example.result, example.result_type)})`;
@@ -152,7 +152,6 @@ export function buildTier1PropertyTestMethods(
             `        ${assertion}`
         ].join('\n'));
     });
-    const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
     errors.filter(error => error.call_assertable !== false).forEach((error, index) => {
         const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
             ? error.exception

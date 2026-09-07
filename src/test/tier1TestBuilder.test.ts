@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from '../tier1TestBuilder';
+import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 
 test('builds exact value and exception assertions without asking an LLM', () => {
     const methods = buildTier1TestMethods('format_value', [

@@ -10,7 +10,7 @@
  * The test_strategy output replaces all hardcoded boundary rules in the unittest writer prompt.
  */
 
-import { getSkillCards, formatSkillCardsForPrompt, getSkillLibrarySummaryForPrompt } from './prompt_skill_library';
+import { getSkillCards, formatSkillCardsForPrompt, getSkillLibrarySummaryForPrompt } from './promptSkillLibrary';
 
 // === Type Definitions ===
 

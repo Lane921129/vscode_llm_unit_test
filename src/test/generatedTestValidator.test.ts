@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../generatedTestValidator';
+import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../validation/generatedTestValidator';
 
 test('rejects a Markdown test plan even when it mentions unittest', () => {
     const result = validateUnittestStructure('* Import unittest\n* Use unittest.TestCase');

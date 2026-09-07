@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { getWebviewContent } from '../webviewContent';
+import { getWebviewContent } from '../ui/webviewContent';
 
 test('cloud credential editor has separate name, model, and key inputs and clears them after saving', () => {
     const html = getWebviewContent(key => key);

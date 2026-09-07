@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../ollamaCapability';
-import { isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../modelProbeExecution';
+import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
+import { isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
     const request = buildOllamaStructuredProbe('local-model');

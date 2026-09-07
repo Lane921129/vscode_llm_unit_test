@@ -610,8 +610,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             if parameter.kind is inspect.Parameter.KEYWORD_ONLY
             and parameter.default is inspect.Parameter.empty
         ]
-    except Exception:
-        pass
+    except Exception as sig_err:
+        print(f"[dynamic_tracer] warning: could not inspect signature for {func_name!r}: {sig_err}", file=sys.stderr)
 
     # Combine literal call-site facts with generic source-derived coverage.
     # A real caller example is valuable, but must not suppress other reachable

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { test } from 'node:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { detectMutationEngineForPlatform, extractFunctionsWithAst } from '../utils';
+import { detectMutationEngineForPlatform, extractFunctionsWithAst } from '../utils/utils';
 
 test('uses mutatest for Python 3.11 and earlier', () => {
     assert.strictEqual(detectMutationEngineForPlatform('3.11.9', 'win32'), 'mutatest');

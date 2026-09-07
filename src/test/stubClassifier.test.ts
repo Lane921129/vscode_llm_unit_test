@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { hasDummyFunctionNameMarker, isStructurallyInertStub } from '../stubClassifier';
+import { hasDummyFunctionNameMarker, isStructurallyInertStub } from '../tier/stubClassifier';
 
 test('recognizes inert Python stub bodies and the explicit dummy name marker', () => {
     assert.strictEqual(isStructurallyInertStub('def anything():\n    pass'), true);

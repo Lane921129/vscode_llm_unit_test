@@ -49,7 +49,7 @@ def source_arguments(call):
 def find_call_sites(func_name, project_root, target_path=None):
     """Find calls resolving to the supplied target module; avoid same-name collisions."""
     results = []
-    ignored_dirs = {'__pycache__', '.git', 'node_modules', 'venv', 'env', '.env', '.pytest_cache'}
+    ignored_dirs = {'__pycache__', '.git', 'node_modules', 'venv', 'env', '.env', '.venv', '.pytest_cache'}
     target_absolute = os.path.abspath(target_path) if target_path else None
     target_module = target_module_name(target_absolute, project_root) if target_absolute else None
     target_class, target_member = (func_name.rsplit('.', 1) if '.' in func_name else (None, func_name))

@@ -67,9 +67,9 @@ export function runIsolatedProbe(code: string, timeoutMs = 3000): Promise<boolea
             clearTimeout(timer);
             resolve(false);
         });
-        process.once('close', code => {
+        process.once('close', exitCode => {
             clearTimeout(timer);
-            resolve(code === 0);
+            resolve(exitCode === 0);
         });
         process.stdin.end(code);
     });

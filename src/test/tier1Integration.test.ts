@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { test } from 'node:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildTier1InstanceSetup, buildTier1TestMethods } from '../tier1TestBuilder';
+import { buildTier1InstanceSetup, buildTier1TestMethods } from '../tier/tier1TestBuilder';
 
 test('Tier 1 generated tests execute against a dependency that returns exact strings', () => {
     const methods = buildTier1TestMethods('format_value', [

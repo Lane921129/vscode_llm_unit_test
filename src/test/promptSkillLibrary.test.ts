@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from '../prompt_skill_library';
+import { getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from '../prompts/promptSkillLibrary';
 
 test('syntax-based skill inference selects advanced cards without application vocabulary', () => {
     const source = `
