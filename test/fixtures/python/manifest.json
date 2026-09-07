@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "tier1-boundary",
+      "tier": 1,
+      "source": "tier1_boundary.py",
+      "target": "clamp",
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["branch_threshold_coverage"], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["missing either numeric boundary"]}
+    },
+    {
+      "id": "tier1-explicit-exception",
+      "tier": 1,
+      "source": "tier1_exception.py",
+      "target": "require_value",
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["assert_raises_syntax", "none_input_handling"], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["assertRaises without a target call"]}
+    },
+    {
+      "id": "tier1-class-method",
+      "tier": 1,
+      "source": "tier1_class.py",
+      "target": "Labeler.render",
+      "context": {"class_name": "Labeler", "method_kind": "instance"},
+      "expected": {"method_kind": "instance", "is_async": false, "skills": ["class_method_testing"], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["constructing Labeler without its required prefix"]}
+    },
+    {
+      "id": "tier2-pattern-match",
+      "tier": 2,
+      "source": "tier2_pattern.py",
+      "target": "classify",
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["pattern_matching"], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["omitting the unmatched case"]}
+    },
+    {
+      "id": "tier2-relative-import",
+      "tier": 2,
+      "source": "tier2_package/consumer.py",
+      "target": "format_label",
+      "context": {"calls": ["normalize"], "dependencies": [{"name": "normalize"}]},
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["mock_external_dependency"], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["importing the target by a filesystem path"]}
+    },
+    {
+      "id": "tier2-generator",
+      "tier": 2,
+      "source": "tier2_generator.py",
+      "target": "every_second",
+      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable_generator"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["asserting a generator repr"]}
+    },
+    {
+      "id": "tier3-file-context",
+      "tier": 3,
+      "source": "tier3_file_context.py",
+      "target": "read_first_line",
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["file_io_mocking", "context_manager_testing"], "trace": "mock_required"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["real file system access"]}
+    },
+    {
+      "id": "tier3-http-client",
+      "tier": 3,
+      "source": "tier3_http.py",
+      "target": "fetch_status",
+      "context": {"calls": ["transport.get"], "file_imports": [{"module": "httpx", "name": null, "bound_name": "transport"}]},
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["http_client_mocking"], "trace": "mock_required"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["real network access"]}
+    },
+    {
+      "id": "tier3-database-context",
+      "tier": 3,
+      "source": "tier3_database.py",
+      "target": "insert_value",
+      "context": {"file_imports": [{"module": "sqlite3", "name": null, "bound_name": "sqlite3"}]},
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["database_state_isolation", "context_manager_testing"], "trace": "isolated_resource_required"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["shared or configured database connection"]}
+    },
+    {
+      "id": "tier4-time-control",
+      "tier": 4,
+      "source": "tier4_time.py",
+      "target": "day_stamp",
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["datetime_freezing"], "trace": "mock_required"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 80, "forbidden": ["asserting the real clock"]}
+    },
+    {
+      "id": "tier4-async-context",
+      "tier": 4,
+      "source": "tier4_async_context.py",
+      "target": "read_payload",
+      "context": {"calls": ["session.get", "response.text"], "file_imports": [{"module": "aiohttp", "name": null, "bound_name": "aiohttp"}]},
+      "expected": {"method_kind": "module", "is_async": true, "skills": ["async_coroutine_testing", "context_manager_testing"], "trace": "mock_required"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 80, "forbidden": ["real async network access"]}
+    },
+    {
+      "id": "tier4-dataclass-enum",
+      "tier": 4,
+      "source": "tier4_dataclass_enum.py",
+      "target": "describe",
+      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["inventing enum values absent from source"]}
+    }
+  ]
+}
