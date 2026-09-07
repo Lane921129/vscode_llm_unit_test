@@ -9,6 +9,7 @@ interface FixtureContext {
     dependencies?: unknown[];
     class_name?: string;
     method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+    is_generator?: boolean;
     file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
 }
 

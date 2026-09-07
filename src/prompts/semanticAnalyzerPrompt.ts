@@ -174,6 +174,9 @@ ANALYSIS RULES:
     * Is it declared with async def or does it await a coroutine? → add "async_coroutine_testing"
     * Does it open, read, or write files? → add "file_io_mocking"
     * Does it read the current date, time, or timezone? → add "datetime_freezing"
+    * Does the selected callable yield values? → add "generator_result_testing"
+    * Does it contain with or async with? → add "context_manager_testing"
+    * Does it call a verified imported HTTP client? → add "http_client_mocking"
     * ALWAYS add "import_module_name"
 - For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)
 - For test_strategy.key_rules: only add rules NOT already covered by the selected skill cards

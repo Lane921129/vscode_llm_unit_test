@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 收斂 Tier 1／2 技能卡的證據界線並補足 Generator 支援
+
+- 修正長度邊界、除零與類別實例技能卡：不再預設某個輸入「必定」拋例外，也不再假設可用無參數建構子；它們只能要求依來源條件選擇輸入，並以明確 source／精確 Trace 支持 assertion 與 constructor setup。
+- 新增 `generator_result_testing`：僅在 AST 證實目標 callable 自身含有 `yield`／`yield from` 時注入，要求有限序列以 `list(target(...))` 具體化後再斷言，禁止比較 generator repr。
+- AST 會區分目標函式的 yield 與巢狀 helper 的 yield；Tier 2 generator fixture 已宣告這項 AST 證據與技能卡期待。
+- 驗證：163 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：仍未以真實模型量測 Tier 1／2 的生成成功率與 mutation 成績；Tier 3–4 也尚未實測，不可據此宣稱功能成熟。
+
 ### 將直接 AST 分支條件安全提供給 Tier 2 Prompt
 
 - `ast_extractor.py` 現在只擷取目標函式內、直接作用於參數的單一比較條件，例如 `value <= 3` 與 `len(text) > 4`；巢狀函式、一般 helper call 與無法安全解析的表達式一律排除。

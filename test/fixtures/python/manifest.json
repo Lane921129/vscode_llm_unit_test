@@ -57,7 +57,8 @@
       "tier": 2,
       "source": "tier2_generator.py",
       "target": "every_second",
-      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable_generator"},
+      "context": {"is_generator": true},
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["generator_result_testing"], "trace": "assertable_generator"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["asserting a generator repr"]}
     },
     {

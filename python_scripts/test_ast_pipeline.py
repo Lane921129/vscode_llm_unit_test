@@ -212,6 +212,25 @@ class Worker:
             },
         ])
 
+    def test_extractor_distinguishes_target_generator_from_nested_generator(self):
+        source = '''def emitted(values):
+    for value in values:
+        yield value
+
+def ordinary():
+    def deferred():
+        yield "nested"
+    return deferred
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'generators.py'
+            target.write_text(source, encoding='utf-8')
+            emitted = self.run_script('ast_extractor.py', target, 'emitted')
+            ordinary = self.run_script('ast_extractor.py', target, 'ordinary')
+
+        self.assertTrue(emitted['is_generator'])
+        self.assertFalse(ordinary['is_generator'])
+
     def test_extractor_preserves_relative_import_levels(self):
         source = '''from .helpers import normalize as normalize_value
 from ..shared import validate

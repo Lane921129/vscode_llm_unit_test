@@ -265,6 +265,7 @@ interface AstContext {
     method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
     property_context?: { name: string, getter?: unknown, setter?: unknown, deleter?: unknown } | null;
     is_async?: boolean;
+    is_generator?: boolean;
     executable_lines?: number[];
     raised_exceptions?: string[];
     condition_facts?: Array<{ kind: 'comparison'; parameter: string; subject: 'value' | 'length'; operator: string; literal: string; line: number }>;

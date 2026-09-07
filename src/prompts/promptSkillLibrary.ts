@@ -19,12 +19,12 @@ export const SKILL_LIBRARY: SkillCard[] = [
     {
         id: 'string_length_boundary',
         title: 'String Length Boundary',
-        trigger_hint: 'Use when function has len(x) < N or len(x) > N checks that raise exceptions',
+        trigger_hint: 'Use when source has a len(x) comparison against a literal threshold',
         rules: [
-            'STRING LENGTH BOUNDARY: identify the exact threshold N in `len(x) < N` or `len(x) > N`.',
-            '  - Test with len = N-1 (should raise), len = N (should NOT raise), len = N+1 (should NOT raise).',
-            '  - Do NOT use [:-1] slicing to create a shorter string — e.g. "abc123"[:-1] still has len=5, may not cross boundary.',
-            '  - Use explicit short strings like "" (len=0), "abc" (len=3), "123456789" (len=9).',
+            'STRING LENGTH BOUNDARY: use the exact comparison and threshold from source (including <, <=, >, or >=).',
+            '  - Choose inputs on each reachable side of that condition; N-1, N, and N+1 are candidates only when they fit the source comparison and input type.',
+            '  - Do NOT infer that either side raises, returns normally, or returns a specific value. Assertions require an explicit source path or exact Dynamic Trace evidence.',
+            '  - Build strings with a deliberately known length; do not use a slice unless its resulting length is independently clear.',
         ]
     },
     {
@@ -45,9 +45,8 @@ export const SKILL_LIBRARY: SkillCard[] = [
         trigger_hint: 'Use when function has multiple if/elif branches based on numeric comparisons',
         rules: [
             'BRANCH THRESHOLD COVERAGE: the function has multiple if/elif numeric thresholds.',
-            '  - Write at least one test per branch (including the final else).',
-            '  - Use values that are clearly on each side of every threshold boundary.',
-            '  - Example for thresholds [18.5, 24, 27]: test values like 15, 20, 25, 30.',
+            '  - Cover each reachable source branch, including a final else/default branch when present.',
+            '  - Use values on the appropriate side of every source threshold; derive expected results from the matching source branch or exact trace, not from this card.',
         ]
     },
     {
@@ -146,8 +145,9 @@ export const SKILL_LIBRARY: SkillCard[] = [
         trigger_hint: 'Use when function performs division and may raise ZeroDivisionError',
         rules: [
             'ZERO DIVISION:',
-            '  - Test with denominator = 0: with self.assertRaises(ZeroDivisionError):',
-            '  - If the function guards against zero (returns 0 or raises ValueError), check source code.',
+            '  - Treat zero as a boundary candidate only for the operand used as a denominator in the source.',
+            '  - Use assertRaises only for an explicit source raise or exact verified trace error; a division expression alone is not permission to invent an exception contract.',
+            '  - If the source guards zero, assert the observable guarded behavior from that branch.',
         ]
     },
     {
@@ -156,7 +156,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         trigger_hint: 'Use when the target is an instance method or property that needs an object instance',
         rules: [
             'INSTANCE / PROPERTY TESTING:',
-            '  - Instantiate the class in setUp: self.obj = ClassName()',
+            '  - Build an instance only with AST constructor defaults or verified caller literals; do not guess required constructor dependencies.',
             '  - Call method via instance: result = self.obj.method_name(...)',
             '  - Read a property as self.obj.property_name without parentheses.',
             '  - Do NOT call an instance method or property as a standalone function.',
@@ -243,6 +243,17 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - For async HTTP calls, use AsyncMock for the awaited call or async context-manager boundary.',
         ]
     },
+    {
+        id: 'generator_result_testing',
+        title: 'Generator Result Testing',
+        trigger_hint: 'Use only when AST confirms that the selected callable contains yield or yield from',
+        rules: [
+            'GENERATOR RESULT TESTING:',
+            '  - A generator call is lazy. Materialize a finite result with list(target(...)) before comparing values; never assert a generator repr.',
+            '  - Use finite, source-supported inputs and assert the emitted sequence only when source logic or exact Dynamic Trace supports it.',
+            '  - Include an empty or boundary input only when it exercises a reachable source path; do not invent iteration behavior.',
+        ]
+    },
 ];
 
 export function getSkillCards(skillIds: string[]): SkillCard[] {
@@ -262,6 +273,7 @@ export function inferSkillIdsFromCode(
         class_name?: string;
         class_context?: unknown;
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+        is_generator?: boolean;
         calls?: string[];
         dependencies?: unknown[];
         file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
@@ -293,6 +305,7 @@ export function inferSkillIdsFromCode(
         ids.add('mock_external_dependency');
     }
     if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
+    if (context?.is_generator === true) { ids.add('generator_result_testing'); }
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
     if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
     if (/^\s*(?:async\s+)?with\s+.+:/m.test(source)) { ids.add('context_manager_testing'); }
@@ -331,6 +344,7 @@ export function mergeEvidenceBoundSkillIds(
         class_name?: string;
         class_context?: unknown;
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+        is_generator?: boolean;
         calls?: string[];
         dependencies?: unknown[];
         file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;

@@ -151,3 +151,29 @@ test('HTTP mocking skill requires a target call tied to an imported client bindi
     assert.ok(getSkillCards(ids).find(card => card.id === 'http_client_mocking')?.rules
         .some(rule => rule.includes('Never make a real network request')));
 });
+
+test('generator skill requires selected-callable AST evidence and prevents repr assertions', () => {
+    const generatorIds = inferSkillIdsFromCode(
+        'def every_second(values):\n    for value in values:\n        yield value',
+        { is_generator: true }
+    );
+    const ordinaryIds = inferSkillIdsFromCode(
+        'def label(value):\n    return "yield " + value',
+        { is_generator: false }
+    );
+
+    assert.ok(generatorIds.includes('generator_result_testing'));
+    assert.ok(!ordinaryIds.includes('generator_result_testing'));
+    assert.ok(getSkillCards(generatorIds).find(card => card.id === 'generator_result_testing')?.rules
+        .some(rule => rule.includes('never assert a generator repr')));
+});
+
+test('boundary and constructor cards do not invent behavior absent from source evidence', () => {
+    const cards = getSkillCards(['string_length_boundary', 'zero_division', 'class_method_testing']);
+    const rules = cards.flatMap(card => card.rules).join('\n');
+
+    assert.match(rules, /do NOT infer that either side raises/i);
+    assert.match(rules, /explicit source raise or exact verified trace error/i);
+    assert.match(rules, /do not guess required constructor dependencies/i);
+    assert.doesNotMatch(rules, /N-1 \(should raise\)|self\.obj = ClassName\(\)/i);
+});

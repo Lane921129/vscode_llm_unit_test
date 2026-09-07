@@ -237,6 +237,31 @@ def raised_exception_names(func_node):
     return list(dict.fromkeys(names))
 
 
+def is_generator_function(func_node):
+    """Whether the selected callable itself yields values.
+
+    A nested helper's yield does not make its enclosing callable a generator,
+    so nested scopes are intentionally excluded.
+    """
+    found = False
+
+    def visit(node):
+        nonlocal found
+        if found:
+            return
+        if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            found = True
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in func_node.body:
+        visit(statement)
+    return found
+
+
 def branch_condition_facts(func_node, parameter_names):
     """Return only direct, source-verifiable branch comparisons.
 
@@ -376,6 +401,7 @@ def extract_info(filepath, func_name):
             'method_kind': method_kind(func_node, class_node),
             'property_context': extract_property_context(class_node, lines, func_node.name),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
+            'is_generator': is_generator_function(func_node),
             'executable_lines': executable_body_lines(func_node),
             'raised_exceptions': raised_exception_names(func_node),
             'condition_facts': branch_condition_facts(func_node, set(args)),
