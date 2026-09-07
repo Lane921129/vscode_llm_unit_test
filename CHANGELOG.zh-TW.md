@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### Tier 1 Corpus 完成 Trace、unittest 與 Mutation 端到端 Gate
+
+- 新增 Tier 1 corpus integration test：對每個 Tier 1 fixture 實際執行 AST Extractor、Caller Finder、Dynamic Tracer、正式 `tier1TestFileBuilder`、Python unittest 與內建 AST mutation runner，並驗證 baseline 與 manifest mutation 門檻。
+- 修正 boundary fixture 的等效 mutant：原本 `<`／`<=` 兩側回傳相同值，無法由任何觀察性測試殺死；改為可觀察的 `below`／`inside`／`above` 分支，避免把等效 mutant 假裝成 Tier 1 測試缺陷。
+- 驗證：四項 Tier 1 fixture 的 deterministic unittest 與 builtin mutation 均通過各自門檻；160 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：本機 Python 沒有安裝 `coverage`，因此此 gate 不宣稱已驗證 line coverage；Tier 2–4 尚未以真實模型端到端驗收。
+
 ### 抽出正式 Tier 1 完整 unittest Builder
 
 - 將原本嵌在 orchestrator 的 deterministic Tier 1 unittest 組裝抽為 `tier1TestFileBuilder.ts`，正式 extension 與回歸測試共用相同的模組、instance、static/class method、property、async 與 constructor 綁定規則。

@@ -1,6 +1,6 @@
-def clamp(value: int) -> int:
+def clamp(value: int) -> str:
     if value < 0:
-        return 0
+        return 'below'
     if value > 100:
-        return 100
-    return value
+        return 'above'
+    return 'inside'
