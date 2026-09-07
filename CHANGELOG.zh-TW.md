@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 以 AST 證據擴充 Context Manager 與 HTTP 技能卡
+
+- 新增 `context_manager_testing`：僅在被測函式存在 `with`／`async with` 敘述時，才要求測試驗證區塊內可觀察行為，並在相依資源時以 use point 的 mock 設定 `__enter__`／`__exit__`。
+- 新增 `http_client_mocking`：只有目標函式的 call 與已匯入 `requests`、`httpx`、`aiohttp` 或 `urllib` client 綁定相符時才注入；禁止產生真實網路連線的測試。
+- 新增正反回歸測試，確認字串中的 `with`、未使用的 HTTP import 與未證實的 `client.get()` 不會污染技能購物車。
+- 驗證：151 個 TypeScript 單元測試、60 個 Python 測試、Webview script 語法檢查、完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚待公開 fixture corpus 實測不同 HTTP client 的同步／非同步 context-manager 回應型態；本次不宣稱已完成真實雲端模型的端到端驗證。
+
 ### 開源社群、安全回報與 package metadata
 
 - 新增 `SECURITY.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、GitHub Bug Report／Pull Request 模板，明確禁止在公開回報中提供 Key、Token、私有程式與完整授權資訊。

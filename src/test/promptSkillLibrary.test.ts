@@ -18,7 +18,7 @@ async def load_snapshot(path):
     assert.ok(skillIds.includes('datetime_freezing'));
     assert.deepStrictEqual(
         getSkillCards(skillIds).filter(card => card.id !== 'import_module_name').map(card => card.id).sort(),
-        ['async_coroutine_testing', 'datetime_freezing', 'file_io_mocking']
+        ['async_coroutine_testing', 'context_manager_testing', 'datetime_freezing', 'file_io_mocking']
     );
 });
 
@@ -109,4 +109,45 @@ test('class instance skill is not injected for static or class-bound methods', (
     assert.ok(!staticIds.includes('class_method_testing'));
     assert.ok(!classIds.includes('class_method_testing'));
     assert.ok(instanceIds.includes('class_method_testing'));
+});
+
+test('context-manager skill requires a real with statement rather than a word match', () => {
+    const contextManager = inferSkillIdsFromCode(
+        'def load(factory):\n    with factory() as resource:\n        return resource.read()'
+    );
+    const ordinary = inferSkillIdsFromCode(
+        'def combine_with(value):\n    return "with " + value'
+    );
+
+    assert.ok(contextManager.includes('context_manager_testing'));
+    assert.ok(!ordinary.includes('context_manager_testing'));
+    assert.ok(getSkillCards(contextManager).find(card => card.id === 'context_manager_testing')?.rules
+        .some(rule => rule.includes('__enter__')));
+});
+
+test('HTTP mocking skill requires a target call tied to an imported client binding', () => {
+    const ids = inferSkillIdsFromCode(
+        'def fetch(path):\n    return transport.get(path)',
+        {
+            calls: ['transport.get'],
+            file_imports: [{ module: 'httpx', name: null, bound_name: 'transport' }],
+        }
+    );
+    const importedButUnused = inferSkillIdsFromCode(
+        'def label(value):\n    return value',
+        {
+            calls: [],
+            file_imports: [{ module: 'requests', name: null, bound_name: 'requests' }],
+        }
+    );
+    const unrelatedClient = inferSkillIdsFromCode(
+        'def fetch(client, path):\n    return client.get(path)',
+        { calls: ['client.get'], file_imports: [] }
+    );
+
+    assert.ok(ids.includes('http_client_mocking'));
+    assert.ok(!importedButUnused.includes('http_client_mocking'));
+    assert.ok(!unrelatedClient.includes('http_client_mocking'));
+    assert.ok(getSkillCards(ids).find(card => card.id === 'http_client_mocking')?.rules
+        .some(rule => rule.includes('Never make a real network request')));
 });

@@ -219,6 +219,30 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - Cover timezone or formatting boundaries only when the source code handles them.',
         ]
     },
+    {
+        id: 'context_manager_testing',
+        title: 'Context Manager Testing',
+        trigger_hint: 'Use when the target contains a Python with or async with statement',
+        rules: [
+            'CONTEXT MANAGER TESTING:',
+            '  - Exercise the observable behavior inside the with block, not only construction of the manager.',
+            '  - When a dependency supplies the manager, patch it at the module-under-test use point and configure its __enter__ return value with MagicMock.',
+            '  - Assert __enter__/__exit__ calls only when that interaction is observable and relevant to the target behavior.',
+            '  - Do not open real resources merely to test the context-manager syntax.',
+        ]
+    },
+    {
+        id: 'http_client_mocking',
+        title: 'HTTP Client Mocking',
+        trigger_hint: 'Use when the target calls an imported HTTP client such as requests, httpx, aiohttp, or urllib',
+        rules: [
+            'HTTP CLIENT MOCKING:',
+            '  - Never make a real network request from a generated test.',
+            '  - Patch the imported client at the module-under-test use point and provide a minimal response mock for only the members read by the source.',
+            '  - Assert request arguments and observable return or error behavior from the source; do not invent HTTP status handling that is absent from it.',
+            '  - For async HTTP calls, use AsyncMock for the awaited call or async context-manager boundary.',
+        ]
+    },
 ];
 
 export function getSkillCards(skillIds: string[]): SkillCard[] {
@@ -240,7 +264,7 @@ export function inferSkillIdsFromCode(
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
         calls?: string[];
         dependencies?: unknown[];
-        file_imports?: Array<{ module?: string | null; name?: string | null }>;
+        file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
     }
 ): string[] {
     const ids = new Set<string>(['import_module_name']);
@@ -271,6 +295,25 @@ export function inferSkillIdsFromCode(
     if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
     if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
+    if (/^\s*(?:async\s+)?with\s+.+:/m.test(source)) { ids.add('context_manager_testing'); }
+
+    // Match a verified call binding instead of names in comments, strings, or
+    // unrelated imports elsewhere in the module. HTTP library names are
+    // technical dependency evidence, never application-domain vocabulary.
+    const httpModules = /^(?:requests|httpx|aiohttp|urllib(?:\.request)?)$/;
+    const httpBindings = new Set(
+        (context?.file_imports || [])
+            .filter(item => httpModules.test(item.module || ''))
+            .map(item => item.bound_name || item.name || (item.module || '').split('.')[0])
+            .filter((name): name is string => Boolean(name))
+    );
+    const httpCall = (context?.calls || []).some(call => {
+        const root = call.split('.')[0];
+        return httpBindings.has(root)
+            || /^(?:requests|httpx|aiohttp)\.(?:get|post|put|patch|delete|request|stream)$/i.test(call)
+            || /^urllib\.request\.urlopen$/i.test(call);
+    });
+    if (httpCall) { ids.add('http_client_mocking'); }
 
     return [...ids];
 }
@@ -290,7 +333,7 @@ export function mergeEvidenceBoundSkillIds(
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
         calls?: string[];
         dependencies?: unknown[];
-        file_imports?: Array<{ module?: string | null; name?: string | null }>;
+        file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
     }
 ): string[] {
     const baseline = inferSkillIdsFromCode(sourceCode, context);
