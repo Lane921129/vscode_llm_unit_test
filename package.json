@@ -93,6 +93,11 @@
           "type": "string",
           "default": "http://127.0.0.1:11434",
           "description": "Base URL for Ollama API"
+        },
+        "llmUnitTest.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python interpreter or virtual-environment executable used for AST, trace, coverage, and mutation commands"
         }
       }
     }

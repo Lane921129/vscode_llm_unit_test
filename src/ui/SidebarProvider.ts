@@ -591,7 +591,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {
-        const infos = await extractFunctionsWithAst(filePath);
+        const configuredPython = vscode.workspace.getConfiguration('llmUnitTest').get<string>('pythonPath', '');
+        const infos = await extractFunctionsWithAst(filePath, configuredPython);
         return infos.map(f => f.fullName);
     }
 

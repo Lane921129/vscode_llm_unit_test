@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runSpawn } from './processRunner';
 import { throwIfExecutionCancelled } from '../pipeline/executionContext';
+import { normalizePythonExecutable } from './pythonTestEnvironment';
 
 export interface FunctionAstInfo {
     name: string;
@@ -14,7 +15,7 @@ export interface FunctionAstInfo {
 /**
  * 透過 Python 原生 AST 完整解析檔案內所有函式、Class Method、Async 函式
  */
-export async function extractFunctionsWithAst(filePath: string): Promise<FunctionAstInfo[]> {
+export async function extractFunctionsWithAst(filePath: string, pythonExecutable?: string): Promise<FunctionAstInfo[]> {
     if (!fs.existsSync(filePath)) {return [];}
 
     const pythonScript = `
@@ -80,7 +81,7 @@ except Exception as e:
 `;
 
     try {
-        const { stdout, code } = await runSpawn('python', ['-c', pythonScript, filePath], {
+        const { stdout, code } = await runSpawn(normalizePythonExecutable(pythonExecutable), ['-c', pythonScript, filePath], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
         return code === 0 && stdout.trim() ? JSON.parse(stdout) : [];

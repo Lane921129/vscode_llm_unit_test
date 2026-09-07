@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 支援指定 Python／venv 直譯器以維持完整品質鏈路
+
+- 新增 VS Code 設定 `llmUnitTest.pythonPath`，預設為可攜的 `python`；使用者可指定實驗室、RDP 或 virtual environment 的直譯器，不含任何固定磁碟或帳號路徑。
+- 同一個選擇會套用於全檔／批次函式掃描、AST、Caller Finder、Dynamic Trace、格式驗證、coverage、內建 mutation fallback 與外部 mutatest／mutmut。
+- mutmut 改為由指定直譯器的 `python -m mutmut` 啟動，並以同一個直譯器執行 unittest runner；含空白的 venv 路徑有回歸測試，避免在子程序拆成錯誤命令。
+- 驗證：167 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未在實際 RDP／實驗室環境指向一個已安裝 requirements 的 venv 完成端到端模型測試；本機沙箱的不同權限 Python user-site 問題，現在可由這個設定避開。
+
 ### 將 Coverage 缺失改為品質閘門失敗而非 N/A 成績
 
 - 預先驗證發現 extension 使用的 Python 無法匯入 `coverage` 時，現在會停止分析與 mutation 計分，將原因與可攜的 `python -m pip install -r requirements.txt` 修復指令寫入 `final_report.md`。

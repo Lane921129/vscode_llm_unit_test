@@ -1,5 +1,11 @@
 import * as path from 'path';
 
+/** Resolve a user-selected interpreter without introducing shell arguments. */
+export function normalizePythonExecutable(value?: string): string {
+    const candidate = typeof value === 'string' ? value.trim() : '';
+    return candidate || 'python';
+}
+
 /**
  * Create the isolated environment used to execute generated Python tests.
  *

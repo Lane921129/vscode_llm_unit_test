@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import { test } from 'node:test';
-import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments } from '../utils/pythonTestEnvironment';
+import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from '../utils/pythonTestEnvironment';
 
 test('builds a portable Python environment without shell placeholders', () => {
     const environment = buildGeneratedTestEnvironment(
@@ -35,4 +35,10 @@ test('reports a path-agnostic remediation when the coverage quality gate is unav
     assert.match(message, /C:\\Python\\python\.exe -m pip install -r requirements\.txt/);
     assert.match(message, /restart the VS Code Extension Development Host/);
     assert.doesNotMatch(message, /D:\\|C:\\Users\\lane9/);
+});
+
+test('normalizes an optional Python interpreter without imposing a drive or account path', () => {
+    assert.strictEqual(normalizePythonExecutable('  /opt/project/.venv/bin/python  '), '/opt/project/.venv/bin/python');
+    assert.strictEqual(normalizePythonExecutable(''), 'python');
+    assert.strictEqual(normalizePythonExecutable(undefined), 'python');
 });

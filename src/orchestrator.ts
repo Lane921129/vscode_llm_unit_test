@@ -22,7 +22,7 @@ import { formatReportProvenance, ReportProvenance } from './utils/reportProvenan
 import { buildStubSmokeAssertion } from './tier/stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stubClassifier';
 import { buildStubTestPlan } from './tier/stubTestPlan';
-import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments } from './utils/pythonTestEnvironment';
+import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
@@ -45,11 +45,12 @@ interface ComplexityResult {
 /** 呼叫 complexity_assessor.py，回傳複雜度分數 */
 async function assessFunctionComplexity(
     filePath: string,
-    funcName: string
+    funcName: string,
+    pythonExecutable: string
 ): Promise<ComplexityResult> {
     const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
     try {
-        const { stdout } = await runSpawn('python', [script, filePath, funcName], {
+        const { stdout } = await runSpawn(pythonExecutable, [script, filePath, funcName], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
         return JSON.parse(stdout.trim()) as ComplexityResult;
@@ -104,7 +105,8 @@ async function runMockScaffold(
     filePath: string,
     funcName: string,
     traceResult: any,
-    targetModule?: string
+    targetModule?: string,
+    pythonExecutable: string = 'python'
 ): Promise<{ scaffold: string; patches: string[]; mock_names: string[]; class_name?: string | null; is_async?: boolean } | null> {
     const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
     const scriptArgs = [script, filePath, funcName];
@@ -115,7 +117,7 @@ async function runMockScaffold(
         scriptArgs.push(targetModule);
     }
     try {
-        const { stdout } = await runSpawn('python', scriptArgs,
+        const { stdout } = await runSpawn(pythonExecutable, scriptArgs,
             { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }
         );
         const parsed = JSON.parse(stdout.trim());
@@ -234,6 +236,13 @@ interface AnalysisParams {
     cloudKey?: string;
     projectName?: string;
     sessionDate?: string;
+    /** Optional venv or laboratory interpreter; empty values fall back to PATH python. */
+    pythonExecutable?: string;
+}
+
+function configuredPythonExecutable(): string {
+    const configured = vscode.workspace?.getConfiguration?.('llmUnitTest')?.get<string>('pythonPath', '');
+    return normalizePythonExecutable(configured);
 }
 
 interface CallerContext {
@@ -315,12 +324,13 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            await runAnalysisSession(params, sidebarProvider, async (runParams, log, view) => {
+            const paramsWithPython = { ...params, pythonExecutable: configuredPythonExecutable() };
+            await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 if (runParams.funcName) {
                     await executeSingleFileAnalysis(runParams, log, view);
                     return;
                 }
-                const funcs = await extractFunctionsWithAst(runParams.filePath);
+                const funcs = await extractFunctionsWithAst(runParams.filePath, runParams.pythonExecutable);
                 throwIfExecutionCancelled();
                 if (funcs.length === 0) {
                     log(`[系統] 檔案 ${path.basename(runParams.filePath)} 中無可測試函式。`);
@@ -347,13 +357,14 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            await runAnalysisSession(params, sidebarProvider, async (runParams, log, view) => {
+            const paramsWithPython = { ...params, pythonExecutable: configuredPythonExecutable() };
+            await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 const files = await findPythonFilesInDir(runParams.batchPath);
                 throwIfExecutionCancelled();
                 const tasks: Array<() => Promise<void>> = [];
                 for (const file of files) {
                     throwIfExecutionCancelled();
-                    const funcs = await extractFunctionsWithAst(file);
+                    const funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable);
                     for (const func of funcs) {
                         tasks.push(async () => {
                             throwIfExecutionCancelled();
@@ -420,11 +431,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 async function extractAstContext(
     targetPath: string,
-    funcName: string
+    funcName: string,
+    pythonExecutable: string
 ): Promise<AstContext | null> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
     try {
-        const { stdout, stderr, code } = await runSpawn('python', [pythonScript, targetPath, funcName], {
+        const { stdout, stderr, code } = await runSpawn(pythonExecutable, [pythonScript, targetPath, funcName], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
         if (code !== 0) {
@@ -439,7 +451,8 @@ async function extractAstContext(
 async function findCallerContexts(
     funcName: string,
     projectRoot: string,
-    targetPath?: string
+    targetPath?: string,
+    pythonExecutable: string = 'python'
 ): Promise<CallerContext[]> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
     try {
@@ -447,7 +460,7 @@ async function findCallerContexts(
         if (targetPath) {
             args.push(targetPath);
         }
-        const { stdout } = await runSpawn('python', args, {
+        const { stdout } = await runSpawn(pythonExecutable, args, {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
         const parsed = JSON.parse(stdout);
@@ -484,7 +497,8 @@ interface DynamicTraceResult {
 async function runDynamicTrace(
     filePath: string,
     funcName: string,
-    callerArgs?: CallerContext[]
+    callerArgs?: CallerContext[],
+    pythonExecutable: string = 'python'
 ): Promise<DynamicTraceResult | null> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
     const baseArgs = [pythonScript, filePath, funcName];
@@ -508,7 +522,7 @@ async function runDynamicTrace(
         const runTrace = async (inputs?: typeof literalInputs): Promise<DynamicTraceResult> => {
             const args = [...baseArgs];
             if (inputs && inputs.length > 0) {args.push(JSON.stringify(inputs));}
-            const { stdout } = await runSpawn('python', args, {
+            const { stdout } = await runSpawn(pythonExecutable, args, {
                 env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
                 timeout: 15000
             });
@@ -685,7 +699,8 @@ async function validateGeneratedTestCode(
     targetUsage: 'call' | 'property' = 'call',
     targetSignature?: unknown[],
     allowedExceptionNames?: string[],
-    targetClassName?: string
+    targetClassName?: string,
+    pythonExecutable: string = 'python'
 ): Promise<{ valid: boolean; reason?: string }> {
     const structure = validateUnittestStructure(
         code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName
@@ -696,7 +711,7 @@ async function validateGeneratedTestCode(
 
     try {
         const parsed = await runSpawn(
-            'python',
+            pythonExecutable,
             ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
             { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
         );
@@ -706,7 +721,7 @@ async function validateGeneratedTestCode(
         if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature) && targetSignature.length > 0) {
             const validatorScript = path.join(__dirname, '..', 'python_scripts', 'validate_target_calls.py');
             const compatibility = await runSpawn(
-                'python',
+                pythonExecutable,
                 [validatorScript, targetCallable, JSON.stringify(targetSignature)],
                 { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
             );
@@ -755,10 +770,10 @@ function stripUniformIndent(code: string): string {
 }
 
 /** Parse bare asserts with Python AST; the normal validation gates still apply. */
-async function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string, importModule?: string): Promise<string> {
+async function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string, importModule?: string, pythonExecutable: string = 'python'): Promise<string> {
     const moduleName = importModule || path.basename(srcFilePath, '.py');
     const script = path.join(__dirname, '..', 'python_scripts', 'rescue_unittest.py');
-    const result = await runSpawn('python', [script], {
+    const result = await runSpawn(pythonExecutable, [script], {
         input: JSON.stringify({ code: rawCode, module: moduleName }),
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         timeout: 5000
@@ -819,6 +834,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     // Keep the qualified selection for reports and output paths, while using
     // the AST-confirmed leaf name when building Python calls and assertions.
     let targetFuncName = params.funcName;
+    const pythonExecutable = normalizePythonExecutable(params.pythonExecutable);
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
     const userTierSetting = params.promptStrategy || 'auto';
@@ -826,7 +842,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const dummyNameMarked = hasDummyFunctionNameMarker(params.funcName);
     let complexityScore = 30;
     if (params.funcName && !dummyNameMarked) {
-        const comp = await assessFunctionComplexity(params.filePath, params.funcName);
+        const comp = await assessFunctionComplexity(params.filePath, params.funcName, pythonExecutable);
         complexityScore = comp.score;
         log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
     } else if (dummyNameMarked) {
@@ -958,7 +974,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let astContext: AstContext | null = null;
     if (params.funcName) {
         log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
-        astContext = await extractAstContext(params.filePath, params.funcName);
+        astContext = await extractAstContext(params.filePath, params.funcName, pythonExecutable);
         if (astContext && !astContext.error) {
             targetFuncName = astContext.name || targetFuncName;
             log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
@@ -976,16 +992,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const depFilePath = resolvePythonDependencyPath(params.filePath, projectRoot, dep);
                     
                     if (fs.existsSync(depFilePath)) {
-                        const depAst = await extractAstContext(depFilePath, dep.name);
+                            const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
                         if (depAst && !depAst.error) {
                             // 🔍 呼叫站掃描：找出這個依賴函式在全專案的所有呼叫點
                             log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
-                            const callers = await findCallerContexts(dep.name, projectRoot, depFilePath);
+                            const callers = await findCallerContexts(dep.name, projectRoot, depFilePath, pythonExecutable);
                             if (callers.length > 0) {
                                 depAst.callerContexts = callers;
                                 log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
                             }
-                            const dependencyTrace = await runDynamicTrace(depFilePath, dep.name, callers);
+                            const dependencyTrace = await runDynamicTrace(depFilePath, dep.name, callers, pythonExecutable);
                             if (dependencyTrace && !dependencyTrace.load_error) {
                                 depAst.traceResult = dependencyTrace;
                                 log(`[Trace] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
@@ -1004,7 +1020,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const projectRoot = (params as any).batchPath
                     ? (params as any).batchPath
                     : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
-                const selfCallers = await findCallerContexts(params.funcName, projectRoot, params.filePath);
+                const selfCallers = await findCallerContexts(params.funcName, projectRoot, params.filePath, pythonExecutable);
                 if (selfCallers.length > 0) {
                     astContext.callerContexts = selfCallers;
                     log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
@@ -1013,7 +1029,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             // 動態執行追蹤：取得真實的 input→output 範例，讓 LLM 的 assert 值不再是猜的
             log(`[Trace] 正在動態執行函式以取得真實輸入輸出範例...`);
-            const traceResult = await runDynamicTrace(params.filePath, params.funcName, astContext.callerContexts);
+            const traceResult = await runDynamicTrace(params.filePath, params.funcName, astContext.callerContexts, pythonExecutable);
             if (traceResult && !traceResult.load_error) {
                 (astContext as any).traceResult = traceResult;
                 const exCount = traceResult.examples.length;
@@ -1335,7 +1351,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (currentTier === 3 && !sanitizedCode && !survivedMutants) {
                 log(`[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…`);
                 const traceResult = (astContext as any)?.traceResult;
-                const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult, targetImportModule);
+                const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult, targetImportModule, pythonExecutable);
                 if (scaffoldResult && scaffoldResult.scaffold) {
                     log(`[Tier 3] 骨架產生完成！patches: ${scaffoldResult.patches.join(', ') || '(無外部依賴)'}`);
                     const moduleName = targetImportModule;
@@ -1476,7 +1492,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
                     if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
                         log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
-                        const rescued = await rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule);
+                        const rescued = await rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule, pythonExecutable);
                         if (!rescued) {
                             if (llmRetry === 0) {
                                 log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
@@ -1496,7 +1512,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                         (astContext as any)?.signature,
                         exceptionNamesFromEvidence(astContext),
-                        (astContext as any)?.class_name
+                        (astContext as any)?.class_name,
+                        pythonExecutable
                     );
                     if (!candidateValidation.valid) {
                         if (llmRetry === 0) {
@@ -1578,7 +1595,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                 (astContext as any)?.signature,
                 exceptionNamesFromEvidence(astContext),
-                (astContext as any)?.class_name
+                (astContext as any)?.class_name,
+                pythonExecutable
             );
             if (!generatedValidation.valid) {
                 throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
@@ -1596,13 +1614,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const targetDir = path.dirname(params.filePath);
                 const parentDir = path.dirname(targetDir);
                 const grandParentDir = path.dirname(parentDir);
-                const coverageProbe = await runSpawn('python', ['-c', 'import coverage'], {
+                const coverageProbe = await runSpawn(pythonExecutable, ['-c', 'import coverage'], {
                     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
                     timeout: 5000
                 });
                 const hasCoverage = coverageProbe.code === 0;
                 if (!hasCoverage) {
-                    const coverageMessage = coverageRequiredMessage('python');
+                    const coverageMessage = coverageRequiredMessage(pythonExecutable);
                     log(`[預先驗證阻擋] ${coverageMessage}`);
                     finalReportMarkdown += `### ⚠️ Coverage 品質閘門不可用\n\n${coverageMessage}\n\n`;
                     throw new Error(coverageMessage);
@@ -1612,14 +1630,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 ]);
                 const runPrecheck = async (): Promise<{ ok: boolean; out: string }> => {
                     const testRun = await runSpawn(
-                        'python',
+                        pythonExecutable,
                         generatedUnittestArguments(testModule, targetDir, hasCoverage),
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
                     );
                     let output = `${testRun.stdout}${testRun.stderr}`.trim();
                     if (hasCoverage && testRun.code === 0) {
                         const coverageReport = await runSpawn(
-                            'python', ['-m', 'coverage', 'report', '-m'],
+                            pythonExecutable, ['-m', 'coverage', 'report', '-m'],
                             { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
                         );
                         output = [output, coverageReport.stdout, coverageReport.stderr]
@@ -1685,7 +1703,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                                     (astContext as any)?.signature,
                                     exceptionNamesFromEvidence(astContext),
-                                    (astContext as any)?.class_name
+                                    (astContext as any)?.class_name,
+                                    pythonExecutable
                                 );
                                 if (reviewValidation.valid) {
                                     throwIfExecutionCancelled();
@@ -1742,7 +1761,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
                                             (astContext as any)?.signature,
                                             exceptionNamesFromEvidence(astContext),
-                                            (astContext as any)?.class_name
+                                        (astContext as any)?.class_name,
+                                        pythonExecutable
                                         );
                                         if (repairValidation.valid) {
                                             throwIfExecutionCancelled();
@@ -1816,7 +1836,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             let pyVer = '';
             try {
                 // 取得 Python 版本
-                const { stdout: pyVerRaw } = await runSpawn('python', ['--version'], {
+                const { stdout: pyVerRaw } = await runSpawn(pythonExecutable, ['--version'], {
                     env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
                 });
                 pyVer = pyVerRaw.trim().replace('Python ', '');
@@ -1827,7 +1847,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else if (preferredEngine === 'mutmut') {
                     log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
                     // Python 3.12+ uses mutmut because mutatest requires coverage < 6.
-                    const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
+                    const mutmutCheck = await runSpawn(pythonExecutable, ['-m', 'mutmut', '--version'], {});
                     if (mutmutCheck.code === 0) {
                         engine = 'mutmut';
                         log(`[系統] mutmut 可用，使用 mutmut 進行突變測試。`);
@@ -1838,12 +1858,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else {
                     log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
                     // Windows 或 Python < 3.12 優先使用 mutatest
-                    const mutatestCheck = await runSpawn('python', ['-c', 'from mutatest.cli import cli_main'], {});
+                    const mutatestCheck = await runSpawn(pythonExecutable, ['-c', 'from mutatest.cli import cli_main'], {});
                     if (mutatestCheck.code === 0) {
                         engine = 'mutatest';
                         log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
                     } else {
-                        const mutmutCheck = await runSpawn('mutmut', ['--version'], {});
+                        const mutmutCheck = await runSpawn(pythonExecutable, ['-m', 'mutmut', '--version'], {});
                         if (mutmutCheck.code === 0) {
                             engine = 'mutmut';
                             log(`[系統] mutatest 不可用，改用 mutmut。`);
@@ -1871,7 +1891,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const perMutationTimeout = Math.max(1, Math.min(10, Math.floor(params.timeoutSeconds / 3)));
                 const selectedClassName = (astContext as any)?.class_name as string | undefined;
                 const fallbackRun = await runSpawn(
-                    'python',
+                    pythonExecutable,
                     [
                         fallbackScript,
                         params.filePath,
@@ -1914,7 +1934,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     params.filePath,
                     testModule,
                     reportDir,
-                    params.mutpyTimeout
+                    params.mutpyTimeout,
+                    pythonExecutable
                 );
                 const mutationEnvironment = buildGeneratedTestEnvironment(process.env, [
                     targetDir, parentDir, grandParentDir, testDir

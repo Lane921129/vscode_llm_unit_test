@@ -27,15 +27,18 @@ export function buildExternalMutationExecution(
     targetPath: string,
     testModule: string,
     reportDirectory: string,
-    timeoutFactor?: number
+    timeoutFactor?: number,
+    pythonExecutable: string = 'python'
 ): ExternalMutationExecution {
-    const testRunner = `python -m unittest ${testModule}`;
+    // mutmut owns this runner string. JSON quoting keeps a selected interpreter
+    // path with spaces as one executable token when mutmut launches it.
+    const testRunner = `${JSON.stringify(pythonExecutable)} -m unittest ${testModule}`;
     if (engine === 'mutmut') {
-        const args = ['run', '--paths-to-mutate', targetPath, '--runner', testRunner];
+        const args = ['-m', 'mutmut', 'run', '--paths-to-mutate', targetPath, '--runner', testRunner];
         if (timeoutFactor) {
             args.push('--test-time-multiplier', String(timeoutFactor));
         }
-        return { command: 'mutmut', args };
+        return { command: pythonExecutable, args };
     }
 
     const args = [
@@ -47,5 +50,5 @@ export function buildExternalMutationExecution(
     if (timeoutFactor) {
         args.push('--timeout_factor', String(timeoutFactor));
     }
-    return { command: 'python', args };
+    return { command: pythonExecutable, args };
 }
