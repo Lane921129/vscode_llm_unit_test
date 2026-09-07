@@ -29,6 +29,33 @@ class FixtureCorpusTests(unittest.TestCase):
         )
         return json.loads(completed.stdout)
 
+    def find_callers(self, fixture):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / 'ast_caller_finder.py'),
+                fixture['target'],
+                str(FIXTURE_ROOT),
+                str(FIXTURE_ROOT / fixture['source']),
+            ],
+            check=True,
+            capture_output=True,
+            encoding='utf-8',
+        )
+        return json.loads(completed.stdout)
+
+    def trace(self, fixture, inputs=None):
+        args = [
+            sys.executable,
+            str(SCRIPTS_DIR / 'dynamic_tracer.py'),
+            str(FIXTURE_ROOT / fixture['source']),
+            fixture['target'],
+        ]
+        if inputs:
+            args.append(json.dumps(inputs))
+        completed = subprocess.run(args, check=True, capture_output=True, encoding='utf-8')
+        return json.loads(completed.stdout)
+
     def test_manifest_has_three_fixtures_for_each_tier(self):
         self.assertEqual(self.manifest['schema_version'], 1)
         self.assertGreaterEqual(len(self.manifest['fixtures']), 12)
@@ -60,6 +87,26 @@ class FixtureCorpusTests(unittest.TestCase):
                         and item.get('bound_name') == expected_import.get('bound_name')
                         for item in data['file_imports']
                     ))
+
+    def test_tier_one_fixtures_produce_safe_dynamic_trace_facts(self):
+        tier_one = [fixture for fixture in self.manifest['fixtures'] if fixture['tier'] == 1]
+        for fixture in tier_one:
+            with self.subTest(fixture=fixture['id']):
+                callers = self.find_callers(fixture)
+                literal_inputs = [
+                    {
+                        'args': caller['trace_args'],
+                        'kwargs': caller['trace_kwargs'] or {},
+                        'constructor_args': caller['trace_constructor_args'],
+                        'constructor_kwargs': caller['trace_constructor_kwargs'] or {},
+                    }
+                    for caller in callers
+                    if isinstance(caller.get('trace_args'), list)
+                ]
+                trace = self.trace(fixture, literal_inputs or None)
+                self.assertIsNone(trace['load_error'])
+                self.assertTrue(trace['examples'] or trace['errors'])
+                self.assertTrue(all(item.get('call_assertable', True) for item in trace['examples'] + trace['errors']))
 
 
 if __name__ == '__main__':

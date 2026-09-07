@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### 讓 Tier 1 Corpus 以真實 Caller／Trace 取得建構子事實
+
+- `Labeler.render` fixture 補上同檔、字面值建構子的真實 caller，讓 Caller Finder 能以 `Labeler('label').render('value')` 提供建構子與方法引數的分離事實。
+- Python corpus 回歸新增 Tier 1 Dynamic Trace gate：每個 Tier 1 fixture 都必須透過正式 `ast_caller_finder.py` 與 `dynamic_tracer.py` 取得至少一筆安全、可 assertion 的成功或例外結果；必要建構子沒有實證時不會假裝可測。
+- 驗證：155 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此 gate 驗證 Trace 事實可用，不取代下一步的「將 Tier 1 builder 產物逐項執行並檢查 mutation 門檻」。
+
 ### 修正 Tier 1／2 Prompt 對有限 Trace 的過度推論
 
 - Writer Prompt 不再根據少數成功／失敗 Dynamic Trace 範例宣稱某段字串長度「必定」拋例外、另一段「必定」正常，或宣稱所有未觀測輸入都回傳 `None`。
