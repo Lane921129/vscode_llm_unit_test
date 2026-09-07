@@ -68,7 +68,12 @@ def find_external_calls(func_node, import_bindings, target_module, local_helpers
             call_path = expression_path(node.func)
             if not call_path:
                 continue
-            if call_path[0] in import_bindings:
+            # ``open`` is resolved from builtins at runtime but can be patched
+            # safely at the target module's use point.  Without this branch a
+            # file-I/O Tier 3 scaffold has no patch and may touch real files.
+            if call_path == ['open']:
+                patch_path = f"{target_module}.open"
+            elif call_path[0] in import_bindings:
                 patch_path = f"{target_module}." + '.'.join(call_path)
             elif (len(call_path) == 1 and call_path[0] in local_helpers
                   and helper_has_side_effect_boundary(local_helpers[call_path[0]], import_bindings)):

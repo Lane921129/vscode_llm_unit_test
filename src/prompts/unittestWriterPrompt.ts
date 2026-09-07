@@ -62,7 +62,9 @@ export function getTier3UserPrompt(
     scaffold: string,
     moduleName: string,
     traceExamples: Array<{args: string[], result: string}> = [],
-    verifiedConstructorCall?: string | null
+    verifiedConstructorCall?: string | null,
+    targetSource?: string,
+    semanticGuidance?: string
 ): string {
     let prompt = `Target function: ${funcName} (from module: ${moduleName})\n\n`;
     if (traceExamples.length > 0) {
@@ -76,6 +78,12 @@ export function getTier3UserPrompt(
         prompt += `Verified constructor setup from a real call site:\n`;
         prompt += `  - Use exactly: instance = ${verifiedConstructorCall}\n`;
         prompt += `  - These are constructor arguments only. Do NOT pass them to ${funcName}(...).\n\n`;
+    }
+    if (targetSource) {
+        prompt += `Target source (evidence; do not copy it into the test):\n\`\`\`python\n${targetSource.trim()}\n\`\`\`\n\n`;
+    }
+    if (semanticGuidance) {
+        prompt += `Evidence-bound skill guidance (source and verified execution facts take precedence over model suggestions):\n${semanticGuidance.trim()}\n\n`;
     }
     prompt += `Test scaffold (fill in the TODO sections):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nFill in the TODO sections now:`;
     return prompt;
@@ -98,7 +106,7 @@ Output only that single Python code fence. Do not include analysis, reasoning, h
 Guidelines:
 - Use absolute imports (e.g. from module_name import target_function).
 - Use unittest.mock (patch, MagicMock) for all external dependencies.
-- Cover all edge cases: None, empty, boundary values, all exception paths.
+- Cover branches, boundaries, and exception paths only when source code, selected skill cards, or verified execution facts support them. Do not add None or empty-input tests merely by habit.
 - Every test method name must start with test_.
 - Do NOT copy the source code.`;
 }

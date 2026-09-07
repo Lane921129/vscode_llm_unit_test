@@ -82,6 +82,27 @@ test('Tier 3 scaffold prompt distinguishes verified constructor setup from metho
     assert.match(prompt, /Do NOT pass them to render\(\.\.\.\)/);
 });
 
+test('Tier 3 scaffold prompt receives source and evidence-bound skill guidance', () => {
+    const prompt = getTier3UserPrompt(
+        'read_first_line',
+        'def test_read_first_line(self, mock_open):\n    pass',
+        'reader', [], undefined,
+        "def read_first_line(path):\n    with open(path) as handle:\n        return handle.readline()",
+        '=== FUNCTION-SPECIFIC RULES ===\n[File I/O Mocking]\n  Patch at the point of use.'
+    );
+
+    assert.match(prompt, /Target source \(evidence; do not copy it into the test\)/);
+    assert.match(prompt, /File I\/O Mocking/);
+    assert.match(prompt, /source and verified execution facts take precedence/);
+});
+
+test('Tier 4 repair prompt does not require habitual None or empty-input tests', () => {
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
+
+    assert.match(writerSource, /Do not add None or empty-input tests merely by habit/);
+    assert.doesNotMatch(writerSource, /Cover all edge cases: None, empty, boundary values, all exception paths/);
+});
+
 test('writer prompt preserves the canonical package import path from AST context', () => {
     const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 

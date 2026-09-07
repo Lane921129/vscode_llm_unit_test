@@ -1365,7 +1365,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         scaffoldResult.scaffold,
                         moduleName,
                         traceExamples,
-                        verifiedConstructorCall
+                        verifiedConstructorCall,
+                        (astContext as any)?.code || targetCode,
+                        semanticContext
                     );
                     try {
                         const raw = await requestLlmApi(params, sysP, usrP, log, 'test-code-json');

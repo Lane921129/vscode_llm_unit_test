@@ -441,6 +441,31 @@ def add_record(value):
         self.assertEqual(result['mock_names'], ['mock_open_connection'])
         self.assertIn("@patch('app.repository.open_connection')", result['scaffold'])
 
+    def test_mock_scaffold_patches_direct_builtin_open_at_target_use_point(self):
+        source = '''def read_first_line(path):
+    with open(path, encoding='utf-8') as handle:
+        return handle.readline().strip()
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'reader.py'
+            target.write_text(source, encoding='utf-8')
+            result = generate_scaffold(str(target), 'read_first_line', target_module='app.reader')
+
+        self.assertEqual(result['patches'], ['app.reader.open'])
+        self.assertEqual(result['mock_names'], ['mock_open'])
+        self.assertIn("@patch('app.reader.open')", result['scaffold'])
+
+    def test_mock_scaffold_does_not_patch_an_unrelated_open_word(self):
+        source = '''def describe(value):
+    return f"open:{value}"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'reader.py'
+            target.write_text(source, encoding='utf-8')
+            result = generate_scaffold(str(target), 'describe', target_module='app.reader')
+
+        self.assertEqual(result['patches'], [])
+
     def test_dynamic_tracer_awaits_async_target_before_recording_the_result(self):
         source = '''async def double(value):
     return value * 2

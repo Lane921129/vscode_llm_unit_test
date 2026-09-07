@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 補齊 Tier 3 檔案 I/O Mock Scaffold 與 Tier 3／4 語境安全
+
+- `mock_scaffold_generator.py` 現在會將目標函式直接使用的 Python built-in `open()` 視為目標模組使用點，產生 `@patch('target_module.open')`；避免 file I/O fixture 因為它不是 import binding 而漏 patch、接觸真實檔案。
+- 新增正反 AST 回歸：真正 `open()` 會產生 patch，僅包含 `"open"` 字樣的字串不會被誤判。
+- Tier 3 專屬 Prompt 現在包含目標 source 與 evidence-bound skill guidance，不再只給 TODO scaffold 與有限 Trace；Tier 4 repair system prompt 也不再要求習慣性 None／空值測試。
+- 驗證：169 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此項驗證 mock patch 路徑與 Prompt 資料流，尚未透過真實模型完成 Tier 3 file／HTTP／DB、Tier 4 async／time／dataclass 的端到端得分。
+
 ### 支援指定 Python／venv 直譯器以維持完整品質鏈路
 
 - 新增 VS Code 設定 `llmUnitTest.pythonPath`，預設為可攜的 `python`；使用者可指定實驗室、RDP 或 virtual environment 的直譯器，不含任何固定磁碟或帳號路徑。
