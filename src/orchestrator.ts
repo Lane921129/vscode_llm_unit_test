@@ -27,7 +27,8 @@ import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import * as path from 'path';
 import * as fs from 'fs';
-import { spawn, ChildProcess } from 'child_process';
+import { runSpawn } from './utils/processRunner';
+import { ExecutionManager, currentExecution, runInExecution, isExecutionCancelled, throwIfExecutionCancelled } from './pipeline/executionContext';
 
 
 // ─────────────────────────────────────────────────────────────
@@ -62,19 +63,20 @@ async function assessFunctionComplexity(
  */
 async function runWithConcurrencyLimit<T>(
     tasks: (() => Promise<T>)[],
-    limit: number
+    limit: number,
+    onError: (message: string) => void
 ): Promise<(T | undefined)[]> {
     const results: (T | undefined)[] = new Array(tasks.length);
     let idx = 0;
     async function worker() {
         while (idx < tasks.length) {
-            if (isAborted) {break;}
+            if (isExecutionCancelled()) {break;}
             const i = idx++;
             try {
                 results[i] = await tasks[i]();
             } catch (err: any) {
                 // 任一 task 失敗不影響其他 worker 繼續執行
-                console.error(`[並行] 任務 ${i} 執行失敗: ${err?.message ?? err}`);
+                if (!isExecutionCancelled()) { onError(`[並行] 任務 ${i} 執行失敗: ${err?.message ?? err}`); }
             }
         }
     }
@@ -122,76 +124,6 @@ async function runMockScaffold(
     }
 }
 
-// ── 並行與 Process 管理 ──────────────────────────────────────
-const activeAbortControllers = new Set<AbortController>();
-const activeProcesses = new Set<ChildProcess>();
-let isAborted = false;
-
-/** 跨平台安全終止 Process Tree（含子行程） */
-function killProcessTree(proc: ChildProcess) {
-    if (!proc.pid) {return;}
-    if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', proc.pid.toString(), '/T', '/F']);
-    } else {
-        try {
-            process.kill(-proc.pid, 'SIGKILL'); // Unix: 殺整個 process group
-        } catch {
-            proc.kill('SIGKILL');
-        }
-    }
-}
-
-/**
- * spawn 封裝：以引數陣列執行外部命令，自動追蹤到 activeProcesses。
- * 比 exec() 更安全——路徑中有空格也不會崩潰。
- */
-function runSpawn(
-    command: string,
-    args: string[],
-    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; input?: string }
-): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return new Promise((resolve, reject) => {
-        if (isAborted) {return reject(new Error('使用者強制中止'));}
-
-        const proc = spawn(command, args, {
-            cwd: options.cwd,
-            env: options.env ?? process.env,
-            detached: process.platform !== 'win32',
-            shell: false
-        });
-
-        activeProcesses.add(proc);
-        let stdout = '';
-        let stderr = '';
-
-        let timer: NodeJS.Timeout | null = null;
-        if (options.timeout) {
-            timer = setTimeout(() => {
-                killProcessTree(proc);
-                reject(new Error(`執行超時 (超過 ${options.timeout! / 1000} 秒)`));
-            }, options.timeout);
-        }
-
-        proc.stdout?.on('data', (d) => { stdout += d.toString(); });
-        proc.stderr?.on('data', (d) => { stderr += d.toString(); });
-        if (options.input !== undefined) {
-            proc.stdin?.end(options.input);
-        }
-
-        proc.on('close', (code) => {
-            if (timer) {clearTimeout(timer);}
-            activeProcesses.delete(proc);
-            resolve({ stdout, stderr, code });
-        });
-
-        proc.on('error', (err) => {
-            if (timer) {clearTimeout(timer);}
-            activeProcesses.delete(proc);
-            reject(err);
-        });
-    });
-}
-
 interface ModelProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
     contextLength: number;  // max context tokens from model
@@ -213,6 +145,41 @@ function defaultModelProfile(): ModelProfile {
 
 let currentModelProfile: ModelProfile = defaultModelProfile();
 let storedModelProfiles: StoredModelProfile[] = [];
+interface ModelSnapshot {
+    current: ModelProfile;
+    stored: StoredModelProfile[];
+}
+const analysisRuns = new ExecutionManager<ModelSnapshot>();
+interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
+
+async function runAnalysisSession<T extends object>(
+    params: T,
+    sidebar: MutationViewProvider,
+    operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView) => Promise<void>
+): Promise<void> {
+    const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles });
+    if (!execution) {
+        await vscode.window.showInformationMessage('已有分析執行中，請等待完成或先中止。');
+        return;
+    }
+    const view: AnalysisView = { webview: { postMessage: message => {
+        if (!analysisRuns.canPublish(execution)) { return Promise.resolve(false); }
+        return sidebar.webview?.postMessage(message) ?? Promise.resolve(false);
+    } } };
+    const log = (text: string) => { void view.webview?.postMessage({ command: 'appendLog', text }); };
+    const runParams = { ...params, sessionDate: `${formatSessionDate()}_${execution.id}` };
+    await runInExecution(execution, async () => {
+        try { await operation(runParams, log, view); }
+        catch (error: any) {
+            if (!execution.cancelled) { log(`[錯誤] 測試執行發生異常: ${error?.message ?? error}`); }
+        } finally {
+            if (analysisRuns.finish(execution)) {
+                void sidebar.webview?.postMessage({ command: 'analysisFinished' });
+            }
+        }
+    });
+}
+
 let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVersion' | 'buildTimestamp' | 'extensionMode'> = {
     extensionId: 'unknown',
     extensionVersion: 'unknown',
@@ -345,40 +312,24 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            isAborted = false;
-            const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
-            
-            params.sessionDate = formatSessionDate();
-
-            try {
-                if (!params.funcName) {
-                // 全檔案模式：萃取所有函式，並行處理（最多 3 個同時執行）
-                const funcInfos = await extractFunctionsWithAst(params.filePath);
-                const funcs = funcInfos.map(f => f.fullName);
-                if (funcs.length === 0) {
-                    log(`[系統] 在檔案 ${path.basename(params.filePath)} 中找不到任何函式，無法進行全檔案測試。`);
-                } else {
-                    const PARALLEL_LIMIT = 3;
-                    log(`[系統] 開啟「全檔案掃描模式」！共找到 ${funcs.length} 個函式，準備以最多 ${PARALLEL_LIMIT} 個並行作業進行處理...`);
-                    const tasks = funcs.map((fName, i) => async () => {
-                        if (isAborted) {return;}
-                        log(`\n======================================================`);
-                        log(`[系統] 正在處理函式 (${i+1}/${funcs.length}): ${fName}`);
-                        log(`======================================================`);
-                        const singleParams: AnalysisParams = { ...params, funcName: fName };
-                        await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
-                    });
-                    await runWithConcurrencyLimit(tasks, PARALLEL_LIMIT);
-                    log(`\n[系統] 🎉 全檔案掃描與測試執行完畢！`);
+            await runAnalysisSession(params, sidebarProvider, async (runParams, log, view) => {
+                if (runParams.funcName) {
+                    await executeSingleFileAnalysis(runParams, log, view);
+                    return;
                 }
-            } else {
-                await executeSingleFileAnalysis(params, log, sidebarProvider);
-            }
-            } catch (err: any) {
-                log(`[錯誤] 測試執行發生異常: ${err?.message ?? err}`);
-            } finally {
-                sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
-            }
+                const funcs = await extractFunctionsWithAst(runParams.filePath);
+                throwIfExecutionCancelled();
+                if (funcs.length === 0) {
+                    log(`[系統] 檔案 ${path.basename(runParams.filePath)} 中無可測試函式。`);
+                    return;
+                }
+                log(`[系統] 全檔案掃描：${funcs.length} 個函式，最多 3 個並行作業。`);
+                await runWithConcurrencyLimit(funcs.map(func => async () => {
+                    throwIfExecutionCancelled();
+                    await executeSingleFileAnalysis({ ...runParams, funcName: func.fullName }, log, view);
+                }), 3, log);
+                log('[系統] 全檔案掃描與測試執行完畢。');
+            });
         }
     );
 
@@ -393,67 +344,34 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            isAborted = false;
-            const log = (text: string) => sidebarProvider.webview?.postMessage({ command: 'appendLog', text });
-            try {
-                const dateStr = formatSessionDate();
-                
-                const pyFiles = await findPythonFilesInDir(params.batchPath);
-                if (pyFiles.length === 0) {
-                    log(`[系統] 在目錄 ${params.batchPath} 中找不到任何 Python 檔案。`);
-                    return;
-                }
-
-                log(`[系統] 開始批次測試，共找到 ${pyFiles.length} 個 Python 檔案。`);
-                const projectName = path.basename(params.batchPath);
-                const PARALLEL_LIMIT = 3;
-                // 收集所有 (file, funcName) 對
-                const allTasks: Array<{ file: string; fName: string; fileIdx: number; funcIdx: number; totalFuncs: number }> = [];
-                for (let i = 0; i < pyFiles.length; i++) {
-                    if (isAborted) {break;}
-                    const file = pyFiles[i];
-                    const funcInfos = await extractFunctionsWithAst(file);
-                    const funcs = funcInfos.map(f => f.fullName);
-                    if (funcs.length === 0) {
-                        log(`[系統] 檔案 ${path.basename(file)} 中無可測試的函式，跳過。`);
-                        continue;
-                    }
-                    for (let j = 0; j < funcs.length; j++) {
-                        allTasks.push({ file, fName: funcs[j], fileIdx: i, funcIdx: j, totalFuncs: funcs.length });
+            await runAnalysisSession(params, sidebarProvider, async (runParams, log, view) => {
+                const files = await findPythonFilesInDir(runParams.batchPath);
+                throwIfExecutionCancelled();
+                const tasks: Array<() => Promise<void>> = [];
+                for (const file of files) {
+                    throwIfExecutionCancelled();
+                    const funcs = await extractFunctionsWithAst(file);
+                    for (const func of funcs) {
+                        tasks.push(async () => {
+                            throwIfExecutionCancelled();
+                            log(`[系統] 批次目標：${path.basename(file)}:${func.fullName}`);
+                            await executeSingleFileAnalysis({
+                                ...runParams, filePath: file, funcName: func.fullName,
+                                projectName: path.basename(runParams.batchPath)
+                            }, log, view);
+                        });
                     }
                 }
-                log(`[系統] 批次掃描完成，共 ${allTasks.length} 個函式任務，以最多 ${PARALLEL_LIMIT} 個並行作業處理...`);
-                const batchTaskFns = allTasks.map(({ file, fName, fileIdx, funcIdx, totalFuncs }) => async () => {
-                    if (isAborted) {return;}
-                    log(`\n--- 批次任務進度: 檔案 ${fileIdx+1}/${pyFiles.length}, 函式 ${funcIdx+1}/${totalFuncs} ---`);
-                    log(`[系統] 目標函式: ${fName}`);
-                    const singleParams: AnalysisParams = { ...params, filePath: file, funcName: fName, projectName: projectName, sessionDate: dateStr };
-                    try {
-                        await executeSingleFileAnalysis(singleParams, log, sidebarProvider);
-                    } catch (taskErr: any) {
-                        log(`[錯誤] 批次函式 ${fName} 執行失敗: ${taskErr?.message ?? taskErr}`);
-                    }
-                });
-                await runWithConcurrencyLimit(batchTaskFns, PARALLEL_LIMIT);
-                log(`\n[系統] 🎉 批次自動化測試執行完畢！`);
-            } catch (error) {
-                log(`[錯誤] 批次執行發生錯誤: ${error}`);
-            } finally {
-                sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
-            }
+                log(`[系統] 批次掃描完成：${tasks.length} 個函式，最多 3 個並行作業。`);
+                await runWithConcurrencyLimit(tasks, 3, log);
+                log('[系統] 批次自動化測試執行完畢。');
+            });
         }
     );
 
     const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
-        if (!isAborted) {
-            isAborted = true;
-            // 立刻中止所有進行中的 LLM API 請求
-            for (const ctrl of activeAbortControllers) {ctrl.abort();}
-            activeAbortControllers.clear();
-            // 跨平台終止所有追蹤中的 Python 子行程
-            for (const proc of activeProcesses) {killProcessTree(proc);}
-            activeProcesses.clear();
-            sidebarProvider.webview?.postMessage({ command: 'appendLog', text: '\n[系統] ⚠️ 收到終止測試信號，已中止所有進行中的任務。' });
+        if (analysisRuns.cancel()) {
+            sidebarProvider.webview?.postMessage({ command: 'appendLog', text: '\n[系統] 已中止本次分析，可重新開始。' });
             sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
         }
     });
@@ -492,7 +410,8 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd, updateModelProfileCmd);
+    context.subscriptions.push(runTestCmd, runBatchCmd, abortTestCmd, updateModelProfileCmd,
+        { dispose: () => { analysisRuns.cancel(); } });
 }
 
 
@@ -659,68 +578,62 @@ async function requestLlmApi(
         bodyData = googleRequest.body;
     }
 
+    throwIfExecutionCancelled();
     const controller = new AbortController();
-    activeAbortControllers.add(controller);
+    const release = currentExecution()?.onCancel(() => controller.abort());
     const timeoutId = setTimeout(() => {
-        if (activeAbortControllers.has(controller)) {
-            controller.abort();
-            log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
-        }
+        controller.abort();
+        log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
     }, params.timeoutSeconds * 1000);
-
-    let response;
     try {
-        response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(bodyData),
-            signal: controller.signal
+        const response = await fetch(apiUrl, {
+            method: 'POST', headers, body: JSON.stringify(bodyData), signal: controller.signal
         });
-    } finally {
-        clearTimeout(timeoutId);
-        activeAbortControllers.delete(controller);
-    }
+        throwIfExecutionCancelled();
+        if (!response.ok) {
+            const errText = await response.text();
+            if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
+                log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），改用一般文字輸出：${errText.substring(0, 180)}`);
+                return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
+            }
+            throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+        }
 
-    if (isAborted) {throw new Error("使用者強制中止");}
-    if (!response.ok) {
-        const errText = await response.text();
-        if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
-            log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），改用一般文字輸出：${errText.substring(0, 180)}`);
+        const resJson = await response.json() as Record<string, unknown>;
+
+        let responseText: string;
+        if (params.envType === 'local') {
+            responseText = (resJson as { response?: string }).response || "";
+        } else if (params.envType === 'custom') {
+            const choices = (resJson as any).choices;
+            if (choices && choices[0]?.message?.content) {
+                responseText = choices[0].message.content;
+            } else if ((resJson as any).error) {
+                throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
+            } else {
+                throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+            }
+        } else {
+            const candidates = (resJson as any).candidates;
+            if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
+                responseText = candidates[0].content.parts[0].text;
+            } else if ((resJson as any).error) {
+                throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
+            } else {
+                throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+            }
+        }
+
+        if (!isStructuredResponseUsable(responseText, outputFormat)) {
+            log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
             return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
         }
-        throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+        throwIfExecutionCancelled();
+        return responseText;
+    } finally {
+        clearTimeout(timeoutId);
+        release?.();
     }
-
-    const resJson = await response.json() as Record<string, unknown>;
-
-    let responseText: string;
-    if (params.envType === 'local') {
-        responseText = (resJson as { response?: string }).response || "";
-    } else if (params.envType === 'custom') {
-        const choices = (resJson as any).choices;
-        if (choices && choices[0]?.message?.content) {
-            responseText = choices[0].message.content;
-        } else if ((resJson as any).error) {
-            throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
-        } else {
-            throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
-        }
-    } else {
-        const candidates = (resJson as any).candidates;
-        if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
-            responseText = candidates[0].content.parts[0].text;
-        } else if ((resJson as any).error) {
-            throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
-        } else {
-            throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
-        }
-    }
-
-    if (!isStructuredResponseUsable(responseText, outputFormat)) {
-        log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
-        return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
-    }
-    return responseText;
 }
 
 function cleanCodeBlock(code: string): string {
@@ -890,7 +803,10 @@ function parseMutmutSurvived(mutatestResult: string): string {
     return survivedList.join('\n');
 }
 
-async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: MutationViewProvider) {
+async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
+    throwIfExecutionCancelled();
+    const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
+        ?? { current: currentModelProfile, stored: storedModelProfiles };
     let currentLoop = 1;
     let mutationScore = 0;
     // Rollback 保底：記錄歷史最高分的測試檔，防止後輪 LLM 改壞舊測試
@@ -913,23 +829,23 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     } else if (dummyNameMarked) {
         log(`[快速通道] 偵測到 dummy 名稱標記，跳過複雜度評估與後續 AST 分析。`);
     }
-    const selectedStoredProfile = findModelProfile(storedModelProfiles, {
+    const selectedStoredProfile = findModelProfile(modelSnapshot.stored, {
         envType: params.envType,
         modelName: params.modelName
     });
     const activeModelProfile = selectedStoredProfile
         ? withBudget(selectedStoredProfile)
-        : (currentModelProfile.envType === params.envType && currentModelProfile.modelName === params.modelName
-            ? currentModelProfile
+        : (modelSnapshot.current.envType === params.envType && modelSnapshot.current.modelName === params.modelName
+            ? modelSnapshot.current
             : defaultModelProfile());
     const modelParamBillion = parseFloat(activeModelProfile.paramSize);
     // When another model has already been probed in this session but the
     // selected one has no saved entry, retain the conservative Tier-1 gate.
     // A fresh extension with no probe data stays neutral for compatibility.
     const qualifiedForSelectedModel = qualificationForSelectedProfile(
-        storedModelProfiles,
+        modelSnapshot.stored,
         { envType: params.envType, modelName: params.modelName },
-        currentModelProfile.testGenerationReady !== undefined
+        modelSnapshot.current.testGenerationReady !== undefined
     );
     const mayUseModelAuthoredTests = canUseTierOneLlmFallback(qualifiedForSelectedModel, userTierSetting);
     if (qualifiedForSelectedModel === undefined) {
@@ -993,6 +909,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     }
     
     if (!fs.existsSync(sessionDir)) {
+        throwIfExecutionCancelled();
         fs.mkdirSync(sessionDir, { recursive: true });
     }
 
@@ -1029,6 +946,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         finalReportMarkdown += `> [!NOTE]\n> 函式名稱包含明確 \`dummy\` token，已依使用者標記略過 AST、Dynamic Trace、LLM 與突變測試。\n\n`;
         finalReportMarkdown += `- **測試狀態**: 已略過（Dummy／雜訊函式）\n`;
         finalReportMarkdown += `- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n`;
+        throwIfExecutionCancelled();
         fs.writeFileSync(existingReport, finalReportMarkdown, 'utf-8');
         log(`[快速通道] ✅ Dummy 函式 ${params.funcName} 已略過；結果已寫入 ${existingReport}`);
         return;
@@ -1181,6 +1099,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         if (!stubPlan) {
             const reason = `類別 ${className} 的建構子需要 ${requiredConstructorParams.join(', ')}，但找不到可驗證的 caller literal 設定。`;
             finalReportMarkdown += `## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：${reason} 未產生測試，也未呼叫 LLM。\n`;
+            throwIfExecutionCancelled();
             fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
             log(`[快速通道] ⏭️ ${reason} 已安全略過。`);
             return;
@@ -1213,6 +1132,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         ].join('\n');
 
         const testPath = path.join(sessionDir, 'loop1_test.py');
+        throwIfExecutionCancelled();
         fs.writeFileSync(testPath, smokeTest, 'utf-8');
 
         finalReportMarkdown += `## 🚀 快速通道結果\n\n`;
@@ -1221,6 +1141,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         finalReportMarkdown += `- **生成測試**: \`${testPath}\`\n\n`;
         finalReportMarkdown += `\`\`\`python\n${smokeTest}\n\`\`\`\n`;
 
+        throwIfExecutionCancelled();
         fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
         log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
         // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
@@ -1298,7 +1219,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     while (currentLoop <= params.maxLoops && mutationScore < 100) {
 
-        if (isAborted) {
+        if (isExecutionCancelled()) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
             break;
         }
@@ -1354,7 +1275,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         try {
             // ─── Tier 降階修復迴圈 ───
             let tierSuccess = false;
-            while (currentTier >= 1 && !tierSuccess && !isAborted) {
+            while (currentTier >= 1 && !tierSuccess && !isExecutionCancelled()) {
                 try {
                 log(`[Tier 執行] 目前使用策略：Tier ${currentTier}`);
                 sanitizedCode = "";
@@ -1693,6 +1614,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
+            throwIfExecutionCancelled();
             fs.writeFileSync(testPath, finalCode, 'utf8');
             log(`[系統] 測試腳本已存檔至: ${testPath}`);
 
@@ -1764,7 +1686,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         let reviewerFixed = false;
                         const funcArgs: string[] = (astContext as any)?.args || [];
                         for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
-                            if (isAborted) {break;}
+                            if (isExecutionCancelled()) {break;}
                             log(`[Reviewer] 第 ${reviewAttempt} 次修復嘗試...`);
                             try {
                                 const brokenCode = fs.readFileSync(testPath, 'utf8');
@@ -1792,6 +1714,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     (astContext as any)?.class_name
                                 );
                                 if (reviewValidation.valid) {
+                                    throwIfExecutionCancelled();
                                     fs.writeFileSync(testPath, revCode, 'utf8');
                                     const revCheck = await runPrecheck();
                                     const reviewerCoverage = assessExecution(revCheck.out);
@@ -1831,7 +1754,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 log(`[Tier 4 Self-repair] Reviewer 無法修復，嘗試 Tier 4 自我修正（最多 2 次）...`);
                                 let repaired = false;
                                 for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
-                                    if (isAborted) {break;}
+                                    if (isExecutionCancelled()) {break;}
                                     log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
                                     try {
                                         const repairSys = getTier4SystemPrompt();
@@ -1848,6 +1771,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             (astContext as any)?.class_name
                                         );
                                         if (repairValidation.valid) {
+                                            throwIfExecutionCancelled();
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
                                             const result2 = await runPrecheck();
                                             const repairCoverage = assessExecution(result2.out);
@@ -1963,7 +1887,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             log(`[${engine}] 正在建構突變測試指令...`);
             log(`[${engine}] 正式啟動分析 (系統超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
 
-            if (isAborted) {throw new Error("使用者強制中止");}
+            if (isExecutionCancelled()) {throw new Error("使用者強制中止");}
 
             let builtinMutation: BasicMutationResult | null = null;
             let noMutationCandidates = false;
@@ -2026,7 +1950,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     env: mutationEnvironment,
                     timeout: params.timeoutSeconds * 1000
                 });
-                if (isAborted) {
+                if (isExecutionCancelled()) {
                     throw new Error('使用者強制中止');
                 }
                 if (externalRun.code !== 0) {
@@ -2119,6 +2043,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             } else if (!noMutationCandidates && currentLoop > 1 && mutationScore < bestScore && bestCode) {
                 // 分數下降：自動回滾至歷史最優解
                 const droppedScore = mutationScore;
+                throwIfExecutionCancelled();
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore; // 維持最高分不歸零
                 log(`[Rollback] ⚠️ 第 ${currentLoop} 輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解。`);
@@ -2155,6 +2080,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             });
 
             if (fs.existsSync(path.join(reportDir, 'index.html'))) {
+                throwIfExecutionCancelled();
                 vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
             }
 
@@ -2252,6 +2178,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
 
     const finalReportPath = path.join(sessionDir, `final_report.md`);
+    throwIfExecutionCancelled();
     fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');
     sidebarProvider.webview?.postMessage({
         command: 'attachResultReport',
@@ -2261,6 +2188,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     log(`[系統] 分析結束！測試檔與最終報告已儲存至:\n${sessionDir}`);
     
     const doc = await vscode.workspace.openTextDocument(finalReportPath);
+    throwIfExecutionCancelled();
     await vscode.window.showTextDocument(doc, { preview: false });
 }
 

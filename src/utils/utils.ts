@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { runSpawn } from './processRunner';
+import { throwIfExecutionCancelled } from '../pipeline/executionContext';
 
 export interface FunctionAstInfo {
     name: string;
@@ -78,31 +79,20 @@ except Exception as e:
     sys.exit(1)
 `;
 
-    return new Promise((resolve) => {
-        const py = spawn('python', ['-c', pythonScript, filePath], {
+    try {
+        const { stdout, code } = await runSpawn('python', ['-c', pythonScript, filePath], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
-
-        let stdout = '';
-        py.stdout.on('data', data => stdout += data.toString());
-        py.stderr.on('data', () => { /* suppress stderr; parse errors are handled via close code */ });
-        py.on('error', () => resolve([]));
-        py.on('close', code => {
-            if (code === 0 && stdout.trim()) {
-                try {
-                    resolve(JSON.parse(stdout));
-                } catch {
-                    resolve([]);
-                }
-            } else {
-                resolve([]);
-            }
-        });
-    });
+        return code === 0 && stdout.trim() ? JSON.parse(stdout) : [];
+    } catch {
+        throwIfExecutionCancelled();
+        return [];
+    }
 }
 
 /** 遞迴掃描資料夾 */
 export async function findPythonFilesInDir(dir: string): Promise<string[]> {
+    throwIfExecutionCancelled();
     const ignored = new Set(['.git', 'node_modules', 'env', '.env', 'venv', '.venv', '.pytest_cache', '__pycache__']);
     const results: string[] = [];
     try {
@@ -116,7 +106,7 @@ export async function findPythonFilesInDir(dir: string): Promise<string[]> {
                 results.push(fullPath);
             }
         }
-    } catch { }
+    } catch { throwIfExecutionCancelled(); }
     return results;
 }
 

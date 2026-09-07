@@ -4,6 +4,15 @@
 
 ## 2026-09-07
 
+### 每次分析獨立取消、模型快照與行程管理
+
+- 新增 ExecutionContext／ExecutionManager，以 AsyncLocalStorage 將每批工作、所有 worker 及其資源綁定同一不可重設的取消狀態；模型能力在分析開始時複製，後續連線探測不改變既有工作。
+- 中止後可立即開始新分析；舊工作的 log、coverage、完成通知與取消後寫檔均被阻擋，session 目錄加入唯一識別，避免快速重跑覆寫結果。
+- 抽出共用 processRunner，Python 掃描與分析使用相同的取消追蹤；保留引數陣列、stdout／stderr、timeout 與跨平台終止。Windows taskkill 回傳失敗時補上直接子行程終止後備。
+- LLM 請求的 timeout／取消範圍延伸至回應本文讀取完成；相同時間僅允許一批未取消的分析，避免重複啟動。
+- 驗證：149 個 TypeScript 測試、60 個 Python 測試、密鑰歷史掃描、型別、lint、建置與差異格式檢查通過；新增真實命令中止／重跑、模型快照及雙 Python 行程隔離測試。
+- 限制：未在 Linux／macOS 桌面實測；若 Windows 禁止 taskkill，後備僅保證直接子行程終止。單檔分析與報告主體仍待後續按責任拆分。
+
 ### 修復斷言救援與公開命令入口
 
 - 裸 assert 改用 Python AST 解析後轉為 unittest，保留完整布林、連鎖比較、多行表達式及跨 assertion 的 setup；不再以逗號或比較正則拆解語意。
