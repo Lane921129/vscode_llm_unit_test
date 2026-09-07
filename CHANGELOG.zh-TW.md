@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 以真實報告建立 Fixture 模型／Tier Scorecard
+
+- 新增 `python_scripts/fixture_scorecard.py`：遞迴讀取 extension 既有 `final_report.md`，依公開 fixture manifest 對照目標、coverage 與 mutation score，輸出 `fixture_scorecard.json` 與人類可讀 `fixture_scorecard.md`。
+- 未找到報告、缺少計分、低於門檻、報告記錄執行中斷皆不會被標為通過；同一 fixture 的多次結果明確選用最新報告，單次多修復迴圈則採 rollback 所保留的最高已驗證分數。
+- `--require-complete` 可在後續有真實模型執行資料時作為 CI／release gate；本工具不呼叫模型、不讀取 Key，也不會捏造 coverage 或 mutation 成績。
+- 驗證：153 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：目前尚無使用者授權的真實雲端模型或可用本機模型結果可匯入，故 scorecard 尚未產生可宣稱的模型排名。
+
 ### 新增跨 Tier 的公開 Python 驗收 Corpus
 
 - 新增 13 個無業務資料的 Python fixture（Tier 1 四項、Tier 2–4 各三項），涵蓋邊界、例外、類別方法、property、match/case、相對 import、generator、檔案 context manager、HTTP client、資料庫隔離、時間、async context manager 與 dataclass／enum。
