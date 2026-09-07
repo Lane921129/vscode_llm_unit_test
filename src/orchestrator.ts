@@ -10,7 +10,8 @@ import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './llm/cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
-import { buildTier1InstanceSetup, buildTier1PropertyTestMethods, buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
+import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
+import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { appendTraceMethodsToUnittestClass } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tier/tierRouter';
@@ -1297,66 +1298,32 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     log('[Tier 1 退回] 動態追蹤失敗，改走標準 LLM 生成與預先驗證流程。');
                 } else {
                     log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
-                    const moduleName = targetImportModule;
-                    const isProperty = (astContext as any)?.method_kind === 'property';
-                    const isAsyncTarget = Boolean((astContext as any)?.is_async);
-                    const tier1Methods = isProperty
-                        ? buildTier1PropertyTestMethods(targetFuncName, traceResult.examples, traceResult.errors, 'self._instance', isAsyncTarget)
-                        : buildTier1TestMethods(targetFuncName, traceResult.examples, traceResult.errors, isAsyncTarget);
-
-                    if (tier1Methods.length > 0) {
-                        const className = (astContext as any)?.class_name as string | null;
-                        const methodKind = (astContext as any)?.method_kind as string | undefined;
-                        const directClassCall = className && (methodKind === 'static' || methodKind === 'class');
-                        const constructorParams = ((astContext as any)?.class_context?.init?.required_params
-                            || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
-                        const verifiedInstanceSetup = className && !directClassCall
-                            ? buildTier1InstanceSetup(className, astContext?.callerContexts)
-                            : null;
-                        if (className && !directClassCall && constructorParams && constructorParams.length > 0 && !verifiedInstanceSetup) {
-                            if (!mayUseModelAuthoredTests) {
-                                throw new Error(
-                                    `Tier 1 無法安全建立 ${className}：建構子需要 ${constructorParams.join(', ')}，`
-                                    + '而 Auto 模式下模型尚未通過 unittest 生成探測。請先執行「測試連線」，或明確選擇 Tier 2–4 後使用受驗證閘門保護的 LLM fallback。'
-                                );
-                            }
-                            log(`[Tier 1] 類別 ${className} 的建構子需要參數（${constructorParams.join(', ')}），改走一般生成與預先驗證流程。`);
-                        } else if (className) {
-                            const setupBlock = directClassCall ? '' : (verifiedInstanceSetup || [
-                                `    def setUp(self):`,
-                                `        self._instance = ${className}()`,
-                            ].join('\n'));
-                            const callPrefix = directClassCall ? `${className}.${targetFuncName}(` : `self._instance.${targetFuncName}(`;
-                            // Property methods already use self._instance.<property> access.
-                            const classMethodsMapped = isProperty ? tier1Methods : tier1Methods.map(m =>
-                                m.replace(new RegExp(`(?<![._])\\b${targetFuncName}\\(`, 'g'), callPrefix)
+                    const className = (astContext as any)?.class_name as string | null;
+                    const constructorParams = ((astContext as any)?.class_context?.init?.required_params
+                        || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
+                    const tier1File = buildTier1TestFile({
+                        moduleName: targetImportModule,
+                        functionName: targetFuncName,
+                        examples: traceResult.examples,
+                        errors: traceResult.errors,
+                        className,
+                        methodKind: (astContext as any)?.method_kind,
+                        constructorParams,
+                        callerContexts: astContext?.callerContexts,
+                        isAsync: Boolean((astContext as any)?.is_async),
+                    });
+                    if (tier1File.missingConstructorFacts) {
+                        if (!mayUseModelAuthoredTests) {
+                            throw new Error(
+                                `Tier 1 無法安全建立 ${className}：建構子需要 ${tier1File.missingConstructorFacts.join(', ')}，`
+                                + '而 Auto 模式下模型尚未通過 unittest 生成探測。請先執行「測試連線」，或明確選擇 Tier 2–4 後使用受驗證閘門保護的 LLM fallback。'
                             );
-                            sanitizedCode = [
-                                `import unittest`,
-                                `from ${moduleName} import ${className}`,
-                                ``,
-                                `class TestTier1${targetFuncName || 'Auto'}(unittest.TestCase):`,
-                                setupBlock,
-                                ``,
-                                classMethodsMapped.join('\n\n'),
-                                ``,
-                                `if __name__ == '__main__':`,
-                                `    unittest.main()`,
-                            ].join('\n');
-                        } else {
-                            sanitizedCode = [
-                                `import unittest`,
-                                `from ${moduleName} import *`,
-                                ``,
-                                `class TestTier1${targetFuncName || 'Auto'}(unittest.TestCase):`,
-                                tier1Methods.join('\n\n'),
-                                ``,
-                                `if __name__ == '__main__':`,
-                                `    unittest.main()`,
-                            ].join('\n');
                         }
-                        rawCode = `[Tier 1] Generated ${tier1Methods.length} fill-in test methods`;
-                        log(`[Tier 1] 填空法完成！共產出 ${tier1Methods.length} 個測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
+                        log(`[Tier 1] 類別 ${className} 的建構子需要參數（${tier1File.missingConstructorFacts.join(', ')}），改走一般生成與預先驗證流程。`);
+                    } else if (tier1File.code) {
+                        sanitizedCode = tier1File.code;
+                        rawCode = `[Tier 1] Generated ${tier1File.methodCount} fill-in test methods`;
+                        log(`[Tier 1] 填空法完成！共產出 ${tier1File.methodCount} 個測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
                     }
                 }
             }

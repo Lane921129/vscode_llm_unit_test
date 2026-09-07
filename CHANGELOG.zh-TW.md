@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 抽出正式 Tier 1 完整 unittest Builder
+
+- 將原本嵌在 orchestrator 的 deterministic Tier 1 unittest 組裝抽為 `tier1TestFileBuilder.ts`，正式 extension 與回歸測試共用相同的模組、instance、static/class method、property、async 與 constructor 綁定規則。
+- 必要建構子只接受 Caller Finder 已驗證的 literal；沒有事實時回傳缺失原因，Auto 模式維持拒絕猜測建構子，手動 Tier 才能進入既有受驗證的 LLM fallback。
+- 新增 builder 回歸測試，覆蓋可攜模組匯入、建構子與方法參數分離、必要建構子拒絕，以及 property 不可加括號。
+- 驗證：159 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：下一步仍須以這個正式 builder 對四項 Tier 1 corpus 產物實際執行 unittest 與 builtin mutation，不能僅以字串 builder 測試作為品質證明。
+
 ### 讓 Tier 1 Corpus 以真實 Caller／Trace 取得建構子事實
 
 - `Labeler.render` fixture 補上同檔、字面值建構子的真實 caller，讓 Caller Finder 能以 `Labeler('label').render('value')` 提供建構子與方法引數的分離事實。
