@@ -97,6 +97,8 @@ npm run compile
 
 Each analysis run creates an output session. The main `final_report.md` records the selected model, Tier, trace facts, validation failures, coverage, mutation baseline, survived mutants, and bounded repair attempts. A mutation score is only reported after the original baseline passes in the same isolated import environment.
 
+Coverage is a required quality gate, not an optional display value. If the Python interpreter used by VS Code cannot import `coverage`, analysis stops before scoring and reports the exact dependency command. Install `requirements.txt` using that same interpreter, then restart the Extension Development Host.
+
 ## Current limitations
 
 - LLM quality varies. Tier 2–4 output is validated but cannot make an incapable model reason correctly.
@@ -209,6 +211,8 @@ npm run compile
 ```
 
 每次分析的 `final_report.md` 會記錄模型、Tier、Trace、驗證失敗、coverage、mutation baseline、survived mutant 與修補嘗試。只有原始 baseline 在相同隔離匯入環境通過後，才會報告 mutation score。
+
+Coverage 是必要的品質閘門，不是可省略的顯示欄位。若 VS Code 實際使用的 Python 無法匯入 `coverage`，分析會在計分前停止，並提供相同直譯器的安裝指令。請用該直譯器安裝 `requirements.txt` 後重啟 Extension Development Host。
 
 ## 已知限制
 

@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 將 Coverage 缺失改為品質閘門失敗而非 N/A 成績
+
+- 預先驗證發現 extension 使用的 Python 無法匯入 `coverage` 時，現在會停止分析與 mutation 計分，將原因與可攜的 `python -m pip install -r requirements.txt` 修復指令寫入 `final_report.md`。
+- 不再以「unittest 可以執行」掩蓋未執行的 line／branch coverage gate；這能防止任何 Tier 或模型取得沒有覆蓋率證據的表面成功結果。
+- 新增可攜診斷訊息回歸測試，不含特定硬碟、帳號或本機路徑。
+- 驗證：166 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：本機沙箱的一般 Python 與提升權限 Python 使用不同 user-site；一般執行器目前仍未載入 coverage。這是環境部署問題，必須在 VS Code 實際使用的 Python 環境安裝 requirements 後，才可完成真實 coverage gate 驗收。
+
 ### 讓技能購物車真正進入 Writer Prompt 並移除例外過度推論
 
 - 修正 Orchestrator 資料流：語意分析師產出的 evidence-bound skill cart 與 guidance 現在會傳入主 Writer Prompt 與 Tier 2 分治子 Prompt；先前這段內容只會寫進報告，沒有實際提供給測試生成模型。

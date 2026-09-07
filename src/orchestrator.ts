@@ -22,7 +22,7 @@ import { formatReportProvenance, ReportProvenance } from './utils/reportProvenan
 import { buildStubSmokeAssertion } from './tier/stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stubClassifier';
 import { buildStubTestPlan } from './tier/stubTestPlan';
-import { buildGeneratedTestEnvironment, generatedUnittestArguments } from './utils/pythonTestEnvironment';
+import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments } from './utils/pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
@@ -1602,7 +1602,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 });
                 const hasCoverage = coverageProbe.code === 0;
                 if (!hasCoverage) {
-                    log('[預先驗證] 未安裝 coverage，改以 unittest 執行驗證；本輪覆蓋率將標示為 N/A。');
+                    const coverageMessage = coverageRequiredMessage('python');
+                    log(`[預先驗證阻擋] ${coverageMessage}`);
+                    finalReportMarkdown += `### ⚠️ Coverage 品質閘門不可用\n\n${coverageMessage}\n\n`;
+                    throw new Error(coverageMessage);
                 }
                 const testExecutionEnv = buildGeneratedTestEnvironment(process.env, [
                     targetDir, parentDir, grandParentDir, testDir
