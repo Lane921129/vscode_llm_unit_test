@@ -6,11 +6,11 @@
 
 ### 新增跨 Tier 的公開 Python 驗收 Corpus
 
-- 新增 12 個無業務資料的 Python fixture，Tier 1–4 各 3 個，涵蓋邊界、例外、類別方法、match/case、相對 import、generator、檔案 context manager、HTTP client、資料庫隔離、時間、async context manager 與 dataclass／enum。
+- 新增 13 個無業務資料的 Python fixture（Tier 1 四項、Tier 2–4 各三項），涵蓋邊界、例外、類別方法、property、match/case、相對 import、generator、檔案 context manager、HTTP client、資料庫隔離、時間、async context manager 與 dataclass／enum。
 - 每個 fixture 在 `manifest.json` 定義目標、可證實的 AST／技能卡事實、建議 Tier、最低 coverage／mutation score 及不可接受的假測試；它們是後續模型評分共同輸入，不是假造的模型實測成績。
 - 新增 TypeScript corpus 測試與 Python AST corpus 測試，確保四個 Tier 各有三項、所有目標均能由正式 AST Extractor 解析，且技能預期持續受 source／import／call 證據約束。
 - 驗證：153 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
-- 限制：尚未以真實模型生成並計算這 12 項的 coverage／mutation 實測矩陣；外部資源案例只允許 mock 或隔離資源，不能在本機回歸時觸網或使用共享資料庫。
+- 限制：尚未以真實模型生成並計算這 13 項的 coverage／mutation 實測矩陣；外部資源案例只允許 mock 或隔離資源，不能在本機回歸時觸網或使用共享資料庫。
 
 ### 以 AST 證據擴充 Context Manager 與 HTTP 技能卡
 

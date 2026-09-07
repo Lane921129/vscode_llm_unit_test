@@ -31,10 +31,10 @@ class FixtureCorpusTests(unittest.TestCase):
 
     def test_manifest_has_three_fixtures_for_each_tier(self):
         self.assertEqual(self.manifest['schema_version'], 1)
-        self.assertEqual(len(self.manifest['fixtures']), 12)
+        self.assertGreaterEqual(len(self.manifest['fixtures']), 12)
         for tier in range(1, 5):
             fixtures = [fixture for fixture in self.manifest['fixtures'] if fixture['tier'] == tier]
-            self.assertEqual(len(fixtures), 3)
+            self.assertGreaterEqual(len(fixtures), 3)
 
     def test_every_fixture_has_ast_context_and_acceptance_criteria(self):
         for fixture in self.manifest['fixtures']:
@@ -45,6 +45,8 @@ class FixtureCorpusTests(unittest.TestCase):
                 self.assertNotIn('error', data)
                 self.assertEqual(data['method_kind'], fixture['expected']['method_kind'])
                 self.assertEqual(data['is_async'], fixture['expected']['is_async'])
+                if data['method_kind'] == 'property':
+                    self.assertIsNotNone(data['property_context'])
                 self.assertGreater(fixture['acceptance']['min_line_coverage'], 0)
                 self.assertGreater(fixture['acceptance']['min_mutation_score'], 0)
                 self.assertTrue(fixture['acceptance']['forbidden'])

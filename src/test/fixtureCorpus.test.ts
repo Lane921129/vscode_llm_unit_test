@@ -39,11 +39,11 @@ const manifest = JSON.parse(readFileSync(join(fixtureRoot, 'manifest.json'), 'ut
 
 test('public fixture corpus has three neutral acceptance inputs for every Tier', () => {
     assert.strictEqual(manifest.schema_version, 1);
-    assert.strictEqual(manifest.fixtures.length, 12);
+    assert.ok(manifest.fixtures.length >= 12);
 
     for (const tier of [1, 2, 3, 4]) {
         const fixtures = manifest.fixtures.filter(fixture => fixture.tier === tier);
-        assert.strictEqual(fixtures.length, 3, `Tier ${tier} must have three fixtures`);
+        assert.ok(fixtures.length >= 3, `Tier ${tier} must have at least three fixtures`);
         for (const fixture of fixtures) {
             assert.ok(fixture.target);
             assert.ok(fixture.acceptance.min_line_coverage > 0);

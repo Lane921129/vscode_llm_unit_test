@@ -27,6 +27,15 @@
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["constructing Labeler without its required prefix"]}
     },
     {
+      "id": "tier1-property",
+      "tier": 1,
+      "source": "tier1_property.py",
+      "target": "Temperature.value",
+      "context": {"class_name": "Temperature", "method_kind": "property"},
+      "expected": {"method_kind": "property", "is_async": false, "skills": ["class_method_testing"], "trace": "assertable"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["calling the property with parentheses"]}
+    },
+    {
       "id": "tier2-pattern-match",
       "tier": 2,
       "source": "tier2_pattern.py",
