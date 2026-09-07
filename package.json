@@ -4,6 +4,14 @@
   "publisher": "lane",
   "description": "Using llm to generate unit test and analyzation for user",
   "version": "0.0.1",
+  "homepage": "https://github.com/Lane921129/vscode_llm_unit_test#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lane921129/vscode_llm_unit_test.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Lane921129/vscode_llm_unit_test/issues"
+  },
   "engines": {
     "vscode": "^1.116.0"
   },

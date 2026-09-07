@@ -4,6 +4,12 @@
 
 ## 2026-09-07
 
+### 開源社群、安全回報與 package metadata
+
+- 新增 `SECURITY.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、GitHub Bug Report／Pull Request 模板，明確禁止在公開回報中提供 Key、Token、私有程式與完整授權資訊。
+- `package.json` 補上 repository、issues 與 homepage metadata，讓 extension 發布與 GitHub 專案關聯可被工具與使用者辨識。
+- 驗證：149 個 TypeScript 單元測試、60 個 Python 測試、Webview script 語法檢查、完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ### 補齊 MIT 授權檔
 
 - 補上 `LICENSE` 的標準 MIT 條文，與 `package.json` 已宣告的 MIT 授權及 README 連結一致。
