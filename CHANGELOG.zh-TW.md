@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 新增 AST 綁定的 Tier 4 Async Context Manager 技能卡
+
+- 新增 `async_context_manager_testing`，只在目標 callable 真的含有 `async with` 時才放入技能購物車；同步 `with` 與字串文字不會誤觸發。
+- 技能卡區分 `async with client.method(...)` 和 `await client.method(...)`，要求使用 `__aenter__`／`__aexit__`，並警告裸 `AsyncMock` 回傳 coroutine 不能直接充當 async context manager。
+- 一般 context-manager 卡同步補上 sync／async protocol 的分界；Tier 4 async fixture 已將此項列為可驗證的技能期待。
+- 驗證：170 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此項證明 AST 觸發與 Prompt 規則正確，尚未以真實 async provider 回應完成 Tier 4 端到端 coverage／mutation 評分。
+
 ### 補齊 Tier 3 檔案 I/O Mock Scaffold 與 Tier 3／4 語境安全
 
 - `mock_scaffold_generator.py` 現在會將目標函式直接使用的 Python built-in `open()` 視為目標模組使用點，產生 `@patch('target_module.open')`；避免 file I/O fixture 因為它不是 import binding 而漏 patch、接觸真實檔案。

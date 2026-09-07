@@ -125,6 +125,25 @@ test('context-manager skill requires a real with statement rather than a word ma
         .some(rule => rule.includes('__enter__')));
 });
 
+test('async-context skill requires real async with syntax and uses the async protocol', () => {
+    const asyncContext = inferSkillIdsFromCode(
+        'async def load(session):\n    async with session.get() as response:\n        return await response.text()'
+    );
+    const ordinaryContext = inferSkillIdsFromCode(
+        'def load(factory):\n    with factory() as resource:\n        return resource.read()'
+    );
+    const textOnly = inferSkillIdsFromCode(
+        'async def label(value):\n    return "async with " + value'
+    );
+
+    assert.ok(asyncContext.includes('async_context_manager_testing'));
+    assert.ok(!ordinaryContext.includes('async_context_manager_testing'));
+    assert.ok(!textOnly.includes('async_context_manager_testing'));
+    const card = getSkillCards(asyncContext).find(candidate => candidate.id === 'async_context_manager_testing');
+    assert.ok(card?.rules.some(rule => rule.includes('__aenter__')));
+    assert.ok(card?.rules.some(rule => rule.includes('bare AsyncMock call returns a coroutine')));
+});
+
 test('HTTP mocking skill requires a target call tied to an imported client binding', () => {
     const ids = inferSkillIdsFromCode(
         'def fetch(path):\n    return transport.get(path)',

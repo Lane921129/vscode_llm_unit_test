@@ -176,6 +176,7 @@ ANALYSIS RULES:
     * Does it read the current date, time, or timezone? → add "datetime_freezing"
     * Does the selected callable yield values? → add "generator_result_testing"
     * Does it contain with or async with? → add "context_manager_testing"
+    * Does it contain async with? → also add "async_context_manager_testing"
     * Does it call a verified imported HTTP client? → add "http_client_mocking"
     * ALWAYS add "import_module_name"
 - For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)

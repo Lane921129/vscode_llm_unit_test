@@ -226,9 +226,22 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'CONTEXT MANAGER TESTING:',
             '  - Exercise the observable behavior inside the with block, not only construction of the manager.',
-            '  - When a dependency supplies the manager, patch it at the module-under-test use point and configure its __enter__ return value with MagicMock.',
+            '  - For ordinary with, when a dependency supplies the manager, patch it at the module-under-test use point and configure its __enter__ return value with MagicMock.',
+            '  - For async with, use the async context-manager protocol (__aenter__/__aexit__) instead; do not reuse the ordinary __enter__ setup.',
             '  - Assert __enter__/__exit__ calls only when that interaction is observable and relevant to the target behavior.',
             '  - Do not open real resources merely to test the context-manager syntax.',
+        ]
+    },
+    {
+        id: 'async_context_manager_testing',
+        title: 'Async Context Manager Testing',
+        trigger_hint: 'Use only when the selected callable contains an async with statement',
+        rules: [
+            'ASYNC CONTEXT MANAGER TESTING:',
+            '  - Configure the value consumed by async with as an async context manager with __aenter__ and __aexit__.',
+            '  - Distinguish `async with client.method(...)` from `await client.method(...)`: a bare AsyncMock call returns a coroutine and is not automatically an async context manager.',
+            '  - Use AsyncMock only for members the source actually awaits, and assert observable results rather than mock implementation details.',
+            '  - Do not make real asynchronous network, file, or database calls.',
         ]
     },
     {
@@ -309,6 +322,7 @@ export function inferSkillIdsFromCode(
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
     if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
     if (/^\s*(?:async\s+)?with\s+.+:/m.test(source)) { ids.add('context_manager_testing'); }
+    if (/^\s*async\s+with\s+.+:/m.test(source)) { ids.add('async_context_manager_testing'); }
 
     // Match a verified call binding instead of names in comments, strings, or
     // unrelated imports elsewhere in the module. HTTP library names are

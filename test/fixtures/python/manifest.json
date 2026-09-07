@@ -101,7 +101,7 @@
       "source": "tier4_async_context.py",
       "target": "read_payload",
       "context": {"calls": ["session.get", "response.text"], "file_imports": [{"module": "aiohttp", "name": null, "bound_name": "aiohttp"}]},
-      "expected": {"method_kind": "module", "is_async": true, "skills": ["async_coroutine_testing", "context_manager_testing"], "trace": "mock_required"},
+      "expected": {"method_kind": "module", "is_async": true, "skills": ["async_coroutine_testing", "context_manager_testing", "async_context_manager_testing"], "trace": "mock_required"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 80, "forbidden": ["real async network access"]}
     },
     {
