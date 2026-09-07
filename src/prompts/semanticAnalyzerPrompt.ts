@@ -257,21 +257,21 @@ export function formatSemanticContextForPrompt(
     }
 
     if (analysis.unreachable_paths.length > 0) {
-        out += '\nUnreachable Paths (Do NOT write tests expecting these):\n';
+        out += '\nCandidate unreachable paths (verify against source or trace; do not omit a test solely because of this suggestion):\n';
         for (const up of analysis.unreachable_paths) {
             out += '  X "' + up.condition + '" -- ' + up.reason + '\n';
         }
     }
 
     if (analysis.equivalent_mutant_candidates.length > 0) {
-        out += '\nProbable Equivalent Mutants (These may be unkillable without mock.patch):\n';
+        out += '\nCandidate equivalent mutants (verify observability before treating them as unkillable):\n';
         for (const em of analysis.equivalent_mutant_candidates) {
             out += '  ~ ' + em.description + ': ' + em.reason + '\n';
         }
     }
 
     if (analysis.mock_required_for && analysis.mock_required_for.length > 0) {
-        out += '\nPaths Requiring mock.patch to Test:\n';
+        out += '\nCandidate paths that may require mock.patch (verify target and use point):\n';
         for (const mrf of analysis.mock_required_for) {
             out += '  [mock] Path: ' + mrf.path + '\n';
             out += '         Patch target: ' + mrf.mock_target + '\n';

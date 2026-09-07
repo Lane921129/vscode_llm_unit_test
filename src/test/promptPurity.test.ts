@@ -164,6 +164,41 @@ test('writer prompt presents AST branch conditions as input coverage facts, neve
     assert.doesNotMatch(prompt, /value <= 3.*Returns|len\(text\) > 4.*Raises/s);
 });
 
+test('writer prompt receives evidence-bound semantic guidance within its token budget', () => {
+    const guidance = '=== FUNCTION-SPECIFIC RULES (Selected for this function) ===\n[Generator Result Testing]\n  Materialize finite results.';
+    const prompt = getUserPrompt(
+        'sample.py', 'every_second', 'def every_second(values):\n    yield from values', 'small',
+        { name: 'every_second', args: ['values'] }, undefined, 20_000, '', guidance
+    );
+    const constrained = getUserPrompt(
+        'sample.py', 'every_second', 'def every_second(values):\n    yield from values', 'small',
+        { name: 'every_second', args: ['values'] }, undefined, 1, '', guidance
+    );
+
+    assert.match(prompt, /EVIDENCE-BOUND SEMANTIC GUIDANCE/);
+    assert.match(prompt, /Generator Result Testing/);
+    assert.match(prompt, /source code and verified execution facts take precedence/);
+    assert.doesNotMatch(constrained, /EVIDENCE-BOUND SEMANTIC GUIDANCE/);
+});
+
+test('writer prompt does not turn try/except or dependency warnings into universal exception claims', () => {
+    const exceptionPrompt = getUserPrompt('sample.py', 'render', 'def render(value):\n    try:\n        return normalize(value)\n    except ValueError:\n        return "fallback"', 'small', {
+        name: 'render',
+        args: ['value'],
+        code: 'def render(value):\n    try:\n        return normalize(value)\n    except ValueError:\n        return "fallback"',
+    });
+    const dependencyPrompt = getUserPrompt('sample.py', 'render', 'def render(value):\n    return normalize(value)', 'small', {
+        name: 'render',
+        args: ['value'],
+        code: 'def render(value):\n    return normalize(value)',
+        dependencyContexts: [{ name: 'normalize', code: 'def normalize(value):\n    raise ValueError()' }],
+    });
+
+    assert.match(exceptionPrompt, /does not prove every path or every exception is caught/);
+    assert.match(dependencyPrompt, /may propagate/);
+    assert.doesNotMatch(exceptionPrompt + dependencyPrompt, /NEVER raises exceptions|MUST use.*assertRaises/s);
+});
+
 test('semantic strategy labels model-proposed inputs as candidates rather than facts', () => {
     const context = formatSemanticContextForPrompt({
         dependency_behaviors: [],

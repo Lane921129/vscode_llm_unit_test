@@ -1266,7 +1266,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             astContext,
             focusContext,
             activeModelProfile.budgetTokens,
-            params.modelName
+            params.modelName,
+            semanticContext
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
         log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${activeModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${activeModelProfile.paramSize}, Context: ${activeModelProfile.contextLength.toLocaleString()})`);
@@ -1405,7 +1406,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         subAstContext,
                         focusContext,
                         activeModelProfile.budgetTokens,
-                        params.modelName
+                        params.modelName,
+                        semanticContext
                     );
 
                     let subRaw = "";

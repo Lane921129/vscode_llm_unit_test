@@ -4,6 +4,15 @@
 
 ## 2026-09-07
 
+### 讓技能購物車真正進入 Writer Prompt 並移除例外過度推論
+
+- 修正 Orchestrator 資料流：語意分析師產出的 evidence-bound skill cart 與 guidance 現在會傳入主 Writer Prompt 與 Tier 2 分治子 Prompt；先前這段內容只會寫進報告，沒有實際提供給測試生成模型。
+- 新增 token 預算 gate：只有整段 guidance 放得下時才注入，預算不足時安全略過，避免規則被截成不完整片段；注入內容再次標示來源碼與精確 Trace 優先於模型候選建議。
+- Writer Prompt 不再因為存在 `try/except` 而宣稱函式「永不」拋例外，也不再把 dependency 的 `raise` 警示直接變成測試契約；兩者都必須以實際 source path 或 Trace 佐證。
+- 語意分析師的不可達路徑、等效 mutant、mock 需求都改為「候選」並要求驗證，不能據此自動刪除測試或忽略 mutation。
+- 驗證：165 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未以真實 provider 對 Tier 2 跑出可執行率、coverage 與 mutation 成績；Tier 3–4 仍未實測。
+
 ### 收斂 Tier 1／2 技能卡的證據界線並補足 Generator 支援
 
 - 修正長度邊界、除零與類別實例技能卡：不再預設某個輸入「必定」拋例外，也不再假設可用無參數建構子；它們只能要求依來源條件選擇輸入，並以明確 source／精確 Trace 支持 assertion 與 constructor setup。

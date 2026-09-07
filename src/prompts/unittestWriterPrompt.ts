@@ -210,7 +210,8 @@ export function getUserPrompt(
     astContext?: any,
     focusContexts?: string,
     budgetTokens: number = 20000,
-    modelName: string = ''
+    modelName: string = '',
+    semanticGuidance?: string
 ): string {
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
@@ -393,9 +394,8 @@ export function getUserPrompt(
                 if (dep.code && /^\s*raise\s+/m.test(dep.code) && !targetHasTry) {
                     prompt += `\n⚠️ UNCAUGHT DEPENDENCY EXCEPTION WARNING:\n`;
                     prompt += `  - Dependency \`${dep.name}()\` raises exceptions for inputs that violate its own validation rule.\n`;
-                    prompt += `  - Because \`${funcName}()\` does NOT use try/except to catch it, the exception propagates directly to caller!\n`;
-                    prompt += `  - For inputs that trigger this uncaught exception, you MUST use \`with self.assertRaises(ExceptionType):\`.\n`;
-                    prompt += `  - Do NOT assert that \`${funcName}()\` returns False or an error string on invalid inputs.\n`;
+                    prompt += `  - This exception may propagate when the target reaches that dependency call; verify the exact source path or Dynamic Trace before writing an exception test.\n`;
+                    prompt += `  - Do not infer a return value or exception contract solely from this dependency warning.\n`;
                 }
             }
 
@@ -507,16 +507,14 @@ export function getUserPrompt(
                 const m = rl.trim().match(/^raise\s+(\w+)\s*\(([^)]*)\)/);
                 if (m) {
                     prompt += `  - This function can raise ${m[1]}("${m[2].trim().replace(/["']/g,'')}")\n`;
-                    prompt += `    → MUST test with: with self.assertRaises(${m[1]}): ${funcName}(...)\n`;
-                    prompt += `    → Do NOT call assertEqual or assertIsNone on an input that triggers this raise.\n`;
+                    prompt += `    → Use assertRaises(${m[1]}) only after choosing an input that reaches this explicit source path or an exact verified trace error.\n`;
+                    prompt += `    → Do NOT assert a normal result for an input that source or trace proves reaches this raise.\n`;
                 }
             }
         } else if (exceptLines.length > 0) {
-            // 函式有 try/except 但自身不 raise → 永遠不拋例外給 caller
-            prompt += `\n\n✅ EXCEPTION HANDLING NOTE (from static analysis):\n`;
-            prompt += `  - ${funcName}() catches exceptions internally via try/except.\n`;
-            prompt += `  - This function NEVER raises exceptions to the caller.\n`;
-            prompt += `  - Do NOT use assertRaises() — always use assertEqual() to check return values.\n`;
+            prompt += `\n\n⚠️ EXCEPTION HANDLING CAUTION (from static analysis):\n`;
+            prompt += `  - ${funcName}() contains try/except, but that alone does not prove every path or every exception is caught.\n`;
+            prompt += `  - Inspect the protected statements and exception handlers. Use assertRaises only for an explicit source raise or exact verified trace error.\n`;
         }
 
         // Fix C：return 結構提示（Loop 1 & Loop 2+ 都提示）
@@ -575,7 +573,7 @@ export function getUserPrompt(
                 for (const er of ((traceRemind.errors || []) as any[]).filter(error => error.call_assertable !== false).slice(0, 5)) {
                     prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}  ← use assertRaises\n`;
                 }
-                prompt += `  ← Do NOT invent inputs. Do NOT guess return values. Use ONLY the above.\n`;
+                prompt += `  ← Preserve these exact facts for trace-derived assertions. Additional inputs may cover source-derived conditions, but their assertions still need source or trace evidence.\n`;
             }
         }
     }
@@ -586,6 +584,16 @@ export function getUserPrompt(
     } else {
         const src = (astContext && !astContext.error) ? (astContext.code || code) : code;
         prompt += `\nSource code (write tests for this, do not copy it):\n\`\`\`python\n${src}\n\`\`\``;
+    }
+
+    if (semanticGuidance) {
+        const remaining = budgetTokens - estimateTokens(prompt) - 500;
+        const guidanceTokens = estimateTokens(semanticGuidance);
+        if (remaining >= guidanceTokens) {
+            prompt += `\n\n=== EVIDENCE-BOUND SEMANTIC GUIDANCE ===\n`;
+            prompt += `${semanticGuidance.trim()}\n`;
+            prompt += `Treat model-authored candidates as suggestions only; source code and verified execution facts take precedence.\n`;
+        }
     }
 
 
