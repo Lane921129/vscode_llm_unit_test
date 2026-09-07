@@ -183,6 +183,35 @@ class Worker:
 
         self.assertEqual(data['raised_exceptions'], ['ValueError'])
 
+    def test_extractor_reports_only_direct_parameter_branch_conditions(self):
+        source = '''def classify(value, text):
+    if value <= 3:
+        return "small"
+    if len(text) > 4:
+        return "long"
+    if normalize(value) == 9:
+        return "external"
+    def deferred():
+        if value == 7:
+            return "nested"
+    return "other"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'classify.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'classify')
+
+        self.assertEqual(data['condition_facts'], [
+            {
+                'kind': 'comparison', 'parameter': 'value', 'subject': 'value',
+                'operator': 'LtE', 'literal': '3', 'line': 2,
+            },
+            {
+                'kind': 'comparison', 'parameter': 'text', 'subject': 'length',
+                'operator': 'Gt', 'literal': '4', 'line': 4,
+            },
+        ])
+
     def test_extractor_preserves_relative_import_levels(self):
         source = '''from .helpers import normalize as normalize_value
 from ..shared import validate

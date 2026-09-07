@@ -217,6 +217,20 @@ export function getUserPrompt(
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;
 
+    const comparisonOperators: Record<string, string> = {
+        Eq: '==', NotEq: '!=', Lt: '<', LtE: '<=', Gt: '>', GtE: '>=',
+        Is: 'is', IsNot: 'is not', In: 'in', NotIn: 'not in',
+    };
+    const formatConditionFact = (fact: any): string | null => {
+        if (fact?.kind !== 'comparison' || typeof fact.parameter !== 'string' || typeof fact.literal !== 'string') {
+            return null;
+        }
+        const operator = comparisonOperators[fact.operator] || fact.operator;
+        const subject = fact.subject === 'length' ? `len(${fact.parameter})` : fact.parameter;
+        const line = Number.isInteger(fact.line) ? `Source line ${fact.line}: ` : '';
+        return `${line}${subject} ${operator} ${fact.literal}`;
+    };
+
     if (astContext && !astContext.error) {
         prompt += `\nFunction info:\n`;
         prompt += `- Name: ${astContext.name}\n`;
@@ -288,6 +302,17 @@ export function getUserPrompt(
             for (const item of astContext.referenced_globals) {
                 prompt += `  - ${item.code}\n`;
             }
+        }
+        const rawConditionFacts: Array<string | null> = Array.isArray(astContext.condition_facts)
+            ? astContext.condition_facts.map(formatConditionFact)
+            : [];
+        const conditionFacts = rawConditionFacts.filter((fact: string | null): fact is string => fact !== null);
+        if (conditionFacts.length > 0) {
+            prompt += `- AST branch-condition facts (source-derived, not expected results):\n`;
+            for (const fact of conditionFacts) {
+                prompt += `  - ${fact}\n`;
+            }
+            prompt += `  - Choose independent inputs that exercise both sides where feasible. These facts do NOT prove a return value or exception; derive assertions from source or exact trace evidence.\n`;
         }
 
         // 動態執行追蹤結果（真實 input→output 範例，讓 LLM 不用猜 assert 值）

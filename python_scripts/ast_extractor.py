@@ -237,6 +237,69 @@ def raised_exception_names(func_node):
     return list(dict.fromkeys(names))
 
 
+def branch_condition_facts(func_node, parameter_names):
+    """Return only direct, source-verifiable branch comparisons.
+
+    These facts deliberately describe *conditions*, not expected results.  A
+    test planner can use them to choose inputs on both sides of a condition,
+    while assertions must still be justified by source code or real tracing.
+    Calls such as ``validator(value)`` and nested callables are excluded: their
+    semantics cannot be safely inferred from the selected function alone.
+    """
+    facts = []
+    seen = set()
+
+    def scalar_literal(node):
+        try:
+            value = ast.literal_eval(node)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return repr(value)
+        return None
+
+    def compared_parameter(node):
+        if isinstance(node, ast.Name) and node.id in parameter_names:
+            return node.id, 'value'
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == 'len'
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in parameter_names
+        ):
+            return node.args[0].id, 'length'
+        return None, None
+
+    def visit(node):
+        if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
+            parameter, subject = compared_parameter(node.left)
+            literal = scalar_literal(node.comparators[0])
+            if parameter and literal is not None:
+                fact = {
+                    'kind': 'comparison',
+                    'parameter': parameter,
+                    'subject': subject,
+                    'operator': type(node.ops[0]).__name__,
+                    'literal': literal,
+                    'line': node.lineno,
+                }
+                identity = tuple(sorted(fact.items()))
+                if identity not in seen:
+                    facts.append(fact)
+                    seen.add(identity)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in func_node.body:
+        visit(statement)
+    return facts
+
+
 def extract_info(filepath, func_name):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -315,6 +378,7 @@ def extract_info(filepath, func_name):
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
             'executable_lines': executable_body_lines(func_node),
             'raised_exceptions': raised_exception_names(func_node),
+            'condition_facts': branch_condition_facts(func_node, set(args)),
             'code': source_for(lines, func_node)
         }, ensure_ascii=False))
     except Exception as error:

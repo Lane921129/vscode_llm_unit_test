@@ -267,6 +267,7 @@ interface AstContext {
     is_async?: boolean;
     executable_lines?: number[];
     raised_exceptions?: string[];
+    condition_facts?: Array<{ kind: 'comparison'; parameter: string; subject: 'value' | 'length'; operator: string; literal: string; line: number }>;
     traceResult?: DynamicTraceResult;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];

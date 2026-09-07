@@ -147,6 +147,23 @@ test('writer prompt keeps Dynamic Trace facts exact instead of inventing univers
     assert.doesNotMatch(prompt, /CRITICAL BOUNDARY RULES|ALWAYS raises|ALWAYS returns normally/);
 });
 
+test('writer prompt presents AST branch conditions as input coverage facts, never output facts', () => {
+    const prompt = getUserPrompt('sample.py', 'classify', 'def classify(value, text): pass', 'small', {
+        name: 'classify',
+        args: ['value', 'text'],
+        condition_facts: [
+            { kind: 'comparison', parameter: 'value', subject: 'value', operator: 'LtE', literal: '3', line: 2 },
+            { kind: 'comparison', parameter: 'text', subject: 'length', operator: 'Gt', literal: '4', line: 4 },
+        ],
+    });
+
+    assert.match(prompt, /AST branch-condition facts/);
+    assert.match(prompt, /Source line 2: value <= 3/);
+    assert.match(prompt, /Source line 4: len\(text\) > 4/);
+    assert.match(prompt, /do NOT prove a return value or exception/);
+    assert.doesNotMatch(prompt, /value <= 3.*Returns|len\(text\) > 4.*Raises/s);
+});
+
 test('semantic strategy labels model-proposed inputs as candidates rather than facts', () => {
     const context = formatSemanticContextForPrompt({
         dependency_behaviors: [],

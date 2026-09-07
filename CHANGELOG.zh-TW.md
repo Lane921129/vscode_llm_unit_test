@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 將直接 AST 分支條件安全提供給 Tier 2 Prompt
+
+- `ast_extractor.py` 現在只擷取目標函式內、直接作用於參數的單一比較條件，例如 `value <= 3` 與 `len(text) > 4`；巢狀函式、一般 helper call 與無法安全解析的表達式一律排除。
+- Writer Prompt 將這些資料標示為「選擇輸入以覆蓋條件兩側」的 source-derived facts，明確禁止將它們解讀成回傳值或例外；assertion 仍須由原始碼或精確 Dynamic Trace 支持。
+- 新增正反回歸：驗證直接 parameter／`len(parameter)` 比較可辨識，helper call 和 nested callable 不會污染事實；Prompt 也不得把條件改寫成輸出結論。
+- 驗證：161 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此項只建立 Tier 2 的通用靜態證據輸入，尚未以真實模型完成 Tier 2 端到端品質量測；Tier 3–4 仍未完成實測。
+
 ### Tier 1 Corpus 完成 Trace、unittest 與 Mutation 端到端 Gate
 
 - 新增 Tier 1 corpus integration test：對每個 Tier 1 fixture 實際執行 AST Extractor、Caller Finder、Dynamic Tracer、正式 `tier1TestFileBuilder`、Python unittest 與內建 AST mutation runner，並驗證 baseline 與 manifest mutation 門檻。
