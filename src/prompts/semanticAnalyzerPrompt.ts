@@ -287,7 +287,7 @@ export function formatSemanticContextForPrompt(
     // === AI 推導的測資策略 ===
     const ts = analysis.test_strategy;
     if (ts) {
-        out += '\n=== TEST DATA STRATEGY (AI-derived for this specific function) ===\n';
+        out += '\n=== TEST DATA STRATEGY (AI-derived, validate against source before use) ===\n';
         out += 'Overall approach: ' + ts.approach + '\n';
 
         if (ts.key_rules && ts.key_rules.length > 0) {
@@ -301,14 +301,14 @@ export function formatSemanticContextForPrompt(
         }
 
         if (ts.input_hints && ts.input_hints.length > 0) {
-            out += '\nInput Boundary Hints (use these exact values in test cases):\n';
+            out += '\nInput Boundary Candidates (use only when supported by source or verified execution):\n';
             for (const hint of ts.input_hints) {
                 out += '  Param "' + hint.param_name + '": ' + hint.strategy + '\n';
                 if (hint.boundary_inputs.length > 0) {
-                    out += '    Valid inputs (use assertEqual): [' + hint.boundary_inputs.join(', ') + ']\n';
+                    out += '    Candidate normal inputs: [' + hint.boundary_inputs.join(', ') + ']\n';
                 }
                 if (hint.invalid_inputs.length > 0) {
-                    out += '    Invalid inputs (use assertRaises): [' + hint.invalid_inputs.join(', ') + ']\n';
+                    out += '    Candidate exception inputs (assertRaises requires an explicit source raise or verified error): [' + hint.invalid_inputs.join(', ') + ']\n';
                 }
                 if (hint.notes) {
                     out += '    Note: ' + hint.notes + '\n';

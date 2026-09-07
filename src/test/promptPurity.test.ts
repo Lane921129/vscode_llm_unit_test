@@ -131,3 +131,39 @@ test('semantic context omits unverified dependency return claims while retaining
     assert.ok(!context.includes('Always returns: [object Object]'));
     assert.match(context, /Unverified dependency-return claims were omitted/);
 });
+
+test('writer prompt keeps Dynamic Trace facts exact instead of inventing universal boundaries', () => {
+    const prompt = getUserPrompt('sample.py', 'validate', 'def validate(value):\n    return value', 'small', {
+        name: 'validate',
+        args: ['value'],
+        traceResult: {
+            examples: [{ args: ["'valid'"], result: "'ok'", result_assertable: true, call_assertable: true }],
+            errors: [{ args: ["'x'"], exception: 'ValueError', message: 'short', call_assertable: true }],
+        },
+    });
+
+    assert.match(prompt, /TRACE EVIDENCE LIMIT/);
+    assert.match(prompt, /only that exact call/);
+    assert.doesNotMatch(prompt, /CRITICAL BOUNDARY RULES|ALWAYS raises|ALWAYS returns normally/);
+});
+
+test('semantic strategy labels model-proposed inputs as candidates rather than facts', () => {
+    const context = formatSemanticContextForPrompt({
+        dependency_behaviors: [],
+        unreachable_paths: [],
+        equivalent_mutant_candidates: [],
+        required_skills: [],
+        test_strategy: {
+            approach: 'exercise source branches',
+            input_hints: [{
+                param_name: 'value', strategy: 'candidate boundary', boundary_inputs: ['0'], invalid_inputs: ['-1'], notes: ''
+            }],
+            assertion_style: 'mixed', mock_needed: false, key_rules: []
+        }
+    });
+
+    assert.match(context, /AI-derived, validate against source before use/);
+    assert.match(context, /Candidate normal inputs/);
+    assert.match(context, /assertRaises requires an explicit source raise or verified error/);
+    assert.doesNotMatch(context, /use these exact values in test cases/);
+});

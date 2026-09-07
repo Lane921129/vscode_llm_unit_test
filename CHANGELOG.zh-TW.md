@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 修正 Tier 1／2 Prompt 對有限 Trace 的過度推論
+
+- Writer Prompt 不再根據少數成功／失敗 Dynamic Trace 範例宣稱某段字串長度「必定」拋例外、另一段「必定」正常，或宣稱所有未觀測輸入都回傳 `None`。
+- Trace 現在只可作為精確呼叫的 assertion 事實；額外邊界必須由目標 AST 原始碼與已選取技能卡支持，`assertRaises` 也只能依明確 `raise` 或精確 Trace error 建立。
+- 語意分析師提出的 input hints 在 Writer prompt 中改標示為候選值，必須再由原始碼／Trace 驗證，避免模型產生的 JSON 被誤認為程式規格。
+- 驗證：155 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未以真實模型測量此改動對 Tier 2 的可執行率；下一步是以已驗證 provider 跑同一批 fixture，比較格式、驗證與 mutation 結果。
+
 ### 以真實報告建立 Fixture 模型／Tier Scorecard
 
 - 新增 `python_scripts/fixture_scorecard.py`：遞迴讀取 extension 既有 `final_report.md`，依公開 fixture manifest 對照目標、coverage 與 mutation score，輸出 `fixture_scorecard.json` 與人類可讀 `fixture_scorecard.md`。
