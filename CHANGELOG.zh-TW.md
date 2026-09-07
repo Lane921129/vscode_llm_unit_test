@@ -4,6 +4,15 @@
 
 ## 2026-09-07
 
+### 清理失效開發工具與同步進度
+
+- Webview 擷取工具改讀 src/ui/webviewContent.ts，提供翻譯 callback，統一由腳本位置解析來源與 out 產物位置，並直接檢查實際生成 JavaScript 的語法；test:unit 納入 test:webview。
+- 移除已無正式程式讀取的 modelName／apiKeys 設定及修改舊來源路徑的 test/patch.js；金鑰管理維持 SecretStorage。
+- 將 5 個已追蹤的 Python .pyc 快取移出 Git 索引，保留本機檔案；未清除 VS Code 測試下載快取。
+- 重整 target/task.md，以已實作、驗收界線與後續工作取代舊 34% 統計；早期計畫與概覽加上歷史文件說明。
+- 驗證：149 個 TypeScript 測試、60 個 Python 測試、Webview 擷取／語法檢查、密鑰歷史掃描、型別、lint、建置及差異格式檢查通過；擷取工具於專案根目錄與子目錄均成功執行。
+- 限制：Webview 檢查涵蓋生成 JavaScript 語法，未取代瀏覽器 DOM 或 VS Code 真實互動驗收；跨工作目錄寫入產物的驗證需要放行本機沙箱檔案限制。
+
 ### 每次分析獨立取消、模型快照與行程管理
 
 - 新增 ExecutionContext／ExecutionManager，以 AsyncLocalStorage 將每批工作、所有 worker 及其資源綁定同一不可重設的取消狀態；模型能力在分析開始時複製，後續連線探測不改變既有工作。

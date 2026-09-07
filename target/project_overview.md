@@ -1,3 +1,5 @@
+> 狀態說明（2026-09-07）：本文件保留早期設計語境；目前功能、驗證與待辦請以 [task.md](task.md) 和 [中文變更紀錄](../CHANGELOG.zh-TW.md) 為準，實作約束以 [PROJECT_RULES.md](../PROJECT_RULES.md) 為準。
+
 # 📖 LLM Unit Test — 專案說明文件
 
 > **版本**: 0.0.1 (lane_edition)
