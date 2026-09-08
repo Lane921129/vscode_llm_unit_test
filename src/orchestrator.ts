@@ -12,7 +12,7 @@ import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseU
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
-import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile } from './tier/traceTestAugmenter';
+import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
@@ -1632,7 +1632,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             // their verified setUp never overwrites model-authored setup.
             const traceForAugmentation = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
             const isTopLevelFunction = !(astContext as any)?.class_name;
-            if (currentTier > 1 && canUseDeterministicTierOne(traceForAugmentation)) {
+            if (shouldPreserveVerifiedTrace(currentTier, tier1GenerationMode)
+                && canUseDeterministicTierOne(traceForAugmentation)) {
                 if (isTopLevelFunction) {
                     const traceMethods = buildTier1TestMethods(
                         targetFuncName,

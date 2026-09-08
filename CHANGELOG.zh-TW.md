@@ -124,6 +124,13 @@
 - `literal in parameter`、非 literal collection、helper／method call、複合條件與巢狀 callable 均維持排除，避免把 Python 容器或外部語意猜成邊界規則。
 - 驗證：新增反向數值／長度比較、membership 正例，以及反向 membership 反例；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
 
+### 讓 LLM Tier 1 同樣保留已驗證的 Trace 基線
+
+- Tier 2–4 已會在模型候選通過結構與證據 gate 後，附加由 Dynamic Trace 建構的 I/O 測試；但 LLM evidence-bound Tier 1 原本完全依賴模型自行保留這些案例，造成不同模型即使產出可執行 unittest，也可能少測已知行為。
+- 現在所有 LLM-authored Tier（含 Tier 1）都會保留可安全 assertion 的 Trace methods。頂層函式附加到既有 TestCase；class／property 仍維持獨立 TestCase 與已驗證 constructor literal，避免覆寫模型的 `setUp`／Mock 狀態。
+- deterministic fallback Tier 1 不會重複附加，因為它的完整測試檔已直接由同一份 Trace 建構。這保留 LLM 對額外情境與測試組織的判斷空間，也讓最低可驗證行為不依賴模型記憶。
+- 驗證：新增所有 LLM Tier 與 deterministic Tier 1 的 Trace 保留策略回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

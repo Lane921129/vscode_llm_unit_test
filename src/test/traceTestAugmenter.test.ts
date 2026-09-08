@@ -1,12 +1,19 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile } from '../tier/traceTestAugmenter';
+import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from '../tier/traceTestAugmenter';
 
 const traceMethod = [
     '    def test_case_1(self):',
     '        result = target(1)',
     '        self.assertEqual(result, 2)',
 ].join('\n');
+
+test('preserves Trace baselines for every LLM-authored Tier but not deterministic Tier 1', () => {
+    assert.strictEqual(shouldPreserveVerifiedTrace(1, 'llm-evidence-bound'), true);
+    assert.strictEqual(shouldPreserveVerifiedTrace(1, 'deterministic-fallback'), false);
+    assert.strictEqual(shouldPreserveVerifiedTrace(2, 'deterministic-fallback'), true);
+    assert.strictEqual(shouldPreserveVerifiedTrace(4), true);
+});
 
 test('adds verified Trace methods inside the existing unittest class', () => {
     const code = [

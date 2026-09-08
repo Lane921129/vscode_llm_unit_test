@@ -7,6 +7,18 @@ export interface TraceFileAugmentation extends TraceMethodAugmentation {
     addedClassName?: string;
 }
 
+/**
+ * Model-authored tests may add scenarios, but never replace a safe execution
+ * baseline.  Deterministic Tier 1 already consists of those methods, so
+ * appending it again would be redundant; every LLM-authored Tier preserves it.
+ */
+export function shouldPreserveVerifiedTrace(
+    tier: number,
+    tier1GenerationMode?: 'llm-evidence-bound' | 'deterministic-fallback'
+): boolean {
+    return tier > 1 || (tier === 1 && tier1GenerationMode === 'llm-evidence-bound');
+}
+
 function traceMethodName(method: string): string | undefined {
     return method.match(/^\s*def\s+(test_trace_case_\d+)\s*\(/m)?.[1];
 }
