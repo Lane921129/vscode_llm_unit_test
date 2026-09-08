@@ -39,6 +39,13 @@
 - 規則不禁止目標函式內部使用相依，也不把相依的 source／Trace 變成 target assertion；它只避免模型在測試本身做無效的直接 setup 呼叫。
 - 驗證：184 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 在執行前攔下與 Dynamic Trace 矛盾的直接 Assertion
+
+- 新增證據 gate：模型若直接對一個已驗證的 target call 寫 `self.assertEqual(...)`，expected value 必須和同一組 Trace input 的實際結果一致；單引號／雙引號與 whitespace 差異會正規化比較，不會執行或解析模型字串。
+- 第一次發現矛盾時，系統把確切 Trace 事實附到格式／證據修復 Prompt 要求重新生成；第二次仍矛盾才中止。這可在預先驗證前擋下已知 Tier 1／Tier 2 幻覺 assertion。
+- Gate 有意只處理直接 assertion：未被 Trace 的探索輸入、經額外轉換的值及其他測試策略仍交由來源碼、既有結構驗證、執行、coverage 與 mutation gate 判定。
+- 驗證：187 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

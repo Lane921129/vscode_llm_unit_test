@@ -25,6 +25,7 @@ import { buildStubTestPlan } from './tier/stubTestPlan';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
+import { findDirectTraceAssertionContradiction } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import * as path from 'path';
@@ -1530,14 +1531,20 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         (astContext as any)?.class_name,
                         pythonExecutable
                     );
-                    if (!candidateValidation.valid) {
+                    const traceContradiction = findDirectTraceAssertionContradiction(
+                        sanitizedCode,
+                        targetFuncName,
+                        (astContext as any)?.traceResult
+                    );
+                    if (!candidateValidation.valid || traceContradiction) {
+                        const validationReason = traceContradiction || candidateValidation.reason;
                         if (llmRetry === 0) {
-                            log(`[警告] 模型輸出未通過 Python/unittest 格式驗證：${candidateValidation.reason}；將以嚴格格式要求重試。`);
-                            generationPrompt = `${userPrompt}\n\nFORMAT REPAIR REQUIRED: Your previous response was not a runnable Python unittest file. Return ONLY one complete Python file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block.`;
+                            log(`[警告] 模型輸出未通過證據／Python unittest 驗證：${validationReason}；將以嚴格格式要求重試。`);
+                            generationPrompt = `${userPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${validationReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block. Keep every assertion for an exact verified Trace call equal to that Trace result.`;
                             sanitizedCode = '';
                             continue;
                         }
-                        throw new Error(`模型連續兩次未通過 Python/unittest 格式驗證：${candidateValidation.reason}`);
+                        throw new Error(`模型連續兩次未通過證據／Python unittest 驗證：${validationReason}`);
                     }
 
                     break; // 成功跳出 retry
