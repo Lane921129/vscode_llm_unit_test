@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { findDirectTraceAssertionContradiction } from '../validation/traceAssertionEvidence';
+import { findDirectTraceAssertionContradiction, validateTraceAssertionEvidence } from '../validation/traceAssertionEvidence';
 
 const trace = {
     examples: [
@@ -58,5 +58,16 @@ test('checks a reversed assertEqual argument order and ignores assertion message
     assert.strictEqual(
         findDirectTraceAssertionContradiction("self.assertTrue(check(1), 'detail')", 'check', { examples: [{ args: ['1'], result: 'True' }] }),
         undefined
+    );
+});
+
+test('returns a reusable validation result for every model-authored write path', () => {
+    assert.deepStrictEqual(
+        validateTraceAssertionEvidence('self.assertFalse(check(1))', 'check', { examples: [{ args: ['1'], result: 'True' }] }),
+        { valid: false, reason: '已驗證 Trace 顯示 check(1) 回傳 True，但模型對相同呼叫斷言 False。' }
+    );
+    assert.deepStrictEqual(
+        validateTraceAssertionEvidence('self.assertTrue(check(1))', 'check', { examples: [{ args: ['1'], result: 'True' }] }),
+        { valid: true }
     );
 });

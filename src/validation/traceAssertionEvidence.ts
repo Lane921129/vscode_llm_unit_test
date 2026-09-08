@@ -10,6 +10,11 @@ export interface TraceAssertionEvidence {
     examples?: TraceAssertionExample[];
 }
 
+export interface TraceAssertionEvidenceValidation {
+    valid: boolean;
+    reason?: string;
+}
+
 function normalizePythonExpression(value: string): string {
     // This is intentionally not an evaluator. It only normalizes whitespace
     // and quote style for simple literal comparison against an existing Trace.
@@ -140,4 +145,18 @@ export function findDirectTraceAssertionContradiction(
         }
     }
     return undefined;
+}
+
+/**
+ * A reusable gate for every model-authored write path. Structural validation
+ * answers whether a test is runnable; this gate answers whether a direct
+ * assertion contradicts a fact that Python has already observed.
+ */
+export function validateTraceAssertionEvidence(
+    code: string,
+    callableName: string,
+    trace: TraceAssertionEvidence | undefined
+): TraceAssertionEvidenceValidation {
+    const reason = findDirectTraceAssertionContradiction(code, callableName, trace);
+    return reason ? { valid: false, reason } : { valid: true };
 }

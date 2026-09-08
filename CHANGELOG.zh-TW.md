@@ -58,6 +58,12 @@
 - 可選的 assertion 訊息與巢狀 dict／list／tuple 字面值不影響比較；這讓常見不同模型輸出風格仍使用同一個證據標準，而不為特定模型特化。
 - 驗證：189 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 將 Trace 證據 Gate 套用至所有模型寫檔路徑
+
+- 原本只有初次 Writer 候選會在結構驗證前檢查已驗證 Trace assertion；Tier 2 分治合流後的最終檔、Reviewer 修復與 Tier 4 Self-repair 可能只做結構檢查，讓修復內容重新引入已知矛盾。
+- 現在四個路徑共用同一個可重用 evidence validation result。任何一條路徑若直接斷言了與精確 Trace input 相反的結果，都不會寫入測試檔或進入 coverage／mutation 計分；日誌和報告會區分格式失敗與 Trace 證據失敗。
+- 驗證：190 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

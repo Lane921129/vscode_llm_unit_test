@@ -25,7 +25,7 @@ import { buildStubTestPlan } from './tier/stubTestPlan';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
-import { findDirectTraceAssertionContradiction } from './validation/traceAssertionEvidence';
+import { validateTraceAssertionEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import * as path from 'path';
@@ -1531,13 +1531,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         (astContext as any)?.class_name,
                         pythonExecutable
                     );
-                    const traceContradiction = findDirectTraceAssertionContradiction(
+                    const traceEvidenceValidation = validateTraceAssertionEvidence(
                         sanitizedCode,
                         targetFuncName,
                         (astContext as any)?.traceResult
                     );
-                    if (!candidateValidation.valid || traceContradiction) {
-                        const validationReason = traceContradiction || candidateValidation.reason;
+                    if (!candidateValidation.valid || !traceEvidenceValidation.valid) {
+                        const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
                         if (llmRetry === 0) {
                             log(`[警告] 模型輸出未通過證據／Python unittest 驗證：${validationReason}；將以嚴格格式要求重試。`);
                             generationPrompt = `${userPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${validationReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block. Keep every assertion for an exact verified Trace call equal to that Trace result.`;
@@ -1654,8 +1654,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 (astContext as any)?.class_name,
                 pythonExecutable
             );
-            if (!generatedValidation.valid) {
-                throw new Error(`模型輸出未通過 Python/unittest 格式驗證：${generatedValidation.reason}`);
+            const generatedTraceEvidence = validateTraceAssertionEvidence(
+                finalCode,
+                targetFuncName,
+                (astContext as any)?.traceResult
+            );
+            if (!generatedValidation.valid || !generatedTraceEvidence.valid) {
+                throw new Error(`模型輸出未通過 Python/unittest 格式或 Trace 證據驗證：${generatedTraceEvidence.reason || generatedValidation.reason}`);
             }
 
             log(`[系統] 準備將生成的測試程式碼存檔...`);
@@ -1762,7 +1767,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     (astContext as any)?.class_name,
                                     pythonExecutable
                                 );
-                                if (reviewValidation.valid) {
+                                const reviewerTraceEvidence = validateTraceAssertionEvidence(
+                                    revCode,
+                                    targetFuncName,
+                                    (astContext as any)?.traceResult
+                                );
+                                if (reviewValidation.valid && reviewerTraceEvidence.valid) {
                                     throwIfExecutionCancelled();
                                     fs.writeFileSync(testPath, revCode, 'utf8');
                                     const revCheck = await runPrecheck();
@@ -1789,8 +1799,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
                                     }
                                 } else {
-                                    log(`[Reviewer] 第 ${reviewAttempt} 次回應未通過格式驗證：${reviewValidation.reason}`);
-                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應未通過格式驗證：${reviewValidation.reason}\n\n`;
+                                    const reviewerReason = reviewerTraceEvidence.reason || reviewValidation.reason;
+                                    log(`[Reviewer] 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}`);
+                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}\n\n`;
                                 }
                             } catch (revErr: any) {
                                 log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);
@@ -1820,7 +1831,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                         (astContext as any)?.class_name,
                                         pythonExecutable
                                         );
-                                        if (repairValidation.valid) {
+                                        const repairTraceEvidence = validateTraceAssertionEvidence(
+                                            repairCode,
+                                            targetFuncName,
+                                            (astContext as any)?.traceResult
+                                        );
+                                        if (repairValidation.valid && repairTraceEvidence.valid) {
                                             throwIfExecutionCancelled();
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
                                             const result2 = await runPrecheck();
@@ -1845,7 +1861,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${repairFailure}`);
                                             }
                                         } else {
-                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次回應未通過格式驗證：${repairValidation.reason}`);
+                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次回應未通過格式／Trace 證據驗證：${repairTraceEvidence.reason || repairValidation.reason}`);
                                         }
                                     } catch (repairErr: any) {
                                         log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);
