@@ -37,6 +37,7 @@
 - 涉及外部模組副作用或跨模組返回值測試時，必須使用標準的 `unittest.mock.patch`；嚴禁透過竄改本地變數進行無效的偽 Mock。
 - 動態追蹤只提供可呼叫性的基礎 I/O 事實；複雜邊界與多分支策略由 Semantic Analyzer 產生。
 - Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物仍須通過結構、隔離執行、coverage 與 mutation gate。Auto 未驗證模型的 deterministic Trace 產物只能作為明確標示的 fallback，不得稱為 LLM 生成成果。
+- Tier 1 fixture scorecard 必須以機讀 `llm-evidence-bound` 或 `deterministic-fallback` provenance 分開評分；同一份彙整含有兩種模式而未選擇模式時，必須拒絕形成單一品質結論。舊報告缺少 provenance 時不可計入 LLM 成績。
 - 已通過資格的 Tier 2–4 測試，對頂層函式必須保留所有可安全 assertion 的 Dynamic Trace I/O 方法；LLM 可以增加情境、Mock 與突變修補，但不得移除或覆寫已驗證的行為 oracle。
 - Dynamic Trace 可使用受限、語法／型別中立的數值尺度組合作為探索輸入，但任何測試 oracle 都必須來自實際執行結果；不得將探索值或結果解讀為特定領域規則。
 - Tier 1 若 AST 指出目標為一般 coroutine，必須用標準 library event loop 執行已驗證的呼叫後再 assertion／`assertRaises`；async generator 仍須以受限收集邏輯處理，不得把 coroutine 或 generator 物件本身當作結果 oracle。

@@ -11,6 +11,13 @@
 - LLM 與備援兩條路都必須通過既有 unittest 結構、隔離執行、coverage 與 mutation 閘門；本次只驗證架構與回歸，尚未以真實模型取得 Tier 1 品質分數。
 - 驗證：180 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 將 Tier 1 LLM 與確定性成績分開彙整
+
+- `final_report.md` 現在另寫入穩定的 `Tier 1 generation mode` 機讀欄位；保留原本的中文說明，讓人與評分工具都能辨識產物來源。
+- `fixture_scorecard.py` 升級為 schema 2，可用 `--tier1-generation-mode llm-evidence-bound` 或 `deterministic-fallback` 分開產出評分。若未指定模式且同一 fixture 有兩種結果，會標記 `mixed_generation_modes` 而非挑選一個分數混充品質；舊報告缺欄位則為 `incomplete_provenance`。
+- 驗證：180 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：彙整器不會呼叫模型，仍需以使用者授權的真實模型執行 fixture，才能取得可比較的 LLM 品質資料。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

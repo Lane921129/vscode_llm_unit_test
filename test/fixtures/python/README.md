@@ -14,10 +14,15 @@
 先用 extension 對這些 fixture 產生測試並保留其 `final_report.md`，再執行：
 
 ```text
-python python_scripts/fixture_scorecard.py <報告根目錄>
+python python_scripts/fixture_scorecard.py <報告根目錄> --tier1-generation-mode llm-evidence-bound
 ```
 
 工具會在報告根目錄產生 `fixture_scorecard/fixture_scorecard.json` 與
 `fixture_scorecard/fixture_scorecard.md`。加上 `--require-complete` 可讓
 內部 CI 或 release 候選 gate 在任何 fixture 未通過門檻時回傳非零結束碼；它不會
 呼叫模型、讀取 API Key 或把缺失結果算作通過。
+
+Tier 1 的 LLM 證據導向與 deterministic fallback 必須分開評分。若同一 fixture
+根目錄同時含兩種產生模式而沒有指定 `--tier1-generation-mode`，工具會標示
+`mixed_generation_modes`，不會把兩種成績混成單一品質結論。可用的值是
+`llm-evidence-bound` 與 `deterministic-fallback`。

@@ -1314,6 +1314,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         ? 'LLM 證據導向生成（來源碼 + AST + Dynamic Trace + 技能卡）'
                         : '確定性備援（模型尚未通過 Auto 的 unittest 資格探測）';
                     finalReportMarkdown += `- **Tier 1 實際產生模式**: ${modeLabel}\n\n`;
+                    // Stable, machine-readable provenance for fixture scorecards.
+                    // Keep this separate from the localized explanation above.
+                    finalReportMarkdown += `- **Tier 1 generation mode**: ${tier1GenerationMode}\n\n`;
                     tier1GenerationModeRecorded = true;
                 }
                 if (tier1GenerationMode === 'llm-evidence-bound') {
