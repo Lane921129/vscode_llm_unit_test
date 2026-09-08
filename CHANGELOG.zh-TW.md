@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### 修正 Provider 前言造成的 unittest 資格誤判
+
+- 測試連線資格探測改用與正式生成相同、具 `unittest` 證據限制的 Python code-fence 擷取器；模型在單一有效 Python code fence 前後加入簡短 Markdown 前言時，不再因外層文字而被誤判失敗。
+- 擷取後仍必須通過完整 unittest 結構、`increment(1)`／`increment(-1)` 雙行為 assertion、最小安全 fixture 限制與隔離 Python 執行；Markdown 計畫、無 unittest 證據的 fence 或不安全程式碼仍會被拒絕。
+- 新增 Gemma 類模型常見「前言 + Python fence」回歸案例。
+- 驗證：175 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
 ### 將模型資格結果寫入系統日誌
 
 - 連線成功但未通過 unittest 生成驗證時，Local Ollama、Cloud Gemini、Custom API 現在都會寫入側邊欄系統日誌；內容包含 provider、模型、探測模式、固定驗證原因與 Auto 的 Tier 1 安全路由。

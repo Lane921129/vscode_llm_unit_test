@@ -1,4 +1,4 @@
-import { unwrapGeneratedCodeEnvelope, validateUnittestStructure } from '../validation/generatedTestValidator';
+import { extractPythonTestCode, validateUnittestStructure } from '../validation/generatedTestValidator';
 
 /** Provider-neutral result for the minimum safe unittest-generation contract. */
 export type StructuredOutputCapability = 'verified' | 'unverified';
@@ -31,9 +31,9 @@ export const TEST_GENERATION_PROBE_SCHEMA = {
 };
 
 function extractProbeCode(response: string): string {
-    const unwrapped = unwrapGeneratedCodeEnvelope(response).trim();
-    const fenced = unwrapped.match(/^```(?:python)?\s*\r?\n([\s\S]*?)\r?\n?```\s*$/i);
-    return (fenced ? fenced[1] : unwrapped).trim();
+    // Use the same evidence-gated fence extractor as generated test files.
+    // Providers often add harmless prose around one otherwise valid Python fence.
+    return extractPythonTestCode(response).trim();
 }
 
 /** Require both known probe cases, not merely one copied syntactic call. */

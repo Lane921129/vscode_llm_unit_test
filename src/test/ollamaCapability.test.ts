@@ -121,6 +121,24 @@ test('plain Ollama probe does not require JSON mode and shared qualification acc
     }).capability, 'verified');
 });
 
+test('shared qualification extracts a valid unittest fence surrounded by provider prose', () => {
+    const code = [
+        'import unittest',
+        '',
+        'def increment(value):',
+        '    return value + 1',
+        '',
+        'class TestIncrement(unittest.TestCase):',
+        '    def test_increment(self):',
+        '        self.assertEqual(increment(1), 2)',
+        '        self.assertEqual(increment(-1), 0)',
+    ].join('\n');
+
+    assert.strictEqual(assessTestGenerationProbe({
+        response: `Here is the requested test file:\n\`\`\`python\n${code}\n\`\`\``
+    }).capability, 'verified');
+});
+
 test('shared runnable qualification requires the safe fixture and an isolated execution pass', async () => {
     const code = [
         'import unittest',
