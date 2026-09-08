@@ -7,6 +7,7 @@ import { initI18n, t } from '../i18n';
 import { extractFunctionsWithAst } from '../utils/utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from '../llm/cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
+import { formatModelQualificationLog, ModelQualificationProfile } from '../llm/modelQualification';
 import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from '../llm/testGenerationQualification';
 import { verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
@@ -18,6 +19,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     public webview?: vscode.Webview;
 
     constructor(private readonly secretStorage: vscode.SecretStorage) {}
+
+    private appendModelQualificationLog(profile: ModelQualificationProfile): void {
+        void this.webview?.postMessage({
+            command: 'appendLog',
+            text: formatModelQualificationLog(profile)
+        });
+    }
 
     public resolveWebviewView(webviewView: vscode.WebviewView) {
         initI18n();
@@ -348,12 +356,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     );
                                                     plainPythonVerified = capability.capability === 'verified';
                                                 }
-                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                                const qualificationProfile = {
                                                     ...profile,
                                                     testGenerationReady: capability.capability === 'verified',
                                                     testGenerationReason: capability.reason,
                                                     testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
-                                                });
+                                                };
+                                                this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
+                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
+                                                this.appendModelQualificationLog(qualificationProfile);
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
                                                         `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
@@ -364,12 +375,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     );
                                                 }
                                             } catch {
-                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                                const qualificationProfile = {
                                                     ...profile,
                                                     testGenerationReady: false,
                                                     testGenerationReason: '測試連線逾時或無法完成 unittest 生成探針。',
                                                     testGenerationMode: '未完成'
-                                                });
+                                                };
+                                                this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
+                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
+                                                this.appendModelQualificationLog(qualificationProfile);
                                                 vscode.window.showWarningMessage(
                                                     '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
                                                 );
@@ -458,6 +472,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
+                                this.appendModelQualificationLog(profile);
                                 if (capability.capability === 'verified') {
                                     const contextMessage = connectionMetadata.contextLengthKnown
                                         ? `最大輸入 Context：${connectionMetadata.contextLength.toLocaleString()} tokens`
@@ -505,7 +520,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         : undefined);
                                     plainPythonVerified = capability.capability === 'verified';
                                 }
-                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', {
+                                const profile = {
                                     paramSize: 'Custom API',
                                     contextLength: 8192,
                                     envType: 'custom',
@@ -513,7 +528,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
                                     testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
-                                });
+                                } as const;
+                                this.webview?.postMessage({ command: 'modelProbeResult', profile });
+                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
+                                this.appendModelQualificationLog(profile);
                                 if (capability.capability === 'verified') {
                                     vscode.window.showInformationMessage(
                                         `✅ Custom API 連線成功！已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`

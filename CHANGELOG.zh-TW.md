@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### 將模型資格結果寫入系統日誌
+
+- 連線成功但未通過 unittest 生成驗證時，Local Ollama、Cloud Gemini、Custom API 現在都會寫入側邊欄系統日誌；內容包含 provider、模型、探測模式、固定驗證原因與 Auto 的 Tier 1 安全路由。
+- 成功資格、探測 timeout 及 failure 資格狀態也採用同一個 `formatModelQualificationLog` 格式；Local／Custom 同步補上完整 `modelProbeResult`，讓 UI 狀態與日誌一致。
+- 日誌只使用已驗證的非密鑰 metadata，排除 API Key、authorization header、原始 provider response 與模型原文輸出。
+- 驗證：174 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
 ### 分離跨 Provider 的 unittest 資格契約
 
 - 新增 `src/llm/testGenerationQualification.ts`，集中所有 provider 共用的測試連線 Prompt、JSON schema、回應結構驗證與雙案例 assertion 規則。

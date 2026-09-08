@@ -13,6 +13,30 @@ export interface ModelQualificationRequest {
     modelName: string;
 }
 
+function compactLogValue(value: string | undefined, fallback: string): string {
+    const compact = value?.replace(/[\r\n]+/g, ' ').trim();
+    return compact || fallback;
+}
+
+/**
+ * Formats only non-secret probe metadata for the user-visible system log.
+ * Provider responses and API credentials must never be appended here.
+ */
+export function formatModelQualificationLog(profile: ModelQualificationProfile): string {
+    const provider = profile.envType === 'cloud'
+        ? 'Cloud Gemini'
+        : profile.envType === 'custom'
+            ? 'Custom API'
+            : 'Local Ollama';
+    const model = compactLogValue(profile.modelName, '未指定模型');
+    const mode = compactLogValue(profile.testGenerationMode, 'unittest 生成探測');
+    const reason = compactLogValue(profile.testGenerationReason, '未提供原因');
+
+    return profile.testGenerationReady === true
+        ? `[模型資格] ${provider}／${model}：連線成功，已通過 ${mode}。`
+        : `[模型資格] ${provider}／${model}：連線成功，但未通過 ${mode}（${reason}）。Auto 將保守使用 Tier 1。`;
+}
+
 /**
  * A probe result only applies to the exact provider/model pair that produced
  * it. A different selected model must be treated as unqualified until it has
