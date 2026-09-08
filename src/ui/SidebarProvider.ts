@@ -10,7 +10,7 @@ import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/clou
 import { formatModelQualificationLog, ModelQualificationProfile } from '../llm/modelQualification';
 import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from '../llm/testGenerationQualification';
-import { verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
+import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -293,6 +293,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     init,
                                     timeoutMs
                                 );
+                            const configuredPython = vscode.workspace.getConfiguration('llmUnitTest').get<string>('pythonPath', '');
+                            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                            const pythonExecutable = resolvePythonExecutable(configuredPython, workspaceRoot);
+                            const isolatedProbeExecutor = (code: string) => runIsolatedProbe(code, 3000, pythonExecutable);
 
                             if (message.envType === 'local') {
                                 const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -344,7 +348,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     body: JSON.stringify(buildOllamaTestGenerationProbe(message.modelName))
                                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                                 const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
-                                                let capability = await verifyRunnableTestGenerationProbe(outputPayload);
+                                                let capability = await verifyRunnableTestGenerationProbe(outputPayload, isolatedProbeExecutor);
                                                 let plainPythonVerified = false;
                                                 if (capability.capability !== 'verified') {
                                                     const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
@@ -353,7 +357,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                         body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName))
                                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                                     capability = await verifyRunnableTestGenerationProbe(
-                                                        plainResponse.ok ? await plainResponse.json() : undefined
+                                                        plainResponse.ok ? await plainResponse.json() : undefined,
+                                                        isolatedProbeExecutor
                                                     );
                                                     plainPythonVerified = capability.capability === 'verified';
                                                 }
@@ -441,9 +446,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     headers: request.headers,
                                     body: JSON.stringify(request.body)
                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                let capability = await verifyRunnableTestGenerationProbe(response.ok
-                                    ? { response: getGoogleGeneratedText(await response.json()) }
-                                    : undefined);
+                                let capability = await verifyRunnableTestGenerationProbe(
+                                    response.ok ? { response: getGoogleGeneratedText(await response.json()) } : undefined,
+                                    isolatedProbeExecutor
+                                );
                                 let plainPythonVerified = false;
                                 if (capability.capability !== 'verified') {
                                     const plainRequest = buildGoogleGenerateContentRequest(
@@ -458,9 +464,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         body: JSON.stringify(plainRequest.body)
                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                     await requireSuccessfulProbeResponse(plainResponse);
-                                    capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
-                                        ? { response: getGoogleGeneratedText(await plainResponse.json()) }
-                                        : undefined);
+                                    capability = await verifyRunnableTestGenerationProbe(
+                                        plainResponse.ok ? { response: getGoogleGeneratedText(await plainResponse.json()) } : undefined,
+                                        isolatedProbeExecutor
+                                    );
                                     plainPythonVerified = capability.capability === 'verified';
                                 }
                                 const profile = {
@@ -501,9 +508,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         'json'
                                     ))
                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                let capability = await verifyRunnableTestGenerationProbe(response.ok
-                                    ? { response: getCustomChatCompletionText(await response.json()) }
-                                    : undefined);
+                                let capability = await verifyRunnableTestGenerationProbe(
+                                    response.ok ? { response: getCustomChatCompletionText(await response.json()) } : undefined,
+                                    isolatedProbeExecutor
+                                );
                                 let plainPythonVerified = false;
                                 if (capability.capability !== 'verified') {
                                     const plainResponse = await timedFetch(message.customUrl, {
@@ -517,9 +525,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         ))
                                     }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                     await requireSuccessfulProbeResponse(plainResponse);
-                                    capability = await verifyRunnableTestGenerationProbe(plainResponse.ok
-                                        ? { response: getCustomChatCompletionText(await plainResponse.json()) }
-                                        : undefined);
+                                    capability = await verifyRunnableTestGenerationProbe(
+                                        plainResponse.ok ? { response: getCustomChatCompletionText(await plainResponse.json()) } : undefined,
+                                        isolatedProbeExecutor
+                                    );
                                     plainPythonVerified = capability.capability === 'verified';
                                 }
                                 const profile = {

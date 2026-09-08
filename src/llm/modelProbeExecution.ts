@@ -68,9 +68,14 @@ export function isIsolatedProbeCode(code: string): boolean {
     return assessIsolatedProbeCode(code).valid;
 }
 
-export function runIsolatedProbe(code: string, timeoutMs = 3000): Promise<boolean> {
+/**
+ * Run the fixed qualification fixture using the same selected interpreter as
+ * the rest of the extension.  `-I` still prevents user-site imports from
+ * affecting this isolated, standard-library-only execution.
+ */
+export function runIsolatedProbe(code: string, timeoutMs = 3000, pythonExecutable = 'python'): Promise<boolean> {
     return new Promise(resolve => {
-        const process = spawn('python', ['-I', '-c', PROBE_RUNNER], {
+        const process = spawn(pythonExecutable, ['-I', '-c', PROBE_RUNNER], {
             stdio: ['pipe', 'ignore', 'ignore'],
             shell: false,
             windowsHide: true,

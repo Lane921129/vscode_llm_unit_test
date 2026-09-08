@@ -7,7 +7,7 @@
 ### 統一以工作區 `.venv` 執行 Python 工具
 
 - 未設定 `llmUnitTest.pythonPath` 時，extension 現在會優先偵測工作區標準 `.venv`；Windows 使用 `.venv/Scripts/python.exe`，其他系統使用 `.venv/bin/python`。明確設定的自訂或實驗室直譯器仍有最高優先權。
-- 函式掃描、AST、Dynamic Trace、coverage、mutation 與 extension 的 Python 回歸會使用同一個選擇；`npm run test:python` 也改為強制使用專案 `.venv`，避免系統 Python、使用者層套件與專案套件混用。
+- 函式掃描、AST、Dynamic Trace、模型資格 probe 的隔離 unittest、coverage、mutation 與 extension 的 Python 回歸會使用同一個選擇；`npm run test:python` 也改為強制使用專案 `.venv`，避免系統 Python、使用者層套件與專案套件混用。
 - 開發文件改為先建立 `.venv`、再安裝 `requirements.txt`，不記錄任何固定磁碟或帳號路徑。
 
 ### 將 Tier 1 改為 LLM 證據導向生成，並保留可辨識備援

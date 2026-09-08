@@ -161,6 +161,7 @@ test('shared runnable qualification requires the safe fixture and an isolated ex
         /1 行最小安全 fixture 不允許的語句/
     );
     assert.strictEqual(await runIsolatedProbe(code), true);
+    assert.strictEqual(await runIsolatedProbe(code, 3000, '__missing_project_probe_python__'), false);
     assert.deepStrictEqual(
         await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code),
         {
