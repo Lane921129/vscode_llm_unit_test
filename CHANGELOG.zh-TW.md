@@ -138,6 +138,13 @@
 - 合併後仍必須通過原有 JSON／code-fence、unittest AST、隔離執行、coverage 與 mutation gates；本次不放寬任何模型輸出品質條件，也不將非文字片段視為程式碼。
 - 驗證：新增 Cloud 分段 JSON 與 Custom typed text 回覆回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
 
+### 將安全的 Match Case 輸入事實交給 Writer
+
+- Dynamic Trace 已能探索部分 `match/case` literal，但 Writer 的 AST branch facts 沒有對應欄位，小模型只能從原始碼自行辨識 case 值。
+- 現在 AST 會擷取直接目標參數上、沒有 guard 的 scalar literal 與 `case A | B` pattern，並以「輸入探索提示」傳入 Writer；不會將 case 對應的回傳值當作 assertion。
+- guarded case、capture、mapping、class pattern 與可變匹配都不會產生事實；Dynamic Trace 同步不再把含 guard 的 pattern 視為可安全到達，避免把 runtime dependency 誤當成固定路徑。
+- 驗證：新增 literal／or／None case 正例與 guarded case 反例；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

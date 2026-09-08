@@ -327,9 +327,48 @@ def branch_condition_facts(func_node, parameter_names):
             values.append(scalar_literal(item))
         return values
 
+    def match_literals(match_node):
+        match_value = getattr(ast, 'MatchValue', ())
+        match_singleton = getattr(ast, 'MatchSingleton', ())
+        match_or = getattr(ast, 'MatchOr', ())
+
+        def pattern_values(pattern):
+            if match_value and isinstance(pattern, match_value):
+                return [scalar_literal(pattern.value)] if is_scalar_literal_node(pattern.value) else []
+            if match_singleton and isinstance(pattern, match_singleton):
+                return [repr(pattern.value)]
+            if match_or and isinstance(pattern, match_or):
+                values = []
+                for nested in pattern.patterns:
+                    values.extend(pattern_values(nested))
+                return values
+            return []
+
+        values = []
+        for case in match_node.cases:
+            # A guard may rely on runtime state, so its literal pattern alone
+            # is not a safe branch-input fact.
+            if case.guard is None:
+                values.extend(pattern_values(case.pattern))
+        return list(dict.fromkeys(values))
+
     def visit(node):
         if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
             return
+        match_type = getattr(ast, 'Match', ())
+        if match_type and isinstance(node, match_type):
+            parameter, subject = compared_parameter(node.subject)
+            values = match_literals(node) if parameter and subject == 'value' else []
+            if values:
+                fact = {
+                    'kind': 'match', 'parameter': parameter, 'subject': subject,
+                    'literals': values, 'line': node.lineno,
+                }
+                identity = tuple(sorted((key, tuple(value) if isinstance(value, list) else value)
+                                        for key, value in fact.items()))
+                if identity not in seen:
+                    facts.append(fact)
+                    seen.add(identity)
         if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
             operator = node.ops[0]
             parameter, subject = compared_parameter(node.left)

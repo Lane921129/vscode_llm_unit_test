@@ -207,7 +207,8 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
                 name = subject[0]
                 literals = []
                 for case in node.cases:
-                    literals.extend(_match_pattern_literals(case.pattern))
+                    if case.guard is None:
+                        literals.extend(_match_pattern_literals(case.pattern))
                 for literal in literals:
                     add(name, literal)
                 # A synthetic non-match reaches `case _` / the unmatched path

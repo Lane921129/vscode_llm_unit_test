@@ -244,6 +244,28 @@ class Worker:
             },
         ])
 
+    def test_extractor_reports_only_unguarded_literal_match_cases(self):
+        source = '''def route(mode):
+    match mode:
+        case "fast" | "safe":
+            return "known"
+        case None:
+            return "none"
+        case "guarded" if enabled():
+            return "runtime"
+        case _:
+            return "other"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'route')
+
+        self.assertEqual(data['condition_facts'], [{
+            'kind': 'match', 'parameter': 'mode', 'subject': 'value',
+            'literals': ["'fast'", "'safe'", 'None'], 'line': 2,
+        }])
+
     def test_extractor_distinguishes_target_generator_from_nested_generator(self):
         source = '''def emitted(values):
     for value in values:
