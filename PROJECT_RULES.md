@@ -59,6 +59,7 @@
 
 ## 憑證與外部服務
 
+- Python 的專案依賴必須安裝於工作區 `.venv`；未明確設定 `llmUnitTest.pythonPath` 時，AST、Trace、驗證、coverage、mutation 與本機 Python 回歸測試必須優先使用該 `.venv`（Windows 為 `Scripts/python.exe`，其他系統為 `bin/python`）。明確的使用者／實驗室直譯器設定可覆寫自動選擇；不得保存固定磁碟、帳號或工作區絕對路徑。
 - API Key 只能放在 VS Code SecretStorage、CI Secret 或執行環境變數；禁止寫入原始碼、設定檔、報告與 Git。
 - 公開 CI 必須在不取得雲端模型 Key 的條件下掃描 tracked files 與可達 Git 歷史的高可信密鑰格式；掃描失敗只可輸出 pattern 類型與檔案／commit 位置，不得輸出疑似憑證內容。此掃描不可取代已揭露憑證的撤銷與重建。
 - Google API Key 必須走 HTTP Header，不可放入 URL。

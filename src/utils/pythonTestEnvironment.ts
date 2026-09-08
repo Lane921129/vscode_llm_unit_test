@@ -1,9 +1,40 @@
+import * as fs from 'fs';
 import * as path from 'path';
 
 /** Resolve a user-selected interpreter without introducing shell arguments. */
 export function normalizePythonExecutable(value?: string): string {
     const candidate = typeof value === 'string' ? value.trim() : '';
     return candidate || 'python';
+}
+
+/**
+ * Choose one interpreter for every Python-backed step of a workspace run.
+ *
+ * A user or laboratory setting always wins.  Otherwise, a conventional
+ * workspace `.venv` is preferred so extension commands do not silently mix
+ * its dependencies with a system or user-site Python installation.
+ */
+export function resolvePythonExecutable(
+    configuredValue?: string,
+    workspaceRoot?: string,
+    platform: NodeJS.Platform = process.platform,
+    pathExists: (candidate: string) => boolean = fs.existsSync
+): string {
+    const configured = typeof configuredValue === 'string' ? configuredValue.trim() : '';
+    if (configured) {
+        return configured;
+    }
+
+    if (workspaceRoot) {
+        const virtualEnvironmentPython = platform === 'win32'
+            ? path.join(workspaceRoot, '.venv', 'Scripts', 'python.exe')
+            : path.join(workspaceRoot, '.venv', 'bin', 'python');
+        if (pathExists(virtualEnvironmentPython)) {
+            return virtualEnvironmentPython;
+        }
+    }
+
+    return 'python';
 }
 
 /**

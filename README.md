@@ -34,13 +34,15 @@
 - Python `3.9+` for the analysis scripts. Python `3.12` is used in CI.
 - Optional: Ollama for local models.
 - Recommended for native mutation tools on Windows + Python 3.12+: WSL. The extension falls back to its built-in AST mutation runner when no compatible native tool is available.
-- If VS Code's default `python` is not the environment containing `coverage` and project dependencies, set `llmUnitTest.pythonPath` in VS Code Settings to that virtual-environment interpreter. The selected interpreter is used consistently for AST, trace, validation, coverage, and mutation commands.
+- With no `llmUnitTest.pythonPath` setting, a standard workspace `.venv` is selected automatically (`.venv/Scripts/python.exe` on Windows, `.venv/bin/python` elsewhere). Set `llmUnitTest.pythonPath` only for a custom virtual environment or laboratory interpreter; that explicit setting takes priority for AST, trace, validation, coverage, and mutation commands.
 
 ### Develop locally
 
 ```bash
 npm ci
-python -m pip install -r requirements.txt
+python -m venv .venv
+# Windows: .venv/Scripts/python -m pip install -r requirements.txt
+# macOS/Linux: .venv/bin/python -m pip install -r requirements.txt
 npm run test:unit
 npm run compile
 ```
@@ -154,13 +156,15 @@ Auto 模式會保守處理未探測模型，優先走可重現的 Tier 1。若�
 - 分析腳本需要 Python `3.9+`；CI 使用 Python `3.12`。
 - 本機模型可選擇安裝 Ollama。
 - Windows + Python 3.12+ 若要使用原生 mutation tool，建議使用 WSL；沒有相容工具時會退回內建 AST mutation runner。
-- 若 VS Code 預設的 `python` 不是安裝 `coverage` 與專案依賴的環境，請在 VS Code Settings 設定 `llmUnitTest.pythonPath` 為該 virtual environment 的直譯器。AST、Trace、驗證、coverage 與 mutation 都會使用同一個選擇。
+- 未設定 `llmUnitTest.pythonPath` 時，系統會自動選擇工作區標準 `.venv`（Windows 為 `.venv/Scripts/python.exe`，其他系統為 `.venv/bin/python`）。只有要使用自訂 virtual environment 或實驗室直譯器時，才需要設定 `llmUnitTest.pythonPath`；明確設定會優先供 AST、Trace、驗證、coverage 與 mutation 全程使用。
 
 ### 本機開發
 
 ```bash
 npm ci
-python -m pip install -r requirements.txt
+python -m venv .venv
+# Windows：.venv/Scripts/python -m pip install -r requirements.txt
+# macOS/Linux：.venv/bin/python -m pip install -r requirements.txt
 npm run test:unit
 npm run compile
 ```

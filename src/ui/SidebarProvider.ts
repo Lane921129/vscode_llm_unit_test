@@ -13,6 +13,7 @@ import { PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_
 import { verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -612,7 +613,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {
         const configuredPython = vscode.workspace.getConfiguration('llmUnitTest').get<string>('pythonPath', '');
-        const infos = await extractFunctionsWithAst(filePath, configuredPython);
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const infos = await extractFunctionsWithAst(filePath, resolvePythonExecutable(configuredPython, workspaceRoot));
         return infos.map(f => f.fullName);
     }
 

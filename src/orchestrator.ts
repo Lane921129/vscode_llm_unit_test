@@ -23,7 +23,7 @@ import { formatReportProvenance, ReportProvenance } from './utils/reportProvenan
 import { buildStubSmokeAssertion } from './tier/stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stubClassifier';
 import { buildStubTestPlan } from './tier/stubTestPlan';
-import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
+import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable, resolvePythonExecutable } from './utils/pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceAssertionEvidence } from './validation/traceAssertionEvidence';
@@ -245,7 +245,8 @@ interface AnalysisParams {
 
 function configuredPythonExecutable(): string {
     const configured = vscode.workspace?.getConfiguration?.('llmUnitTest')?.get<string>('pythonPath', '');
-    return normalizePythonExecutable(configured);
+    const workspaceRoot = vscode.workspace?.workspaceFolders?.[0]?.uri.fsPath;
+    return resolvePythonExecutable(configured, workspaceRoot);
 }
 
 interface CallerContext {
