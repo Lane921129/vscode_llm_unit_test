@@ -280,7 +280,7 @@ interface AstContext {
     is_generator?: boolean;
     executable_lines?: number[];
     raised_exceptions?: string[];
-    condition_facts?: Array<{ kind: 'comparison'; parameter: string; subject: 'value' | 'length'; operator: string; literal: string; line: number }>;
+    condition_facts?: Array<{ kind: 'comparison' | 'membership'; parameter: string; subject: 'value' | 'length'; operator: string; literal?: string | null; literals?: string[]; line: number }>;
     traceResult?: DynamicTraceResult;
     dependencyContexts?: AstContext[];
     callerContexts?: CallerContext[];

@@ -267,12 +267,19 @@ export function getUserPrompt(
         Is: 'is', IsNot: 'is not', In: 'in', NotIn: 'not in',
     };
     const formatConditionFact = (fact: any): string | null => {
-        if (fact?.kind !== 'comparison' || typeof fact.parameter !== 'string' || typeof fact.literal !== 'string') {
+        if (typeof fact?.parameter !== 'string' || typeof fact?.operator !== 'string') {
             return null;
         }
         const operator = comparisonOperators[fact.operator] || fact.operator;
         const subject = fact.subject === 'length' ? `len(${fact.parameter})` : fact.parameter;
         const line = Number.isInteger(fact.line) ? `Source line ${fact.line}: ` : '';
+        if (fact.kind === 'membership') {
+            if (!Array.isArray(fact.literals) || !fact.literals.every((literal: unknown) => typeof literal === 'string')) {
+                return null;
+            }
+            return `${line}${subject} ${operator} (${fact.literals.join(', ')})`;
+        }
+        if (fact.kind !== 'comparison' || typeof fact.literal !== 'string') {return null;}
         return `${line}${subject} ${operator} ${fact.literal}`;
     };
 

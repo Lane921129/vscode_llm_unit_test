@@ -298,18 +298,73 @@ def branch_condition_facts(func_node, parameter_names):
             return node.args[0].id, 'length'
         return None, None
 
+    def is_scalar_literal_node(node):
+        literal = scalar_literal(node)
+        return literal is not None or (isinstance(node, ast.Constant) and node.value is None)
+
+    def reversed_operator(operator):
+        """Normalise ``literal OP parameter`` into parameter-first form."""
+        reverse = {
+            ast.Lt: ast.Gt,
+            ast.LtE: ast.GtE,
+            ast.Gt: ast.Lt,
+            ast.GtE: ast.LtE,
+            ast.Eq: ast.Eq,
+            ast.NotEq: ast.NotEq,
+            ast.Is: ast.Is,
+            ast.IsNot: ast.IsNot,
+        }
+        operator_type = reverse.get(type(operator))
+        return operator_type() if operator_type else None
+
+    def membership_literals(node):
+        if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return None
+        values = []
+        for item in node.elts:
+            if not is_scalar_literal_node(item):
+                return None
+            values.append(scalar_literal(item))
+        return values
+
     def visit(node):
         if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
             return
         if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
+            operator = node.ops[0]
             parameter, subject = compared_parameter(node.left)
-            literal = scalar_literal(node.comparators[0])
-            if parameter and literal is not None:
+            comparator = node.comparators[0]
+            if parameter and isinstance(operator, (ast.In, ast.NotIn)) and subject == 'value':
+                values = membership_literals(comparator)
+                if values is not None:
+                    fact = {
+                        'kind': 'membership',
+                        'parameter': parameter,
+                        'subject': subject,
+                        'operator': type(operator).__name__,
+                        'literals': values,
+                        'line': node.lineno,
+                    }
+                    identity = tuple(sorted((key, tuple(value) if isinstance(value, list) else value)
+                                            for key, value in fact.items()))
+                    if identity not in seen:
+                        facts.append(fact)
+                        seen.add(identity)
+                return
+            if not parameter:
+                parameter, subject = compared_parameter(comparator)
+                if parameter and is_scalar_literal_node(node.left):
+                    operator = reversed_operator(operator)
+                    comparator = node.left
+                else:
+                    parameter = None
+            literal = scalar_literal(comparator)
+            if parameter and operator and is_scalar_literal_node(comparator):
                 fact = {
                     'kind': 'comparison',
                     'parameter': parameter,
                     'subject': subject,
-                    'operator': type(node.ops[0]).__name__,
+                    'operator': type(operator).__name__,
                     'literal': literal,
                     'line': node.lineno,
                 }

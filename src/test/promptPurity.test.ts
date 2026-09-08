@@ -254,12 +254,14 @@ test('writer prompt presents AST branch conditions as input coverage facts, neve
         condition_facts: [
             { kind: 'comparison', parameter: 'value', subject: 'value', operator: 'LtE', literal: '3', line: 2 },
             { kind: 'comparison', parameter: 'text', subject: 'length', operator: 'Gt', literal: '4', line: 4 },
+            { kind: 'membership', parameter: 'mode', subject: 'value', operator: 'In', literals: ["'fast'", "'safe'"], line: 6 },
         ],
     });
 
     assert.match(prompt, /AST branch-condition facts/);
     assert.match(prompt, /Source line 2: value <= 3/);
     assert.match(prompt, /Source line 4: len\(text\) > 4/);
+    assert.match(prompt, /Source line 6: mode in \('fast', 'safe'\)/);
     assert.match(prompt, /do NOT prove a return value or exception/);
     assert.doesNotMatch(prompt, /value <= 3.*Returns|len\(text\) > 4.*Raises/s);
 });

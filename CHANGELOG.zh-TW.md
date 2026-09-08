@@ -117,6 +117,13 @@
 - Prompt 明確標記它們不是執行 oracle；Semantic Analyzer、Writer 與 Reviewer 都不得從常數、`__init__` 或 import 臆測回傳值、例外或外部 side effect，精確 assertion 仍只依 Dynamic Trace、明確 raise 或同測試的 mock side effect。
 - 驗證：新增 AST setup 語境 Prompt 回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
 
+### 補齊反向比較與 literal membership 的分支探索
+
+- Dynamic Trace 原本可從 `mode in ('a', 'b')` 取得部分輸入，但 AST 不會把該條件交給 Writer；而 `3 < value`、`2 >= len(text)` 這類 literal 位於左側的安全比較，AST 與 Trace 都會漏掉。
+- 現在兩條管線會將可證明的反向比較正規化為 parameter-first 條件，並把 parameter-first tuple／list／set literal membership 列為輸入覆蓋事實。Writer 只收到「應探索哪些輸入」而非輸出結論；Trace 執行後的真實結果仍是唯一精確 assertion oracle。
+- `literal in parameter`、非 literal collection、helper／method call、複合條件與巢狀 callable 均維持排除，避免把 Python 容器或外部語意猜成邊界規則。
+- 驗證：新增反向數值／長度比較、membership 正例，以及反向 membership 反例；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

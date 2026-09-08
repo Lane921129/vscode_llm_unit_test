@@ -212,6 +212,38 @@ class Worker:
             },
         ])
 
+    def test_extractor_normalizes_reverse_and_literal_membership_conditions(self):
+        source = '''def classify(value, text, mode):
+    if 3 < value:
+        return "large"
+    if 2 >= len(text):
+        return "short"
+    if mode in ("fast", "safe"):
+        return "known"
+    if "prefix" in mode:
+        return "not-a-safe-candidate-shape"
+    return "other"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'classify.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'classify')
+
+        self.assertEqual(data['condition_facts'], [
+            {
+                'kind': 'comparison', 'parameter': 'value', 'subject': 'value',
+                'operator': 'Gt', 'literal': '3', 'line': 2,
+            },
+            {
+                'kind': 'comparison', 'parameter': 'text', 'subject': 'length',
+                'operator': 'LtE', 'literal': '2', 'line': 4,
+            },
+            {
+                'kind': 'membership', 'parameter': 'mode', 'subject': 'value',
+                'operator': 'In', 'literals': ["'fast'", "'safe'"], 'line': 6,
+            },
+        ])
+
     def test_extractor_distinguishes_target_generator_from_nested_generator(self):
         source = '''def emitted(values):
     for value in values:
@@ -953,6 +985,29 @@ class Settings:
             result['examples']
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
+
+    def test_dynamic_tracer_reaches_reverse_and_literal_membership_branches(self):
+        source = '''def route(value: int, mode: str):
+    if 3 < value:
+        return "large"
+    if mode in ("fast", "safe"):
+        return "known"
+    return "other"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'route')
+
+        self.assertIsNone(result['load_error'])
+        self.assertIn(
+            {'args': ['4', "'test_value'"], 'result': "'large'", 'result_type': 'str'},
+            result['examples']
+        )
+        self.assertIn(
+            {'args': ['1', "'fast'"], 'result': "'known'", 'result_type': 'str'},
+            result['examples']
+        )
 
     def test_dynamic_tracer_uses_relative_numeric_probes_for_derived_thresholds(self):
         source = '''def classify(numerator, denominator):

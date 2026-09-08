@@ -111,6 +111,27 @@ def _condition_subject(node, parameter_names):
     return None
 
 
+def _is_scalar_literal_node(node):
+    value = _literal_value(node)
+    return value is not None or (isinstance(node, ast.Constant) and node.value is None)
+
+
+def _reversed_comparison_operator(operator):
+    """Convert literal-first comparisons into an equivalent subject-first form."""
+    reverse = {
+        ast.Lt: ast.Gt,
+        ast.LtE: ast.GtE,
+        ast.Gt: ast.Lt,
+        ast.GtE: ast.LtE,
+        ast.Eq: ast.Eq,
+        ast.NotEq: ast.NotEq,
+        ast.Is: ast.Is,
+        ast.IsNot: ast.IsNot,
+    }
+    operator_type = reverse.get(type(operator))
+    return operator_type() if operator_type else None
+
+
 def find_selected_ast_function(tree, selector):
     """Resolve a module function or an explicit top-level Class.method."""
     if '.' in selector:
@@ -208,11 +229,17 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
         if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
             continue
         subject = _condition_subject(node.left, parameter_names)
-        if not subject:
-            continue
-        name, subject_kind = subject
         operator = node.ops[0]
         right = node.comparators[0]
+        if not subject:
+            subject = _condition_subject(right, parameter_names)
+            if not subject or not _is_scalar_literal_node(node.left):
+                continue
+            operator = _reversed_comparison_operator(operator)
+            if operator is None:
+                continue
+            right = node.left
+        name, subject_kind = subject
 
         if isinstance(operator, (ast.In, ast.NotIn)) and subject_kind == 'value' and isinstance(right, (ast.List, ast.Tuple, ast.Set)):
             literal_items = [_literal_value(item) for item in right.elts]
@@ -224,7 +251,7 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
             continue
 
         literal = _literal_value(right)
-        if literal is None and not (isinstance(right, ast.Constant) and right.value is None):
+        if not _is_scalar_literal_node(right):
             continue
 
         if subject_kind == 'length':
