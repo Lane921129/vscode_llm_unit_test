@@ -49,3 +49,14 @@ test('checks boolean and None unittest assertions against matching Trace facts',
     );
     assert.strictEqual(findDirectTraceAssertionContradiction("self.assertIsNone(fetch('x'))", 'fetch', noneTrace), undefined);
 });
+
+test('checks a reversed assertEqual argument order and ignores assertion messages', () => {
+    assert.match(
+        findDirectTraceAssertionContradiction("self.assertEqual({'ok': False}, target('value', 2), 'detail')", 'target', trace) || '',
+        /斷言 \{'ok': False\}/
+    );
+    assert.strictEqual(
+        findDirectTraceAssertionContradiction("self.assertTrue(check(1), 'detail')", 'check', { examples: [{ args: ['1'], result: 'True' }] }),
+        undefined
+    );
+});

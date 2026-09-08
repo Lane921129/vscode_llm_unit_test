@@ -52,6 +52,12 @@
 - 比對仍嚴格限於同一行中可解析的直接 target call 與完全相同 Trace 引數；指派後再 assertion、轉換結果與未追蹤輸入仍交給隔離 Python 執行、coverage 與 mutation gate，避免誤拒絕探索性測試。
 - 驗證：188 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 防止交換 assertEqual 參數繞過 Trace 證據
+
+- `assertEqual` 現在會辨識 target call 位於第一或第二個參數的兩種合法 unittest 寫法；即使模型把 actual／expected 交換，也會將另一側與完全相同的 Dynamic Trace 結果比較。
+- 可選的 assertion 訊息與巢狀 dict／list／tuple 字面值不影響比較；這讓常見不同模型輸出風格仍使用同一個證據標準，而不為特定模型特化。
+- 驗證：189 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
