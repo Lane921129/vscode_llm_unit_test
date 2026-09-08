@@ -59,3 +59,20 @@ test('keeps newlines out of qualification logs', () => {
     assert.ok(!message.includes('\n'));
     assert.match(message, /local model/);
 });
+
+test('appends the fixed-fixture probe reply only when qualification fails', () => {
+    const failed = formatModelQualificationLog({
+        envType: 'cloud',
+        modelName: 'gemma-4-31b-it',
+        testGenerationReady: false,
+        testGenerationReason: '安全 fixture 拒絕。'
+    }, '```python\n# probe reply\n```');
+    const passed = formatModelQualificationLog({
+        envType: 'cloud',
+        modelName: 'gemma-4-31b-it',
+        testGenerationReady: true
+    }, 'this reply must not be logged after success');
+
+    assert.match(failed, /\[模型探測回應\][\s\S]*# probe reply/);
+    assert.ok(!passed.includes('this reply must not be logged after success'));
+});

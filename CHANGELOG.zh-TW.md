@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### 在資格失敗日誌附上固定探測回覆
+
+- 當模型連線成功但未通過 unittest 資格時，側邊欄系統日誌現在會在 `[模型探測回應]` 後附上實際 provider 回覆，保留換行、上限 6,000 字元並標示截斷。
+- 這只適用於不含專案原始碼、固定 `increment` fixture 的連線探測；資格成功與正式測試生成不會記錄模型回覆，API Key、header 與 provider 原始 HTTP error 也不會透過此欄位寫入。
+- 隔離執行改為重用共同的 evidence-gated code-fence 解包器，修正前段能找到「前言 + Python fence」但最後安全檢查又使用舊解包邏輯的資料流不一致。
+- 驗證：178 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
 ### 讓 Cloud unittest 探測可重現且保留安全界線
 
 - Cloud Gemini 的兩段最小 unittest 資格探測現在明確使用 `temperature: 0`，避免採用模型預設隨機性；這只影響測試連線，不改變正式測試生成請求的溫度策略。

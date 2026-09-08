@@ -163,10 +163,30 @@ test('shared runnable qualification requires the safe fixture and an isolated ex
     assert.strictEqual(await runIsolatedProbe(code), true);
     assert.deepStrictEqual(
         await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code),
-        { capability: 'verified', reason: '模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。' }
+        {
+            capability: 'verified',
+            reason: '模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。',
+            responsePreview: JSON.stringify({ code })
+        }
     );
     assert.strictEqual(
         (await verifyRunnableTestGenerationProbe(payload, async () => false)).capability,
         'unverified'
     );
+});
+
+test('failed isolated qualification retains the fixed-fixture reply for local diagnostics', async () => {
+    const code = [
+        'import unittest',
+        'def increment(value): return value + 1',
+        'class TestIncrement(unittest.TestCase):',
+        '    def test_increment(self):',
+        '        self.assertEqual(increment(1), 2)',
+        '        self.assertEqual(increment(-1), 0)',
+        'open("unsafe", "w")',
+    ].join('\n');
+    const result = await verifyRunnableTestGenerationProbe({ response: JSON.stringify({ code }) });
+
+    assert.strictEqual(result.capability, 'unverified');
+    assert.match(result.responsePreview || '', /open/);
 });

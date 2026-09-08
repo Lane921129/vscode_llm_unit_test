@@ -20,10 +20,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
     constructor(private readonly secretStorage: vscode.SecretStorage) {}
 
-    private appendModelQualificationLog(profile: ModelQualificationProfile): void {
+    private appendModelQualificationLog(profile: ModelQualificationProfile, responsePreview?: string): void {
         void this.webview?.postMessage({
             command: 'appendLog',
-            text: formatModelQualificationLog(profile)
+            text: formatModelQualificationLog(profile, responsePreview)
         });
     }
 
@@ -364,7 +364,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
-                                                this.appendModelQualificationLog(qualificationProfile);
+                                                this.appendModelQualificationLog(qualificationProfile, capability.responsePreview);
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
                                                         `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
@@ -473,7 +473,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                this.appendModelQualificationLog(profile);
+                                this.appendModelQualificationLog(profile, capability.responsePreview);
                                 if (capability.capability === 'verified') {
                                     const contextMessage = connectionMetadata.contextLengthKnown
                                         ? `最大輸入 Context：${connectionMetadata.contextLength.toLocaleString()} tokens`
@@ -532,7 +532,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 } as const;
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                this.appendModelQualificationLog(profile);
+                                this.appendModelQualificationLog(profile, capability.responsePreview);
                                 if (capability.capability === 'verified') {
                                     vscode.window.showInformationMessage(
                                         `✅ Custom API 連線成功！已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`

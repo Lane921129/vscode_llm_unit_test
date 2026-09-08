@@ -6,6 +6,18 @@ export type StructuredOutputCapability = 'verified' | 'unverified';
 export interface StructuredOutputProbeResult {
     capability: StructuredOutputCapability;
     reason: string;
+    /** Transient, capped preview of the fixed-fixture probe reply for UI diagnosis. */
+    responsePreview?: string;
+}
+
+const MAX_PROBE_RESPONSE_PREVIEW_CHARS = 6_000;
+
+/** The connection probe uses a fixed fixture, so a bounded reply preview is safe to show locally. */
+export function formatProbeResponsePreview(response: string): string {
+    const cleaned = response.replace(/\u0000/g, '');
+    return cleaned.length <= MAX_PROBE_RESPONSE_PREVIEW_CHARS
+        ? cleaned
+        : `${cleaned.slice(0, MAX_PROBE_RESPONSE_PREVIEW_CHARS)}\n…（探測回應已截斷，共 ${cleaned.length} 字元）`;
 }
 
 export const STRUCTURED_OUTPUT_PROBE_PROMPT =
@@ -30,7 +42,7 @@ export const TEST_GENERATION_PROBE_SCHEMA = {
     required: ['code']
 };
 
-function extractProbeCode(response: string): string {
+export function extractQualificationProbeCode(response: string): string {
     // Use the same evidence-gated fence extractor as generated test files.
     // Providers often add harmless prose around one otherwise valid Python fence.
     return extractPythonTestCode(response).trim();
@@ -82,10 +94,14 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
     if (typeof response !== 'string' || !response.trim()) {
         return { capability: 'unverified', reason: '模型沒有回傳測試程式碼。' };
     }
-    const code = extractProbeCode(response);
+    const responsePreview = formatProbeResponsePreview(response);
+    const reject = (reason: string): StructuredOutputProbeResult => ({
+        capability: 'unverified', reason, responsePreview
+    });
+    const code = extractQualificationProbeCode(response);
     const validation = validateUnittestStructure(code);
     if (!validation.valid) {
-        return { capability: 'unverified', reason: validation.reason || '模型沒有產生有效的 unittest 結構。' };
+        return reject(validation.reason || '模型沒有產生有效的 unittest 結構。');
     }
 
     const definesFixture = /^\s*def\s+increment\s*\(\s*value\s*\)\s*:/m.test(code);
@@ -93,16 +109,14 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
         !/^\s*def\s+increment\s*\(/.test(line) && /\bincrement\s*\(/.test(line)
     );
     if (!definesFixture || !invokesFixture) {
-        return {
-            capability: 'unverified',
-            reason: '模型沒有產生可自我驗證的 increment 測試程式。'
-        };
+        return reject('模型沒有產生可自我驗證的 increment 測試程式。');
     }
     if (!hasProbeBehaviorAssertions(code)) {
-        return {
-            capability: 'unverified',
-            reason: '模型未同時驗證已知行為 increment(1) == 2 與 increment(-1) == 0。'
-        };
+        return reject('模型未同時驗證已知行為 increment(1) == 2 與 increment(-1) == 0。');
     }
-    return { capability: 'verified', reason: '模型已通過 unittest 結構、目標呼叫與雙案例行為 assertion 驗證。' };
+    return {
+        capability: 'verified',
+        reason: '模型已通過 unittest 結構、目標呼叫與雙案例行為 assertion 驗證。',
+        responsePreview
+    };
 }
