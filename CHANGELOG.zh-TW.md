@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### 讓 Cloud unittest 探測可重現且保留安全界線
+
+- Cloud Gemini 的兩段最小 unittest 資格探測現在明確使用 `temperature: 0`，避免採用模型預設隨機性；這只影響測試連線，不改變正式測試生成請求的溫度策略。
+- 隔離 fixture 白名單新增無害註解與 `unittest.main(verbosity=N)`，以避免常見教學式輸出被誤拒；`open()`、任意 import、動態執行與其他未列入最小 fixture 的語句仍不能執行。
+- 若仍被安全限制拒絕，系統日誌會顯示不允許語句的行數，而非模糊地只顯示「最小 fixture 不符合」。
+- 驗證：176 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
 ### 修正 Provider 前言造成的 unittest 資格誤判
 
 - 測試連線資格探測改用與正式生成相同、具 `unittest` 證據限制的 Python code-fence 擷取器；模型在單一有效 Python code fence 前後加入簡短 Markdown 前言時，不再因外層文字而被誤判失敗。

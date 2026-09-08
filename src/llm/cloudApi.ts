@@ -4,8 +4,9 @@ export interface GoogleGenerateContentRequest {
     body: {
         contents: Array<{ parts: Array<{ text: string }> }>;
         generationConfig?: {
-            responseMimeType: 'application/json';
+            responseMimeType?: 'application/json';
             responseSchema?: Record<string, unknown>;
+            temperature?: number;
         };
     };
 }
@@ -13,6 +14,8 @@ export interface GoogleGenerateContentRequest {
 export interface GoogleGenerationOptions {
     responseMimeType?: 'application/json';
     responseSchema?: Record<string, unknown>;
+    /** Set only for deterministic, tiny connection probes. */
+    temperature?: number;
 }
 
 export interface GoogleListModelsRequest {
@@ -91,10 +94,11 @@ export function buildGoogleGenerateContentRequest(
         },
         body: {
             contents: [{ parts: [{ text: prompt }] }],
-            ...(options?.responseMimeType ? {
+            ...(options?.responseMimeType || options?.temperature !== undefined ? {
                 generationConfig: {
-                    responseMimeType: options.responseMimeType,
-                    ...(options.responseSchema ? { responseSchema: options.responseSchema } : {})
+                    ...(options?.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
+                    ...(options?.responseSchema ? { responseSchema: options.responseSchema } : {}),
+                    ...(options?.temperature !== undefined ? { temperature: options.temperature } : {})
                 }
             } : {})
         },

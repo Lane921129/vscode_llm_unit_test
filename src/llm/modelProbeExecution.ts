@@ -34,7 +34,12 @@ function probeCode(payload: unknown): string | undefined {
 }
 
 /** Permit only the tiny self-contained fixture before executing model output. */
-export function isIsolatedProbeCode(code: string): boolean {
+export interface IsolatedProbeCodeAssessment {
+    valid: boolean;
+    reason?: string;
+}
+
+export function assessIsolatedProbeCode(code: string): IsolatedProbeCodeAssessment {
     const allowed = [
         /^import unittest$/,
         /^def increment\(value\):(?: return value \+ 1)?$/,
@@ -47,9 +52,21 @@ export function isIsolatedProbeCode(code: string): boolean {
         /^self\.assertEqual\(0, increment\(-1\)\)$/,
         /^if __name__ == ['"]__main__['"]:$/,
         /^unittest\.main\(\)$/,
+        /^unittest\.main\(\s*verbosity\s*=\s*\d+\s*\)$/,
+        /^#.*$/,
     ];
     const lines = code.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    return lines.length > 0 && lines.every(line => allowed.some(pattern => pattern.test(line)));
+    const unsupportedLines = lines.filter(line => !allowed.some(pattern => pattern.test(line)));
+    return unsupportedLines.length === 0 && lines.length > 0
+        ? { valid: true }
+        : {
+            valid: false,
+            reason: `模型探測碼含 ${unsupportedLines.length || 1} 行最小安全 fixture 不允許的語句。`
+        };
+}
+
+export function isIsolatedProbeCode(code: string): boolean {
+    return assessIsolatedProbeCode(code).valid;
 }
 
 export function runIsolatedProbe(code: string, timeoutMs = 3000): Promise<boolean> {
@@ -85,8 +102,12 @@ export async function verifyRunnableTestGenerationProbe(
         return assessment;
     }
     const code = probeCode(payload);
-    if (!code || !isIsolatedProbeCode(code)) {
-        return { capability: 'unverified', reason: '模型探測碼未符合可安全隔離執行的最小 unittest fixture。' };
+    if (!code) {
+        return { capability: 'unverified', reason: '模型沒有可執行的測試程式碼。' };
+    }
+    const safety = assessIsolatedProbeCode(code);
+    if (!safety.valid) {
+        return { capability: 'unverified', reason: safety.reason || '模型探測碼未符合可安全隔離執行的最小 unittest fixture。' };
     }
     return await executor(code)
         ? { capability: 'verified', reason: '模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。' }

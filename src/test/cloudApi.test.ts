@@ -36,6 +36,12 @@ test('buildGoogleGenerateContentRequest supports a JSON output contract without 
     });
 });
 
+test('buildGoogleGenerateContentRequest supports a deterministic connection-probe temperature', () => {
+    const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'probe', { temperature: 0 });
+
+    assert.deepStrictEqual(request.body.generationConfig, { temperature: 0 });
+});
+
 test('normalizes resource-style model names and lists models without placing the key in a URL', () => {
     const request = buildGoogleGenerateContentRequest(' models/example-model ', 'test-key', 'hello');
     const listRequest = buildGoogleListModelsRequest('test-key', 'next page');

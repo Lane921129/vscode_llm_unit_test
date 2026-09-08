@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { test } from 'node:test';
 import { buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
 import { assessStructuredOutputProbe, assessTestGenerationProbe } from '../llm/testGenerationQualification';
-import { isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
+import { assessIsolatedProbeCode, isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
     const request = buildOllamaStructuredProbe('local-model');
@@ -154,7 +154,12 @@ test('shared runnable qualification requires the safe fixture and an isolated ex
     const payload = { response: JSON.stringify({ code }) };
 
     assert.strictEqual(isIsolatedProbeCode(code), true);
+    assert.strictEqual(isIsolatedProbeCode(code + '\n# A harmless generated comment\nunittest.main(verbosity=2)'), true);
     assert.strictEqual(isIsolatedProbeCode(code + '\nopen("unsafe", "w")'), false);
+    assert.match(
+        assessIsolatedProbeCode(code + '\nopen("unsafe", "w")').reason || '',
+        /1 行最小安全 fixture 不允許的語句/
+    );
     assert.strictEqual(await runIsolatedProbe(code), true);
     assert.deepStrictEqual(
         await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code),

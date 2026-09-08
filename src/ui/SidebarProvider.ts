@@ -433,7 +433,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     credential.model,
                                     credential.key,
                                     TEST_GENERATION_PROBE_PROMPT,
-                                    { responseMimeType: 'application/json', responseSchema: TEST_GENERATION_PROBE_SCHEMA }
+                                    { responseMimeType: 'application/json', responseSchema: TEST_GENERATION_PROBE_SCHEMA, temperature: 0 }
                                 );
                                 const response = await fetchWithServerRetry<Response>(fetch, request.url, {
                                     method: 'POST',
@@ -448,7 +448,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     const plainRequest = buildGoogleGenerateContentRequest(
                                         credential.model,
                                         credential.key,
-                                        PLAIN_TEST_GENERATION_PROBE_PROMPT
+                                        PLAIN_TEST_GENERATION_PROBE_PROMPT,
+                                        { temperature: 0 }
                                     );
                                     const plainResponse = await fetchWithServerRetry<Response>(fetch, plainRequest.url, {
                                         method: 'POST',
