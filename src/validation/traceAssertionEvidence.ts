@@ -15,6 +15,11 @@ export interface TraceAssertionEvidenceValidation {
     reason?: string;
 }
 
+interface DirectAssertionExpectation {
+    value: string;
+    isTruthinessAssertion: boolean;
+}
+
 function normalizePythonExpression(value: string): string {
     // This is intentionally not an evaluator. It only normalizes whitespace
     // and quote style for simple literal comparison against an existing Trace.
@@ -86,7 +91,7 @@ function splitTopLevelArguments(value: string): string[] {
     return argumentsList;
 }
 
-function expectedDirectAssertionValue(line: string, callStart: number, callEnd: number): string | undefined {
+function expectedDirectAssertionValue(line: string, callStart: number, callEnd: number): DirectAssertionExpectation | undefined {
     const assertionMatch = /self\.(assertEqual|assertTrue|assertFalse|assertIsNone)\s*\(/.exec(line);
     if (!assertionMatch || assertionMatch.index > callStart) {return undefined;}
     const assertionOpen = assertionMatch.index + assertionMatch[0].length - 1;
@@ -97,12 +102,22 @@ function expectedDirectAssertionValue(line: string, callStart: number, callEnd: 
     const callExpression = normalizePythonExpression(line.slice(callStart, callEnd + 1));
     if (assertionMatch[1] === 'assertEqual') {
         if (argumentsList.length < 2) {return undefined;}
-        if (normalizePythonExpression(argumentsList[0]) === callExpression) {return argumentsList[1];}
-        if (normalizePythonExpression(argumentsList[1]) === callExpression) {return argumentsList[0];}
+        if (normalizePythonExpression(argumentsList[0]) === callExpression) {
+            return { value: argumentsList[1], isTruthinessAssertion: false };
+        }
+        if (normalizePythonExpression(argumentsList[1]) === callExpression) {
+            return { value: argumentsList[0], isTruthinessAssertion: false };
+        }
         return undefined;
     }
     if (argumentsList.length < 1 || normalizePythonExpression(argumentsList[0]) !== callExpression) {return undefined;}
-    return assertionMatch[1] === 'assertTrue' ? 'True' : assertionMatch[1] === 'assertFalse' ? 'False' : 'None';
+    if (assertionMatch[1] === 'assertIsNone') {
+        return { value: 'None', isTruthinessAssertion: false };
+    }
+    return {
+        value: assertionMatch[1] === 'assertTrue' ? 'True' : 'False',
+        isTruthinessAssertion: true
+    };
 }
 
 /**
@@ -133,14 +148,22 @@ export function findDirectTraceAssertionContradiction(
                 normalizePythonExpression(line.slice(callOpen + 1, closeIndex)) === signature
             );
             if (!traceMatch) {continue;}
-            const assertedValue = expectedDirectAssertionValue(line, callExpressionStart, closeIndex);
-            if (assertedValue === undefined) {continue;}
-            if (normalizePythonExpression(assertedValue) !== normalizePythonExpression(traceMatch.example.result || '')) {
+            const expectation = expectedDirectAssertionValue(line, callExpressionStart, closeIndex);
+            if (expectation === undefined) {continue;}
+            const normalizedTraceResult = normalizePythonExpression(traceMatch.example.result || '');
+            // assertTrue/assertFalse verify Python truthiness, not equality to
+            // True/False. Only reject when Trace proves an exact Boolean;
+            // None, 0, empty containers, and custom objects stay for Python's
+            // isolated execution gate to evaluate without false rejection.
+            if (expectation.isTruthinessAssertion && normalizedTraceResult !== 'True' && normalizedTraceResult !== 'False') {
+                continue;
+            }
+            if (normalizePythonExpression(expectation.value) !== normalizedTraceResult) {
                 const callArgs = [
                     ...(traceMatch.example.args || []),
                     ...Object.entries(traceMatch.example.kwargs || {}).map(([name, value]) => `${name}=${value}`)
                 ].join(', ');
-                return `已驗證 Trace 顯示 ${callableName}(${callArgs}) 回傳 ${traceMatch.example.result}，但模型對相同呼叫斷言 ${assertedValue}。`;
+                return `已驗證 Trace 顯示 ${callableName}(${callArgs}) 回傳 ${traceMatch.example.result}，但模型對相同呼叫斷言 ${expectation.value}。`;
             }
         }
     }

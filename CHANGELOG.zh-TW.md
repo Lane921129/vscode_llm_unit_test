@@ -64,6 +64,12 @@
 - 現在四個路徑共用同一個可重用 evidence validation result。任何一條路徑若直接斷言了與精確 Trace input 相反的結果，都不會寫入測試檔或進入 coverage／mutation 計分；日誌和報告會區分格式失敗與 Trace 證據失敗。
 - 驗證：190 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 修正布林 Assertion 的 Python Truthiness 語意
+
+- `assertTrue(value)` 與 `assertFalse(value)` 驗證的是 Python truthiness，不是 `value == True` 或 `value == False`。先前 gate 會把已驗證回傳 `None`、`0` 或空集合的合法 `assertFalse(...)` 誤判為矛盾，這會不必要地限制不同模型的正確測試寫法。
+- 現在只有 Dynamic Trace 精確回傳 Boolean literal `True`／`False` 時，才以 `assertTrue`／`assertFalse` 直接判定相反 assertion；其他實值保留給隔離 Python unittest 執行決定。`assertEqual` 與 `assertIsNone` 的精確比較不變。
+- 驗證：191 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
