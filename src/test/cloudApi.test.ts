@@ -91,4 +91,8 @@ test('extracts a Cloud generated text response without trusting malformed payloa
     );
     assert.strictEqual(getGoogleGeneratedText({ candidates: [] }), undefined);
     assert.strictEqual(getGoogleGeneratedText({ candidates: [{ content: { parts: [{}] } }] }), undefined);
+    assert.strictEqual(
+        getGoogleGeneratedText({ candidates: [{ content: { parts: [{ text: '{"code":' }, { text: '"complete"}' }, { inlineData: {} }] } }] }),
+        '{"code":"complete"}'
+    );
 });

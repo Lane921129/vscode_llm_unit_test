@@ -7,8 +7,8 @@ import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeE
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './prompts/mutantTriagePrompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
-import { buildGoogleGenerateContentRequest, resolveGoogleApiKey } from './llm/cloudApi';
-import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './llm/customApi';
+import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
+import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
@@ -625,18 +625,18 @@ async function requestLlmApi(
         if (params.envType === 'local') {
             responseText = (resJson as { response?: string }).response || "";
         } else if (params.envType === 'custom') {
-            const choices = (resJson as any).choices;
-            if (choices && choices[0]?.message?.content) {
-                responseText = choices[0].message.content;
+            const customText = getCustomChatCompletionText(resJson);
+            if (customText) {
+                responseText = customText;
             } else if ((resJson as any).error) {
                 throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
             } else {
                 throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
             }
         } else {
-            const candidates = (resJson as any).candidates;
-            if (candidates && candidates[0]?.content?.parts?.[0]?.text) {
-                responseText = candidates[0].content.parts[0].text;
+            const cloudText = getGoogleGeneratedText(resJson);
+            if (cloudText) {
+                responseText = cloudText;
             } else if ((resJson as any).error) {
                 throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
             } else {

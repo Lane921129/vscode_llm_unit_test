@@ -47,4 +47,8 @@ test('extracts Custom assistant text without trusting malformed payloads', () =>
     );
     assert.strictEqual(getCustomChatCompletionText({ choices: [{ message: {} }] }), undefined);
     assert.strictEqual(getCustomChatCompletionText({ choices: [] }), undefined);
+    assert.strictEqual(
+        getCustomChatCompletionText({ choices: [{ message: { content: [{ type: 'text', text: '{"code":' }, { type: 'text', text: '"complete"}' }, { type: 'reasoning', summary: 'ignored' }] } }] }),
+        '{"code":"complete"}'
+    );
 });

@@ -15,7 +15,22 @@ export function getCustomChatCompletionText(payload: unknown): string | undefine
         return undefined;
     }
     const content = (choices[0] as { message?: { content?: unknown } }).message?.content;
-    return typeof content === 'string' && content.trim() ? content : undefined;
+    if (typeof content === 'string') {
+        return content.trim() ? content : undefined;
+    }
+    // Some OpenAI-compatible gateways return typed message segments instead
+    // of one string.  Preserve text segments in order, while ignoring tool,
+    // image, reasoning, and malformed parts that are not executable output.
+    if (Array.isArray(content)) {
+        const text = content
+            .map(part => part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+                ? (part as { text: string }).text
+                : undefined)
+            .filter((part): part is string => typeof part === 'string')
+            .join('');
+        return text.trim() ? text : undefined;
+    }
+    return undefined;
 }
 
 /**

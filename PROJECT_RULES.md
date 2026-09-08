@@ -82,6 +82,7 @@
 - Mock Scaffold 必須追蹤被測函式呼叫的同模組 side-effect helper；helper 若到達 imported I/O boundary，必須 patch helper 的 module use point，避免因只看目標函式本體而遺漏資料庫連線。
 - 模型輸出可使用標準 Python／Py／未標記 code fence，或被 `code` 字串 JSON envelope 包裝的上述區塊；系統只能擷取含 unittest 證據的單一程式碼區塊後進行結構與 AST 驗證，不得把 Markdown 說明、無 `code` 字串的 JSON 或多段產物當作測試程式。
 - 供應商拒絕 JSON／schema 格式時，僅可針對明確的格式拒絕狀態（400、415、422、501）回退為純文字生成；401、403、404、429 與 5xx 等帳號、模型、配額或服務錯誤必須保留並清楚回報，不得偽裝成格式回退。
+- Provider 回覆文字必須依官方／相容協定完整讀取所有可執行 text segments，再交給結構化輸出與 Python 驗證；不得只取第一段而截斷 JSON 或測試碼，也不得把 tool、image、reasoning 或未知 segment 偽裝成程式輸出。
 
 ## 品質、Git 與紀錄
 

@@ -131,6 +131,13 @@
 - deterministic fallback Tier 1 不會重複附加，因為它的完整測試檔已直接由同一份 Trace 建構。這保留 LLM 對額外情境與測試組織的判斷空間，也讓最低可驗證行為不依賴模型記憶。
 - 驗證：新增所有 LLM Tier 與 deterministic Tier 1 的 Trace 保留策略回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
 
+### 完整保留分段的 Cloud 與相容 API 文字回覆
+
+- 正式 Cloud 生成流程先前直接讀取第一個 `candidates[0].content.parts[0].text`；供應商若將 JSON envelope 或 Python code 分成多個 text part，後半段會被靜默丟失，最後看似模型格式不合格。
+- 現在正式生成與資格探測共用 Cloud 文字擷取器，依順序合併所有合法 text parts。OpenAI-compatible Custom API 同步接受標準字串 content 與 typed text segment 陣列，忽略 tool、image、reasoning 與未知內容。
+- 合併後仍必須通過原有 JSON／code-fence、unittest AST、隔離執行、coverage 與 mutation gates；本次不放寬任何模型輸出品質條件，也不將非文字片段視為程式碼。
+- 驗證：新增 Cloud 分段 JSON 與 Custom typed text 回覆回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
