@@ -175,6 +175,38 @@ test('semantic prompt supplies verified dependency repr facts instead of JavaScr
     assert.ok(!prompt.includes('[object Object]'));
 });
 
+test('semantic analyzer receives bounded AST setup context without treating it as an output oracle', () => {
+    const prompt = getSemanticAnalyzerUserPrompt(
+        'def process(value):\n    return PREFIX + self.client.send(value)',
+        [],
+        [],
+        {
+            file_imports: [
+                { kind: 'from', module: 'settings', name: 'PREFIX', bound_name: 'PREFIX' },
+                { kind: 'import', module: 'transport', alias: 'transport', bound_name: 'transport' }
+            ],
+            referenced_globals: [{ name: 'PREFIX', code: "PREFIX = '>'" }],
+            class_name: 'Worker', method_kind: 'instance',
+            class_context: {
+                name: 'Worker', bases: ['BaseWorker'],
+                init: {
+                    signature: [{ name: 'client', required: true, default: null }],
+                    assigns: [{ name: 'client', code: 'self.client = client' }]
+                }
+            }
+        }
+    );
+
+    assert.match(prompt, /MODULE AND CLASS SETUP CONTEXT/);
+    assert.match(prompt, /from settings import PREFIX/);
+    assert.match(prompt, /import transport as transport/);
+    assert.match(prompt, /PREFIX = '>'/);
+    assert.match(prompt, /Target binding: instance member of Worker/);
+    assert.match(prompt, /Constructor parameters: client \(required\)/);
+    assert.match(prompt, /self\.client = client/);
+    assert.match(prompt, /does not prove a return value, exception, or external side effect/);
+});
+
 test('semantic context omits unverified dependency return claims while retaining verified facts', () => {
     const analysis: SemanticAnalysis = {
         dependency_behaviors: [{

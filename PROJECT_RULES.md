@@ -7,6 +7,7 @@
 - `python_scripts/dynamic_tracer.py`、`python_scripts/ast_extractor.py` 與基礎提示詞不得硬編碼任何業務領域關鍵字、固定閾值或特定回傳結構。
 - 領域特化必須由 Semantic Analyzer 根據目標原始碼選取 Skill Cards；不得把某個專案的規則帶進其他專案。
 - Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
+- Semantic Analyzer 必須收到受預算限制的目標模組 imports、引用 globals、class bases 與 `__init__` 簽名／賦值；這些只可用於 import、constructor、dependency injection 與 Mock 策略，不能作為回傳值、例外或外部 side effect 的 assertion 事實。
 - Prompt 詳細程度與 Tier 2 分治策略必須依已探測的參數量、Context 與已解析 Tier 決定；不得以供應商、模型品牌或名稱片段建立白名單／黑名單。
 - Writer 的輸出契約必須對所有 provider、模型與 Tier 使用相同的純 Python code fence；包括 Tier 3 Scaffold、Tier 4 與 Self-repair。不得依模型名稱插入或移除 `<thinking>` 等分析標籤，以免分析文字混入可執行測試。
 - 產生測試前必須保留必要的語境：目標函式、imports、引用的模組常數、類別與 `__init__`、相依函式、呼叫站與動態追蹤結果。

@@ -1211,7 +1211,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const semUsr = getSemanticAnalyzerUserPrompt(
                 (astContext as any).code || '',
                 semDeps,
-                semCallSites
+                semCallSites,
+                astContext
             );
             const semRaw = await requestLlmApi(params, semSys, semUsr, log, 'json');
             const semResult = parseSemanticAnalysis(semRaw);

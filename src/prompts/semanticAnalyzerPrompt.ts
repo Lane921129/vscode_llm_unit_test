@@ -65,6 +65,22 @@ export interface DependencyTraceForPrompt {
     };
 }
 
+/** A bounded AST setup view.  These are source facts, not execution oracles. */
+export interface SemanticAstSetupContext {
+    file_imports?: Array<{ kind?: string; module?: string; level?: number; name?: string | null; alias?: string | null; bound_name?: string }>;
+    referenced_globals?: Array<{ name?: string; code?: string }>;
+    class_name?: string | null;
+    method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+    class_context?: {
+        name?: string;
+        bases?: string[];
+        init?: {
+            signature?: Array<{ name?: string; kind?: string; default?: string | null; required?: boolean }>;
+            assigns?: Array<{ name?: string; code?: string }>;
+        };
+    } | null;
+}
+
 function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[]): string {
     const traced = dependencies.filter(dependency => {
         const trace = dependency.traceResult;
@@ -92,6 +108,53 @@ function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[])
         }
     }
     return out + '\n';
+}
+
+function formatAstSetupContext(context?: SemanticAstSetupContext): string {
+    if (!context) {return '';}
+    const lines: string[] = [];
+    const imports = (context.file_imports || []).slice(0, 12);
+    if (imports.length > 0) {
+        lines.push('Imports available in the target module:');
+        for (const item of imports) {
+            const dots = '.'.repeat(item.level || 0);
+            if (item.kind === 'import') {
+                lines.push(`  - import ${item.module || item.bound_name || '?'}${item.alias ? ` as ${item.alias}` : ''}`);
+            } else {
+                lines.push(`  - from ${dots}${item.module || ''} import ${item.name || '*'}${item.alias ? ` as ${item.alias}` : ''}`);
+            }
+        }
+    }
+    const globals = (context.referenced_globals || []).filter(item => item.name && item.code).slice(0, 8);
+    if (globals.length > 0) {
+        lines.push('Referenced module globals (source definitions):');
+        for (const item of globals) {
+            lines.push(`  - ${item.code}`);
+        }
+    }
+    if (context.class_context) {
+        const classInfo = context.class_context;
+        lines.push(`Target binding: ${context.method_kind || 'unknown'} member of ${context.class_name || classInfo.name || 'class'}.`);
+        if (classInfo.bases?.length) {
+            lines.push(`Class bases: ${classInfo.bases.join(', ')}`);
+        }
+        const signature = (classInfo.init?.signature || []).slice(0, 12);
+        if (signature.length > 0) {
+            lines.push('Constructor parameters: ' + signature.map(param =>
+                `${param.name || '?'} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})`
+            ).join(', '));
+        }
+        const assigns = (classInfo.init?.assigns || []).filter(item => item.code).slice(0, 8);
+        if (assigns.length > 0) {
+            lines.push('Constructor assignments (source setup):');
+            for (const item of assigns) {
+                lines.push(`  - ${item.code}`);
+            }
+        }
+    }
+    return lines.length > 0
+        ? `=== MODULE AND CLASS SETUP CONTEXT ===\n${lines.join('\n')}\nThis is source/setup context only. It does not prove a return value, exception, or external side effect.\n\n`
+        : '';
 }
 
 // === System Prompt ===
@@ -154,6 +217,7 @@ AVAILABLE SKILL IDs (for required_skills array):
 ${skillLibrarySummary}
 
 ANALYSIS RULES:
+- MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.
 - When VERIFIED DEPENDENCY EXECUTION FACTS are provided, reproduce their Python repr values exactly. Never replace a Python dict/list/tuple with a JavaScript-style description such as "[object Object]".
 - Without verified dependency execution facts, do not claim a dependency "always returns" a concrete value; leave dependency_behaviors empty and let the Writer rely on source code or mock.patch.
 - For unreachable_paths: if dependency always returns X, which if-conditions are always True/False?
@@ -190,9 +254,12 @@ ANALYSIS RULES:
 export function getSemanticAnalyzerUserPrompt(
     targetSource: string,
     dependencies: Array<{ name: string; code: string; traceResult?: DependencyTraceForPrompt['traceResult'] }>,
-    callSites?: Array<{ caller_func: string; call_expr: string }>
+    callSites?: Array<{ caller_func: string; call_expr: string }>,
+    astSetupContext?: SemanticAstSetupContext
 ): string {
     let prompt = '=== TARGET FUNCTION SOURCE CODE ===\n```python\n' + targetSource.trim() + '\n```\n\n';
+
+    prompt += formatAstSetupContext(astSetupContext);
 
     if (dependencies.length > 0) {
         prompt += '=== DEPENDENCY SOURCE CODE ===\n';

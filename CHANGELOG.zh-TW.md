@@ -110,6 +110,13 @@
 - 複數繼承、override、decorated class、同名本地類別、factory／屬性鏈與不確定 MRO 一律不會當作目標呼叫站，因此不會把猜測性資料帶進 Trace 或 Prompt。
 - 驗證：新增安全繼承的正反 Caller Finder 回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
 
+### 讓語意分析師取得受限的模組與 Class Setup 語境
+
+- Semantic Analyzer 原本只看目標函式、相依與呼叫站；雖然 AST 已擷取 imports、引用常數、class bases 與 `__init__` 資訊，分析師卻無法用它們規劃正確 import、建構子與 dependency-injection Mock 策略。
+- 現在會以固定上限將這些 AST source facts 傳給分析師：最多 12 個 imports、8 個引用 globals、12 個 constructor parameters 與 8 個初始化賦值。這避免小模型因缺少 setup 語境而猜測 `self` 屬性來源，同時維持 prompt 預算。
+- Prompt 明確標記它們不是執行 oracle；Semantic Analyzer、Writer 與 Reviewer 都不得從常數、`__init__` 或 import 臆測回傳值、例外或外部 side effect，精確 assertion 仍只依 Dynamic Trace、明確 raise 或同測試的 mock side effect。
+- 驗證：新增 AST setup 語境 Prompt 回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
