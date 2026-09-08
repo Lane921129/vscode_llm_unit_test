@@ -327,6 +327,20 @@ test('writer prompt does not turn try/except or dependency warnings into univers
     assert.doesNotMatch(exceptionPrompt + dependencyPrompt, /NEVER raises exceptions|MUST use.*assertRaises/s);
 });
 
+test('writer prompt treats static return expressions as shapes rather than exact output facts', () => {
+    const prompt = getUserPrompt('sample.py', 'render', 'def render(value):\n    return normalize(value)', 'small', {
+        name: 'render',
+        args: ['value'],
+        code: 'def render(value):\n    return normalize(value)',
+    });
+
+    assert.match(prompt, /RETURN EXPRESSION SHAPES/);
+    assert.match(prompt, /Possible expression shape: normalize\(value\)/);
+    assert.match(prompt, /NOT output facts/);
+    assert.match(prompt, /Do NOT use these expressions as an exact expected value/);
+    assert.doesNotMatch(prompt, /Use ONLY the above structures in assertEqual/);
+});
+
 test('writer prompt prevents Tier 2 from directly calling a dependency as unused setup', () => {
     const prompt = getUserPrompt('checkout.py', 'submit', 'def submit(value): return normalize(value)', 'small', {
         name: 'submit',

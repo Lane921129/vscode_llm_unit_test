@@ -634,15 +634,17 @@ export function getUserPrompt(
             prompt += `  - Inspect the protected statements and exception handlers. Use assertRaises only for an explicit source raise or exact verified trace error.\n`;
         }
 
-        // Fix C：return 結構提示（Loop 1 & Loop 2+ 都提示）
+        // Return expressions are setup/shape hints, never a substitute for an
+        // executed assertion oracle.  This applies in both initial and repair
+        // loops so a reviewer cannot reintroduce source-derived guesses.
         const returnLines = srcLines.filter((l: string) => /^\s*return\s+/.test(l) && !/^\s*return\s*$/.test(l));
         if (returnLines.length > 0 && returnLines.length <= 8) {
-            prompt += `\nℹ️ RETURN VALUE STRUCTURE (from static analysis):\n`;
+            prompt += `\nℹ️ RETURN EXPRESSION SHAPES (from static analysis, NOT output facts):\n`;
             for (const rl of returnLines) {
                 const cleaned = rl.trim().replace(/^return\s+/, '');
-                prompt += `  - Possible return value: ${cleaned}\n`;
+                prompt += `  - Possible expression shape: ${cleaned}\n`;
             }
-            prompt += `  → Use ONLY the above structures in assertEqual. Do NOT invent new dict keys or types.\n`;
+            prompt += `  → Do NOT use these expressions as an exact expected value by themselves. Exact assertions require a verified Dynamic Trace, an explicit literal return reached by the selected input, or a mock side effect controlled in this test.\n`;
         }
 
         // Trace 重申：Loop 2+ 強制再次列出 Verified Real Execution Results，防止 AI 使用假輸入
