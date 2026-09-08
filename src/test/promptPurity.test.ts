@@ -10,7 +10,7 @@ import {
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
 } from '../prompts/semanticAnalyzerPrompt';
-import { getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
+import { compactSemanticGuidanceForBudget, getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -283,6 +283,30 @@ test('writer prompt receives evidence-bound semantic guidance within its token b
     assert.match(prompt, /Generator Result Testing/);
     assert.match(prompt, /source code and verified execution facts take precedence/);
     assert.doesNotMatch(constrained, /EVIDENCE-BOUND SEMANTIC GUIDANCE/);
+});
+
+test('semantic guidance budget keeps complete evidence and skill sections before candidate suggestions', () => {
+    const guidance = [
+        '=== SEMANTIC GUIDANCE ===',
+        'Use verified execution facts and source code as evidence.',
+        '',
+        '=== CANDIDATE PATH GUIDANCE ===',
+        'Candidate path A is a model suggestion that must be verified against source or trace.',
+        'Candidate path B is another model suggestion that must be verified against source or trace.',
+        '',
+        '=== FUNCTION-SPECIFIC RULES (Selected for this function) ===',
+        '[Generator Result Testing]',
+        '  Materialize finite results before assertion.',
+        '',
+        '=== TEST DATA STRATEGY (AI-derived, validate against source before use) ===',
+        'Overall approach: exercise source branches.'
+    ].join('\n');
+    const compact = compactSemanticGuidanceForBudget(guidance, 65) || '';
+
+    assert.match(compact, /SEMANTIC GUIDANCE/);
+    assert.match(compact, /Generator Result Testing/);
+    assert.doesNotMatch(compact, /Candidate path A/);
+    assert.match(compact, /budget-reduced/);
 });
 
 test('writer prompt does not turn try/except or dependency warnings into universal exception claims', () => {

@@ -227,6 +227,64 @@ function estimateTokens(text: string): number {
     return Math.ceil(text.length / 3.5);
 }
 
+/**
+ * Keep semantic guidance useful for small-context models without cutting a
+ * rule or code fence mid-sentence.  The formatter emits complete `=== ... ===`
+ * sections, so selection can prefer execution facts and evidence-bound skill
+ * cards before lower-confidence candidate suggestions.
+ */
+export function compactSemanticGuidanceForBudget(guidance: string, maxTokens: number): string | undefined {
+    if (!guidance.trim() || maxTokens <= 0) {
+        return undefined;
+    }
+    if (estimateTokens(guidance) <= maxTokens) {
+        return guidance.trim();
+    }
+
+    const headings = [...guidance.matchAll(/^=== [^\n]+ ===\s*$/gm)];
+    if (headings.length === 0) {
+        return undefined;
+    }
+    const sections = headings.map((heading, index) => {
+        const start = heading.index || 0;
+        const end = headings[index + 1]?.index ?? guidance.length;
+        const text = guidance.slice(start, end).trim();
+        const title = heading[0].trim();
+        const priority = title.includes('FUNCTION-SPECIFIC RULES') || title.includes('DETERMINISTIC SKILL BASELINE')
+            ? 1
+            : title.includes('SEMANTIC GUIDANCE') || title.includes('VERIFIED DEPENDENCY FACTS')
+                ? 0
+                : title.includes('TEST DATA STRATEGY')
+                    ? 2
+                    : title.includes('CANDIDATE PATH GUIDANCE')
+                        ? 3
+                        : 4;
+        return { text, priority, originalIndex: index };
+    });
+
+    const selected: typeof sections = [];
+    let usedTokens = 0;
+    for (const section of [...sections].sort((a, b) => a.priority - b.priority || a.originalIndex - b.originalIndex)) {
+        const sectionTokens = estimateTokens(section.text);
+        if (usedTokens + sectionTokens <= maxTokens) {
+            selected.push(section);
+            usedTokens += sectionTokens;
+        }
+    }
+    if (selected.length === 0) {
+        return undefined;
+    }
+
+    const omitted = selected.length < sections.length;
+    const output = selected
+        .sort((a, b) => a.originalIndex - b.originalIndex)
+        .map(section => section.text)
+        .join('\n\n');
+    return omitted
+        ? `${output}\n\n[Semantic guidance was budget-reduced; omitted sections are suggestions, not execution facts.]`
+        : output;
+}
+
 function distillDependency(dep: any, level: 0 | 1 | 2 | 3): string {
     if (level === 3) {
         return `Dependency: ${dep.name} (code too long, mock it)\n`;
@@ -647,10 +705,10 @@ export function getUserPrompt(
 
     if (semanticGuidance) {
         const remaining = budgetTokens - estimateTokens(prompt) - 500;
-        const guidanceTokens = estimateTokens(semanticGuidance);
-        if (remaining >= guidanceTokens) {
+        const compactGuidance = compactSemanticGuidanceForBudget(semanticGuidance, remaining);
+        if (compactGuidance) {
             prompt += `\n\n=== EVIDENCE-BOUND SEMANTIC GUIDANCE ===\n`;
-            prompt += `${semanticGuidance.trim()}\n`;
+            prompt += `${compactGuidance}\n`;
             prompt += `Treat model-authored candidates as suggestions only; source code and verified execution facts take precedence.\n`;
         }
     }

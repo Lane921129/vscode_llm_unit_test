@@ -15,6 +15,11 @@
 - 最小 unittest 資格 probe 現在由隔離 runner 提供固定 `increment` fixture；模型只需產生 `unittest.TestCase` 與兩個已知 target assertion，不必重寫被測函式。這讓資格工作更貼近正式測試生成，也避免模型因函式註解、格式或多餘 fixture 細節被誤判。
 - 舊版自含相同 fixture 的回覆仍相容；所有回覆仍要通過 unittest 結構、固定 target call、雙案例 assertion、安全白名單與隔離執行，沒有放寬為只看文字或 HTTP 成功。
 
+### 依 Context 預算分段保留 Tier 1／Tier 2 語意指引
+
+- Writer 不再因整段 semantic guidance 放不下就完全丟棄；現在只會注入可完整容納的段落，優先順序為已驗證語境、技能卡、測資策略、模型提出的候選路徑。
+- 被省略的段落會在 Prompt 中明確標記為 budget-reduced；不會截斷技能規則或 code fence，也不會把被裁掉的候選建議當成實際執行事實。
+
 ### 將 Tier 1 改為 LLM 證據導向生成，並保留可辨識備援
 
 - Tier 1 在選定模型已通過 unittest 資格探測，或使用者手動選擇 Tier 時，現在會真正呼叫 LLM；Prompt 同時約束目標來源碼、AST 語境、Dynamic Trace 與本函式技能卡。模型負責選擇支持的行為、邊界與測試組織，不能把來源分支或技能卡當成未驗證的 assertion。

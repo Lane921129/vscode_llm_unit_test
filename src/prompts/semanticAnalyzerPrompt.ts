@@ -405,6 +405,7 @@ export function formatSemanticContextForPrompt(
         out += '\nUnverified dependency-return claims were omitted. Use dependency source, verified facts, or mock.patch instead.\n';
     }
 
+    out += '\n=== CANDIDATE PATH GUIDANCE ===\n';
     if (analysis.unreachable_paths.length > 0) {
         out += '\nCandidate unreachable paths (verify against source or trace; do not omit a test solely because of this suggestion):\n';
         for (const up of analysis.unreachable_paths) {
