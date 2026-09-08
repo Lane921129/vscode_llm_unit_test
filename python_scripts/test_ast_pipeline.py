@@ -360,6 +360,87 @@ def render_value():
         self.assertEqual(decorate_calls[0]['trace_args'], ['value'])
         self.assertIsNone(decorate_calls[0]['trace_constructor_args'])
 
+    def test_caller_finder_uses_only_safe_inherited_class_callers_for_base_method_trace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'worker.py'
+            target.write_text(
+                '''class Base:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def render(self, value):
+        return self.prefix + value
+
+class SafeChild(Base):
+    pass
+
+class OverrideChild(Base):
+    def render(self, value):
+        return "override:" + value
+''',
+                encoding='utf-8'
+            )
+            (root / 'consumer.py').write_text(
+                '''from worker import SafeChild as ImportedChild, OverrideChild
+import worker as worker_module
+
+class LocalChild(ImportedChild):
+    pass
+
+class LocalOverride(ImportedChild):
+    def render(self, value):
+        return "local:" + value
+
+class MultipleBases(ImportedChild, object):
+    pass
+
+@replace_class
+class DecoratedChild(ImportedChild):
+    pass
+
+def through_import():
+    return ImportedChild("import:").render("value")
+
+def through_module():
+    return worker_module.SafeChild("module:").render("value")
+
+def through_local_binding():
+    subject = LocalChild("local:")
+    return subject.render("value")
+
+def ignored_override():
+    return OverrideChild("wrong:").render("value")
+
+def ignored_local_override():
+    return LocalOverride("wrong:").render("value")
+
+def ignored_multiple_bases():
+    return MultipleBases("wrong:").render("value")
+
+def ignored_decorated_class():
+    return DecoratedChild("wrong:").render("value")
+
+class Base:
+    def render(self, value):
+        return "unrelated:" + value
+
+def ignored_same_named_local_base():
+    return Base().render("wrong")
+''',
+                encoding='utf-8'
+            )
+            calls = self.run_script('ast_caller_finder.py', 'Base.render', root, target)
+
+        self.assertEqual(
+            [(call['caller_func'], call['trace_constructor_args'], call['trace_args']) for call in calls],
+            [
+                ('through_import', ['import:'], ['value']),
+                ('through_module', ['module:'], ['value']),
+                ('through_local_binding', ['local:'], ['value']),
+            ]
+        )
+
     def test_extractor_preserves_required_defaults_and_keyword_only_parameters(self):
         source = '''def combine(left, /, middle, right=3, *, flag=True, required_option, **extras):
     return left + middle + right

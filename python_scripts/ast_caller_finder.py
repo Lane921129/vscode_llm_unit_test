@@ -46,6 +46,40 @@ def source_arguments(call):
     )
 
 
+def class_defines_member(class_node, member_name):
+    """Whether a class overrides the selected member in its own body."""
+    return any(
+        isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == member_name
+        for item in class_node.body
+    )
+
+
+def direct_safe_subclasses(tree, target_class, target_member, resolves_target_class):
+    """Find classes that can only inherit the selected target member.
+
+    This deliberately accepts just one direct base, no class decorator, and no
+    local override.  Python's broader MRO, metaclasses and class decorators
+    can alter lookup semantics, so they remain outside of Trace evidence.
+    """
+    safe_names = {target_class}
+    pending = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    changed = True
+    while changed:
+        changed = False
+        for class_node in pending:
+            if class_node.name in safe_names or class_node.decorator_list:
+                continue
+            if len(class_node.bases) != 1 or class_defines_member(class_node, target_member):
+                continue
+            base = expression_path(class_node.bases[0])
+            if not base:
+                continue
+            if resolves_target_class(base, safe_names):
+                safe_names.add(class_node.name)
+                changed = True
+    return safe_names
+
+
 def find_call_sites(func_name, project_root, target_path=None):
     """Find calls resolving to the supplied target module; avoid same-name collisions."""
     results = []
@@ -53,6 +87,26 @@ def find_call_sites(func_name, project_root, target_path=None):
     target_absolute = os.path.abspath(target_path) if target_path else None
     target_module = target_module_name(target_absolute, project_root) if target_absolute else None
     target_class, target_member = (func_name.rsplit('.', 1) if '.' in func_name else (None, func_name))
+    target_module_classes = {target_class} if target_class else set()
+
+    # A subclass declared beside the selected base can safely supply caller
+    # literals for Base.method only when it has the conservative shape below.
+    # This keeps dynamic tracing grounded in real call sites without assuming
+    # arbitrary inheritance, factories or a modified MRO.
+    if target_absolute and target_class:
+        try:
+            with open(target_absolute, 'r', encoding='utf-8') as handle:
+                target_tree = ast.parse(handle.read(), filename=target_absolute)
+            target_module_classes = direct_safe_subclasses(
+                target_tree,
+                target_class,
+                target_member,
+                lambda path, known: len(path) == 1 and path[0] in known
+            )
+        except Exception:
+            # Caller discovery remains usable for direct class references if a
+            # side scan cannot parse the selected target module.
+            target_module_classes = {target_class}
 
     for dirpath, dirnames, filenames in os.walk(project_root):
         dirnames[:] = [d for d in dirnames if d not in ignored_dirs]
@@ -72,7 +126,7 @@ def find_call_sites(func_name, project_root, target_path=None):
                 for node in tree.body:
                     if isinstance(node, ast.ImportFrom) and node.module and module_matches(node.module, target_module):
                         for alias in node.names:
-                            if target_class and alias.name == target_class:
+                            if target_class and alias.name in target_module_classes:
                                 class_aliases.add(alias.asname or alias.name)
                             elif not target_class and alias.name in (func_name, '*'):
                                 direct_names.add(alias.asname or alias.name)
@@ -96,13 +150,33 @@ def find_call_sites(func_name, project_root, target_path=None):
                 return (
                     len(path) == 1 and path[0] in class_aliases
                 ) or (
-                    len(path) == 2 and path[0] in module_aliases and path[1] == target_class
+                    len(path) == 2 and path[0] in module_aliases and path[1] in target_module_classes
                 ) or (
                     target_absolute is not None
                     and os.path.abspath(filepath) == target_absolute
                     and len(path) == 1
-                    and path[0] == target_class
+                    and path[0] in target_module_classes
                 )
+
+            if target_class:
+                local_safe_subclasses = direct_safe_subclasses(
+                    tree,
+                    target_class,
+                    target_member,
+                    lambda path, known: (
+                        len(path) == 1 and path[0] in class_aliases
+                    ) or (
+                        len(path) == 2 and path[0] in module_aliases and path[1] in target_module_classes
+                    ) or (
+                        target_absolute is not None
+                        and os.path.abspath(filepath) == target_absolute
+                        and len(path) == 1 and path[0] in known
+                    )
+                )
+                # ``direct_safe_subclasses`` includes the target name as a
+                # traversal seed.  It was not necessarily imported in this
+                # caller file, so never turn that seed into a class alias.
+                class_aliases.update(local_safe_subclasses - {target_class})
 
             # A variable is evidence of a target instance only when it is
             # assigned directly in the same lexical callable.  This small,

@@ -103,6 +103,13 @@
 - 這裡的「候選」只限 `equivalent_mutant_candidates` 欄位：它是分析師提出、尚待 observability 驗證的突變等價假設，不是系統元件名稱，也不會被升格為事實。Writer／Reviewer 仍以來源結構、精確 Dynamic Trace、明確 raise 或 mock side effect 決定可執行 assertion。
 - 驗證：197 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 以保守繼承解析補回 Base Method 的真實呼叫站 Trace
+
+- 選取 `Base.method` 時，先前 Caller Finder 只接受 `Base(...).method(...)` 或其直接匯入別名；未覆寫方法的子類別雖然實際執行同一個 Base member，卻會遺失可用的 constructor 與方法 literal，降低 Tier 1／Tier 2 的 Dynamic Trace 覆蓋。
+- 現在只接受可靜態證明的子類別：單一直接基類、沒有 class decorator、未在 class body 覆寫選取 member。支援同模組子類別、直接匯入別名、模組別名與同一 caller scope 的安全本地子類別；回收的 constructor literal 仍只用於建立選取的 base class instance。
+- 複數繼承、override、decorated class、同名本地類別、factory／屬性鏈與不確定 MRO 一律不會當作目標呼叫站，因此不會把猜測性資料帶進 Trace 或 Prompt。
+- 驗證：新增安全繼承的正反 Caller Finder 回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
