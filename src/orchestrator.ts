@@ -12,7 +12,7 @@ import { addOutputContract, buildCustomChatCompletionBody, isStructuredResponseU
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
-import { appendTraceMethodsToUnittestClass } from './tier/traceTestAugmenter';
+import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
@@ -1591,21 +1591,49 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             // A capable model can add mocks and higher-level scenarios, but it
             // must not discard concrete target behavior already verified by
-            // Dynamic Trace. Instance construction is intentionally excluded:
-            // its setup may require source-specific arguments or patches.
+            // Dynamic Trace. Class/property traces keep a separate TestCase so
+            // their verified setUp never overwrites model-authored setup.
             const traceForAugmentation = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
             const isTopLevelFunction = !(astContext as any)?.class_name;
-            if (currentTier > 1 && isTopLevelFunction && canUseDeterministicTierOne(traceForAugmentation)) {
-                const traceMethods = buildTier1TestMethods(
-                    targetFuncName,
-                    traceForAugmentation!.examples,
-                    traceForAugmentation!.errors,
-                    Boolean((astContext as any)?.is_async)
-                );
-                const augmented = appendTraceMethodsToUnittestClass(finalCode, traceMethods);
-                finalCode = augmented.code;
-                if (augmented.addedMethodCount > 0) {
-                    log(`[Trace 保底] 已將 ${augmented.addedMethodCount} 個已驗證 I/O 測試加入 Tier ${currentTier} 測試類別。`);
+            if (currentTier > 1 && canUseDeterministicTierOne(traceForAugmentation)) {
+                if (isTopLevelFunction) {
+                    const traceMethods = buildTier1TestMethods(
+                        targetFuncName,
+                        traceForAugmentation!.examples,
+                        traceForAugmentation!.errors,
+                        Boolean((astContext as any)?.is_async)
+                    );
+                    const augmented = appendTraceMethodsToUnittestClass(finalCode, traceMethods);
+                    finalCode = augmented.code;
+                    if (augmented.addedMethodCount > 0) {
+                        log(`[Trace 保底] 已將 ${augmented.addedMethodCount} 個已驗證 I/O 測試加入 Tier ${currentTier} 測試類別。`);
+                    }
+                } else {
+                    const className = (astContext as any)?.class_name as string | null;
+                    const constructorParams = ((astContext as any)?.class_context?.init?.required_params
+                        || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
+                    const traceFile = buildTier1TestFile({
+                        moduleName: targetImportModule,
+                        functionName: targetFuncName,
+                        examples: traceForAugmentation!.examples,
+                        errors: traceForAugmentation!.errors,
+                        className,
+                        methodKind: (astContext as any)?.method_kind,
+                        constructorParams,
+                        callerContexts: astContext?.callerContexts,
+                        isAsync: Boolean((astContext as any)?.is_async),
+                    });
+                    if (traceFile.code) {
+                        const augmented = appendVerifiedTraceTestFile(
+                            finalCode, traceFile.code, traceFile.methodCount, targetFuncName
+                        );
+                        finalCode = augmented.code;
+                        if (augmented.addedMethodCount > 0) {
+                            log(`[Trace 保底] 已將 ${augmented.addedMethodCount} 個已驗證 Class/Property I/O 測試加入獨立 ${augmented.addedClassName} 類別。`);
+                        }
+                    } else if (traceFile.missingConstructorFacts) {
+                        log(`[Trace 保底] 類別 ${className} 缺少可驗證 constructor literal（${traceFile.missingConstructorFacts.join(', ')}），不會猜測 Trace 測試 setup。`);
+                    }
                 }
             }
 

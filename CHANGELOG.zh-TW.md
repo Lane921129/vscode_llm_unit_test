@@ -25,6 +25,13 @@
 - scorecard 的表格與 JSON 會保留該分類，讓 Tier 2 的 mock／格式失敗不再被混成模型能力不足。
 - 驗證：182 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### Tier 2 保留類別與 Property 的已驗證 Trace
+
+- Tier 2–4 原本只會把頂層函式的 Dynamic Trace 方法附加到模型測試；class instance method、static/class method 與 property 可能只剩模型自行推論的測試。
+- 現在若已有可安全 assertion 的 Trace 與可驗證的 constructor literal，系統會用正式 Tier 1 builder 組出獨立 `TestVerifiedTrace_*` 類別，再加入 LLM 產物。這樣保留真實 I/O oracle，同時不覆寫模型生成類別的 `setUp`、Mock 或測試方法。
+- 建構子必要資料不足時會記錄並安全略過，不會以猜測的 `Class()` 產生必定失敗的測試。
+- 驗證：183 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
