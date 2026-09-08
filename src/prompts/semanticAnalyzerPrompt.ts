@@ -225,19 +225,100 @@ export function getSemanticAnalyzerUserPrompt(
 
 // === Response Parser ===
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function meaningfulText(value: unknown): string | undefined {
+    if (typeof value !== 'string') {return undefined;}
+    const text = value.trim();
+    if (!text || text === '...' || /^<[^>]+>$/.test(text)) {return undefined;}
+    return text;
+}
+
+function meaningfulTextList(value: unknown): string[] {
+    return Array.isArray(value)
+        ? value.map(meaningfulText).filter((item): item is string => Boolean(item))
+        : [];
+}
+
+function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
+    if (!isRecord(value)) {return null;}
+    const dependency_behaviors = (Array.isArray(value.dependency_behaviors) ? value.dependency_behaviors : [])
+        .map(item => {
+            if (!isRecord(item)) {return undefined;}
+            const name = meaningfulText(item.name);
+            const when_caller_passes = meaningfulText(item.when_caller_passes);
+            const always_returns = meaningfulText(item.always_returns);
+            const can_raise = meaningfulTextList(item.can_raise);
+            return name && when_caller_passes && always_returns
+                ? { name, when_caller_passes, always_returns, can_raise }
+                : undefined;
+        }).filter((item): item is DependencyBehavior => Boolean(item));
+    const unreachable_paths = (Array.isArray(value.unreachable_paths) ? value.unreachable_paths : [])
+        .map(item => isRecord(item) ? {
+            condition: meaningfulText(item.condition), reason: meaningfulText(item.reason)
+        } : undefined)
+        .filter((item): item is { condition: string; reason: string } => Boolean(item?.condition && item.reason));
+    const equivalent_mutant_candidates = (Array.isArray(value.equivalent_mutant_candidates) ? value.equivalent_mutant_candidates : [])
+        .map(item => isRecord(item) ? {
+            description: meaningfulText(item.description), reason: meaningfulText(item.reason)
+        } : undefined)
+        .filter((item): item is { description: string; reason: string } => Boolean(item?.description && item.reason));
+    const mock_required_for = (Array.isArray(value.mock_required_for) ? value.mock_required_for : [])
+        .map(item => isRecord(item) ? {
+            path: meaningfulText(item.path), mock_target: meaningfulText(item.mock_target), example: meaningfulText(item.example)
+        } : undefined)
+        .filter((item): item is { path: string; mock_target: string; example: string } =>
+            Boolean(item?.path && item.mock_target && item.example));
+    const rawStrategy = isRecord(value.test_strategy) ? value.test_strategy : {};
+    const input_hints = (Array.isArray(rawStrategy.input_hints) ? rawStrategy.input_hints : [])
+        .map(item => {
+            if (!isRecord(item)) {return undefined;}
+            const param_name = meaningfulText(item.param_name);
+            const strategy = meaningfulText(item.strategy);
+            if (!param_name || !strategy) {return undefined;}
+            return {
+                param_name,
+                strategy,
+                boundary_inputs: meaningfulTextList(item.boundary_inputs),
+                invalid_inputs: meaningfulTextList(item.invalid_inputs),
+                notes: meaningfulText(item.notes) || ''
+            };
+        }).filter((item): item is TestInputHint => Boolean(item));
+    const assertion_style = rawStrategy.assertion_style === 'assertEqual' || rawStrategy.assertion_style === 'assertRaises' || rawStrategy.assertion_style === 'mixed'
+        ? rawStrategy.assertion_style
+        : 'mixed';
+
+    return {
+        dependency_behaviors,
+        unreachable_paths,
+        equivalent_mutant_candidates,
+        mock_required_for,
+        required_skills: meaningfulTextList(value.required_skills),
+        test_strategy: {
+            approach: meaningfulText(rawStrategy.approach) || '',
+            input_hints,
+            assertion_style,
+            mock_needed: rawStrategy.mock_needed === true,
+            key_rules: meaningfulTextList(rawStrategy.key_rules)
+        }
+    };
+}
+
 export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | null {
     try {
         const trimmed = llmResponse.trim();
         if (trimmed.startsWith('{')) {
-            return JSON.parse(trimmed) as SemanticAnalysis;
+            return normalizeSemanticAnalysis(JSON.parse(trimmed));
         }
         const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (codeBlockMatch) {
-            return JSON.parse(codeBlockMatch[1].trim()) as SemanticAnalysis;
+            return normalizeSemanticAnalysis(JSON.parse(codeBlockMatch[1].trim()));
         }
         const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]) as SemanticAnalysis;
+            return normalizeSemanticAnalysis(JSON.parse(jsonMatch[0]));
         }
     } catch {
         // Parse failed - caller will handle null gracefully

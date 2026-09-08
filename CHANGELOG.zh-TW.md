@@ -96,6 +96,13 @@
 - 現在只合併去重的 imports，並將每個已驗證子回覆完整保留為名稱唯一的 `TestCase`。各自的 setup、teardown、helper 和 async base class 都維持本地隔離，避免跨呼叫站狀態污染。
 - 驗證：196 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 清洗語意分析師的未完成 JSON 分析結果
+
+- 舊版只要 JSON 能解析就直接傳給 Writer；模型可能回傳 `<to be determined>`、`...`、空白欄位或未知 assertion style，這些未完成內容仍會進入測資策略，讓後續模型將佔位符誤認為工作指令。
+- 現在 Semantic Analyzer 的回覆會在 JSON 解析後做結構化清洗：只保留完整文字欄位、合法 assertion style、Boolean mock flag 與非佔位的 input hints／skills／分析結果項目；不完整項目安全略過，並以保守的 `mixed` assertion style 取代未知值。
+- 這裡的「候選」只限 `equivalent_mutant_candidates` 欄位：它是分析師提出、尚待 observability 驗證的突變等價假設，不是系統元件名稱，也不會被升格為事實。Writer／Reviewer 仍以來源結構、精確 Dynamic Trace、明確 raise 或 mock side effect 決定可執行 assertion。
+- 驗證：197 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
