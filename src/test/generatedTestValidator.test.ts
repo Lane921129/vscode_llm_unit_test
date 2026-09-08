@@ -500,3 +500,10 @@ test('extracts a labeled or unlabeled unittest code fence without preserving mod
     assert.ok(extractPythonTestCode(multipleFences).startsWith('import unittest'));
     assert.strictEqual(extractPythonTestCode('plain response'), 'plain response');
 });
+
+test('unwraps a structured code envelope placed inside a JSON code fence', () => {
+    const code = 'import unittest\nclass TestValue(unittest.TestCase):\n    pass';
+    const fencedEnvelope = `Provider preface\n\`\`\`json\n${JSON.stringify({ code })}\n\`\`\`\nProvider suffix`;
+
+    assert.strictEqual(extractPythonTestCode(fencedEnvelope), code);
+});

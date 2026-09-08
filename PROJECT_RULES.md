@@ -73,7 +73,7 @@
 - 生成測試結構驗證必須拒絕非隔離的 SQLite 連線與未匯入／直接呼叫被測模組私有 helper；`sqlite3.connect(':memory:')` 與標準 `mock.patch` 得以保留。
 - LLM 的 `assertRaises` 必須有目標函式 AST 明確 `raise`、可 assertion 的 Dynamic Trace 例外，或同一測試明確設定的 mock `side_effect` 作為事實依據；不得憑空猜測業務例外。簽名不符的 `TypeError` 測試依既有簽名閘門處理。
 - Mock Scaffold 必須追蹤被測函式呼叫的同模組 side-effect helper；helper 若到達 imported I/O boundary，必須 patch helper 的 module use point，避免因只看目標函式本體而遺漏資料庫連線。
-- 模型輸出可使用標準 Python／Py／未標記 code fence；系統只能擷取含 unittest 證據的單一程式碼區塊後進行結構與 AST 驗證，不得把 Markdown 說明當作測試程式。
+- 模型輸出可使用標準 Python／Py／未標記 code fence，或被 `code` 字串 JSON envelope 包裝的上述區塊；系統只能擷取含 unittest 證據的單一程式碼區塊後進行結構與 AST 驗證，不得把 Markdown 說明、無 `code` 字串的 JSON 或多段產物當作測試程式。
 - 供應商拒絕 JSON／schema 格式時，僅可針對明確的格式拒絕狀態（400、415、422、501）回退為純文字生成；401、403、404、429 與 5xx 等帳號、模型、配額或服務錯誤必須保留並清楚回報，不得偽裝成格式回退。
 
 ## 品質、Git 與紀錄

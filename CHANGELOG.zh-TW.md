@@ -70,6 +70,12 @@
 - 現在只有 Dynamic Trace 精確回傳 Boolean literal `True`／`False` 時，才以 `assertTrue`／`assertFalse` 直接判定相反 assertion；其他實值保留給隔離 Python unittest 執行決定。`assertEqual` 與 `assertIsNone` 的精確比較不變。
 - 驗證：191 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 接受 JSON Code Fence 中的安全測試 Envelope
+
+- 部分模型會遵循結構化輸出契約，卻將 `{ "code": "..." }` 再包進 ```json code fence；舊流程可找到含 `unittest` 的 fence，但不會第二次解開 `code` 欄位，最後把 JSON 當 Python 拒絕。
+- 現在會先選取含 unittest 證據的單一 code fence，再只解開合法 JSON 的字串 `code` 欄位。未知 JSON 形狀、無 `code` 字串、無 unittest 證據的區塊與 Markdown 說明仍由既有結構驗證拒絕。
+- 驗證：192 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

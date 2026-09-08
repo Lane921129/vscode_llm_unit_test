@@ -471,7 +471,11 @@ export function extractPythonTestCode(response: string): string {
     const preferred = fencedBlocks.find(block =>
         (block.language === 'python' || block.language === 'py') && hasUnittestEvidence(block)
     ) || fencedBlocks.find(hasUnittestEvidence);
-    return preferred ? preferred.code : unwrapped;
+    // Some providers wrap the structured {"code": "..."} contract in a
+    // ```json fence. Select the evidence-bearing fence first, then unwrap its
+    // single code field as a second, format-only step. Unknown JSON shapes
+    // remain untouched and are rejected by the normal structural validator.
+    return preferred ? unwrapGeneratedCodeEnvelope(preferred.code).trim() : unwrapped;
 }
 
 /**
