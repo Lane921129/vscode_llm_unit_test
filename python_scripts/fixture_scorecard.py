@@ -42,6 +42,7 @@ def report_fields(report_path):
     function_match = re.search(r'^- \*\*測試函式\*\*:\s*(.+)$', text, re.MULTILINE)
     tier_match = re.search(r'^- \*\*策略\*\*:\s*請求\s+([^，\n]+)，實際 Tier\s+(\d+)', text, re.MULTILINE)
     generation_mode_match = re.search(r'^- \*\*Tier 1 generation mode\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
+    failure_category_match = re.search(r'^- \*\*失敗分類\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     coverage = percentage_values(text, '覆蓋率')
     mutation = percentage_values(text, '突變分數')
     return {
@@ -50,6 +51,7 @@ def report_fields(report_path):
         'requested_tier': tier_match.group(1).strip() if tier_match else None,
         'resolved_tier': int(tier_match.group(2)) if tier_match else None,
         'tier1_generation_mode': generation_mode_match.group(1) if generation_mode_match else None,
+        'failure_category': failure_category_match.group(1) if failure_category_match else None,
         # A report can contain several repair loops. The rollback implementation
         # retains the best verified test file, so the highest reported value is
         # the conservative comparable fact for that session.
@@ -92,6 +94,7 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
         'resolved_tier': None,
         'tier1_generation_mode': None,
         'available_tier1_generation_modes': [],
+        'failure_category': None,
         'reason': '找不到對應的 final_report.md。',
     }
     if not matches:
@@ -130,6 +133,7 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
         'requested_tier': fields['requested_tier'],
         'resolved_tier': fields['resolved_tier'],
         'tier1_generation_mode': fields['tier1_generation_mode'],
+        'failure_category': fields['failure_category'],
     })
     if fixture['tier'] == 1 and fields['tier1_generation_mode'] not in TIER1_GENERATION_MODES:
         result.update(status='incomplete_provenance', reason='Tier 1 報告缺少可機讀的 generation mode；不與 LLM 或 deterministic fallback 成績混算。')
@@ -187,15 +191,15 @@ def format_markdown(scorecard):
         f"- 未計分／缺報告／執行中斷：{scorecard['fixture_count'] - scorecard['status_counts'].get('passed', 0) - scorecard['status_counts'].get('threshold_failed', 0)}",
         f"- Tier 1 產生模式篩選：{scorecard['tier1_generation_mode_filter'] or '未篩選（混合模式會拒絕計分）'}",
         '',
-        '| Tier | Fixture | 產生模式 | 狀態 | Coverage | Mutation | 報告 |',
-        '| --- | --- | --- | --- | --- | --- | --- |',
+        '| Tier | Fixture | 產生模式 | 狀態 | 失敗分類 | Coverage | Mutation | 報告 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |',
     ]
     for result in scorecard['results']:
         coverage = f"{result['coverage']:g}%" if result['coverage'] is not None else 'N/A'
         mutation = f"{result['mutation_score']:g}%" if result['mutation_score'] is not None else 'N/A'
         report = result['report'] or '—'
         lines.append(
-            f"| {result['tier']} | {result['id']} | {result['tier1_generation_mode'] or '—'} | {result['status']} | {coverage} / {result['min_line_coverage']}% | "
+            f"| {result['tier']} | {result['id']} | {result['tier1_generation_mode'] or '—'} | {result['status']} | {result['failure_category'] or '—'} | {coverage} / {result['min_line_coverage']}% | "
             f"{mutation} / {result['min_mutation_score']}% | {report} |"
         )
     lines.extend(['', '## 判定說明', ''])

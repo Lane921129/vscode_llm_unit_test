@@ -10,16 +10,17 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from fixture_scorecard import build_scorecard, format_markdown, write_scorecard
 
 
-def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound'):
+def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None):
     interrupted = '\n### ❌ 執行中斷（第 2 輪）\n' if error else ''
     mode_line = f'- **Tier 1 generation mode**: {generation_mode}\n' if generation_mode else ''
+    failure_line = f'- **失敗分類**: {failure_category}\n' if failure_category else ''
     return f'''# 突變測試與修復分析報告
 
 - **目標檔案**: {target_file}
 - **測試函式**: {target_function}
 
 - **策略**: 請求 tier3，實際 Tier 3
-{mode_line}- **覆蓋率**: {coverage}% (未覆蓋行號: 無)
+{mode_line}{failure_line}- **覆蓋率**: {coverage}% (未覆蓋行號: 無)
 - **突變分數**: {mutation}%
 {interrupted}'''
 
@@ -50,7 +51,7 @@ class FixtureScorecardTests(unittest.TestCase):
     def test_execution_error_cannot_be_counted_as_a_pass_and_outputs_are_machine_readable(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
-            self.write_report(root, 'error', report('/portable/tier1_boundary.py', 'clamp', 100, 100, error=True))
+            self.write_report(root, 'error', report('/portable/tier1_boundary.py', 'clamp', 100, 100, error=True, failure_category='model-format'))
             card = build_scorecard(root)
             output = root / 'scorecard'
             json_path, markdown_path = write_scorecard(card, output)
@@ -59,6 +60,7 @@ class FixtureScorecardTests(unittest.TestCase):
 
         result = next(item for item in card['results'] if item['id'] == 'tier1-boundary')
         self.assertEqual(result['status'], 'execution_error')
+        self.assertEqual(result['failure_category'], 'model-format')
         self.assertEqual(stored['schema_version'], 2)
         self.assertIn('execution_error', format_markdown(card))
         self.assertIn('Fixture Corpus Scorecard', markdown)

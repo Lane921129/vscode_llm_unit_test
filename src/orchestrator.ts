@@ -26,6 +26,7 @@ import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnitte
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
+import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import * as path from 'path';
 import * as fs from 'fs';
 import { runSpawn } from './utils/processRunner';
@@ -2116,8 +2117,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error && error.stack ? error.stack : '';
+            const failureCategory = classifyExecutionFailure(message);
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
             finalReportMarkdown += `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
+            finalReportMarkdown += `- **失敗分類**: ${failureCategory}\n\n`;
             finalReportMarkdown += `**錯誤訊息**: ${message}\n\n`;
             if (stack && stack !== message) {
                 finalReportMarkdown += `**錯誤堆疊**:\n\`\`\`\n${stack}\n\`\`\`\n\n`;

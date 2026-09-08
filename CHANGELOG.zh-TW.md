@@ -18,6 +18,13 @@
 - 驗證：180 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 - 限制：彙整器不會呼叫模型，仍需以使用者授權的真實模型執行 fixture，才能取得可比較的 LLM 品質資料。
 
+### 為 Tier 1／Tier 2 實測加入失敗分類
+
+- 中斷的 `final_report.md` 現在會寫入機讀的失敗分類：`model-api`、`model-format`、`ast-trace`、`validation`、`coverage`、`mutation`、`environment`、`timeout`、`cancelled` 或 `unknown`。
+- 分類不依 provider 或模型名稱，不改變既有路由、重試與品質 gate；用途僅是讓 fixture scorecard 和後續多模型實測能分辨 Prompt／格式問題與環境或工具問題。
+- scorecard 的表格與 JSON 會保留該分類，讓 Tier 2 的 mock／格式失敗不再被混成模型能力不足。
+- 驗證：182 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆
