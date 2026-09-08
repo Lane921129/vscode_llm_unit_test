@@ -9,7 +9,7 @@
 
 - Supports local Ollama, Google AI Studio, and OpenAI-compatible Chat Completions APIs.
 - Extracts module imports, referenced constants, class setup, constructor facts, dependency calls, and safe call-site literals using Python AST.
-- Uses Dynamic Trace to turn verified inputs, outputs, and exceptions into deterministic Tier 1 assertions.
+- Uses Dynamic Trace as the assertion oracle for Tier 1. A qualified or manually selected model uses source, AST, Trace, and scoped Skill Cards to organize evidence-bound tests; unprobed Auto mode uses an explicitly labelled deterministic fallback.
 - Uses AST/Trace evidence-bound Skill Cards for async code, generators, mappings, floating-point values, database isolation, and mocking. No domain-specific vocabulary is hard-coded.
 - Validates generated tests before scoring: target invocation, assertions, Python structure, safe mocking, isolated I/O, runtime execution, coverage, and mutation baseline.
 - Writes `final_report.md` so failures identify the responsible stage: model, AST, trace, validation, coverage, or mutation tool.
@@ -18,7 +18,7 @@
 
 | Tier | Best for | Core approach |
 |---|---|---|
-| 1 | Small or unverified models; traceable code | Builds tests mechanically from verified Dynamic Trace facts. |
+| 1 | Traceable code; qualified or manually selected models | LLM selects evidence-bound test organization from source/AST/Trace/Skill Cards; Auto with an unprobed model uses a labelled deterministic Trace fallback. |
 | 2 | Several clear call sites | Uses constrained, divide-and-conquer LLM generation when helpful. |
 | 3 | External dependencies | Supplies a Mock Scaffold and verified constructor setup. |
 | 4 | Complex code and survived mutants | Uses full context, reviewer validation, and bounded self-repair. |
@@ -57,7 +57,7 @@ Then open this folder in VS Code and press `F5` to launch an Extension Developme
 6. Select Auto or a Tier, then run the analysis.
 7. Open the completed function card in the coverage dashboard to view its `final_report.md`.
 
-For a traceable function such as `increment(value)`, Tier 1 executes safe inputs and produces assertions from the observed behavior. For an instance method, it only reuses constructor arguments that were verified from a safe call site; it never invents a required constructor dependency.
+For a traceable function such as `increment(value)`, Tier 1 executes safe inputs and uses the observed behavior as its assertion oracle. When LLM generation is permitted, the model decides which supported behaviors and source branches to organize into tests; it may not invent assertions. For an instance method, it only reuses constructor arguments that were verified from a safe call site; it never invents a required constructor dependency.
 
 ## Provider setup
 
@@ -129,7 +129,7 @@ The public-release work is tracked in [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md). 
 
 - 支援 Local Ollama、Google AI Studio、OpenAI 相容 Chat Completions API。
 - 以 Python AST 擷取 imports、引用常數、class 初始化、建構子事實、依賴呼叫與安全的呼叫端 literal。
-- Dynamic Trace 會執行安全探針，將已驗證輸入、輸出與例外轉為 Tier 1 的確定性 assertion。
+- Dynamic Trace 會執行安全探針，作為 Tier 1 assertion 的事實來源。合格模型或手動選擇 Tier 時，LLM 會根據來源碼、AST、Trace 與範圍限定的技能卡組織證據導向測試；Auto 未探測模型則使用清楚標示的確定性 Trace 備援。
 - 以 AST／Trace 證據挑選技能卡，涵蓋 async、generator、mapping、浮點、資料庫隔離與 mock；不硬編碼業務領域詞彙。
 - 生成碼必須通過目標呼叫、assertion、Python 結構、安全 mock、隔離 I/O、實際執行、coverage 與 mutation baseline 驗證。
 - 每次執行會產生 `final_report.md`，清楚區分模型、AST、Trace、驗證、coverage 或 mutation 工具造成的問題。
@@ -138,7 +138,7 @@ The public-release work is tracked in [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md). 
 
 | Tier | 適用情境 | 核心做法 |
 |---|---|---|
-| 1 | 小型／未探測模型、可追蹤程式 | 從已驗證 Dynamic Trace 機械式建立測試。 |
+| 1 | 可追蹤程式；合格模型或手動選擇 | LLM 依來源碼／AST／Trace／技能卡組織證據導向測試；Auto 未探測模型使用有標示的確定性 Trace 備援。 |
 | 2 | 多個清楚呼叫端 | 必要時以受限的分治 LLM 生成。 |
 | 3 | 外部相依 | 提供 Mock Scaffold 與已驗證建構子設定。 |
 | 4 | 高複雜度或存活 mutant | 使用完整語境、Reviewer 與有上限的自我修復。 |
@@ -177,7 +177,7 @@ npm run compile
 6. 選擇 Auto 或 Tier，開始分析。
 7. 從 coverage 看板開啟完成函式卡片，閱讀對應的 `final_report.md`。
 
-例如 `increment(value)` 這類可追蹤函式，Tier 1 會實際執行安全輸入，再以觀察到的行為建立 assertion。若是 instance method，系統只會使用安全呼叫端已驗證的建構子參數，不會猜測必要相依。
+例如 `increment(value)` 這類可追蹤函式，Tier 1 會實際執行安全輸入，並把觀察到的行為當作 assertion 事實。允許 LLM 生成時，模型負責從支持的行為與來源分支組織測試，但不能憑空產生 assertion。若是 instance method，系統只會使用安全呼叫端已驗證的建構子參數，不會猜測必要相依。
 
 ## 模型設定
 

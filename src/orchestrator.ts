@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './prompts/unittestWriterPrompt';
+import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './prompts/unittestWriterPrompt';
 import { getReviewerSystemPrompt, getReviewerUserPrompt } from './prompts/bugFixerPrompt';
 import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './prompts/semanticAnalyzerPrompt';
 import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompts/promptSkillLibrary';
@@ -14,7 +14,7 @@ import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { appendTraceMethodsToUnittestClass } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
-import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from './tier/tierRouter';
+import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
 import { assessTargetCoverage } from './mutation/targetCoverage';
@@ -866,7 +866,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         { envType: params.envType, modelName: params.modelName },
         modelSnapshot.current.testGenerationReady !== undefined
     );
-    const mayUseModelAuthoredTests = canUseTierOneLlmFallback(qualifiedForSelectedModel, userTierSetting);
+    const tier1GenerationMode = resolveTier1GenerationMode(qualifiedForSelectedModel, userTierSetting);
+    const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
     if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
             ? '[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。'
@@ -896,6 +897,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     }
 
     let survivedMutants = "";
+    let tier1GenerationModeRecorded = false;
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let currentTier = resolvedTier;
     let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **使用的策略**: Tier ${currentTier} (${userTierSetting === 'auto' ? 'Auto 自動路由' : '使用者指定 Tier ' + currentTier})\n- **日期**: ${reportDateStr}\n\n`;
@@ -1259,7 +1261,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const testPath = path.join(sessionDir, `loop${currentLoop}_test.py`);
         const reportDir = path.join(sessionDir, `loop${currentLoop}_report`);
 
-        const systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
+        let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
         let focusContext = "";
         if (currentLoop > 1 && survivedMutants) {
             focusContext = extractFocusContext(survivedMutants, targetCode);
@@ -1304,19 +1306,27 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const callerContextsCount = astContext?.callerContexts?.length || 0;
                 const useDivideAndConquer = (currentTier === 2) && (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
 
-                // ─── Tier 1：填空法（2–3B 模型） ───
+                // ─── Tier 1：LLM 證據導向生成；未驗證 Auto 才使用確定性備援 ───
                 if (currentTier === 1 && !survivedMutants) {
                 const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
-                if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
-                    if (!mayUseModelAuthoredTests) {
+                if (!tier1GenerationModeRecorded) {
+                    const modeLabel = tier1GenerationMode === 'llm-evidence-bound'
+                        ? 'LLM 證據導向生成（來源碼 + AST + Dynamic Trace + 技能卡）'
+                        : '確定性備援（模型尚未通過 Auto 的 unittest 資格探測）';
+                    finalReportMarkdown += `- **Tier 1 實際產生模式**: ${modeLabel}\n\n`;
+                    tier1GenerationModeRecorded = true;
+                }
+                if (tier1GenerationMode === 'llm-evidence-bound') {
+                    systemPrompt = getTier1EvidenceBoundSystemPrompt();
+                    log('[Tier 1] 以 LLM 證據導向生成：模型將根據來源碼、AST、Dynamic Trace 與技能卡選擇測試行為；後續閘門驗證產物。');
+                } else {
+                    if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
                         throw new Error(
-                            'Tier 1 無法取得可驗證的動態 Trace；Auto 模式下模型尚未通過 unittest 生成探測，'
-                            + '因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 2–4 後以既有驗證閘門執行。'
+                            'Tier 1 確定性備援無法取得可驗證的動態 Trace；Auto 模式下選定模型尚未通過 unittest 生成探測，'
+                            + '因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 1–4 後以既有驗證閘門使用 LLM 生成。'
                         );
                     }
-                    log('[Tier 1 退回] 動態追蹤失敗，改走標準 LLM 生成與預先驗證流程。');
-                } else {
-                    log(`[Tier 1] 使用已驗證的動態追蹤結果，機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
+                    log(`[Tier 1 備援] 模型未驗證，使用已驗證 Dynamic Trace 機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const className = (astContext as any)?.class_name as string | null;
                     const constructorParams = ((astContext as any)?.class_context?.init?.required_params
                         || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
@@ -1332,17 +1342,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         isAsync: Boolean((astContext as any)?.is_async),
                     });
                     if (tier1File.missingConstructorFacts) {
-                        if (!mayUseModelAuthoredTests) {
-                            throw new Error(
-                                `Tier 1 無法安全建立 ${className}：建構子需要 ${tier1File.missingConstructorFacts.join(', ')}，`
-                                + '而 Auto 模式下模型尚未通過 unittest 生成探測。請先執行「測試連線」，或明確選擇 Tier 2–4 後使用受驗證閘門保護的 LLM fallback。'
-                            );
-                        }
-                        log(`[Tier 1] 類別 ${className} 的建構子需要參數（${tier1File.missingConstructorFacts.join(', ')}），改走一般生成與預先驗證流程。`);
+                        throw new Error(
+                            `Tier 1 確定性備援無法安全建立 ${className}：建構子需要 ${tier1File.missingConstructorFacts.join(', ')}，`
+                            + '但沒有可驗證的 caller literal。請先執行「測試連線」後改用 LLM 證據導向生成。'
+                        );
                     } else if (tier1File.code) {
                         sanitizedCode = tier1File.code;
-                        rawCode = `[Tier 1] Generated ${tier1File.methodCount} fill-in test methods`;
-                        log(`[Tier 1] 填空法完成！共產出 ${tier1File.methodCount} 個測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
+                        rawCode = `[Tier 1 deterministic fallback] Generated ${tier1File.methodCount} trace-derived test methods`;
+                        log(`[Tier 1 備援] 完成！共產出 ${tier1File.methodCount} 個 Trace 衍生測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
+                    } else {
+                        throw new Error('Tier 1 確定性備援未能從已驗證 Trace 產生測試。');
                     }
                 }
             }
@@ -1531,9 +1540,15 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
-            // 【新增】將 AI 完整思考與輸出記錄到報告中（使用摺疊標籤避免太長）
-            finalReportMarkdown += `### 🤖 AI 原始輸出與思考過程\n\n`;
-            finalReportMarkdown += `<details>\n<summary>點擊展開 AI 完整回應</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
+            const isDeterministicTier1Output = rawCode.startsWith('[Tier 1 deterministic fallback]');
+            const generatedOutputTitle = isDeterministicTier1Output
+                ? '### 🧩 Tier 1 確定性備援產物'
+                : '### 🤖 LLM 原始輸出與思考過程';
+            const generatedOutputSummary = isDeterministicTier1Output
+                ? '點擊展開由已驗證 Dynamic Trace 組裝的產物（非 LLM）'
+                : '點擊展開 AI 完整回應';
+            finalReportMarkdown += `${generatedOutputTitle}\n\n`;
+            finalReportMarkdown += `<details>\n<summary>${generatedOutputSummary}</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
 
             let finalCode = sanitizedCode;
             

@@ -38,6 +38,27 @@ Exact Return Value: ${valRepr}
 Complete ONE line: self.assertEqual(result, ${valRepr})`;
 }
 
+/**
+ * Tier 1 is intentionally small, but it is still an LLM judgement step: the
+ * model selects useful observable behaviours and test organization from the
+ * supplied evidence. The deterministic pipeline then proves the candidate.
+ */
+export function getTier1EvidenceBoundSystemPrompt(): string {
+    return `You are a careful Python unittest engineer. Write one complete, runnable unittest file for the target function.
+
+Output ONLY one Python code fence containing the complete file. Do not include analysis or prose.
+
+Evidence rules:
+1. Use the target source and AST facts only to choose relevant paths and candidate inputs. They never prove an output or exception by themselves.
+2. An exact assertion or assertRaises type must be supported by a Verified Real Execution Result. Do not invent return values, exceptions, constructor arguments, imports, or external behaviour.
+3. Use the supplied class context and verified constructor setup exactly when testing an instance method. Do not pass constructor arguments to the method.
+4. Selected skill cards are scoped guidance for this function, not facts that override source or trace evidence.
+5. Include import unittest, a unittest.TestCase, and test_ methods. Do not copy or redefine the production source. No pytest or top-level assert.
+6. If trace evidence is absent for a candidate path, omit that assertion rather than guessing.
+
+The generated file will be rejected unless it passes structural, isolated execution, coverage, and mutation checks.`;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Tier 3：Mock Scaffold 策略（34–70B 中大模型）
 // ─────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { canUseDeterministicTierOne, canUseTierOneLlmFallback, resolveTier } from '../tier/tierRouter';
+import { canUseDeterministicTierOne, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from '../tier/tierRouter';
 
 test('preserves a manual Tier selection even when a model is unqualified', () => {
     assert.strictEqual(resolveTier(70, 90, 'tier4', false), 4);
@@ -43,10 +43,17 @@ test('requires verified examples or errors before an unqualified model may use T
     }), false);
 });
 
-test('permits model fallback after a probe or an explicit Tier choice', () => {
-    assert.strictEqual(canUseTierOneLlmFallback(true), true);
-    assert.strictEqual(canUseTierOneLlmFallback(false), false);
-    assert.strictEqual(canUseTierOneLlmFallback(undefined), false);
-    assert.strictEqual(canUseTierOneLlmFallback(false, 'tier2'), true);
-    assert.strictEqual(canUseTierOneLlmFallback(undefined, 'tier4'), true);
+test('permits evidence-bound LLM Tier 1 after a probe or an explicit Tier choice', () => {
+    assert.strictEqual(canUseTierOneLlmGeneration(true), true);
+    assert.strictEqual(canUseTierOneLlmGeneration(false), false);
+    assert.strictEqual(canUseTierOneLlmGeneration(undefined), false);
+    assert.strictEqual(canUseTierOneLlmGeneration(false, 'tier2'), true);
+    assert.strictEqual(canUseTierOneLlmGeneration(undefined, 'tier4'), true);
+});
+
+test('labels deterministic output as fallback instead of an LLM result', () => {
+    assert.strictEqual(resolveTier1GenerationMode(false), 'deterministic-fallback');
+    assert.strictEqual(resolveTier1GenerationMode(undefined), 'deterministic-fallback');
+    assert.strictEqual(resolveTier1GenerationMode(true), 'llm-evidence-bound');
+    assert.strictEqual(resolveTier1GenerationMode(false, 'tier1'), 'llm-evidence-bound');
 });

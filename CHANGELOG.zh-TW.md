@@ -2,6 +2,15 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-08
+
+### 將 Tier 1 改為 LLM 證據導向生成，並保留可辨識備援
+
+- Tier 1 在選定模型已通過 unittest 資格探測，或使用者手動選擇 Tier 時，現在會真正呼叫 LLM；Prompt 同時約束目標來源碼、AST 語境、Dynamic Trace 與本函式技能卡。模型負責選擇支持的行為、邊界與測試組織，不能把來源分支或技能卡當成未驗證的 assertion。
+- Auto 尚未驗證模型時仍只使用 Dynamic Trace 的確定性備援；報告會明確寫出「Tier 1 實際產生模式」，而且不再把備援產物標為 AI 原始輸出。
+- LLM 與備援兩條路都必須通過既有 unittest 結構、隔離執行、coverage 與 mutation 閘門；本次只驗證架構與回歸，尚未以真實模型取得 Tier 1 品質分數。
+- 驗證：180 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

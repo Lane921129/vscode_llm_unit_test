@@ -10,7 +10,7 @@ import {
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
 } from '../prompts/semanticAnalyzerPrompt';
-import { getTier3UserPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
+import { getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -38,6 +38,15 @@ test('writer output contract does not branch on a provider or model name', () =>
     assert.match(writerSource, /const thinking = false;/);
     assert.match(writerSource, /\\`\\`\\`python/);
     assert.doesNotMatch(writerSource, /<thinking>|<\/thinking>/);
+});
+
+test('Tier 1 LLM prompt binds assertions to execution evidence and keeps skill cards scoped', () => {
+    const prompt = getTier1EvidenceBoundSystemPrompt();
+
+    assert.match(prompt, /Verified Real Execution Result/);
+    assert.match(prompt, /Selected skill cards are scoped guidance/);
+    assert.match(prompt, /structural, isolated execution, coverage, and mutation checks/);
+    assert.doesNotMatch(prompt, forbiddenDomainTerms);
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {

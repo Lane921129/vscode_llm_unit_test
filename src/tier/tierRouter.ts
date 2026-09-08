@@ -53,7 +53,7 @@ function isDeterministicTraceItem(item: unknown, needsResult: boolean): boolean 
     return record.call_assertable !== false && (!needsResult || record.result_assertable !== false);
 }
 
-/** Tier 1 is safe for an unqualified model only when verified trace data exists. */
+/** Tier 1 deterministic fallback is safe only when verified trace data exists. */
 export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability | undefined): boolean {
     return Boolean(
         trace
@@ -66,15 +66,34 @@ export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability
 }
 
 /**
- * Tier 1 may need a model-written fallback when tracing cannot create a safe
- * deterministic test (for example, an opaque required constructor argument).
- * Auto may use that fallback only after the exact provider/model has passed
- * the executable unittest probe.  A manual Tier selection opts into the same
- * fallback, subject to the normal executable validation gates.
+ * A model-authored Tier 1 test is evidence-bound by the source, AST context,
+ * dynamic trace, and selected skill cards. Auto enables it only after the
+ * exact provider/model has passed the executable unittest probe. A manual
+ * Tier choice opts into best-effort generation, still subject to the normal
+ * structural, execution, coverage, and mutation gates.
  */
-export function canUseTierOneLlmFallback(testGenerationReady?: boolean, userTier = 'auto'): boolean {
-    // A manual tier selection authorizes a best-effort model fallback.  Its
+export function canUseTierOneLlmGeneration(testGenerationReady?: boolean, userTier = 'auto'): boolean {
+    // A manual tier selection authorizes best-effort model generation. Its
     // output is still rejected unless the normal validation pipeline proves
     // it executable; Auto mode keeps the stricter probe-first behavior.
     return testGenerationReady === true || userTier !== 'auto';
 }
+
+export type Tier1GenerationMode = 'llm-evidence-bound' | 'deterministic-fallback';
+
+/**
+ * Keep provenance explicit: deterministic output is a safe fallback when
+ * Auto cannot yet trust the selected model, never a substitute labelled as
+ * an LLM result.
+ */
+export function resolveTier1GenerationMode(
+    testGenerationReady?: boolean,
+    userTier = 'auto'
+): Tier1GenerationMode {
+    return canUseTierOneLlmGeneration(testGenerationReady, userTier)
+        ? 'llm-evidence-bound'
+        : 'deterministic-fallback';
+}
+
+/** @deprecated Use canUseTierOneLlmGeneration for new callers. */
+export const canUseTierOneLlmFallback = canUseTierOneLlmGeneration;
