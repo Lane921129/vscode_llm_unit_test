@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { assessStructuredOutputProbe, assessTestGenerationProbe, buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
+import { buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
+import { assessStructuredOutputProbe, assessTestGenerationProbe } from '../llm/testGenerationQualification';
 import { isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
@@ -15,7 +16,7 @@ test('Ollama structured probe is small, deterministic, and domain neutral', () =
     });
 });
 
-test('Ollama structured probe accepts the expected JSON object only', () => {
+test('shared structured qualification accepts the expected JSON object only', () => {
     assert.deepStrictEqual(
         assessStructuredOutputProbe({ response: '{"ok":true}' }),
         { capability: 'verified', reason: '模型已通過結構化 JSON 輸出驗證。' }
@@ -25,7 +26,7 @@ test('Ollama structured probe accepts the expected JSON object only', () => {
     assert.strictEqual(assessStructuredOutputProbe({ response: '' }).capability, 'unverified');
 });
 
-test('test-generation probe requires a complete unittest structure, not merely JSON', () => {
+test('shared test-generation qualification requires a complete unittest structure, not merely JSON', () => {
     const request = buildOllamaTestGenerationProbe('local-model');
     assert.strictEqual(request.format, 'json');
     assert.ok(request.prompt.includes('def increment(value): return value + 1'));
@@ -97,7 +98,7 @@ test('test-generation probe requires a complete unittest structure, not merely J
     );
 });
 
-test('plain test-generation probe does not require JSON mode and accepts fenced Python', () => {
+test('plain Ollama probe does not require JSON mode and shared qualification accepts fenced Python', () => {
     const request = buildOllamaPlainTestGenerationProbe('local-model');
     assert.strictEqual('format' in request, false);
     assert.ok(request.prompt.startsWith('Return only one complete runnable Python unittest file.'));
@@ -120,7 +121,7 @@ test('plain test-generation probe does not require JSON mode and accepts fenced 
     }).capability, 'verified');
 });
 
-test('runnable probe requires the safe fixture and an isolated execution pass', async () => {
+test('shared runnable qualification requires the safe fixture and an isolated execution pass', async () => {
     const code = [
         'import unittest',
         '',

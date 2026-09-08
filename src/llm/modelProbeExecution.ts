@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { assessTestGenerationProbe, StructuredOutputProbeResult } from './ollamaCapability';
+import { assessTestGenerationProbe, StructuredOutputProbeResult } from './testGenerationQualification';
 
 type ProbeExecutor = (code: string) => Promise<boolean>;
 

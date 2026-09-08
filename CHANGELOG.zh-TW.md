@@ -4,6 +4,14 @@
 
 ## 2026-09-07
 
+### 分離跨 Provider 的 unittest 資格契約
+
+- 新增 `src/llm/testGenerationQualification.ts`，集中所有 provider 共用的測試連線 Prompt、JSON schema、回應結構驗證與雙案例 assertion 規則。
+- `ollamaCapability.ts` 現在只負責將共同契約轉為 Ollama 的 `format: json` 或純文字 request；Cloud Gemini 與 Custom API 直接使用共同契約，不再從名稱為 Ollama 的模組取得規則。
+- `modelProbeExecution.ts` 同步改依賴共同資格契約，因此隔離執行標準對 Ollama、Cloud Gemini、Custom API 保持一致。
+- 驗證：172 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+- 限制：本次只消除 provider 名稱與共用資格規則的耦合；Gemma 4 31B 的上游 5xx／503 仍須由連線重試與實際 provider 狀態處理。
+
 ### 更正 Fixture 資料集定位並提升 Cloud 連線暫時故障韌性
 
 - `test/fixtures/python/` 與 README 現在明確稱為「內部回歸 Fixture Corpus」：它用於防止 AST、技能卡、Prompt 與驗證器退步，不是公開模型排名、公開驗收成績，也不代表 Tier 2–4 已成熟。
