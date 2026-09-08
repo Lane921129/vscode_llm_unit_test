@@ -83,6 +83,13 @@
 - Tier 4 Self-repair 同步重用此語境建立器，不再只看 stderr 盲修；所有修復流程都會沿用既有結構、Trace、隔離執行、coverage 與 mutation gate。
 - 驗證：194 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### Tier 2 分治合流改為先驗證、再合併
+
+- Tier 2 的分治流程原本只要能擷取到子回覆就加入合併，直到所有子回覆被正則合併成一份檔案後才做驗證；一個格式錯誤或與 Trace 事實矛盾的子測試會拖累其他有效子測試。
+- 現在每個呼叫站子回覆都必須同時通過 Python/unittest 結構 gate 與 Trace assertion evidence gate，才可加入合併。失敗時只重試該子任務，並把明確格式／Trace 原因提供給模型；兩次都失敗的子回覆不會污染合併結果。
+- 新增可獨立驗證的 Tier 2 子回覆 gate，確保結構有效與 Trace 一致兩項條件缺一不可。
+- 驗證：195 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

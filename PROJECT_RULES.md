@@ -38,6 +38,7 @@
 - 動態追蹤只提供可呼叫性的基礎 I/O 事實；複雜邊界與多分支策略由 Semantic Analyzer 產生。
 - Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物仍須通過結構、隔離執行、coverage 與 mutation gate。Auto 未驗證模型的 deterministic Trace 產物只能作為明確標示的 fallback，不得稱為 LLM 生成成果。
 - Tier 1 fixture scorecard 必須以機讀 `llm-evidence-bound` 或 `deterministic-fallback` provenance 分開評分；同一份彙整含有兩種模式而未選擇模式時，必須拒絕形成單一品質結論。舊報告缺少 provenance 時不可計入 LLM 成績。
+- Tier 2 分治合流的每一份模型子回覆都必須先通過 Python/unittest 結構與 Trace assertion evidence gate，兩者缺一不可；不合格子回覆只能對該子任務帶著原因重試，不得合併污染其他已通過子測試。
 - 每份中斷報告必須寫入 provider-neutral 的機讀失敗分類；分類只用於後續 Tier／模型品質分析，不能改變驗證 gate、重試或把失敗轉成通過。至少區分 API、格式、AST／Trace、執行驗證、coverage、mutation、環境與 timeout。
 - 已通過資格的 Tier 2–4 測試，對頂層函式必須保留所有可安全 assertion 的 Dynamic Trace I/O 方法；LLM 可以增加情境、Mock 與突變修補，但不得移除或覆寫已驗證的行為 oracle。
 - 已通過資格的 Tier 2–4 測試，對可安全建立的 class method 或 property 也必須保留所有可 assertion 的 Dynamic Trace I/O；這些 Trace 測試必須使用獨立 `TestCase` 及已驗證的 constructor literal，禁止合併覆寫模型的 `setUp`，也不得猜測 constructor dependency。

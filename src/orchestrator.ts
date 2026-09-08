@@ -15,6 +15,7 @@ import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
+import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
 import { assessTargetCoverage } from './mutation/targetCoverage';
@@ -1443,13 +1444,41 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     );
 
                     let subRaw = "";
+                    let subGenerationPrompt = subUserPrompt;
                     for (let retry = 0; retry < 2; retry++) {
                         try {
-                            subRaw = await requestLlmApi(params, systemPrompt, subUserPrompt, log, 'test-code-json');
+                            subRaw = await requestLlmApi(params, systemPrompt, subGenerationPrompt, log, 'test-code-json');
                             const subClean = sanitizeLlmResponse(subRaw);
                             if (subClean) {
-                                subSnippets.push(subClean);
-                                break;
+                                const subValidation = await validateGeneratedTestCode(
+                                    subClean,
+                                    targetFuncName,
+                                    path.basename(params.filePath, '.py'),
+                                    (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
+                                    (astContext as any)?.signature,
+                                    exceptionNamesFromEvidence(astContext),
+                                    (astContext as any)?.class_name,
+                                    pythonExecutable
+                                );
+                                const subTraceEvidence = validateTraceAssertionEvidence(
+                                    subClean,
+                                    targetFuncName,
+                                    (astContext as any)?.traceResult
+                                );
+                                const subGate = resolveTierTwoSubtaskGate(subValidation, subTraceEvidence);
+                                if (subGate.accepted) {
+                                    subSnippets.push(subClean);
+                                    break;
+                                }
+                                const subReason = subGate.reason || '不明驗證錯誤';
+                                if (retry === 0) {
+                                    log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆未通過格式／Trace 證據驗證：${subReason}；將重試此子任務。`);
+                                    subGenerationPrompt = `${subUserPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${subReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Preserve exact verified Trace facts.`;
+                                } else {
+                                    log(`[警告] 呼叫點 ${cIdx + 1} 子回覆連續未通過格式／Trace 證據驗證：${subReason}`);
+                                }
+                            } else if (retry === 0) {
+                                log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆為空或不可擷取，將重試此子任務。`);
                             }
                         } catch (err: any) {
                             if (retry === 1) {log(`[警告] 呼叫點 ${cIdx + 1} 生成失敗: ${err.message}`);}
