@@ -30,11 +30,11 @@ export const STRUCTURED_OUTPUT_PROBE_SCHEMA = {
 };
 
 export const TEST_GENERATION_PROBE_PROMPT =
-    'Return exactly one JSON object with a string field named "code". The code field must contain a complete Python unittest file: import unittest, include this fixture exactly as the function under test: def increment(value): return value + 1, define a unittest.TestCase class, and include BOTH self.assertEqual(increment(1), 2) and self.assertEqual(increment(-1), 0). Do not include Markdown or explanations.';
+    'Return exactly one JSON object with a string field named "code". A safe runtime already provides increment(value), which returns value + 1; do not define or import increment. The code field must contain a complete Python unittest file: import unittest, define a unittest.TestCase class, and include BOTH self.assertEqual(increment(1), 2) and self.assertEqual(increment(-1), 0). Do not include Markdown or explanations.';
 
 /** A compatibility probe for providers that can write tests but reject JSON mode. */
 export const PLAIN_TEST_GENERATION_PROBE_PROMPT =
-    'Return only one complete runnable Python unittest file. Include this fixture exactly as the function under test: def increment(value): return value + 1. Import unittest, define a unittest.TestCase class, and include BOTH self.assertEqual(increment(1), 2) and self.assertEqual(increment(-1), 0). Do not include explanations.';
+    'Return only one complete runnable Python unittest file. A safe runtime already provides increment(value), which returns value + 1; do not define or import increment. Import unittest, define a unittest.TestCase class, and include BOTH self.assertEqual(increment(1), 2) and self.assertEqual(increment(-1), 0). Do not include explanations.';
 
 export const TEST_GENERATION_PROBE_SCHEMA = {
     type: 'object',
@@ -104,12 +104,11 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
         return reject(validation.reason || '模型沒有產生有效的 unittest 結構。');
     }
 
-    const definesFixture = /^\s*def\s+increment\s*\(\s*value\s*\)\s*:/m.test(code);
     const invokesFixture = code.split(/\r?\n/).some(line =>
         !/^\s*def\s+increment\s*\(/.test(line) && /\bincrement\s*\(/.test(line)
     );
-    if (!definesFixture || !invokesFixture) {
-        return reject('模型沒有產生可自我驗證的 increment 測試程式。');
+    if (!invokesFixture) {
+        return reject('模型沒有產生可驗證的 increment 目標呼叫。');
     }
     if (!hasProbeBehaviorAssertions(code)) {
         return reject('模型未同時驗證已知行為 increment(1) == 2 與 increment(-1) == 0。');

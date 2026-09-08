@@ -29,7 +29,8 @@ test('shared structured qualification accepts the expected JSON object only', ()
 test('shared test-generation qualification requires a complete unittest structure, not merely JSON', () => {
     const request = buildOllamaTestGenerationProbe('local-model');
     assert.strictEqual(request.format, 'json');
-    assert.ok(request.prompt.includes('def increment(value): return value + 1'));
+    assert.ok(request.prompt.includes('safe runtime already provides increment(value)'));
+    assert.ok(request.prompt.includes('do not define or import increment'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(-1), 0)'));
     assert.strictEqual(assessTestGenerationProbe({ response: '{"code":"string"}' }).capability, 'unverified');
@@ -41,6 +42,22 @@ test('shared test-generation qualification requires a complete unittest structur
                     '',
                     'def increment(value):',
                     '    return value + 1',
+                    '',
+                    'class TestIncrement(unittest.TestCase):',
+                    '    def test_increment(self):',
+                    '        self.assertEqual(increment(1), 2)',
+                    '        self.assertEqual(increment(-1), 0)',
+                    ''
+                ].join('\n')
+            })
+        }).capability,
+        'verified'
+    );
+    assert.strictEqual(
+        assessTestGenerationProbe({
+            response: JSON.stringify({
+                code: [
+                    'import unittest',
                     '',
                     'class TestIncrement(unittest.TestCase):',
                     '    def test_increment(self):',
@@ -102,6 +119,7 @@ test('plain Ollama probe does not require JSON mode and shared qualification acc
     const request = buildOllamaPlainTestGenerationProbe('local-model');
     assert.strictEqual('format' in request, false);
     assert.ok(request.prompt.startsWith('Return only one complete runnable Python unittest file.'));
+    assert.ok(request.prompt.includes('safe runtime already provides increment(value)'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(-1), 0)'));
     assert.strictEqual(assessTestGenerationProbe({
@@ -161,6 +179,15 @@ test('shared runnable qualification requires the safe fixture and an isolated ex
         /1 行最小安全 fixture 不允許的語句/
     );
     assert.strictEqual(await runIsolatedProbe(code), true);
+    const testOnlyCode = [
+        'import unittest',
+        '',
+        'class TestIncrement(unittest.TestCase):',
+        '    def test_increment(self):',
+        '        self.assertEqual(increment(1), 2)',
+        '        self.assertEqual(increment(-1), 0)',
+    ].join('\n');
+    assert.strictEqual(await runIsolatedProbe(testOnlyCode), true);
     assert.strictEqual(await runIsolatedProbe(code, 3000, '__missing_project_probe_python__'), false);
     assert.deepStrictEqual(
         await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code),

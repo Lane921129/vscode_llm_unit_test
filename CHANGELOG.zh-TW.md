@@ -10,6 +10,11 @@
 - 函式掃描、AST、Dynamic Trace、模型資格 probe 的隔離 unittest、coverage、mutation 與 extension 的 Python 回歸會使用同一個選擇；`npm run test:python` 也改為強制使用專案 `.venv`，避免系統 Python、使用者層套件與專案套件混用。
 - 開發文件改為先建立 `.venv`、再安裝 `requirements.txt`，不記錄任何固定磁碟或帳號路徑。
 
+### 降低模型資格 probe 的無關 fixture 格式失敗
+
+- 最小 unittest 資格 probe 現在由隔離 runner 提供固定 `increment` fixture；模型只需產生 `unittest.TestCase` 與兩個已知 target assertion，不必重寫被測函式。這讓資格工作更貼近正式測試生成，也避免模型因函式註解、格式或多餘 fixture 細節被誤判。
+- 舊版自含相同 fixture 的回覆仍相容；所有回覆仍要通過 unittest 結構、固定 target call、雙案例 assertion、安全白名單與隔離執行，沒有放寬為只看文字或 HTTP 成功。
+
 ### 將 Tier 1 改為 LLM 證據導向生成，並保留可辨識備援
 
 - Tier 1 在選定模型已通過 unittest 資格探測，或使用者手動選擇 Tier 時，現在會真正呼叫 LLM；Prompt 同時約束目標來源碼、AST 語境、Dynamic Trace 與本函式技能卡。模型負責選擇支持的行為、邊界與測試組織，不能把來源分支或技能卡當成未驗證的 assertion。

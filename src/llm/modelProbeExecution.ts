@@ -8,6 +8,8 @@ const PROBE_RUNNER = [
     'code = sys.stdin.read()',
     'module = types.ModuleType("llm_unit_probe")',
     'module.__file__ = "<llm_unit_probe>"',
+    'fixture = "def increment(value):\\n    return value + 1\\n"',
+    'exec(compile(fixture, module.__file__, "exec"), module.__dict__)',
     'exec(compile(code, module.__file__, "exec"), module.__dict__)',
     'suite = unittest.defaultTestLoader.loadTestsFromModule(module)',
     'result = unittest.TextTestRunner(verbosity=0).run(suite)',

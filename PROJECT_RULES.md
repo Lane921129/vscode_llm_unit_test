@@ -65,6 +65,7 @@
 - Google API Key 必須走 HTTP Header，不可放入 URL。
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
+- 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
 - 尚未完成「測試連線」的 provider／model 視為尚未驗證；**Auto** 必須先使用有真實 Dynamic Trace 的 Tier 1 deterministic fallback，且只有同一 provider／model 通過可執行 unittest 探測後，Auto 才可使用 LLM 證據導向 Tier 1 與 Tier 2–4。使用者明確選擇 Tier 1–4 時必須保留其選擇，不得因探測缺失強制降階；其模型輸出仍必須通過結構、隔離執行、覆蓋率與突變閘門。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
 - 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
 - 未驗證模型在 **Auto** 的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。使用者明確選擇任一 Tier 時，可走 LLM fallback／高階流程，但不得略過既有的輸出結構、Python 執行、覆蓋率與突變驗證。
