@@ -90,6 +90,12 @@
 - 新增可獨立驗證的 Tier 2 子回覆 gate，確保結構有效與 Trace 一致兩項條件缺一不可。
 - 驗證：195 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### Tier 2 合流保留各呼叫站的獨立 TestCase
+
+- 舊合併器會將每個子回覆的 `setUp`／`tearDown` body 接成同一個 TestCase；不同 caller context 的 mock、物件和欄位可能覆蓋彼此，使個別原本可執行的子測試在合併後失敗。
+- 現在只合併去重的 imports，並將每個已驗證子回覆完整保留為名稱唯一的 `TestCase`。各自的 setup、teardown、helper 和 async base class 都維持本地隔離，避免跨呼叫站狀態污染。
+- 驗證：196 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

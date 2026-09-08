@@ -3,112 +3,70 @@ export interface MergeResult {
     totalMethodsCount: number;
 }
 
+interface ExtractedTestClass {
+    lines: string[];
+    testMethodCount: number;
+}
+
+function extractTopLevelTestClass(snippet: string): ExtractedTestClass | undefined {
+    const lines = snippet.split(/\r?\n/);
+    const classStart = lines.findIndex(line =>
+        /^class\s+\w+\s*\(\s*unittest\.(?:TestCase|IsolatedAsyncioTestCase)\s*\)\s*:/.test(line)
+    );
+    if (classStart < 0) {return undefined;}
+
+    let classEnd = lines.length;
+    for (let index = classStart + 1; index < lines.length; index++) {
+        if (/^(?:class\s+|if\s+__name__\s*==)/.test(lines[index])) {
+            classEnd = index;
+            break;
+        }
+    }
+    const classLines = lines.slice(classStart, classEnd);
+    return {
+        lines: classLines,
+        testMethodCount: classLines.filter(line => /^\s+(?:async\s+)?def\s+test_\w*\s*\(/.test(line)).length
+    };
+}
+
+/**
+ * Tier 2 subtasks are complete, independently validated unittest files. Keep
+ * their TestCase classes separate when combining them: merging setUp/tearDown
+ * bodies makes one caller-context's mocks or fixtures overwrite another's.
+ */
 export function mergeTestSnippets(snippets: string[], className: string = 'TestMergedSuite'): MergeResult {
-    const allImportsSet = new Set<string>();
-    allImportsSet.add('import unittest');
+    const imports = new Set<string>(['import unittest']);
+    const classes: string[] = [];
+    let totalMethodsCount = 0;
+    const safeClassStem = className.replace(/\W/g, '_') || 'TestMergedSuite';
 
-    const setupBodies: string[] = [];
-    const teardownBodies: string[] = [];
-    const testMethods: string[] = [];
-    const helperMethods: string[] = [];
-    const seenMethodNames = new Map<string, number>();
-
-    for (let sIdx = 0; sIdx < snippets.length; sIdx++) {
-        const snippet = snippets[sIdx];
-        const lines = snippet.split('\n');
-        let currentMethodName = '';
-        let currentMethodLines: string[] = [];
-
-        const flushCurrentMethod = () => {
-            if (!currentMethodName || currentMethodLines.length === 0) {return;}
-            const body = currentMethodLines.join('\n');
-
-            if (currentMethodName === 'setUp') {
-                setupBodies.push(body);
-            } else if (currentMethodName === 'tearDown') {
-                teardownBodies.push(body);
-            } else if (currentMethodName.startsWith('test_')) {
-                let finalName = currentMethodName;
-                const count = seenMethodNames.get(currentMethodName) || 0;
-                seenMethodNames.set(currentMethodName, count + 1);
-
-                if (count > 0) {
-                    finalName = `${currentMethodName}_site${sIdx + 1}`;
-                }
-                const renamedBody = body.replace(new RegExp(`def\\s+${currentMethodName}\\s*\\(`), `def ${finalName}(`);
-                testMethods.push(renamedBody);
-            } else {
-                helperMethods.push(body);
-            }
-            currentMethodName = '';
-            currentMethodLines = [];
-        };
-
-        for (const line of lines) {
+    for (let index = 0; index < snippets.length; index++) {
+        const snippet = snippets[index];
+        for (const line of snippet.split(/\r?\n/)) {
             const trimmed = line.trim();
-
-            if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
-                if (!trimmed.includes('module_name') && !trimmed.includes('MODULE_NAME')) {
-                    allImportsSet.add(trimmed);
-                }
-                continue;
-            }
-
-            const methodMatch = line.match(/^(\s*)def\s+([a-zA-Z0-9_]+)\s*\(/);
-            if (methodMatch) {
-                flushCurrentMethod();
-                currentMethodName = methodMatch[2];
-                currentMethodLines = [line];
-                continue;
-            }
-
-            if (currentMethodName) {
-                if (line.match(/^class\s+/) || line.match(/^if\s+__name__/)) {
-                    flushCurrentMethod();
-                    continue;
-                }
-                if (line.length > 0 && !line.startsWith(' ') && !line.startsWith('\t') && !line.startsWith('#')) {
-                    flushCurrentMethod();
-                    continue;
-                }
-                currentMethodLines.push(line);
+            if ((trimmed.startsWith('import ') || trimmed.startsWith('from ')) &&
+                !trimmed.includes('module_name') && !trimmed.includes('MODULE_NAME')) {
+                imports.add(trimmed);
             }
         }
-        flushCurrentMethod();
-    }
 
-    // 整合 setUp 與 tearDown
-    const mergedClassLines: string[] = [];
-    if (setupBodies.length > 0) {
-        mergedClassLines.push(`    def setUp(self):`);
-        for (const s of setupBodies) {
-            const inner = s.split('\n').slice(1).map(l => '    ' + l).join('\n');
-            if (inner.trim()) {mergedClassLines.push(inner);}
-        }
+        const extracted = extractTopLevelTestClass(snippet);
+        if (!extracted || extracted.testMethodCount === 0) {continue;}
+        const classLines = [...extracted.lines];
+        const mergedClassName = `${safeClassStem}_Site${index + 1}`;
+        classLines[0] = classLines[0].replace(/^class\s+\w+/, `class ${mergedClassName}`);
+        classes.push(classLines.join('\n').trimEnd());
+        totalMethodsCount += extracted.testMethodCount;
     }
-
-    if (teardownBodies.length > 0) {
-        mergedClassLines.push(`    def tearDown(self):`);
-        for (const t of teardownBodies) {
-            const inner = t.split('\n').slice(1).map(l => '    ' + l).join('\n');
-            if (inner.trim()) {mergedClassLines.push(inner);}
-        }
-    }
-
-    const allMethods = [...mergedClassLines, ...helperMethods, ...testMethods];
 
     const mergedCode = [
-        Array.from(allImportsSet).join('\n'),
+        ...imports,
         '',
-        `class ${className}(unittest.TestCase):`,
-        allMethods.length > 0 ? allMethods.join('\n\n') : '    pass',
+        ...(classes.length > 0 ? classes : [`class ${safeClassStem}(unittest.TestCase):\n    pass`]),
         '',
         `if __name__ == '__main__':`,
         `    unittest.main()`
-    ].join('\n');
+    ].join('\n\n');
 
-    return {
-        mergedCode,
-        totalMethodsCount: testMethods.length
-    };
+    return { mergedCode, totalMethodsCount };
 }
