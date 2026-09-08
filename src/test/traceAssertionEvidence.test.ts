@@ -33,3 +33,19 @@ test('supports a target module alias and ignores non-assertion setup calls', () 
     );
     assert.strictEqual(findDirectTraceAssertionContradiction("result = target('value', 2)", 'target', trace), undefined);
 });
+
+test('checks boolean and None unittest assertions against matching Trace facts', () => {
+    const booleanTrace = { examples: [{ args: ['1'], result: 'True' }] };
+    const noneTrace = { examples: [{ args: ["'x'"], result: 'None' }] };
+
+    assert.match(
+        findDirectTraceAssertionContradiction('self.assertFalse(check(1))', 'check', booleanTrace) || '',
+        /斷言 False/
+    );
+    assert.strictEqual(findDirectTraceAssertionContradiction('self.assertTrue(check(1))', 'check', booleanTrace), undefined);
+    assert.match(
+        findDirectTraceAssertionContradiction("self.assertEqual(fetch('x'), 'value')", 'fetch', noneTrace) || '',
+        /回傳 None/
+    );
+    assert.strictEqual(findDirectTraceAssertionContradiction("self.assertIsNone(fetch('x'))", 'fetch', noneTrace), undefined);
+});

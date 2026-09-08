@@ -46,6 +46,12 @@
 - Gate 有意只處理直接 assertion：未被 Trace 的探索輸入、經額外轉換的值及其他測試策略仍交由來源碼、既有結構驗證、執行、coverage 與 mutation gate 判定。
 - 驗證：187 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 擴展 Dynamic Trace 的布林與 None Assertion 一致性
+
+- Trace 證據 gate 現在也會比對完全相同 target call 的 `assertTrue`、`assertFalse` 與 `assertIsNone`；模型不能把已驗證的 `True` 寫成 `assertFalse`，或把 `None` 寫成一般值的 `assertEqual`。
+- 比對仍嚴格限於同一行中可解析的直接 target call 與完全相同 Trace 引數；指派後再 assertion、轉換結果與未追蹤輸入仍交給隔離 Python 執行、coverage 與 mutation gate，避免誤拒絕探索性測試。
+- 驗證：188 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

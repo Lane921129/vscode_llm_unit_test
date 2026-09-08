@@ -52,8 +52,25 @@ function traceCallSignature(example: TraceAssertionExample): string | undefined 
     return normalizePythonExpression([...positional, ...keywords].join(','));
 }
 
+function expectedDirectAssertionValue(line: string, callEnd: number): string | undefined {
+    const remainder = line.slice(callEnd + 1);
+    if (line.includes('self.assertEqual')) {
+        return remainder.match(/^\s*,\s*(.*?)\s*\)\s*$/)?.[1];
+    }
+    if (/self\.assertTrue\s*\(/.test(line) && /^\s*\)\s*$/.test(remainder)) {
+        return 'True';
+    }
+    if (/self\.assertFalse\s*\(/.test(line) && /^\s*\)\s*$/.test(remainder)) {
+        return 'False';
+    }
+    if (/self\.assertIsNone\s*\(/.test(line) && /^\s*\)\s*$/.test(remainder)) {
+        return 'None';
+    }
+    return undefined;
+}
+
 /**
- * Detect only a direct assertEqual contradiction for the exact same call a
+ * Detect only a direct assertion contradiction for the exact same call a
  * Dynamic Trace has already observed. It intentionally leaves untraced input
  * exploration and assertions over transformed results to the normal gates.
  */
@@ -70,7 +87,7 @@ export function findDirectTraceAssertionContradiction(
     const escapedName = callableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const callPattern = new RegExp(`(?:\\b[A-Za-z_]\\w*\\s*\\.\\s*)?${escapedName}\\s*\\(`, 'g');
     for (const line of code.split(/\r?\n/)) {
-        if (!line.includes('self.assertEqual')) {continue;}
+        if (!/self\.assert(?:Equal|True|False|IsNone)\s*\(/.test(line)) {continue;}
         for (const match of line.matchAll(callPattern)) {
             const callStart = (match.index || 0) + match[0].length - 1;
             const closeIndex = matchingClosingParenthesis(line, callStart);
@@ -79,15 +96,14 @@ export function findDirectTraceAssertionContradiction(
                 normalizePythonExpression(line.slice(callStart + 1, closeIndex)) === signature
             );
             if (!traceMatch) {continue;}
-            const remainder = line.slice(closeIndex + 1);
-            const expectedMatch = remainder.match(/^\s*,\s*(.*?)\s*\)\s*$/);
-            if (!expectedMatch) {continue;}
-            if (normalizePythonExpression(expectedMatch[1]) !== normalizePythonExpression(traceMatch.example.result || '')) {
+            const assertedValue = expectedDirectAssertionValue(line, closeIndex);
+            if (assertedValue === undefined) {continue;}
+            if (normalizePythonExpression(assertedValue) !== normalizePythonExpression(traceMatch.example.result || '')) {
                 const callArgs = [
                     ...(traceMatch.example.args || []),
                     ...Object.entries(traceMatch.example.kwargs || {}).map(([name, value]) => `${name}=${value}`)
                 ].join(', ');
-                return `已驗證 Trace 顯示 ${callableName}(${callArgs}) 回傳 ${traceMatch.example.result}，但模型對相同呼叫斷言 ${expectedMatch[1]}。`;
+                return `已驗證 Trace 顯示 ${callableName}(${callArgs}) 回傳 ${traceMatch.example.result}，但模型對相同呼叫斷言 ${assertedValue}。`;
             }
         }
     }
