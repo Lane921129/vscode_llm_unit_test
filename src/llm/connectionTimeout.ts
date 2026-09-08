@@ -7,6 +7,12 @@ export type FetchLike<TResponse> = (
     init: RequestInit
 ) => Promise<TResponse>;
 
+export interface StatusResponse {
+    status: number;
+}
+
+export const RETRYABLE_PROVIDER_STATUS_CODES = new Set([500, 502, 503, 504]);
+
 /**
  * Run exactly one provider request with its own deadline.
  *
@@ -27,4 +33,30 @@ export async function fetchWithTimeout<TResponse>(
     } finally {
         clearTimeout(timeout);
     }
+}
+
+/**
+ * Retry only transient provider-side failures for an idempotent probe request.
+ * Authentication, quota and malformed-request errors deliberately remain a
+ * single attempt so the user receives their actionable error without delay.
+ */
+export async function fetchWithServerRetry<TResponse extends StatusResponse>(
+    fetcher: FetchLike<TResponse>,
+    input: string,
+    init: RequestInit,
+    timeoutMs: number,
+    maxAttempts = 2,
+    wait: (milliseconds: number) => Promise<void> = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+): Promise<TResponse> {
+    let response: TResponse | undefined;
+    const attempts = Math.max(1, maxAttempts);
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        response = await fetchWithTimeout(fetcher, input, init, timeoutMs);
+        if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt === attempts) {
+            return response;
+        }
+        await wait(750 * attempt);
+    }
+    // The loop always returns, but keeps TypeScript's control-flow exhaustive.
+    return response as TResponse;
 }

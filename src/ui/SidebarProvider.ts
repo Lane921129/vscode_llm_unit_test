@@ -10,7 +10,7 @@ import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/clou
 import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe, PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from '../llm/ollamaCapability';
 import { verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -420,7 +420,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     TEST_GENERATION_PROBE_PROMPT,
                                     { responseMimeType: 'application/json', responseSchema: TEST_GENERATION_PROBE_SCHEMA }
                                 );
-                                const response = await timedFetch(request.url, {
+                                const response = await fetchWithServerRetry<Response>(fetch, request.url, {
                                     method: 'POST',
                                     headers: request.headers,
                                     body: JSON.stringify(request.body)
@@ -435,7 +435,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         credential.key,
                                         PLAIN_TEST_GENERATION_PROBE_PROMPT
                                     );
-                                    const plainResponse = await timedFetch(plainRequest.url, {
+                                    const plainResponse = await fetchWithServerRetry<Response>(fetch, plainRequest.url, {
                                         method: 'POST',
                                         headers: plainRequest.headers,
                                         body: JSON.stringify(plainRequest.body)

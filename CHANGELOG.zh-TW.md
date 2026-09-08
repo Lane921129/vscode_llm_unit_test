@@ -4,6 +4,13 @@
 
 ## 2026-09-07
 
+### 更正 Fixture 資料集定位並提升 Cloud 連線暫時故障韌性
+
+- `test/fixtures/python/` 與 README 現在明確稱為「內部回歸 Fixture Corpus」：它用於防止 AST、技能卡、Prompt 與驗證器退步，不是公開模型排名、公開驗收成績，也不代表 Tier 2–4 已成熟。
+- Cloud AI Studio 的連線測試針對 `500`、`502`、`503`、`504` 這類 provider 端暫時錯誤，會等待 750ms 後重試一次；`400`、認證、權限、模型不存在、配額等可操作錯誤不會重試或被隱藏。
+- 驗證：172 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+- 限制：若 Google 在兩次最小 `generateContent` 探測都回傳 5xx，extension 仍會如實回報服務端錯誤；此修正不會把未通過 unittest 資格的模型誤判為合格。
+
 ### 新增 AST 綁定的 Tier 4 Async Context Manager 技能卡
 
 - 新增 `async_context_manager_testing`，只在目標 callable 真的含有 `async with` 時才放入技能購物車；同步 `with` 與字串文字不會誤觸發。

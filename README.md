@@ -226,7 +226,7 @@ Coverage 是必要的品質閘門，不是可省略的顯示欄位。若 VS Code
 
 ## 專案狀態與貢獻
 
-公開發行進度見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)。貢獻前請閱讀 [PROJECT_RULES.md](PROJECT_RULES.md)，並執行上述本機品質檢查。v1.0 發行工作正逐步補齊貢獻、安全回報與社群文件。
+公開發行進度見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)。目前 `test/fixtures/python/` 是內部回歸資料集，不是公開模型排行或已完成的跨 Tier 驗收。貢獻前請閱讀 [PROJECT_RULES.md](PROJECT_RULES.md)，並執行上述本機品質檢查。v1.0 發行工作正逐步補齊貢獻、安全回報與社群文件。
 
 ## 授權
 
