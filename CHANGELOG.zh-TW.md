@@ -76,6 +76,13 @@
 - 現在會先選取含 unittest 證據的單一 code fence，再只解開合法 JSON 的字串 `code` 欄位。未知 JSON 形狀、無 `code` 字串、無 unittest 證據的區塊與 Markdown 說明仍由既有結構驗證拒絕。
 - 驗證：192 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 讓 Reviewer 與 Self-repair 使用完整的證據語境
+
+- Reviewer 原本仍保留從 source 直接猜回傳值、固定切片範例等遺留指令，也未收到 module imports、引用常數、class 初始化、技能購物車。這會讓修復模型在原始 Writer 已受證據約束後又回到猜測。
+- 現在 Reviewer 會收到完整 AST setup context、相依原始碼、精確 Trace args／kwargs／結果與 evidence-bound semantic guidance；來源與技能卡只能指引路徑和 setup，精確 assertion 必須保留 Trace／明確 raise／mock side effect 的事實界線。
+- Tier 4 Self-repair 同步重用此語境建立器，不再只看 stderr 盲修；所有修復流程都會沿用既有結構、Trace、隔離執行、coverage 與 mutation gate。
+- 驗證：194 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

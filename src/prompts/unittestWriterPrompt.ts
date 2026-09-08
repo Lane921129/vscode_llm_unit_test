@@ -1,4 +1,5 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
+import { getReviewerUserPrompt } from './bugFixerPrompt';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 1：填空法 Prompt（2–3B 極小模型）
@@ -133,14 +134,25 @@ Guidelines:
 - Do NOT copy the source code.`;
 }
 
-export function getTier4SelfRepairPrompt(stderr: string): string {
-    return `Your test file failed pre-verification with these errors:
+export function getTier4SelfRepairPrompt(
+    stderr: string,
+    brokenCode: string = '',
+    funcName: string = '',
+    funcArgs: string[] = [],
+    sourceCode?: string,
+    astContext?: any,
+    moduleName: string = 'module_name',
+    semanticGuidance?: string
+): string {
+    const evidenceContext = brokenCode
+        ? getReviewerUserPrompt(
+            brokenCode, stderr, funcName, funcArgs, sourceCode, astContext, moduleName, semanticGuidance
+        )
+        : `=== PRE-VERIFICATION ERROR LOG ===\n\`\`\`text\n${stderr.substring(0, 2000)}\n\`\`\``;
+    return `${evidenceContext}
 
-\`\`\`
-${stderr.substring(0, 2000)}
-\`\`\`
-
-Fix ONLY the failing test methods. Output the complete corrected test file.`;
+TIER 4 SELF-REPAIR INSTRUCTION:
+Fix only failing methods unless a change is required to preserve verified behavior. Keep passing tests and exact Trace facts. Output the complete corrected test file in one \`\`\`python code block.`;
 }
 
 

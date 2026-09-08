@@ -33,7 +33,7 @@
 - 上述簽名規則同樣適用於被測函式的合法匯入別名，不得因 alias 而略過驗證。
 - Markdown、分析文字、空內容、原始碼複製或沒有 `test_` 方法的內容均不可當作測試檔。
 - Reviewer 與 Self-repair 必須使用相同驗證規則；失敗回應只能寫入報告，不可覆寫有效測試。
-- Reviewer 與 Self-repair 階段必須提供與生成端同等完整度的語境（目標原始碼、引用常數、Class 定義與真實 Trace 數據），禁止在缺乏常數與依賴定義的狀態下進行盲目修復。
+- Reviewer 與 Self-repair 階段必須提供與生成端同等完整度的語境（目標原始碼、imports、引用常數、Class 定義、相依、真實 Trace 數據與證據觸發的技能卡），禁止在缺乏常數與依賴定義的狀態下進行盲目修復。來源碼與技能策略只可選擇路徑／setup，不可取代精確 Trace assertion 事實。
 - 涉及外部模組副作用或跨模組返回值測試時，必須使用標準的 `unittest.mock.patch`；嚴禁透過竄改本地變數進行無效的偽 Mock。
 - 動態追蹤只提供可呼叫性的基礎 I/O 事實；複雜邊界與多分支策略由 Semantic Analyzer 產生。
 - Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物仍須通過結構、隔離執行、coverage 與 mutation gate。Auto 未驗證模型的 deterministic Trace 產物只能作為明確標示的 fallback，不得稱為 LLM 生成成果。

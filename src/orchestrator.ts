@@ -1753,7 +1753,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     funcArgs,
                                     targetSource,
                                     astContext,
-                                    moduleName
+                                    moduleName,
+                                    semanticContext
                                 );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log, 'test-code-json');
                                 const revCode = sanitizeLlmResponse(revRaw);
@@ -1818,7 +1819,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
                                     try {
                                         const repairSys = getTier4SystemPrompt();
-                                        const repairUsr = getTier4SelfRepairPrompt(out);
+                                        const repairUsr = getTier4SelfRepairPrompt(
+                                            out,
+                                            fs.readFileSync(testPath, 'utf8'),
+                                            targetFuncName || '',
+                                            funcArgs,
+                                            (astContext as any)?.code || targetCode,
+                                            astContext,
+                                            targetImportModule,
+                                            semanticContext
+                                        );
                                         const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, 'test-code-json');
                                         const repairCode = sanitizeLlmResponse(repairRaw);
                                         const repairValidation = await validateGeneratedTestCode(

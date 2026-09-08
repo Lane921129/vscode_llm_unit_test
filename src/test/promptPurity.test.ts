@@ -10,7 +10,7 @@ import {
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
 } from '../prompts/semanticAnalyzerPrompt';
-import { getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
+import { getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -47,6 +47,27 @@ test('Tier 1 LLM prompt binds assertions to execution evidence and keeps skill c
     assert.match(prompt, /Selected skill cards are scoped guidance/);
     assert.match(prompt, /structural, isolated execution, coverage, and mutation checks/);
     assert.doesNotMatch(prompt, forbiddenDomainTerms);
+});
+
+test('reviewer prompt uses complete AST and skill context without treating source as an output oracle', () => {
+    const systemPrompt = getReviewerSystemPrompt();
+    const prompt = getReviewerUserPrompt(
+        'import unittest', 'coverage missed line 5', 'render', ['value'], 'def render(value):\n    return PREFIX + value', {
+            method_kind: 'instance', class_name: 'Renderer',
+            class_context: { bases: ['BaseRenderer'], init: { required_params: ['prefix'], assigns: [{ name: 'prefix' }] } },
+            file_imports: [{ kind: 'from', module: 'settings', name: 'PREFIX', level: 0 }],
+            referenced_globals: [{ name: 'PREFIX', code: "PREFIX = '>'" }],
+            traceResult: { examples: [{ args: ["'x'"], kwargs: {}, result: "'>x'" }] }
+        }, 'renderer', '=== SKILL CART ===\nUse selected evidence only.'
+    );
+
+    assert.match(systemPrompt, /They do NOT prove an exact return value/);
+    assert.doesNotMatch(systemPrompt, /If the code returns a string|value\[:N\]/);
+    assert.match(prompt, /AST CONTEXT/);
+    assert.match(prompt, /Constructor required parameters: prefix/);
+    assert.match(prompt, /PREFIX = '>'/);
+    assert.match(prompt, /EVIDENCE-BOUND SKILL AND STRATEGY GUIDANCE/);
+    assert.match(prompt, /Input: \('x'\) => Returned: '>x'/);
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {
@@ -110,6 +131,23 @@ test('Tier 4 repair prompt does not require habitual None or empty-input tests',
 
     assert.match(writerSource, /Do not add None or empty-input tests merely by habit/);
     assert.doesNotMatch(writerSource, /Cover all edge cases: None, empty, boundary values, all exception paths/);
+});
+
+test('Tier 4 self-repair receives the same source, AST, Trace, and skill evidence as Reviewer', () => {
+    const prompt = getTier4SelfRepairPrompt(
+        'assertion failed', 'import unittest', 'compute', ['value'], 'def compute(value):\n    return value', {
+            file_imports: [{ kind: 'import', module: 'math' }],
+            referenced_globals: [{ name: 'LIMIT', code: 'LIMIT = 3' }],
+            traceResult: { examples: [{ args: ['3'], result: '6' }] }
+        }, 'calculator', '=== SKILL CART ===\n[Float Precision]'
+    );
+
+    assert.match(prompt, /TARGET SOURCE CODE/);
+    assert.match(prompt, /Available module imports: import math/);
+    assert.match(prompt, /LIMIT = 3/);
+    assert.match(prompt, /Input: \(3\) => Returned: 6/);
+    assert.match(prompt, /Float Precision/);
+    assert.match(prompt, /TIER 4 SELF-REPAIR INSTRUCTION/);
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {
