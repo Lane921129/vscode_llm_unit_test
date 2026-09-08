@@ -229,6 +229,20 @@ test('writer prompt does not turn try/except or dependency warnings into univers
     assert.doesNotMatch(exceptionPrompt + dependencyPrompt, /NEVER raises exceptions|MUST use.*assertRaises/s);
 });
 
+test('writer prompt prevents Tier 2 from directly calling a dependency as unused setup', () => {
+    const prompt = getUserPrompt('checkout.py', 'submit', 'def submit(value): return normalize(value)', 'small', {
+        name: 'submit',
+        args: ['value'],
+        dependencyContexts: [{ name: 'normalize', code: 'def normalize(value): return value' }],
+    });
+    const tier1Prompt = getTier1EvidenceBoundSystemPrompt();
+
+    assert.match(prompt, /Do NOT directly call a dependency merely to compute an expected value or assign unused setup/);
+    assert.match(prompt, /patch it at checkout's use point/);
+    assert.match(tier1Prompt, /Do not call a dependency directly merely to calculate an expected value/);
+    assert.doesNotMatch(prompt + tier1Prompt, forbiddenDomainTerms);
+});
+
 test('semantic strategy labels model-proposed inputs as candidates rather than facts', () => {
     const context = formatSemanticContextForPrompt({
         dependency_behaviors: [],

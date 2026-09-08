@@ -32,6 +32,13 @@
 - 建構子必要資料不足時會記錄並安全略過，不會以猜測的 `Class()` 產生必定失敗的測試。
 - 驗證：183 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
 
+### 收斂 Tier 1／Tier 2 的相依函式測試隔離
+
+- 依既有 Tier 2 報告發現，模型可能先直接呼叫相依函式、再將未使用的結果留在測試中；這既不能控制目標函式的相依行為，也容易讓預期值與實際 target call 脫鉤。
+- Tier 1 evidence-bound Prompt、small／large Writer Prompt 及有相依語境的 User Prompt 現在都明確禁止這種做法。相依行為需要控制時，必須 patch 目標模組使用點，目標函式呼叫才是測試主體。
+- 規則不禁止目標函式內部使用相依，也不把相依的 source／Trace 變成 target assertion；它只避免模型在測試本身做無效的直接 setup 呼叫。
+- 驗證：184 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
 ## 2026-09-07
 
 ### 在資格失敗日誌附上固定探測回覆

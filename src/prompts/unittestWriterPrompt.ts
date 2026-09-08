@@ -55,6 +55,7 @@ Evidence rules:
 4. Selected skill cards are scoped guidance for this function, not facts that override source or trace evidence.
 5. Include import unittest, a unittest.TestCase, and test_ methods. Do not copy or redefine the production source. No pytest or top-level assert.
 6. If trace evidence is absent for a candidate path, omit that assertion rather than guessing.
+7. Do not call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.
 
 The generated file will be rejected unless it passes structural, isolated execution, coverage, and mutation checks.`;
 }
@@ -169,7 +170,8 @@ Rules:
 4. No pytest. No top-level assert.
 5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.
    - WRONG: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError — NEVER pass a string as second arg to assertRaises!
-6. ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values or exception types.`;
+6. ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values or exception types.
+7. Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -196,6 +198,7 @@ Guidelines:
 - Do NOT copy the source code into your output.
 - assertRaises syntax: ONLY \`with self.assertRaises(ValueError):\` — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!
 - ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values.
+- Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.
 `;
 
     prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), false)}\n`;
@@ -429,6 +432,7 @@ export function getUserPrompt(
             }
 
             prompt += `\nExternal dependencies:\n`;
+            prompt += `- Unit isolation: call ${funcName}() as the behavior under test. Do NOT directly call a dependency merely to compute an expected value or assign unused setup. When a dependency controls a target path, patch it at ${moduleName}'s use point and configure the mock explicitly.\n`;
             for (const dep of astContext.dependencyContexts) {
                 const dependencyTrace = dep.traceResult;
                 if (dependencyTrace && !dependencyTrace.load_error
