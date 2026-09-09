@@ -12,6 +12,10 @@
 
 - Cloud、Ollama、Custom API 在結構化輸出被拒絕或回覆格式不完整後，改用純文字相容模式時，現在會沿用同一個 API 總 deadline；暫態重試若在等待期間到期，也不會再送出額外請求。
 
+### 以純 Python 統一測試生成
+
+- Cloud、Ollama、Custom API 的 unittest 資格探測與正式測試生成現在一律要求純 Python code fence，不再先要求把完整測試檔 JSON 轉義。語意分析與突變分流仍可使用 JSON 欄位契約，並有本地 parser gate。
+
 ### 為 Cloud 結構化模型加入分析與 mutation triage schema
 
 - 除了 unittest code 以外，Cloud provider 現在也會對 Semantic Analyzer 與 mutation triage 附上最小任務 JSON Schema；這能讓支援 structured output 的模型在傳輸層先固定必要欄位，降低任意 JSON 或缺少 `verdicts` 的回覆機率。

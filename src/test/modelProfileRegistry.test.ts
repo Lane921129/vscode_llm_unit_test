@@ -73,7 +73,7 @@ test('applies a Cloud qualification when Google changes only the models/ prefix'
     }, true), true);
 });
 
-test('uses a verified model\'s plain-Python capability without requesting provider JSON modes', () => {
+test('always requests complete unittest files as plain Python across model capabilities', () => {
     assert.strictEqual(selectTestGenerationResponseFormat({
         testGenerationReady: true,
         testGenerationMode: '純 Python unittest'
@@ -81,11 +81,11 @@ test('uses a verified model\'s plain-Python capability without requesting provid
     assert.strictEqual(selectTestGenerationResponseFormat({
         testGenerationReady: true,
         testGenerationMode: '結構化 JSON unittest'
-    }), 'test-code-json');
+    }), 'text');
     assert.strictEqual(selectTestGenerationResponseFormat({
         testGenerationReady: false,
         testGenerationMode: '純 Python unittest'
-    }), 'test-code-json');
+    }), 'text');
     assert.strictEqual(selectAnalysisResponseFormat({
         testGenerationReady: true,
         testGenerationMode: '純 Python unittest'

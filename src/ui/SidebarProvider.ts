@@ -1,4 +1,3 @@
-import { requireSuccessfulProbeResponse } from '../llm/probeResponse';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,8 +7,8 @@ import { extractFunctionsWithAst } from '../utils/utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from '../llm/cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, ModelQualificationProfile } from '../llm/modelQualification';
-import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
-import { PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from '../llm/testGenerationQualification';
+import { buildOllamaPlainTestGenerationProbe } from '../llm/ollamaCapability';
+import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
@@ -344,38 +343,27 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             // 同時傳給 extension 主程式
                                             vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                             try {
-                                                const outputResponse = await timedFetch(`${baseUrl}/api/generate`, {
+                                                const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
                                                     method: 'POST',
                                                     headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify(buildOllamaTestGenerationProbe(message.modelName))
+                                                    body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName))
                                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                                const outputPayload = outputResponse.ok ? await outputResponse.json() : undefined;
-                                                let capability = await verifyRunnableTestGenerationProbe(outputPayload, isolatedProbeExecutor);
-                                                let plainPythonVerified = false;
-                                                if (capability.capability !== 'verified') {
-                                                    const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
-                                                        method: 'POST',
-                                                        headers: { 'Content-Type': 'application/json' },
-                                                        body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName))
-                                                    }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                                    capability = await verifyRunnableTestGenerationProbe(
-                                                        plainResponse.ok ? await plainResponse.json() : undefined,
-                                                        isolatedProbeExecutor
-                                                    );
-                                                    plainPythonVerified = capability.capability === 'verified';
-                                                }
+                                                const capability = await verifyRunnableTestGenerationProbe(
+                                                    plainResponse.ok ? await plainResponse.json() : undefined,
+                                                    isolatedProbeExecutor
+                                                );
                                                 const qualificationProfile = {
                                                     ...profile,
                                                     testGenerationReady: capability.capability === 'verified',
                                                     testGenerationReason: capability.reason,
-                                                    testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
+                                                    testGenerationMode: '純 Python unittest'
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
                                                 this.appendModelQualificationLog(qualificationProfile, capability.responsePreview);
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
-                                                        `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
+                                                        `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過純 Python unittest 驗證。`
                                                     );
                                                 } else {
                                                     vscode.window.showWarningMessage(
@@ -440,38 +428,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const request = buildGoogleGenerateContentRequest(
                                     credential.model,
                                     credential.key,
-                                    TEST_GENERATION_PROBE_PROMPT,
-                                    { responseMimeType: 'application/json', responseSchema: TEST_GENERATION_PROBE_SCHEMA, temperature: 0 }
+                                    PLAIN_TEST_GENERATION_PROBE_PROMPT,
+                                    { temperature: 0 }
                                 );
                                 const response = await fetchWithServerRetry<Response>(fetch, request.url, {
                                     method: 'POST',
                                     headers: request.headers,
                                     body: JSON.stringify(request.body)
                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                let capability = await verifyRunnableTestGenerationProbe(
+                                const capability = await verifyRunnableTestGenerationProbe(
                                     response.ok ? { response: getGoogleGeneratedText(await response.json()) } : undefined,
                                     isolatedProbeExecutor
                                 );
-                                let plainPythonVerified = false;
-                                if (capability.capability !== 'verified') {
-                                    const plainRequest = buildGoogleGenerateContentRequest(
-                                        credential.model,
-                                        credential.key,
-                                        PLAIN_TEST_GENERATION_PROBE_PROMPT,
-                                        { temperature: 0 }
-                                    );
-                                    const plainResponse = await fetchWithServerRetry<Response>(fetch, plainRequest.url, {
-                                        method: 'POST',
-                                        headers: plainRequest.headers,
-                                        body: JSON.stringify(plainRequest.body)
-                                    }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    await requireSuccessfulProbeResponse(plainResponse);
-                                    capability = await verifyRunnableTestGenerationProbe(
-                                        plainResponse.ok ? { response: getGoogleGeneratedText(await plainResponse.json()) } : undefined,
-                                        isolatedProbeExecutor
-                                    );
-                                    plainPythonVerified = capability.capability === 'verified';
-                                }
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,
                                     contextLength: connectionMetadata.contextLength,
@@ -479,7 +447,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     modelName: credential.model,
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
-                                    testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
+                                    testGenerationMode: '純 Python unittest'
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
@@ -489,7 +457,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         ? `最大輸入 Context：${connectionMetadata.contextLength.toLocaleString()} tokens`
                                         : '最大輸入 Context：API 未公開（採保守 4,096-token 預算）';
                                     vscode.window.showInformationMessage(
-                                        `✅ Cloud AI Studio 連線成功！模型：${connectionMetadata.paramSize}；${contextMessage}；已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
+                                        `✅ Cloud AI Studio 連線成功！模型：${connectionMetadata.paramSize}；${contextMessage}；已通過純 Python unittest 驗證。`
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
@@ -505,34 +473,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     headers: headers,
                                     body: JSON.stringify(buildCustomChatCompletionBody(
                                         message.modelName,
-                                        'Return only the requested structured output.',
-                                        TEST_GENERATION_PROBE_PROMPT,
-                                        'json'
+                                        'Return only runnable Python unittest code.',
+                                        PLAIN_TEST_GENERATION_PROBE_PROMPT,
+                                        'text'
                                     ))
                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                let capability = await verifyRunnableTestGenerationProbe(
+                                const capability = await verifyRunnableTestGenerationProbe(
                                     response.ok ? { response: getCustomChatCompletionText(await response.json()) } : undefined,
                                     isolatedProbeExecutor
                                 );
-                                let plainPythonVerified = false;
-                                if (capability.capability !== 'verified') {
-                                    const plainResponse = await timedFetch(message.customUrl, {
-                                        method: 'POST',
-                                        headers,
-                                        body: JSON.stringify(buildCustomChatCompletionBody(
-                                            message.modelName,
-                                            'Return only runnable Python unittest code.',
-                                            PLAIN_TEST_GENERATION_PROBE_PROMPT,
-                                            'text'
-                                        ))
-                                    }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    await requireSuccessfulProbeResponse(plainResponse);
-                                    capability = await verifyRunnableTestGenerationProbe(
-                                        plainResponse.ok ? { response: getCustomChatCompletionText(await plainResponse.json()) } : undefined,
-                                        isolatedProbeExecutor
-                                    );
-                                    plainPythonVerified = capability.capability === 'verified';
-                                }
                                 const profile = {
                                     paramSize: 'Custom API',
                                     contextLength: 8192,
@@ -540,14 +489,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     modelName: message.modelName,
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
-                                    testGenerationMode: plainPythonVerified ? '純 Python unittest' : '結構化 JSON unittest'
+                                    testGenerationMode: '純 Python unittest'
                                 } as const;
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                 this.appendModelQualificationLog(profile, capability.responsePreview);
                                 if (capability.capability === 'verified') {
                                     vscode.window.showInformationMessage(
-                                        `✅ Custom API 連線成功！已通過${plainPythonVerified ? '純 Python unittest' : '結構化輸出'}驗證。`
+                                        `✅ Custom API 連線成功！已通過純 Python unittest 驗證。`
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(

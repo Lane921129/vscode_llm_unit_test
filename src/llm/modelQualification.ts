@@ -27,16 +27,14 @@ function normalizedModelName(modelName: string): string {
 }
 
 /**
- * Use the exact response style that the selected model proved it can produce.
- * Semantic analysis still uses JSON independently; this applies only to
- * complete unittest/scaffold/repair code requests.
+ * A complete unittest is source code, not a data record. Always request it as
+ * ordinary Python so models do not have to escape a whole file inside JSON.
+ * The local code extractor and execution gates remain the authority.
  */
 export function selectTestGenerationResponseFormat(
-    profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
+    _profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
 ): TestGenerationResponseFormat {
-    return profile.testGenerationReady === true && profile.testGenerationMode === '純 Python unittest'
-        ? 'text'
-        : 'test-code-json';
+    return 'text';
 }
 
 /**
