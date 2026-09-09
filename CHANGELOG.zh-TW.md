@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 修正直接匯入別名的呼叫站作用域
+
+- AST Caller Finder 現在會依呼叫行號檢查 direct import alias 仍解析到目標函式。函式參數、區域／closure 重綁定與模組層後續覆寫的同名 callable 都會排除，不再錯誤傳入 Dynamic Trace 或 LLM 的 caller context。
+- 無法靜態確認的 `nonlocal`、factory 與動態綁定維持保守排除；已確認的直接匯入呼叫不受影響。
+
 ### 讓已驗證純 Python 的模型沿用其正式輸出能力
 
 - 模型若在連線 probe 中只通過「純 Python unittest」，正式 Tier 1／Tier 2、Tier 3、Reviewer 與 Self-repair 現在會沿用純 Python code path，而非又強制 JSON schema。這修正了探測成功、正式生成卻因不支援 structured output 失敗的能力斷鏈。

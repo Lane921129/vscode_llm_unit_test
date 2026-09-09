@@ -54,6 +54,111 @@ def class_defines_member(class_node, member_name):
     )
 
 
+def target_names_in(node):
+    """Return simple names bound by an assignment-like target."""
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return {name for item in node.elts for name in target_names_in(item)}
+    if isinstance(node, ast.Starred):
+        return target_names_in(node.value)
+    return set()
+
+
+class ScopeBindingCollector(ast.NodeVisitor):
+    """Collect names bound in one lexical scope without entering child scopes."""
+
+    def __init__(self, selected_name=None, selected_is_target=False):
+        self.bindings = {}
+        self.global_names = set()
+        self.nonlocal_names = set()
+        self.selected_name = selected_name
+        self.selected_is_target = selected_is_target
+
+    def bind(self, name, line, is_target=False):
+        self.bindings.setdefault(name, []).append((line, is_target))
+
+    def bind_targets(self, targets, line):
+        for target in targets:
+            for name in target_names_in(target):
+                self.bind(name, line)
+
+    def visit_Global(self, node):
+        self.global_names.update(node.names)
+
+    def visit_Nonlocal(self, node):
+        self.nonlocal_names.update(node.names)
+
+    def visit_Assign(self, node):
+        self.bind_targets(node.targets, node.lineno)
+        self.visit(node.value)
+
+    def visit_AnnAssign(self, node):
+        self.bind_targets([node.target], node.lineno)
+        if node.value:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node):
+        self.bind_targets([node.target], node.lineno)
+        self.visit(node.value)
+
+    def visit_NamedExpr(self, node):
+        self.bind_targets([node.target], node.lineno)
+        self.visit(node.value)
+
+    def visit_For(self, node):
+        self.bind_targets([node.target], node.lineno)
+        self.generic_visit(node)
+
+    visit_AsyncFor = visit_For
+
+    def visit_With(self, node):
+        for item in node.items:
+            if item.optional_vars:
+                self.bind_targets([item.optional_vars], node.lineno)
+        self.generic_visit(node)
+
+    visit_AsyncWith = visit_With
+
+    def visit_ExceptHandler(self, node):
+        if node.name:
+            self.bind(node.name, node.lineno)
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            self.bind(alias.asname or alias.name.split('.')[0], node.lineno)
+
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            if alias.name != '*':
+                self.bind(alias.asname or alias.name, node.lineno)
+
+    def visit_FunctionDef(self, node):
+        is_target = self.selected_is_target and node.name == self.selected_name
+        self.bind(node.name, node.lineno, is_target)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        self.bind(node.name, node.lineno)
+
+
+def function_scope_bindings(scope):
+    """Return declarations whose Python function scope can shadow imports."""
+    collector = ScopeBindingCollector()
+    arguments = scope.args
+    for argument in (
+        list(arguments.posonlyargs) + list(arguments.args) + list(arguments.kwonlyargs)
+        + ([arguments.vararg] if arguments.vararg else [])
+        + ([arguments.kwarg] if arguments.kwarg else [])
+    ):
+        collector.bind(argument.arg, scope.lineno)
+    for statement in scope.body:
+        collector.visit(statement)
+    return collector
+
+
 def direct_safe_subclasses(tree, target_class, target_member, resolves_target_class):
     """Find classes that can only inherit the selected target member.
 
@@ -142,6 +247,30 @@ def find_call_sites(func_name, project_root, target_path=None):
                                     (alias.asname,) if alias.asname else tuple(alias.name.split('.'))
                                 )
 
+            # A direct import is not proof by itself: a function parameter,
+            # local assignment or a later module binding can shadow it.  Keep
+            # an ordered module-level binding history so a caller is accepted
+            # only when its name still resolves to the selected function on
+            # that source line.
+            module_bindings = ScopeBindingCollector(
+                selected_name=func_name,
+                selected_is_target=(
+                    not target_class and target_absolute is not None
+                    and os.path.abspath(filepath) == target_absolute
+                )
+            )
+            for statement in tree.body:
+                module_bindings.visit(statement)
+            if target_module and not target_class:
+                for node in tree.body:
+                    if not isinstance(node, ast.ImportFrom) or not node.module or not module_matches(node.module, target_module):
+                        continue
+                    for alias in node.names:
+                        if alias.name == func_name:
+                            module_bindings.bind(alias.asname or alias.name, node.lineno, True)
+            for bindings in module_bindings.bindings.values():
+                bindings.sort(key=lambda item: item[0])
+
             func_ranges = [(node.name, node.lineno, getattr(node, 'end_lineno', node.lineno))
                            for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
@@ -202,6 +331,41 @@ def find_call_sites(func_name, project_root, target_path=None):
                 containing = [item for item in scope_ranges if item[1] <= lineno <= item[2]]
                 return min(containing, key=lambda item: item[2] - item[1])[0]
 
+            function_bindings = {
+                id(scope): function_scope_bindings(scope)
+                for scope, _, _ in scope_ranges
+                if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+
+            def direct_function_reference(name, line):
+                """Whether a name safely resolves to the selected function at line."""
+                if not target_module:
+                    return name == func_name or name in direct_names
+
+                containing_functions = [
+                    item for item in scope_ranges
+                    if isinstance(item[0], (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and item[1] <= line <= item[2]
+                ]
+                # Inspect nearest lexical function first.  ``global`` makes
+                # the name resolve at module level; ``nonlocal`` or any local
+                # binding cannot be proven to be the imported target here.
+                for scope, _, _ in sorted(containing_functions, key=lambda item: item[2] - item[1]):
+                    declarations = function_bindings[id(scope)]
+                    if name in declarations.global_names:
+                        # A global assignment in this callable changes the
+                        # module binding before this call, but is not part of
+                        # the module's static statement history.
+                        if name in declarations.bindings:
+                            return False
+                        break
+                    if name in declarations.nonlocal_names or name in declarations.bindings:
+                        return False
+
+                bindings = module_bindings.bindings.get(name, [])
+                earlier = [binding for binding in bindings if binding[0] <= line]
+                return bool(earlier and earlier[-1][1])
+
             instance_bindings = {}
             for scope, _, _ in scope_ranges:
                 bindings = {}
@@ -229,7 +393,7 @@ def find_call_sites(func_name, project_root, target_path=None):
                 direct_call = (
                     not target_class
                     and isinstance(node.func, ast.Name)
-                    and (node.func.id == func_name or node.func.id in direct_names)
+                    and direct_function_reference(node.func.id, node.lineno)
                 )
                 attribute_call = (
                     isinstance(node.func, ast.Attribute)
@@ -258,7 +422,7 @@ def find_call_sites(func_name, project_root, target_path=None):
                     else:
                         is_target_call = False
                 elif target_module and direct_call:
-                    is_target_call = is_target_call or node.func.id in direct_names
+                    is_target_call = True
                 if not target_class and target_module and attribute_call:
                     module_path = expression_path(node.func.value)
                     is_target_call = is_target_call or (

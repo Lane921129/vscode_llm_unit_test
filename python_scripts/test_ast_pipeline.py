@@ -406,6 +406,49 @@ def process(value):
         self.assertIsNone(by_file['variable_consumer.py']['trace_args'])
         self.assertIsNone(by_file['variable_consumer.py']['trace_kwargs'])
 
+    def test_caller_finder_excludes_shadowed_direct_import_aliases(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            target = root / 'core.py'
+            target.write_text('def validate(value):\n    return value\n', encoding='utf-8')
+            (root / 'consumer.py').write_text(
+                '''from core import validate as core_validate
+
+def confirmed_target():
+    return core_validate(1)
+
+def parameter_shadow(core_validate):
+    return core_validate(2)
+
+def local_shadow():
+    core_validate = lambda value: value + 1
+    return core_validate(3)
+
+def outer_shadow():
+    core_validate = lambda value: value + 2
+    def nested():
+        return core_validate(4)
+    return nested()
+
+def global_shadow():
+    global core_validate
+    core_validate = lambda value: value + 3
+    return core_validate(5)
+
+core_validate = lambda value: value + 3
+
+def module_rebound():
+    return core_validate(6)
+''',
+                encoding='utf-8'
+            )
+            calls = self.run_script('ast_caller_finder.py', 'validate', root, target)
+
+        self.assertEqual(
+            [(call['caller_func'], call['trace_args']) for call in calls],
+            [('confirmed_target', [1])]
+        )
+
     def test_caller_finder_resolves_qualified_class_members_and_constructor_literals(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
