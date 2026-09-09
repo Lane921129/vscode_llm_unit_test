@@ -588,7 +588,10 @@ def unrelated_chain():
                 'from .consumer import format_label\nfrom . import consumer\n\n'
                 'def render_primary():\n    return format_label("  Alpha  ")\n\n'
                 'def render_secondary():\n    return format_label("Beta")\n\n'
-                'def render_module_reference():\n    return consumer.format_label("Gamma")\n',
+                'def render_module_reference():\n    return consumer.format_label("Gamma")\n\n'
+                'def render_shadowed_module_reference():\n'
+                '    consumer = object()\n'
+                '    return consumer.format_label("ignore")\n',
                 encoding='utf-8'
             )
             unrelated = root / 'unrelated'

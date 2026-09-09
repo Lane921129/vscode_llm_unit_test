@@ -284,6 +284,7 @@ def find_call_sites(func_name, project_root, target_path=None):
             # ``pkg.mod.target(...)``.  A plain alias set cannot distinguish
             # it from an unrelated ``pkg.other`` attribute chain.
             module_reference_paths = set()
+            module_reference_bindings = []
             if target_module:
                 for node in tree.body:
                     imported_module = resolved_import_from_module(node, filepath, project_root)
@@ -299,13 +300,17 @@ def find_call_sites(func_name, project_root, target_path=None):
                                 node, alias, filepath, project_root
                             )
                             if imported_alias_module and module_matches(imported_alias_module, target_module):
-                                module_reference_paths.add((alias.asname or alias.name,))
+                                reference_path = (alias.asname or alias.name,)
+                                module_reference_paths.add(reference_path)
+                                module_reference_bindings.append((reference_path[0], node.lineno))
                     elif isinstance(node, ast.Import):
                         for alias in node.names:
                             if module_matches(alias.name, target_module):
-                                module_reference_paths.add(
+                                reference_path = (
                                     (alias.asname,) if alias.asname else tuple(alias.name.split('.'))
                                 )
+                                module_reference_paths.add(reference_path)
+                                module_reference_bindings.append((reference_path[0], node.lineno))
 
             # A direct import is not proof by itself: a function parameter,
             # local assignment or a later module binding can shadow it.  Keep
@@ -329,6 +334,8 @@ def find_call_sites(func_name, project_root, target_path=None):
                     for alias in node.names:
                         if alias.name == func_name:
                             module_bindings.bind(alias.asname or alias.name, node.lineno, True)
+                for bound_name, line in module_reference_bindings:
+                    module_bindings.bind(bound_name, line, True)
             for bindings in module_bindings.bindings.values():
                 bindings.sort(key=lambda item: item[0])
 
@@ -398,10 +405,10 @@ def find_call_sites(func_name, project_root, target_path=None):
                 if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
 
-            def direct_function_reference(name, line):
-                """Whether a name safely resolves to the selected function at line."""
+            def target_binding_reference(name, line):
+                """Whether one binding still resolves to the selected module at line."""
                 if not target_module:
-                    return name == func_name or name in direct_names
+                    return False
 
                 containing_functions = [
                     item for item in scope_ranges
@@ -426,6 +433,18 @@ def find_call_sites(func_name, project_root, target_path=None):
                 bindings = module_bindings.bindings.get(name, [])
                 earlier = [binding for binding in bindings if binding[0] <= line]
                 return bool(earlier and earlier[-1][1])
+
+            def direct_function_reference(name, line):
+                """Whether a name safely resolves to the selected function at line."""
+                if not target_module:
+                    return name == func_name or name in direct_names
+                return target_binding_reference(name, line)
+
+            def module_reference_resolves_target(path, line):
+                return bool(
+                    path and tuple(path) in module_reference_paths
+                    and target_binding_reference(path[0], line)
+                )
 
             instance_bindings = {}
             for scope, _, _ in scope_ranges:
@@ -487,7 +506,7 @@ def find_call_sites(func_name, project_root, target_path=None):
                 if not target_class and target_module and attribute_call:
                     module_path = expression_path(node.func.value)
                     is_target_call = is_target_call or (
-                        module_path is not None and tuple(module_path) in module_reference_paths
+                        module_path is not None and module_reference_resolves_target(module_path, node.lineno)
                     )
                 if not is_target_call:
                     continue
