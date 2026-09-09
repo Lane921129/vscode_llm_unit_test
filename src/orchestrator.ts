@@ -32,6 +32,7 @@ import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { buildSemanticTraceCandidates, SemanticTraceInput } from './tier/semanticTraceCandidates';
+import { traceSubsetForCaller } from './tier/callerTracePartition';
 import * as path from 'path';
 import * as fs from 'fs';
 import { runSpawn } from './utils/processRunner';
@@ -1518,8 +1519,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const ctx = astContext.callerContexts[cIdx];
                     log(`[分治合流] 正在生成第 ${cIdx + 1}/${callerContextsCount} 個呼叫點測試: \`${ctx.caller_file}\` -> \`${ctx.caller_func}()\``);
 
-                    // 打造微型 astContext，只包含這 1 個呼叫站
-                    const subAstContext = { ...astContext, callerContexts: [ctx] };
+                    // 打造微型 AST／Trace context：子任務只能看到本 caller
+                    // 可精確對應的實測 I/O，不能借用其他 caller 的 oracle。
+                    const subTraceResult = traceSubsetForCaller(
+                        (astContext as any).traceResult,
+                        ctx
+                    );
+                    const subAstContext = {
+                        ...astContext,
+                        callerContexts: [ctx],
+                        traceResult: subTraceResult
+                    };
                     const subUserPrompt = getUserPrompt(
                         params.filePath,
                         targetFuncName,
@@ -1552,7 +1562,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 const subTraceEvidence = validateTraceAssertionEvidence(
                                     subClean,
                                     targetFuncName,
-                                    (astContext as any)?.traceResult
+                                    subTraceResult
                                 );
                                 const subGate = resolveTierTwoSubtaskGate(subValidation, subTraceEvidence);
                                 if (subGate.accepted) {

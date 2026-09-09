@@ -20,6 +20,10 @@
 
 - Tier 1／Tier 2 的 Semantic Analyzer 提出的安全 scalar 邊界值，現在會在完整 AST signature 檢查後再交給 Dynamic Trace 實測；只有實際回傳或例外才會進入 Writer。原本 Trace I/O 不會被覆寫，並新增中性 corpus 驗證「語意候選→Trace→deterministic unittest→mutation」閉環。
 
+### 隔離 Tier 2 caller 的 Trace 證據
+
+- Tier 2 分治的每個 caller 子任務現在只會看到與該呼叫站 source literal 精確相符的 Trace I/O；無法精確比對時寧可不提供 oracle，也不會借用其他 caller 的回傳值。最終合流仍會附加所有已驗證的全域 Trace baseline。
+
 ### 為 Cloud 結構化模型加入分析與 mutation triage schema
 
 - 除了 unittest code 以外，Cloud provider 現在也會對 Semantic Analyzer 與 mutation triage 附上最小任務 JSON Schema；這能讓支援 structured output 的模型在傳輸層先固定必要欄位，降低任意 JSON 或缺少 `verdicts` 的回覆機率。

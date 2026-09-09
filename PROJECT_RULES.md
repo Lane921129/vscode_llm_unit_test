@@ -52,6 +52,7 @@
 - 模型 context 預算不足時，Prompt 必須以完整段落優先保留目標函式、可 assertion Dynamic Trace、類別建構語境、已驗證相依事實與證據觸發的技能卡；低信心的語意候選、補充策略與 few-shot 範例可先縮減。不得截斷規則、code fence 或將候選建議升格為 execution fact。
 - Tier 1 fixture scorecard 必須以機讀 `llm-evidence-bound` 或 `deterministic-fallback` provenance 分開評分；同一份彙整含有兩種模式而未選擇模式時，必須拒絕形成單一品質結論。舊報告缺少 provenance 時不可計入 LLM 成績。
 - Tier 2 分治合流的每一份模型子回覆都必須先通過 Python/unittest 結構與 Trace assertion evidence gate，兩者缺一不可；不合格子回覆只能對該子任務帶著原因重試，不得合併污染其他已通過子測試。
+- Tier 2 依 caller 分治時，每個子 prompt 與其 Trace assertion gate 只能接收 source literal 可精確匹配該 caller 的 Trace I/O；repr、動態值、近似值或未解析 caller 一律不可借用其他 caller 的 oracle。分治完成後才由全域 Trace augmentation 保留所有已驗證目標行為。
 - Tier 2 合流不得把不同 caller context 的 `setUp`／`tearDown`／Mock 狀態塞進同一個 TestCase；每個已驗證子回覆必須保留為獨立且名稱唯一的 TestCase，只可去重共用 imports。
 - 每份中斷報告必須寫入 provider-neutral 的機讀失敗分類；分類只用於後續 Tier／模型品質分析，不能改變驗證 gate、重試或把失敗轉成通過。至少區分 API、格式、AST／Trace、執行驗證、coverage、mutation、環境與 timeout。
 - Mutant triage 回覆必須包含 `verdicts` 陣列及每筆可辨識的 mutant、verdict、reason；`KILLABLE` 只有附帶完整 `kill_test` 才能成為下一輪提示。等效／可殺計數必須由已驗證 verdicts 重算，不得信任模型宣告的 summary 欄位。
