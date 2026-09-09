@@ -132,6 +132,68 @@ class Worker:
         self.assertEqual([item['name'] for item in data['class_context']['init']['assigns']], ['config', 'client'])
         self.assertEqual({item['bound_name'] for item in data['file_imports']}, {'operating_system', 'normalize_value'})
 
+    def test_extractor_does_not_treat_local_bindings_or_nested_scopes_as_module_context(self):
+        source = '''from helpers import normalize
+
+LIMIT = 10
+
+def process(normalize, value):
+    LIMIT = 2
+    def deferred():
+        return normalize(LIMIT)
+    return normalize(value) + LIMIT
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'process')
+
+        self.assertEqual(data['dependencies'], [])
+        self.assertEqual(data['referenced_globals'], [])
+        self.assertEqual(data['calls'], ['normalize'])
+
+    def test_extractor_keeps_a_declared_global_but_not_a_nonlocal_as_module_context(self):
+        source = '''LIMIT = 10
+
+def update(value):
+    global LIMIT
+    LIMIT = value
+    return LIMIT
+
+def enclosing():
+    LIMIT = 3
+    def read():
+        nonlocal LIMIT
+        return LIMIT
+    return read
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            global_data = self.run_script('ast_extractor.py', target, 'update')
+            nonlocal_data = self.run_script('ast_extractor.py', target, 'read')
+
+        self.assertEqual(global_data['referenced_globals'], [{'name': 'LIMIT', 'code': 'LIMIT = 10'}])
+        self.assertEqual(nonlocal_data['referenced_globals'], [])
+
+    def test_extractor_does_not_treat_comprehension_bindings_as_global_or_imported_dependencies(self):
+        source = '''from helpers import normalize
+
+LIMIT = 10
+
+def process(values, functions):
+    labels = [LIMIT for LIMIT in values if LIMIT]
+    return [normalize(value) for normalize in functions for value in values]
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'process')
+
+        self.assertEqual(data['referenced_globals'], [])
+        self.assertEqual(data['dependencies'], [])
+        self.assertEqual(data['calls'], ['normalize'])
+
     def test_extractor_reports_executable_target_lines_without_nested_callable_lines(self):
         source = '''def choose(value):
     if value:

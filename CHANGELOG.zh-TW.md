@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 修正 AST 將區域 binding 誤當模組語境
+
+- AST extractor 現在依 Python lexical scope 過濾模組 imports、相依與引用 globals。函式參數、區域 assign／loop／with／exception／import binding、巢狀 function／class、`nonlocal` 與 comprehension target 都不會再被錯誤當成目標模組的 setup 事實。
+- 宣告為 `global` 的名稱仍可保留對目前模組常數的正確引用；未遭 shadow 的 module import 與 global 同樣保留。新增正反回歸案例，避免降低有效 AST 語境完整性。
+
 ### 拒絕生成測試中未使用的相依設定
 
 - 結構 validator 現在會拒絕模型在測試方法中直接呼叫非 target callable、卻把結果存入從未使用變數的輸出。這類程式碼無法影響 target、assertion 或 Mock，是常見但無效的相依測試假象。

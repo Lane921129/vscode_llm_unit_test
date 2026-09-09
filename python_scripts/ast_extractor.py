@@ -44,6 +44,181 @@ def assignment_names(node):
     return []
 
 
+def bound_names(node):
+    """Return names bound by an assignment-like target without guessing scope."""
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names = set()
+        for item in node.elts:
+            names.update(bound_names(item))
+        return names
+    if isinstance(node, ast.Starred):
+        return bound_names(node.value)
+    return set()
+
+
+def function_scope_bindings(func_node):
+    """Names which shadow module bindings throughout this function's scope.
+
+    Python decides whether a name is local for the whole function, not merely
+    after its assignment line. Nested callable scopes and comprehension targets
+    are deliberately excluded from the surrounding function's binding set.
+    """
+    arguments = (
+        list(func_node.args.posonlyargs) + list(func_node.args.args)
+        + list(func_node.args.kwonlyargs)
+        + ([func_node.args.vararg] if func_node.args.vararg else [])
+        + ([func_node.args.kwarg] if func_node.args.kwarg else [])
+    )
+    bindings = {argument.arg for argument in arguments if argument is not None}
+    declared_global, declared_nonlocal = set(), set()
+
+    class BindingVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            if node is not func_node:
+                bindings.add(node.name)
+                return
+            self.generic_visit(node)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Lambda(self, node):
+            return
+
+        def visit_ClassDef(self, node):
+            bindings.add(node.name)
+
+        def visit_Global(self, node):
+            declared_global.update(node.names)
+
+        def visit_Nonlocal(self, node):
+            declared_nonlocal.update(node.names)
+
+        def visit_Assign(self, node):
+            for target in node.targets:
+                bindings.update(bound_names(target))
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node):
+            bindings.update(bound_names(node.target))
+            self.generic_visit(node)
+
+        def visit_AugAssign(self, node):
+            bindings.update(bound_names(node.target))
+            self.generic_visit(node)
+
+        def visit_NamedExpr(self, node):
+            bindings.update(bound_names(node.target))
+            self.generic_visit(node)
+
+        def visit_For(self, node):
+            bindings.update(bound_names(node.target))
+            self.generic_visit(node)
+
+        visit_AsyncFor = visit_For
+
+        def visit_With(self, node):
+            for item in node.items:
+                if item.optional_vars:
+                    bindings.update(bound_names(item.optional_vars))
+            self.generic_visit(node)
+
+        visit_AsyncWith = visit_With
+
+        def visit_ExceptHandler(self, node):
+            if node.name:
+                bindings.add(node.name)
+            self.generic_visit(node)
+
+        def visit_Import(self, node):
+            for alias in node.names:
+                bindings.add(alias.asname or alias.name.split('.')[0])
+
+        def visit_ImportFrom(self, node):
+            for alias in node.names:
+                if alias.name != '*':
+                    bindings.add(alias.asname or alias.name)
+
+    BindingVisitor().visit(func_node)
+    # ``global`` resolves to a module name, while ``nonlocal`` resolves to an
+    # enclosing function. Neither can prove use of the current module context.
+    bindings.difference_update(declared_global)
+    bindings.update(declared_nonlocal)
+    return bindings
+
+
+def function_scope_usage(func_node, local_bindings):
+    """Collect calls and global loads with Python lexical scopes respected."""
+    calls, loaded_names, imported_call_roots = [], set(), set()
+    shadow_scopes = [set(local_bindings)]
+
+    def is_shadowed(name):
+        return any(name in scope for scope in reversed(shadow_scopes))
+
+    class UsageVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            if node is not func_node:
+                return
+            self.generic_visit(node)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Lambda(self, node):
+            return
+
+        def visit_ClassDef(self, node):
+            return
+
+        def visit_Name(self, node):
+            if isinstance(node.ctx, ast.Load) and not is_shadowed(node.id):
+                loaded_names.add(node.id)
+
+        def visit_Call(self, node):
+            call = attribute_name(node.func)
+            calls.append(call)
+            root = call.split('.')[0]
+            if not is_shadowed(root):
+                imported_call_roots.add(root)
+            self.generic_visit(node)
+
+        def visit_ListComp(self, node):
+            self.visit_comprehension_expression(node.generators, node.elt)
+
+        def visit_SetComp(self, node):
+            self.visit_comprehension_expression(node.generators, node.elt)
+
+        def visit_GeneratorExp(self, node):
+            self.visit_comprehension_expression(node.generators, node.elt)
+
+        def visit_DictComp(self, node):
+            self.visit_comprehension_expression(node.generators, (node.key, node.value))
+
+        def visit_comprehension_expression(self, generators, result_nodes):
+            # Comprehension targets have their own implicit scope. Each
+            # iterable is evaluated before its own target is bound, while later
+            # iterables, filters and the result can use earlier targets.
+            shadow_scopes.append(set())
+            try:
+                for generator in generators:
+                    self.visit(generator.iter)
+                    shadow_scopes[-1].update(bound_names(generator.target))
+                    for condition in generator.ifs:
+                        self.visit(condition)
+                if isinstance(result_nodes, tuple):
+                    for node in result_nodes:
+                        self.visit(node)
+                else:
+                    self.visit(result_nodes)
+            finally:
+                shadow_scopes.pop()
+
+    visitor = UsageVisitor()
+    for statement in func_node.body:
+        visitor.visit(statement)
+    return calls, loaded_names, imported_call_roots
+
+
 def attribute_name(node):
     if isinstance(node, ast.Name):
         return node.id
@@ -461,12 +636,14 @@ def extract_info(filepath, func_name):
 
         signature = extract_parameters(func_node.args, ('self', 'cls') if class_name is not None else ())
         args = [param['name'] for param in signature]
-        calls = [attribute_name(child.func) for child in ast.walk(func_node) if isinstance(child, ast.Call)]
+        local_bindings = function_scope_bindings(func_node)
+        calls, loaded_names, imported_call_roots = function_scope_usage(func_node, local_bindings)
         unique_calls = list(dict.fromkeys(calls))
 
         dependencies, seen_dependencies = [], set()
         for call in unique_calls:
-            symbol = imported_symbols.get(call.split('.')[0])
+            root = call.split('.')[0]
+            symbol = imported_symbols.get(root) if root in imported_call_roots else None
             if symbol:
                 key = (symbol['module'], symbol['name'], symbol.get('level', 0))
                 if key not in seen_dependencies:
@@ -477,7 +654,6 @@ def extract_info(filepath, func_name):
                     })
                     seen_dependencies.add(key)
 
-        loaded_names = {node.id for node in ast.walk(func_node) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
         referenced_globals = [module_globals[name] for name in sorted(loaded_names & module_globals.keys())]
 
         print(json.dumps({
