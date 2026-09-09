@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from '../llm/customApi';
+import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from '../llm/customApi';
 
 test('custom API requests JSON mode only when the caller needs a structured result', () => {
     const textRequest = buildCustomChatCompletionBody('model-a', 'system', 'user', 'text');
@@ -18,6 +18,21 @@ test('structured output contracts are generic and describe the expected envelope
     assert.ok(codeContract.includes('Python unittest'));
     assert.ok(jsonContract.includes('valid JSON object'));
     assert.strictEqual(addOutputContract('base', 'text'), 'base');
+});
+
+test('provides minimal schema contracts for semantic analysis and mutant triage', () => {
+    const semantic = responseSchemaForOutputFormat('semantic-json');
+    const triage = responseSchemaForOutputFormat('mutant-triage-json');
+
+    assert.deepStrictEqual((semantic as { required: string[] }).required, [
+        'dependency_behaviors', 'unreachable_paths', 'equivalent_mutant_candidates',
+        'mock_required_for', 'required_skills', 'test_strategy'
+    ]);
+    assert.deepStrictEqual((triage as { required: string[] }).required, [
+        'verdicts', 'has_killable', 'equivalent_count'
+    ]);
+    assert.strictEqual(responseSchemaForOutputFormat('json'), undefined);
+    assert.ok(isStructuredResponseUsable('{"verdicts":[]}', 'mutant-triage-json'));
 });
 
 test('detects malformed successful structured responses before they reach a Tier', () => {

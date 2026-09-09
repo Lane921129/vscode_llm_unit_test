@@ -8,7 +8,7 @@ import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTria
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
-import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, shouldRetryStructuredOutputAsText } from './llm/customApi';
+import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
@@ -554,13 +554,16 @@ async function requestLlmApi(
     systemPrompt: string,
     userPrompt: string,
     log: (text: string) => void,
-    outputFormat: 'text' | 'json' | 'test-code-json' = 'text'
+    outputFormat: CustomOutputFormat = 'text'
 ): Promise<string> {
     let apiUrl = "";
     let bodyData = {};
     let headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     const contractedSystemPrompt = addOutputContract(systemPrompt, outputFormat);
+    const expectsJsonObject = outputFormat === 'json'
+        || outputFormat === 'semantic-json'
+        || outputFormat === 'mutant-triage-json';
 
     if (params.envType === 'local') {
         const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
@@ -570,7 +573,7 @@ async function requestLlmApi(
             system: contractedSystemPrompt,
             prompt: userPrompt,
             stream: false,
-            ...(outputFormat === 'json' ? { format: 'json' } : {})
+            ...(expectsJsonObject ? { format: 'json' } : {})
         };
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
@@ -583,13 +586,7 @@ async function requestLlmApi(
         if (!actualKey) {
             throw new Error('找不到 Google AI Studio API Key。請在側邊欄儲存對應模型的 key，或設定 LLM_UNIT_TEST_GOOGLE_API_KEY。');
         }
-        const responseSchema = outputFormat === 'test-code-json'
-            ? {
-                type: 'object',
-                properties: { code: { type: 'string', description: 'Complete runnable Python unittest file.' } },
-                required: ['code']
-            }
-            : undefined;
+        const responseSchema = responseSchemaForOutputFormat(outputFormat);
         const googleRequest = buildGoogleGenerateContentRequest(
             params.modelName,
             actualKey,
@@ -1232,7 +1229,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 semCallSites,
                 astContext
             );
-            const semRaw = await requestLlmApi(params, semSys, semUsr, log, analysisResponseFormat);
+            const semRaw = await requestLlmApi(
+                params, semSys, semUsr, log,
+                analysisResponseFormat === 'text' ? 'text' : 'semantic-json'
+            );
             const semResult = parseSemanticAnalysis(semRaw);
             if (semResult) {
                 semResult.required_skills = mergeEvidenceBoundSkillIds(
@@ -2269,7 +2269,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     targetFuncName || '',
                     semanticContext
                 );
-                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log, analysisResponseFormat);
+                const triageRaw = await requestLlmApi(
+                    params, triageSys, triageUsr, log,
+                    analysisResponseFormat === 'text' ? 'text' : 'mutant-triage-json'
+                );
                 const triageResult = parseMutantTriageResult(triageRaw);
                 if (triageResult) {
                     log(`[變異體分流師] ✅ 分流完成：${triageResult.equivalent_count} 個等效、${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個可殺。`);

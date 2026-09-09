@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 為 Cloud 結構化模型加入分析與 mutation triage schema
+
+- 除了 unittest code 以外，Cloud provider 現在也會對 Semantic Analyzer 與 mutation triage 附上最小任務 JSON Schema；這能讓支援 structured output 的模型在傳輸層先固定必要欄位，降低任意 JSON 或缺少 `verdicts` 的回覆機率。
+- Ollama、OpenAI-compatible provider 與已驗證純文字模型保留相容行為：前兩者照各自 JSON mode 請求，純文字模型仍不被強制 schema；三者都要通過同一份本地 parser，不能僅因 API 聲稱結構化而跳過證據驗證。
+
 ### 以 `typing.Literal` 擴充安全 Dynamic Trace 輸入
 
 - Dynamic Trace 現在會辨識目標參數明確標註的 `typing.Literal[...]` 值，並將有限的 scalar 值用於實際函式執行。例如沒有 if/match 分支的 `Literal["draft", "published"]` API 也能取得兩個真實 I/O baseline。
