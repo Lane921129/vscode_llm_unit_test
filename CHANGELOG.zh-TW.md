@@ -2,6 +2,14 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-09
+
+### 拒絕生成測試中未使用的相依設定
+
+- 結構 validator 現在會拒絕模型在測試方法中直接呼叫非 target callable、卻把結果存入從未使用變數的輸出。這類程式碼無法影響 target、assertion 或 Mock，是常見但無效的相依測試假象。
+- target result、實際傳入 target 的 helper 結果、參與 assertion 的值與 mock `return_value`／`side_effect` 設定仍會通過；規則不依任何專案領域或函式名稱判定。
+- Python 執行依賴的說明同步明確化：所有 Python runtime 依賴應安裝於工作區 `.venv`；Cloud Gemini 與 Ollama 由擴充功能以 HTTP 呼叫，無需額外安裝 Python SDK。
+
 ## 2026-09-08
 
 ### 統一以工作區 `.venv` 執行 Python 工具

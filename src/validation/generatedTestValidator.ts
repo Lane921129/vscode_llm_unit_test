@@ -337,6 +337,30 @@ function hasIneffectiveLocalDependencyMutation(block: string, callableName: stri
     return false;
 }
 
+/**
+ * A dependency call whose assigned result is never read cannot influence the
+ * target call, an assertion, or a mock. Reject this dead setup while allowing
+ * values that are actually passed to the target or injected into a mock.
+ */
+function unusedNonTargetCallAssignment(block: string, callableName: string,
+                                       callReference: TargetCallReference): string | undefined {
+    const lines = block.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+        const assignment = lines[index].match(
+            /^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(/
+        );
+        if (!assignment || lineUsesTarget(lines[index], callableName, 'call', callReference)) {
+            continue;
+        }
+        const localName = assignment[1];
+        const remaining = lines.slice(index + 1).join('\n');
+        if (!new RegExp('\\b' + escapeRegex(localName) + '\\b').test(remaining)) {
+            return localName;
+        }
+    }
+    return undefined;
+}
+
 function shadowsTargetModule(code: string, moduleName: string): boolean {
     const quotedModule = "['\"]" + escapeRegex(moduleName) + "['\"]";
     const moduleRegistryWrite = new RegExp(
@@ -564,6 +588,17 @@ export function validateUnittestStructure(
                 valid: false,
                 reason: '測試只修改未傳入被測函式、也未注入 mock 的本地相依物件，無法驗證相依路徑'
             };
+        }
+        if (targetUsage === 'call') {
+            for (const block of testMethodBlocks(executable)) {
+                const unusedSetup = unusedNonTargetCallAssignment(block, targetCallable, callReference);
+                if (unusedSetup) {
+                    return {
+                        valid: false,
+                        reason: `測試直接呼叫相依函式後將 ${unusedSetup} 存入未使用變數；請移除無效 setup，或在被測模組使用點以 mock.patch 注入相依行為。`
+                    };
+                }
+            }
         }
     }
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {

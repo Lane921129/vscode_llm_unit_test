@@ -1,5 +1,8 @@
 # VS Code LLM Unit Test Extension - Python Dependencies
-# These are required for the mutation testing engine to work properly.
+# These are the complete Python runtime dependencies used by the extension.
+# Install them into the workspace .venv; do not depend on global Python
+# packages. Cloud Gemini and Ollama are called by the VS Code extension over
+# HTTP and deliberately need no Python SDK.
 
 # mutatest 3.x requires coverage < 6. Native mutmut does not support Windows;
 # use WSL for mutation testing on Windows with Python 3.12+.

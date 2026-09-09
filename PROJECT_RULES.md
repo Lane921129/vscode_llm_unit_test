@@ -57,6 +57,7 @@
 - Tier 1 若 AST 指出目標為一般 coroutine，必須用標準 library event loop 執行已驗證的呼叫後再 assertion／`assertRaises`；async generator 仍須以受限收集邏輯處理，不得把 coroutine 或 generator 物件本身當作結果 oracle。
 - 相依函式的具體回傳值與例外類型，只有在 Python Dynamic Trace 驗證後才可作為測試事實；模型的語意推論只能當作策略建議，缺乏事實時應依原始碼或 `mock.patch` 處理。
 - Tier 1／Tier 2 的模型生成測試不得先直接呼叫相依函式來計算 expected value、或建立未被目標呼叫使用的 setup；若相依行為決定目標路徑，必須在目標模組使用點以 `mock.patch` 明確控制，並以目標函式呼叫作為測試主體。
+- 若模型在同一個測試方法中將非 target callable 的結果存入變數，該變數至少必須實際傳入 target、參與 assertion 或注入 mock；完全未使用的結果是無效相依 setup，必須在寫檔前拒絕。這個 gate 不得拒絕 target result、有效 target input 或 mock 設定。
 - 突變分數必須以相同隔離匯入環境下可通過的原始 unittest baseline 為前提；baseline 失敗不得計算 killed mutant 或宣稱高品質分數。
 - 內建突變 fallback 對選取的 `Class.method` 必須同時驗證限定 scope、隔離 baseline 與所有 mutant 執行；非同步實例方法的 mutation score 不得因 event loop、建構子或原模組匯入而失真。
 

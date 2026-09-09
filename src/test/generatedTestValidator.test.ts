@@ -389,6 +389,28 @@ test('allows a dependency value when it is injected through a standard mock', ()
     assert.strictEqual(validateUnittestStructure(code, 'checkout', 'order_service').valid, true);
 });
 
+test('rejects a direct dependency call assigned to an unused value while allowing an actual target input', () => {
+    const unusedDependencySetup = [
+        'import unittest',
+        'from order_service import checkout',
+        'from auth import decode_credential',
+        '',
+        'class TestCheckout(unittest.TestCase):',
+        '    def test_checkout(self):',
+        '        token_info = decode_credential("abc")',
+        '        self.assertTrue(checkout("order-1", "abc"))',
+    ].join('\n');
+    const usedAsInput = unusedDependencySetup.replace(
+        'self.assertTrue(checkout("order-1", "abc"))',
+        'self.assertTrue(checkout("order-1", token_info))'
+    );
+
+    const result = validateUnittestStructure(unusedDependencySetup, 'checkout', 'order_service');
+    assert.strictEqual(result.valid, false);
+    assert.match(result.reason || '', /未使用變數/);
+    assert.strictEqual(validateUnittestStructure(usedAsInput, 'checkout', 'order_service').valid, true);
+});
+
 test('rejects generated tests that execute external commands or dynamic code', () => {
     const commandCode = [
         'import os',
