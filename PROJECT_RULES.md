@@ -8,6 +8,7 @@
 - 領域特化必須由 Semantic Analyzer 根據目標原始碼選取 Skill Cards；不得把某個專案的規則帶進其他專案。
 - Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
 - 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕並保留 AST 推導的技能卡基線。
+- 已驗證僅支援純 Python unittest 的模型，正式 Writer、Semantic Analyzer 與 mutation triage 都不得再強制供應商 JSON mode／schema；分析與分流仍須以 prompt 的 JSON 契約及本地 schema parser 驗證，不得放寬資料品質 gate。
 - Semantic Analyzer 必須收到受預算限制的目標模組 imports、引用 globals、class bases 與 `__init__` 簽名／賦值；這些只可用於 import、constructor、dependency injection 與 Mock 策略，不能作為回傳值、例外或外部 side effect 的 assertion 事實。
 - AST 提供的 imports、相依與引用 globals 必須遵守所選函式的 Python lexical scope；參數、區域重綁定、巢狀 callable、`nonlocal` 與 comprehension target 不得誤認為模組常數或模組 import 相依。只有可靜態證明未遭 shadow 的模組 binding 才可進入 Prompt。
 - 來源碼中的 `return` 表達式只可提示可能的結果形狀與路徑；除非測試輸入可明確到達 literal return，否則不得把 `return helper(value)`、attribute 或運算式直接轉化為 expected value。精確 assertion 仍須來自可 assertion Dynamic Trace 或同測試控制的 mock side effect。
@@ -51,6 +52,7 @@
 - Tier 2 分治合流的每一份模型子回覆都必須先通過 Python/unittest 結構與 Trace assertion evidence gate，兩者缺一不可；不合格子回覆只能對該子任務帶著原因重試，不得合併污染其他已通過子測試。
 - Tier 2 合流不得把不同 caller context 的 `setUp`／`tearDown`／Mock 狀態塞進同一個 TestCase；每個已驗證子回覆必須保留為獨立且名稱唯一的 TestCase，只可去重共用 imports。
 - 每份中斷報告必須寫入 provider-neutral 的機讀失敗分類；分類只用於後續 Tier／模型品質分析，不能改變驗證 gate、重試或把失敗轉成通過。至少區分 API、格式、AST／Trace、執行驗證、coverage、mutation、環境與 timeout。
+- Mutant triage 回覆必須包含 `verdicts` 陣列及每筆可辨識的 mutant、verdict、reason；`KILLABLE` 只有附帶完整 `kill_test` 才能成為下一輪提示。等效／可殺計數必須由已驗證 verdicts 重算，不得信任模型宣告的 summary 欄位。
 - 已通過資格的 Tier 2–4 測試，對頂層函式必須保留所有可安全 assertion 的 Dynamic Trace I/O 方法；LLM 可以增加情境、Mock 與突變修補，但不得移除或覆寫已驗證的行為 oracle。
 - 已通過資格的 Tier 2–4 測試，對可安全建立的 class method 或 property 也必須保留所有可 assertion 的 Dynamic Trace I/O；這些 Trace 測試必須使用獨立 `TestCase` 及已驗證的 constructor literal，禁止合併覆寫模型的 `setUp`，也不得猜測 constructor dependency。
 - Dynamic Trace 可使用受限、語法／型別中立的數值尺度組合作為探索輸入，但任何測試 oracle 都必須來自實際執行結果；不得將探索值或結果解讀為特定領域規則。

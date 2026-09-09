@@ -14,6 +14,7 @@ export interface ModelQualificationRequest {
 }
 
 export type TestGenerationResponseFormat = 'test-code-json' | 'text';
+export type AnalysisResponseFormat = 'json' | 'text';
 
 /**
  * Use the exact response style that the selected model proved it can produce.
@@ -26,6 +27,21 @@ export function selectTestGenerationResponseFormat(
     return profile.testGenerationReady === true && profile.testGenerationMode === '純 Python unittest'
         ? 'text'
         : 'test-code-json';
+}
+
+/**
+ * Analyzer and mutant-triage prompts still demand JSON text, but they do not
+ * need a provider-level JSON mode.  A model that passed only the plain-Python
+ * probe has already shown that its structured request contract is unsuitable,
+ * so avoid the guaranteed failed request and let the schema parser validate
+ * its ordinary-text reply instead.
+ */
+export function selectAnalysisResponseFormat(
+    profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
+): AnalysisResponseFormat {
+    return profile.testGenerationReady === true && profile.testGenerationMode === '純 Python unittest'
+        ? 'text'
+        : 'json';
 }
 
 function compactLogValue(value: string | undefined, fallback: string): string {

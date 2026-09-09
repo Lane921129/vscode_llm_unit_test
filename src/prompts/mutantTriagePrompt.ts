@@ -99,19 +99,59 @@ export function getMutantTriageUserPrompt(
 
 // === Response Parser ===
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function text(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Preserve only actionable, schema-shaped triage facts.  The model's summary
+ * counters are recomputed from validated verdicts so malformed provider JSON
+ * cannot stop the mutation loop or falsely exclude surviving mutants.
+ */
+function normalizeMutantTriage(value: unknown): MutantTriageResult | null {
+    if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'verdicts') || !Array.isArray(value.verdicts)) {
+        return null;
+    }
+
+    const verdicts = value.verdicts.map(item => {
+        if (!isRecord(item)) {return undefined;}
+        const mutant = text(item.mutant);
+        const reason = text(item.reason);
+        const verdict = item.verdict === 'EQUIVALENT' || item.verdict === 'KILLABLE'
+            ? item.verdict
+            : undefined;
+        const kill_test = item.kill_test === null ? null : text(item.kill_test);
+        if (!mutant || !reason || !verdict) {return undefined;}
+        // A KILLABLE claim without an executable next-step is not safe to use
+        // as a retry hint.  Keep it as no verdict rather than fabricating code.
+        if (verdict === 'KILLABLE' && !kill_test) {return undefined;}
+        return { mutant, reason, verdict, kill_test: verdict === 'EQUIVALENT' ? null : kill_test! };
+    }).filter((item): item is MutantVerdictItem => Boolean(item));
+
+    return {
+        verdicts,
+        has_killable: verdicts.some(item => item.verdict === 'KILLABLE'),
+        equivalent_count: verdicts.filter(item => item.verdict === 'EQUIVALENT').length
+    };
+}
+
 export function parseMutantTriageResult(llmResponse: string): MutantTriageResult | null {
     try {
         const trimmed = llmResponse.trim();
         if (trimmed.startsWith('{')) {
-            return JSON.parse(trimmed) as MutantTriageResult;
+            return normalizeMutantTriage(JSON.parse(trimmed));
         }
         const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (codeBlockMatch) {
-            return JSON.parse(codeBlockMatch[1].trim()) as MutantTriageResult;
+            return normalizeMutantTriage(JSON.parse(codeBlockMatch[1].trim()));
         }
         const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]) as MutantTriageResult;
+            return normalizeMutantTriage(JSON.parse(jsonMatch[0]));
         }
     } catch {
         // Parse failed - caller handles null gracefully

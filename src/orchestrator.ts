@@ -14,7 +14,7 @@ import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
-import { selectTestGenerationResponseFormat } from './llm/modelQualification';
+import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat } from './llm/modelQualification';
 import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
@@ -885,8 +885,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const tier1GenerationMode = resolveTier1GenerationMode(qualifiedForSelectedModel, userTierSetting);
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
+    const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
-        log('[模型能力] 此模型已驗證純 Python unittest 輸出；正式測試生成將不強制 JSON schema。');
+        log('[模型能力] 此模型已驗證純 Python unittest 輸出；正式測試、語意分析與突變分流將不強制供應商 JSON schema。');
     }
     if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
@@ -1231,7 +1232,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 semCallSites,
                 astContext
             );
-            const semRaw = await requestLlmApi(params, semSys, semUsr, log, 'json');
+            const semRaw = await requestLlmApi(params, semSys, semUsr, log, analysisResponseFormat);
             const semResult = parseSemanticAnalysis(semRaw);
             if (semResult) {
                 semResult.required_skills = mergeEvidenceBoundSkillIds(
@@ -2268,7 +2269,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     targetFuncName || '',
                     semanticContext
                 );
-                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log, 'json');
+                const triageRaw = await requestLlmApi(params, triageSys, triageUsr, log, analysisResponseFormat);
                 const triageResult = parseMutantTriageResult(triageRaw);
                 if (triageResult) {
                     log(`[變異體分流師] ✅ 分流完成：${triageResult.equivalent_count} 個等效、${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個可殺。`);
@@ -2293,7 +2294,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         currentLoop = params.maxLoops + 1; // 強制結束 while 迴圈
                     }
                 } else {
-                    log(`[變異體分流師] ⚠️ 無法解析 JSON 回應，跳過分流（不影響主流程）。`);
+                    log(`[變異體分流師] ⚠️ 回應未符合分流 schema，跳過分流（不影響主流程）。`);
                 }
             } catch (triageErr: any) {
                 log(`[變異體分流師] ⚠️ 分流呼叫失敗: ${triageErr.message}，繼續主流程。`);

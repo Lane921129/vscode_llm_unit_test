@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 讓純 Python 資格模型避開不支援的分析 JSON mode
+
+- 模型若資格探測已證明只能可靠輸出純 Python unittest，Semantic Analyzer 與 mutation triage 現在也會直接走普通文字請求，並由既有 JSON contract／parser 驗證回覆；不再先送一個可預期失敗的 provider JSON schema 請求。
+- mutation triage parser 現在驗證 `verdicts` 資料結構、只保留附有 `kill_test` 的 KILLABLE 項目，並從已驗證結果重算可殺／等效計數。任意 JSON 或不完整分流不會再中斷 mutation loop 或錯誤排除存活變異體。
+
 ### 拒絕非語意 schema 的模型 JSON 回覆
 
 - Semantic Analyzer 現在只接受至少含有一個正式分析欄位的 JSON。先前某些 provider 的 metadata、錯誤包裝或任意 JSON 雖可被 JSON parser 讀取，卻可能被誤當成「空分析」並覆蓋掉 AST 推導的技能卡。
