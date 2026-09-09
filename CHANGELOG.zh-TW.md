@@ -25,6 +25,11 @@
 - Writer 現在將來源中的 `return` 表達式標示為「可能結果形狀」，不再暗示可直接作為 `assertEqual` 的 expected value。這避免模型把相依呼叫、屬性或複合運算誤認為可驗證輸出。
 - 精確 assertion 仍限可 assertion Dynamic Trace、明確可到達的 literal return，或同一測試控制的 mock side effect；此限制同時套用初次生成與修復迴圈。
 
+### 讓 AST Caller Finder 辨識完整 dotted import binding
+
+- `import package.module` 後以 `package.module.function(...)`、直接建構 `package.module.Class(...).method(...)` 或先以同一類別直接賦值再呼叫 method，現在都可安全提供 caller literal 與 constructor literal 給 Dynamic Trace。
+- 判定會比對完整 import binding path；`package.other`、同 root 的其他 attribute chain、動態 import 與未知 re-export 仍不會被誤認為目標模組。
+
 ### 將 Tier 1 改為 LLM 證據導向生成，並保留可辨識備援
 
 - Tier 1 在選定模型已通過 unittest 資格探測，或使用者手動選擇 Tier 時，現在會真正呼叫 LLM；Prompt 同時約束目標來源碼、AST 語境、Dynamic Trace 與本函式技能卡。模型負責選擇支持的行為、邊界與測試組織，不能把來源分支或技能卡當成未驗證的 assertion。

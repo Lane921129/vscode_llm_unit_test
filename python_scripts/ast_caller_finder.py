@@ -121,7 +121,12 @@ def find_call_sites(func_name, project_root, target_path=None):
             except Exception:
                 continue
 
-            direct_names, module_aliases, class_aliases = set(), set(), set()
+            direct_names, class_aliases = set(), set()
+            # Preserve the actual bound expression path for ``import pkg.mod``.
+            # Python binds only ``pkg`` in that form, while a later call uses
+            # ``pkg.mod.target(...)``.  A plain alias set cannot distinguish
+            # it from an unrelated ``pkg.other`` attribute chain.
+            module_reference_paths = set()
             if target_module:
                 for node in tree.body:
                     if isinstance(node, ast.ImportFrom) and node.module and module_matches(node.module, target_module):
@@ -133,7 +138,9 @@ def find_call_sites(func_name, project_root, target_path=None):
                     elif isinstance(node, ast.Import):
                         for alias in node.names:
                             if module_matches(alias.name, target_module):
-                                module_aliases.add(alias.asname or alias.name.split('.')[0])
+                                module_reference_paths.add(
+                                    (alias.asname,) if alias.asname else tuple(alias.name.split('.'))
+                                )
 
             func_ranges = [(node.name, node.lineno, getattr(node, 'end_lineno', node.lineno))
                            for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -150,7 +157,8 @@ def find_call_sites(func_name, project_root, target_path=None):
                 return (
                     len(path) == 1 and path[0] in class_aliases
                 ) or (
-                    len(path) == 2 and path[0] in module_aliases and path[1] in target_module_classes
+                    len(path) >= 2 and tuple(path[:-1]) in module_reference_paths
+                    and path[-1] in target_module_classes
                 ) or (
                     target_absolute is not None
                     and os.path.abspath(filepath) == target_absolute
@@ -166,7 +174,8 @@ def find_call_sites(func_name, project_root, target_path=None):
                     lambda path, known: (
                         len(path) == 1 and path[0] in class_aliases
                     ) or (
-                        len(path) == 2 and path[0] in module_aliases and path[1] in target_module_classes
+                        len(path) >= 2 and tuple(path[:-1]) in module_reference_paths
+                        and path[-1] in target_module_classes
                     ) or (
                         target_absolute is not None
                         and os.path.abspath(filepath) == target_absolute
@@ -250,8 +259,11 @@ def find_call_sites(func_name, project_root, target_path=None):
                         is_target_call = False
                 elif target_module and direct_call:
                     is_target_call = is_target_call or node.func.id in direct_names
-                if not target_class and target_module and attribute_call and isinstance(node.func.value, ast.Name):
-                    is_target_call = is_target_call or node.func.value.id in module_aliases
+                if not target_class and target_module and attribute_call:
+                    module_path = expression_path(node.func.value)
+                    is_target_call = is_target_call or (
+                        module_path is not None and tuple(module_path) in module_reference_paths
+                    )
                 if not is_target_call:
                     continue
 

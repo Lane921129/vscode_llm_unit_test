@@ -414,6 +414,60 @@ def render_value():
         self.assertEqual(decorate_calls[0]['trace_args'], ['value'])
         self.assertIsNone(decorate_calls[0]['trace_constructor_args'])
 
+    def test_caller_finder_resolves_dotted_import_paths_for_module_and_class_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            package = root / 'pkg'
+            package.mkdir()
+            (package / '__init__.py').write_text('', encoding='utf-8')
+            target = package / 'worker.py'
+            target.write_text(
+                '''def transform(value):
+    return value + 1
+
+class Service:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def render(self, value):
+        return self.prefix + value
+''',
+                encoding='utf-8'
+            )
+            (root / 'consumer.py').write_text(
+                '''import pkg.worker
+
+def module_call():
+    return pkg.worker.transform(2)
+
+def inline_instance_call():
+    return pkg.worker.Service("inline:").render("value")
+
+def bound_instance_call():
+    subject = pkg.worker.Service("bound:")
+    return subject.render("value")
+
+def unrelated_chain():
+    return pkg.other.transform(99)
+''',
+                encoding='utf-8'
+            )
+
+            transform_calls = self.run_script('ast_caller_finder.py', 'transform', root, target)
+            render_calls = self.run_script('ast_caller_finder.py', 'Service.render', root, target)
+
+        self.assertEqual(
+            [(call['caller_func'], call['trace_args']) for call in transform_calls],
+            [('module_call', [2])]
+        )
+        self.assertEqual(
+            [(call['caller_func'], call['trace_constructor_args'], call['trace_args']) for call in render_calls],
+            [
+                ('inline_instance_call', ['inline:'], ['value']),
+                ('bound_instance_call', ['bound:'], ['value']),
+            ]
+        )
+
     def test_caller_finder_uses_only_safe_inherited_class_callers_for_base_method_trace(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

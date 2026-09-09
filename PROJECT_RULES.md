@@ -15,6 +15,7 @@
 - `__init__` 語境只可包含建構子本體實際執行路徑中的 `self` 賦值；不得把巢狀 helper、lambda、內部類別的 `self` 賦值誤列為初始化狀態。
 - 生成、Mock Scaffold、Reviewer 與救援程式必須使用同一個可匯入的目標模組路徑；不得以檔名匯入而建立與 package 模組不同的第二個模組實例。
 - 呼叫站搜尋必須以目標模組／匯入關係確認，不得只依同名函式全域比對。
+- 對 `import package.module` 的呼叫站，只有與該 import 完整 binding path 相同的 `package.module.target(...)` 或 `package.module.Class(...).method(...)` 可補充 Trace 事實；相同 root 下的其他 attribute chain、動態 import 與不明 re-export 一律不可視為目標。
 - 使用者選取 `Class.method` 時，AST、Dynamic Trace、Mock Scaffold、複雜度與突變測試必須全程解析為同一個明確類別成員；不得退回同名頂層函式或其他類別方法。
 - 生成測試的結構驗證在目標為 `Class.method` 時，必須確認呼叫透過已匯入的目標類別、目標模組別名，或由其直接建立的實例；不得把其他物件的同名方法當作測試證據。
 - `Class.method` 的呼叫站語境必須解析直接匯入、模組別名與明確 `Class(...).method(...)` 結構；建構子字面值與方法字面值必須分開傳遞，且不得把未能靜態驗證的實例呼叫當作目標證據。
