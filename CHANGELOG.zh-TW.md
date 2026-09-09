@@ -13,6 +13,8 @@
 
 - Dynamic Trace 現在會辨識目標參數明確標註的 `typing.Literal[...]` 值，並將有限的 scalar 值用於實際函式執行。例如沒有 if/match 分支的 `Literal["draft", "published"]` API 也能取得兩個真實 I/O baseline。
 - 實作只接受字串、數字、布林和 `None`，不會執行 annotation 內的函式、attribute 或其他表達式；結果仍須由 Trace 實測後才能成為 assertion 依據。
+- 內部 Tier 1 corpus 新增無分支 `Literal` fixture，驗證 `draft`／`published` 兩個明示值確實成為 Trace I/O，並由 deterministic unittest 通過 mutation quality gate；這是回歸證據，不是公開模型排行。
+- Tier 1 corpus 的 AST、Trace、生成 unittest 與 mutation 整合驗收現在會使用工作區 `.venv` 的 Python，不再暗中依賴系統 `python`；fixture 的 `trace_inputs` 也會在 TypeScript 與 Python 驗收雙重確認。
 
 ### 將 AST 型別註記帶入測試生成語境
 

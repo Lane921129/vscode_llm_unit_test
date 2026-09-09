@@ -5,22 +5,28 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { test } from 'node:test';
 import { buildTier1TestFile } from '../tier/tier1TestFileBuilder';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 interface Fixture {
     id: string;
     tier: number;
     source: string;
     target: string;
-    expected: { method_kind: 'module' | 'instance' | 'static' | 'class' | 'property'; is_async: boolean };
+    expected: {
+        method_kind: 'module' | 'instance' | 'static' | 'class' | 'property';
+        is_async: boolean;
+        trace_inputs?: string[];
+    };
     acceptance: { min_mutation_score: number };
 }
 
 const fixtureRoot = resolve(__dirname, '../../test/fixtures/python');
 const scriptsRoot = resolve(__dirname, '../../python_scripts');
 const manifest = JSON.parse(readFileSync(join(fixtureRoot, 'manifest.json'), 'utf8')) as { fixtures: Fixture[] };
+const pythonExecutable = resolvePythonExecutable(undefined, resolve(__dirname, '../..'));
 
 function pythonJson(args: string[], label: string): any {
-    const result = spawnSync('python', args, { encoding: 'utf8' });
+    const result = spawnSync(pythonExecutable, args, { encoding: 'utf8' });
     assert.strictEqual(result.status, 0, `${label}: ${result.stdout}\n${result.stderr}`);
     return JSON.parse(result.stdout);
 }
@@ -60,6 +66,14 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
             }
             const trace = pythonJson(traceArgs, `${fixture.id} Dynamic Trace`);
             assert.strictEqual(trace.load_error, null, `${fixture.id}: ${trace.load_error}`);
+            for (const expectedInput of fixture.expected.trace_inputs || []) {
+                assert.ok(
+                    trace.examples.some((example: { args?: unknown[] }) =>
+                        JSON.stringify(example.args || []) === JSON.stringify([expectedInput])
+                    ),
+                    `${fixture.id}: Dynamic Trace omitted declared input ${expectedInput}`
+                );
+            }
 
             const built = buildTier1TestFile({
                 moduleName,
@@ -75,7 +89,7 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
             assert.ok(built.code, `${fixture.id}: missing deterministic test code`);
             writeFileSync(testPath, built.code!, 'utf8');
 
-            const execution = spawnSync('python', ['-m', 'unittest', testPath.split(/[/\\]/).pop()!], {
+            const execution = spawnSync(pythonExecutable, ['-m', 'unittest', testPath.split(/[/\\]/).pop()!], {
                 cwd: tempDir,
                 encoding: 'utf8',
             });

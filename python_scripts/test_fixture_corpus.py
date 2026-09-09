@@ -107,6 +107,11 @@ class FixtureCorpusTests(unittest.TestCase):
                 self.assertIsNone(trace['load_error'])
                 self.assertTrue(trace['examples'] or trace['errors'])
                 self.assertTrue(all(item.get('call_assertable', True) for item in trace['examples'] + trace['errors']))
+                expected_inputs = fixture['expected'].get('trace_inputs', [])
+                if expected_inputs:
+                    observed_inputs = {tuple(item.get('args', [])) for item in trace['examples']}
+                    for expected_input in expected_inputs:
+                        self.assertIn((expected_input,), observed_inputs)
 
 
 if __name__ == '__main__':

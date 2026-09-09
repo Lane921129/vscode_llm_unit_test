@@ -36,6 +36,14 @@
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["calling the property with parentheses"]}
     },
     {
+      "id": "tier1-literal-annotation",
+      "tier": 1,
+      "source": "tier1_literal.py",
+      "target": "decorate",
+      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable", "trace_inputs": ["'draft'", "'published'"]},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["using generic values instead of declared Literal inputs"]}
+    },
+    {
       "id": "tier2-pattern-match",
       "tier": 2,
       "source": "tier2_pattern.py",
