@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 拒絕非語意 schema 的模型 JSON 回覆
+
+- Semantic Analyzer 現在只接受至少含有一個正式分析欄位的 JSON。先前某些 provider 的 metadata、錯誤包裝或任意 JSON 雖可被 JSON parser 讀取，卻可能被誤當成「空分析」並覆蓋掉 AST 推導的技能卡。
+- 不合格回覆會明確記錄並改用程式碼特徵技能基線；這不是把模型策略降級，而是確保沒有經驗證的分析時仍保留可解釋、可重現的 setup 指引。
+
 ### 修正直接匯入別名的呼叫站作用域
 
 - AST Caller Finder 現在會依呼叫行號檢查 direct import alias 仍解析到目標函式。函式參數、區域／closure 重綁定與模組層後續覆寫的同名 callable 都會排除，不再錯誤傳入 Dynamic Trace 或 LLM 的 caller context。

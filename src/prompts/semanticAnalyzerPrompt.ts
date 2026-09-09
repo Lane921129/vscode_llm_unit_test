@@ -296,6 +296,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+const semanticTopLevelFields = new Set([
+    'dependency_behaviors',
+    'unreachable_paths',
+    'equivalent_mutant_candidates',
+    'mock_required_for',
+    'required_skills',
+    'test_strategy'
+]);
+
+/**
+ * A syntactically valid but unrelated JSON object is not an Analyzer result.
+ * Reject it so orchestration retains its syntax-derived skill baseline instead
+ * of treating a provider error envelope or chat metadata as empty guidance.
+ */
+function hasSemanticAnalysisShape(value: unknown): value is Record<string, unknown> {
+    return isRecord(value) && Object.keys(value).some(key => semanticTopLevelFields.has(key));
+}
+
 function meaningfulText(value: unknown): string | undefined {
     if (typeof value !== 'string') {return undefined;}
     const text = value.trim();
@@ -310,7 +328,7 @@ function meaningfulTextList(value: unknown): string[] {
 }
 
 function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
-    if (!isRecord(value)) {return null;}
+    if (!hasSemanticAnalysisShape(value)) {return null;}
     const dependency_behaviors = (Array.isArray(value.dependency_behaviors) ? value.dependency_behaviors : [])
         .map(item => {
             if (!isRecord(item)) {return undefined;}

@@ -31,3 +31,14 @@ test('drops unfinished semantic placeholders before they reach a Writer prompt',
     assert.doesNotMatch(promptContext, /to be determined/i);
     assert.match(promptContext, /candidate branch input/);
 });
+
+test('rejects unrelated JSON so orchestration keeps the AST skill baseline', () => {
+    assert.strictEqual(parseSemanticAnalysis(JSON.stringify({
+        message: 'temporary gateway metadata',
+        request_id: 'safe-non-secret-id'
+    })), null);
+
+    const minimalAnalysis = parseSemanticAnalysis(JSON.stringify({ required_skills: [] }));
+    assert.ok(minimalAnalysis);
+    assert.deepStrictEqual(minimalAnalysis!.required_skills, []);
+});

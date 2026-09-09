@@ -1244,7 +1244,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
                 finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
             } else {
-                log(`[語意分析師] ⚠️ 無法解析 JSON 回應，跳過語意分析（不影響主流程）。`);
+                log(`[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵技能基線（不影響主流程）。`);
             }
         } catch (semErr: any) {
             log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
