@@ -62,6 +62,7 @@
 - Dynamic Trace 可從明確 `typing.Literal[...]` annotation 擷取有限 scalar 值作為探索輸入；只接受字串、數字、布林與 `None`，不得評估 annotation 中的 call、attribute 或任意表達式。這些值僅用於實際執行 Trace，不是 output oracle。
 - 每一項新增 Trace 輸入推導能力，都必須新增中性 corpus fixture，並至少驗證 AST／Trace 取得預期輸入、deterministic Tier 1 unittest 可執行，以及符合該 fixture 的 mutation 門檻；不得只以單一 helper unit test 宣稱品質提升。
 - corpus 的 Python 整合驗收必須使用與 extension 相同的工作區 `.venv` 解析邏輯；不得在測試程式硬寫系統 `python`，避免本機套件遮蔽乾淨環境的依賴問題。
+- 語意分析師提出的 input hints 只是候選；在傳給 Writer 前必須以 AST 目標函式 signature 過濾，絕不得讓 dependency 的參數、回傳 key 或 caller 局部變數成為 target kwargs。目標呼叫站僅能提供候選輸入，不是相依行為或輸出 oracle。
 - AST／Dynamic Trace 的分支探索可正規化純 literal 的反向比較（如 `3 < value`）與 parameter-first literal membership（如 `mode in ('a', 'b')`）；反向 membership、非 literal collection、helper call、複合 predicate 與巢狀 callable 一律不可產生輸入事實。
 - `match/case` 只可擷取直接目標參數、無 guard 的 scalar literal／literal-or pattern 作為輸入探索事實；guarded case、capture／mapping／class pattern 與可變匹配一律不可當作可保證到達的分支。
 - 模型若對完全相同、可 assertion 的 Dynamic Trace 呼叫直接寫出 `assertEqual` 或 `assertIsNone`，其 assertion value 必須與該 Trace 相同；`assertEqual` 的 actual／expected 兩種參數順序與可選訊息都必須檢查。`assertTrue`／`assertFalse` 只在 Trace 精確回傳 `True`／`False` 時判定矛盾，因為其他 Python 值的 truthiness 必須由隔離執行判定。初次 Writer、Tier 2 分治合流、Reviewer 與 Tier 4 Self-repair 的每個模型產物都必須套用此 gate；矛盾候選必須在寫檔／執行前拒絕並以事實原因重試。此 gate 不得拒絕未 Trace 的候選輸入或經額外轉換後的 assertion。

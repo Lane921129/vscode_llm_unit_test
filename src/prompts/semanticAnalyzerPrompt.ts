@@ -67,6 +67,8 @@ export interface DependencyTraceForPrompt {
 
 /** A bounded AST setup view.  These are source facts, not execution oracles. */
 export interface SemanticAstSetupContext {
+    /** Selected callable parameters from AST, never dependency parameters. */
+    args?: string[];
     file_imports?: Array<{ kind?: string; module?: string; level?: number; name?: string | null; alias?: string | null; bound_name?: string }>;
     referenced_globals?: Array<{ name?: string; code?: string }>;
     class_name?: string | null;
@@ -113,6 +115,12 @@ function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[])
 function formatAstSetupContext(context?: SemanticAstSetupContext): string {
     if (!context) {return '';}
     const lines: string[] = [];
+    const targetParameters = (context.args || []).filter(name => typeof name === 'string' && /^[A-Za-z_]\w*$/.test(name));
+    if (targetParameters.length > 0) {
+        lines.push(`Target function parameters: ${targetParameters.join(', ')}.`);
+    } else if (Array.isArray(context.args)) {
+        lines.push('Target function parameters: none.');
+    }
     const imports = (context.file_imports || []).slice(0, 12);
     if (imports.length > 0) {
         lines.push('Imports available in the target module:');
@@ -218,6 +226,8 @@ ${skillLibrarySummary}
 
 ANALYSIS RULES:
 - MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.
+- When TARGET FUNCTION PARAMETERS are supplied, every test_strategy.input_hints[].param_name must be exactly one of those target parameters. Dependency parameters and dependency return keys are never target inputs.
+- TARGET CALL SITES show how other project code invokes the selected target. They are input candidates only: they do not prove target output, dependency behavior, or an exception.
 - When VERIFIED DEPENDENCY EXECUTION FACTS are provided, reproduce their Python repr values exactly. Never replace a Python dict/list/tuple with a JavaScript-style description such as "[object Object]".
 - Without verified dependency execution facts, do not claim a dependency "always returns" a concrete value; leave dependency_behaviors empty and let the Writer rely on source code or mock.patch.
 - For unreachable_paths: if dependency always returns X, which if-conditions are always True/False?
@@ -272,7 +282,7 @@ export function getSemanticAnalyzerUserPrompt(
     prompt += formatVerifiedDependencyFacts(dependencies);
 
     if (callSites && callSites.length > 0) {
-        prompt += '=== HOW TARGET CALLS DEPENDENCIES ===\n';
+        prompt += '=== TARGET CALL SITES (INPUT CANDIDATES ONLY) ===\n';
         for (const cs of callSites.slice(0, 6)) {
             prompt += '  In ' + cs.caller_func + ': ' + cs.call_expr + '\n';
         }
@@ -280,8 +290,9 @@ export function getSemanticAnalyzerUserPrompt(
     }
 
     prompt += 'TASK:\n';
-    prompt += '1. Analyze dependency usage (if any) to identify fixed behaviors, unreachable paths, equivalent mutants.\n';
+    prompt += '1. Analyze target dependency usage (if any) to identify fixed behaviors, unreachable paths, equivalent mutants.\n';
     prompt += '2. Study the target function source code and derive a test_strategy:\n';
+    prompt += '   - Use only selected target parameter names in input_hints; never name dependency parameters or dependency return keys.\n';
     prompt += '   - What are the valid/invalid input ranges for each parameter?\n';
     prompt += '   - What boundary values would cover all if/elif branches?\n';
     prompt += '   - What non-obvious behaviors might a test writer get wrong?\n';
@@ -409,6 +420,29 @@ export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | n
         // Parse failed - caller will handle null gracefully
     }
     return null;
+}
+
+/**
+ * Semantic input hints are model suggestions, while the selected target
+ * signature is an AST fact. Keep only hints whose names can actually be
+ * supplied to the target; this prevents dependency arguments from reaching
+ * Writer prompts as misleading candidate kwargs.
+ */
+export function restrictSemanticInputHintsToTargetParameters(
+    analysis: SemanticAnalysis,
+    targetParameters: readonly string[] | undefined
+): SemanticAnalysis {
+    if (!targetParameters) {
+        return analysis;
+    }
+    const allowed = new Set(targetParameters.filter(name => typeof name === 'string'));
+    return {
+        ...analysis,
+        test_strategy: {
+            ...analysis.test_strategy,
+            input_hints: analysis.test_strategy.input_hints.filter(hint => allowed.has(hint.param_name))
+        }
+    };
 }
 
 export function formatSemanticContextForPrompt(

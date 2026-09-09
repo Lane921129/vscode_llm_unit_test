@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
 import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './prompts/unittestWriterPrompt';
 import { getReviewerSystemPrompt, getReviewerUserPrompt } from './prompts/bugFixerPrompt';
-import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, formatSemanticContextForPrompt, SemanticAnalysis } from './prompts/semanticAnalyzerPrompt';
+import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis } from './prompts/semanticAnalyzerPrompt';
 import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompts/promptSkillLibrary';
 import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './prompts/mutantTriagePrompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
@@ -1233,8 +1233,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 params, semSys, semUsr, log,
                 analysisResponseFormat === 'text' ? 'text' : 'semantic-json'
             );
-            const semResult = parseSemanticAnalysis(semRaw);
-            if (semResult) {
+            const parsedSemResult = parseSemanticAnalysis(semRaw);
+            if (parsedSemResult) {
+                const semResult = restrictSemanticInputHintsToTargetParameters(
+                    parsedSemResult,
+                    Array.isArray((astContext as any).args) ? (astContext as any).args : undefined
+                );
                 semResult.required_skills = mergeEvidenceBoundSkillIds(
                     (astContext as any).code || '',
                     semResult.required_skills,

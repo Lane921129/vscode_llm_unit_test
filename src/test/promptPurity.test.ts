@@ -96,6 +96,7 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
     );
     const semanticPrompt = getSemanticAnalyzerUserPrompt(
         'def transform(values): return values', [], [], {
+            args: ['values'],
             class_name: 'Worker', method_kind: 'instance',
             class_context: { name: 'Worker', init: { signature: [{ name: 'label', annotation: 'str', required: true, default: null }] } }
         }
@@ -107,6 +108,20 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
     assert.match(reviewerPrompt, /Source parameter type hints \(input shape only\): values: list\[str\]/);
     assert.match(reviewerPrompt, /Constructor type hints \(input shape only\): label: str/);
     assert.match(semanticPrompt, /Constructor parameters: label: str \(required\)/);
+    assert.match(semanticPrompt, /Target function parameters: values/);
+});
+
+test('semantic prompt distinguishes target caller inputs from dependency calls', () => {
+    const prompt = getSemanticAnalyzerUserPrompt(
+        'def render(value):\n    return normalize(value)', [],
+        [{ caller_func: 'entrypoint', call_expr: "render('draft')" }],
+        { args: ['value'] }
+    );
+
+    assert.match(prompt, /TARGET CALL SITES \(INPUT CANDIDATES ONLY\)/);
+    assert.match(prompt, /render\('draft'\)/);
+    assert.match(prompt, /never name dependency parameters or dependency return keys/);
+    assert.doesNotMatch(prompt, /HOW TARGET CALLS DEPENDENCIES/);
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {

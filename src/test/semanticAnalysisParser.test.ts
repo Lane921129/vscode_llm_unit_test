@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { formatSemanticContextForPrompt, parseSemanticAnalysis } from '../prompts/semanticAnalyzerPrompt';
+import { formatSemanticContextForPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters } from '../prompts/semanticAnalyzerPrompt';
 
 test('drops unfinished semantic placeholders before they reach a Writer prompt', () => {
     const parsed = parseSemanticAnalysis(JSON.stringify({
@@ -41,4 +41,24 @@ test('rejects unrelated JSON so orchestration keeps the AST skill baseline', () 
     const minimalAnalysis = parseSemanticAnalysis(JSON.stringify({ required_skills: [] }));
     assert.ok(minimalAnalysis);
     assert.deepStrictEqual(minimalAnalysis!.required_skills, []);
+});
+
+test('keeps semantic input candidates scoped to the selected target signature', () => {
+    const parsed = parseSemanticAnalysis(JSON.stringify({
+        required_skills: [],
+        test_strategy: {
+            approach: 'exercise candidates',
+            input_hints: [
+                { param_name: 'value', strategy: 'target input', boundary_inputs: ["'x'"], invalid_inputs: [], notes: '' },
+                { param_name: 'dependency_flag', strategy: 'dependency-only input', boundary_inputs: ['True'], invalid_inputs: [], notes: '' }
+            ],
+            assertion_style: 'mixed', mock_needed: false, key_rules: []
+        }
+    }));
+
+    assert.ok(parsed);
+    const restricted = restrictSemanticInputHintsToTargetParameters(parsed!, ['value']);
+    assert.deepStrictEqual(restricted.test_strategy.input_hints.map(hint => hint.param_name), ['value']);
+    assert.match(formatSemanticContextForPrompt(restricted), /Param "value"/);
+    assert.doesNotMatch(formatSemanticContextForPrompt(restricted), /dependency_flag/);
 });
