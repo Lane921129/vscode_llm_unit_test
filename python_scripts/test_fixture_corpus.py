@@ -113,6 +113,38 @@ class FixtureCorpusTests(unittest.TestCase):
                     for expected_input in expected_inputs:
                         self.assertIn((expected_input,), observed_inputs)
 
+    def test_tier_two_cross_module_fixtures_preserve_verified_caller_inputs(self):
+        tier_two = [fixture for fixture in self.manifest['fixtures'] if fixture['tier'] == 2]
+        for fixture in tier_two:
+            expected_caller_inputs = fixture['expected'].get('caller_inputs', [])
+            if not expected_caller_inputs:
+                continue
+            with self.subTest(fixture=fixture['id']):
+                callers = self.find_callers(fixture)
+                observed_caller_inputs = {
+                    tuple(caller.get('trace_args', []))
+                    for caller in callers
+                    if isinstance(caller.get('trace_args'), list)
+                }
+                for expected_input in expected_caller_inputs:
+                    self.assertIn((expected_input,), observed_caller_inputs)
+
+                literal_inputs = [
+                    {
+                        'args': caller['trace_args'],
+                        'kwargs': caller['trace_kwargs'] or {},
+                        'constructor_args': caller['trace_constructor_args'],
+                        'constructor_kwargs': caller['trace_constructor_kwargs'] or {},
+                    }
+                    for caller in callers
+                    if isinstance(caller.get('trace_args'), list)
+                ]
+                trace = self.trace(fixture, literal_inputs)
+                self.assertIsNone(trace['load_error'])
+                observed_trace_inputs = {tuple(item.get('args', [])) for item in trace['examples']}
+                for expected_input in fixture['expected'].get('trace_inputs', []):
+                    self.assertIn((expected_input,), observed_trace_inputs)
+
 
 if __name__ == '__main__':
     unittest.main()

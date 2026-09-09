@@ -573,6 +573,43 @@ def unrelated_chain():
             ]
         )
 
+    def test_caller_finder_resolves_relative_package_imports_without_cross_package_guessing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            package = root / 'sample_package'
+            package.mkdir()
+            (package / '__init__.py').write_text('', encoding='utf-8')
+            target = package / 'consumer.py'
+            target.write_text(
+                'def format_label(value):\n    return "label:" + value.strip().lower()\n',
+                encoding='utf-8'
+            )
+            (package / 'entrypoints.py').write_text(
+                'from .consumer import format_label\n\n'
+                'def render_primary():\n    return format_label("  Alpha  ")\n\n'
+                'def render_secondary():\n    return format_label("Beta")\n',
+                encoding='utf-8'
+            )
+            unrelated = root / 'unrelated'
+            unrelated.mkdir()
+            (unrelated / '__init__.py').write_text('', encoding='utf-8')
+            (unrelated / 'consumer.py').write_text('def format_label(value):\n    return value\n', encoding='utf-8')
+            (unrelated / 'entrypoints.py').write_text(
+                'from .consumer import format_label\n\n'
+                'def render_wrong():\n    return format_label("ignore")\n',
+                encoding='utf-8'
+            )
+
+            calls = self.run_script('ast_caller_finder.py', 'format_label', root, target)
+
+        self.assertEqual(
+            [(call['caller_file'], call['caller_func'], call['trace_args']) for call in calls],
+            [
+                ('sample_package/entrypoints.py', 'render_primary', ['  Alpha  ']),
+                ('sample_package/entrypoints.py', 'render_secondary', ['Beta']),
+            ]
+        )
+
     def test_caller_finder_uses_only_safe_inherited_class_callers_for_base_method_trace(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

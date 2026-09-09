@@ -14,6 +14,37 @@ def target_module_name(target_path, project_root):
     return os.path.splitext(relative)[0].replace(os.sep, '.').replace('/', '.')
 
 
+def resolved_import_from_module(node, caller_path, project_root):
+    """Resolve an ``ImportFrom`` module relative to the caller package.
+
+    ``ast.ImportFrom.module`` omits leading dots.  For example,
+    ``from .consumer import format_label`` exposes only ``consumer``.  Resolve
+    it before comparison so a same-named module in another package is never
+    treated as a caller of the selected target.
+    """
+    if not isinstance(node, ast.ImportFrom) or not node.module:
+        return None
+    if not node.level:
+        return node.module
+
+    package_dir = os.path.dirname(os.path.abspath(caller_path))
+    checked_dir = package_dir
+    # Relative imports are valid only in packages. Check every parent crossed
+    # instead of guessing from folders that merely share a module name.
+    for _ in range(node.level):
+        if not os.path.isfile(os.path.join(checked_dir, '__init__.py')):
+            return None
+        checked_dir = os.path.dirname(checked_dir)
+    base_dir = package_dir
+    for _ in range(node.level - 1):
+        base_dir = os.path.dirname(base_dir)
+    relative = os.path.relpath(base_dir, project_root)
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return None
+    package_parts = [] if relative in ('.', '') else relative.replace('\\', '/').split('/')
+    return '.'.join(package_parts + node.module.split('.'))
+
+
 def expression_path(node):
     """Return a simple dotted path for names and attributes, when knowable."""
     if isinstance(node, ast.Name):
@@ -234,7 +265,8 @@ def find_call_sites(func_name, project_root, target_path=None):
             module_reference_paths = set()
             if target_module:
                 for node in tree.body:
-                    if isinstance(node, ast.ImportFrom) and node.module and module_matches(node.module, target_module):
+                    imported_module = resolved_import_from_module(node, filepath, project_root)
+                    if isinstance(node, ast.ImportFrom) and imported_module and module_matches(imported_module, target_module):
                         for alias in node.names:
                             if target_class and alias.name in target_module_classes:
                                 class_aliases.add(alias.asname or alias.name)
@@ -263,7 +295,8 @@ def find_call_sites(func_name, project_root, target_path=None):
                 module_bindings.visit(statement)
             if target_module and not target_class:
                 for node in tree.body:
-                    if not isinstance(node, ast.ImportFrom) or not node.module or not module_matches(node.module, target_module):
+                    imported_module = resolved_import_from_module(node, filepath, project_root)
+                    if not isinstance(node, ast.ImportFrom) or not imported_module or not module_matches(imported_module, target_module):
                         continue
                     for alias in node.names:
                         if alias.name == func_name:
