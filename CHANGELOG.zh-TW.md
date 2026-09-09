@@ -19,6 +19,7 @@
 - Caller Finder 現在可正確解析 package 內的相對 import（如 `from .consumer import target`）；會以完整 package 模組名排除另一個同名 package，並在 Tier 2 corpus 驗證 caller literal 確實進入 Dynamic Trace。
 - 也支援 `from . import module` 後以 `module.target(...)` 呼叫的相對 module alias；只在完整路徑精確對應 target 時收集，避免把未知 package attribute 當成呼叫證據。
 - Module alias 現在也遵守 lexical scope 與 import-rebind 歷史；同名局部變數覆寫 alias 後的 `.target(...)` 不會再污染 Dynamic Trace。
+- 模型資格探測的隔離 Python unittest 執行期限統一為至少 30 秒，與 provider 探測及正式測試的 `.venv` 使用原則一致，避免因過短 3 秒執行期限誤判可用模型。
 
 ### 將 AST 型別註記帶入測試生成語境
 

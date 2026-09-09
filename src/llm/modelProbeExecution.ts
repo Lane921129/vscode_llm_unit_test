@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { assessTestGenerationProbe, extractQualificationProbeCode, StructuredOutputProbeResult } from './testGenerationQualification';
+import { MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS } from './connectionTimeout';
 
 type ProbeExecutor = (code: string) => Promise<boolean>;
 
@@ -75,7 +76,11 @@ export function isIsolatedProbeCode(code: string): boolean {
  * the rest of the extension.  `-I` still prevents user-site imports from
  * affecting this isolated, standard-library-only execution.
  */
-export function runIsolatedProbe(code: string, timeoutMs = 3000, pythonExecutable = 'python'): Promise<boolean> {
+export function runIsolatedProbe(
+    code: string,
+    timeoutMs = MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS,
+    pythonExecutable = 'python'
+): Promise<boolean> {
     return new Promise(resolve => {
         const process = spawn(pythonExecutable, ['-I', '-c', PROBE_RUNNER], {
             stdio: ['pipe', 'ignore', 'ignore'],

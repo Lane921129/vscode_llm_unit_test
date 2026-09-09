@@ -12,7 +12,7 @@ import { buildOllamaPlainTestGenerationProbe, buildOllamaTestGenerationProbe } f
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_PROMPT, TEST_GENERATION_PROBE_SCHEMA } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -296,7 +296,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             const configuredPython = vscode.workspace.getConfiguration('llmUnitTest').get<string>('pythonPath', '');
                             const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
                             const pythonExecutable = resolvePythonExecutable(configuredPython, workspaceRoot);
-                            const isolatedProbeExecutor = (code: string) => runIsolatedProbe(code, 3000, pythonExecutable);
+                            const isolatedProbeExecutor = (code: string) => runIsolatedProbe(
+                                code, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, pythonExecutable
+                            );
 
                             if (message.envType === 'local') {
                                 const config = vscode.workspace.getConfiguration('llmUnitTest');

@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
 
 test('uses a fresh active AbortSignal for an individual provider request', async () => {
     let seenSignal: AbortSignal | undefined;
@@ -32,6 +32,7 @@ test('aborts an individual request only after its own deadline', async () => {
         /timed out/
     );
     assert.ok(MODEL_QUALIFICATION_TIMEOUT_MS > CONNECTION_DISCOVERY_TIMEOUT_MS);
+    assert.ok(MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS >= 30_000);
 });
 
 test('retries a transient provider error once before accepting the probe response', async () => {

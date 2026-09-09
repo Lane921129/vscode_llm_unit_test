@@ -1,6 +1,8 @@
 /** Minimum 30-second allowance for provider discovery and basic probes. */
 export const CONNECTION_DISCOVERY_TIMEOUT_MS = 30_000;
 export const MODEL_QUALIFICATION_TIMEOUT_MS = 60_000;
+/** Generated probe code gets the same minimum execution allowance as normal tests. */
+export const MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS = 30_000;
 
 export type FetchLike<TResponse> = (
     input: string,
