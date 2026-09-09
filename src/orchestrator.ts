@@ -30,7 +30,7 @@ import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceAssertionEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
-import { GENERATION_RETRY_MAX_ATTEMPTS, retryTransientProviderRequest } from './llm/connectionTimeout';
+import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import * as path from 'path';
 import * as fs from 'fs';
 import { runSpawn } from './utils/processRunner';
@@ -554,8 +554,14 @@ async function requestLlmApi(
     systemPrompt: string,
     userPrompt: string,
     log: (text: string) => void,
-    outputFormat: CustomOutputFormat = 'text'
+    outputFormat: CustomOutputFormat = 'text',
+    /** Structured-output fallback must consume the original request allowance. */
+    deadlineAt = deadlineAtFromTimeoutSeconds(params.timeoutSeconds)
 ): Promise<string> {
+    const remainingTimeoutMs = remainingDeadlineMs(deadlineAt);
+    if (remainingTimeoutMs <= 0) {
+        throw new Error(`API 請求已超過 ${params.timeoutSeconds} 秒總時限。`);
+    }
     let apiUrl = "";
     let bodyData = {};
     let headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -604,7 +610,7 @@ async function requestLlmApi(
     const timeoutId = setTimeout(() => {
         controller.abort();
         log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
-    }, params.timeoutSeconds * 1000);
+    }, remainingTimeoutMs);
     try {
         const response = await retryTransientProviderRequest(
             () => fetch(apiUrl, {
@@ -612,7 +618,9 @@ async function requestLlmApi(
             }),
             {
                 maxAttempts: GENERATION_RETRY_MAX_ATTEMPTS,
-                isCancelled: () => controller.signal.aborted || isExecutionCancelled(),
+                isCancelled: () => controller.signal.aborted
+                    || isExecutionCancelled()
+                    || remainingDeadlineMs(deadlineAt) <= 0,
                 onRetry: event => log(
                     `[供應商重試] ${event.reason}；等待 ${event.delayMs}ms 後重試 `
                     + `(${event.retryAttempt}/${event.maxAttempts})。`
@@ -624,7 +632,7 @@ async function requestLlmApi(
             const errText = await response.text();
             if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
                 log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），改用一般文字輸出：${errText.substring(0, 180)}`);
-                return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
+                return requestLlmApi(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
             }
             throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
         }
@@ -656,7 +664,7 @@ async function requestLlmApi(
 
         if (!isStructuredResponseUsable(responseText, outputFormat)) {
             log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
-            return requestLlmApi(params, systemPrompt, userPrompt, log, 'text');
+            return requestLlmApi(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
         }
         throwIfExecutionCancelled();
         return responseText;

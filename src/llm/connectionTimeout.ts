@@ -18,6 +18,16 @@ export const GENERATION_RETRY_MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 750;
 const RETRY_MAX_DELAY_MS = 8_000;
 
+/** Convert the user's per-generation allowance into one absolute deadline. */
+export function deadlineAtFromTimeoutSeconds(timeoutSeconds: number, now = Date.now()): number {
+    return now + Math.max(0, Math.floor(timeoutSeconds * 1000));
+}
+
+/** Remaining allowance for a request that may use retries or output fallbacks. */
+export function remainingDeadlineMs(deadlineAt: number, now = Date.now()): number {
+    return Math.max(0, deadlineAt - now);
+}
+
 /**
  * Run exactly one provider request with its own deadline.
  *
@@ -94,6 +104,13 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // A response can arrive just before a deadline and spend the remaining
+        // time in backoff. Do not launch one more request after that deadline.
+        // Keep the first attempt unchanged so an already-aborted caller retains
+        // its original, actionable abort error.
+        if (attempt > 1 && options.isCancelled?.()) {
+            throw new Error('Provider request was cancelled or exceeded its deadline');
+        }
         try {
             const response = await request();
             if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt === maxAttempts) {

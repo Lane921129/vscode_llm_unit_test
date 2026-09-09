@@ -91,6 +91,7 @@
 - 模型資格的儲存、查詢與套用必須使用同一個 provider／模型身分正規化規則；Google 的 `models/<name>` 與 `<name>` 是同一模型，不得因 resource prefix 讓已通過的 Cloud 探測在 Auto 路由中失效；不同 provider 仍必須嚴格隔離。
 - 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
 - 正式 Semantic Analyzer、Writer、Reviewer 與 mutation triage 的模型生成請求必須對暫態傳輸錯誤及 `408`、`429`、`5xx` 採有限次數、帶 jitter 的指數退避；`400`、認證與權限錯誤不得重試。重試不得重設使用者選擇的總 timeout，取消後不得繼續發送請求，且不得依 provider 或模型名稱決定規則。
+- 結構化輸出拒絕或不完整回覆改走一般文字相容模式時，必須沿用原始 API 請求的 absolute deadline；不得以遞迴或新 controller 重給一次完整 timeout。若退避期間已到期，不得再送出下一次 provider 請求。
 - 未驗證模型在 **Auto** 的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。使用者明確選擇任一 Tier 時，可走 LLM fallback／高階流程，但不得略過既有的輸出結構、Python 執行、覆蓋率與突變驗證。
 - 若 `Class.method` 的成功 Dynamic Trace 使用了呼叫端已驗證的建構子字面值，Tier 1 必須以相同字面值建立實例後才可寫入 assertion；不得因建構子有必要參數而丟棄已驗證 Trace，也不得猜測建構子依賴。
 - Tier 3 Mock Scaffold 若有已驗證的 caller constructor literal，必須將其作為明確 setup 事實提供給模型，並禁止將該設定誤傳給被測方法；沒有事實時不得憑空補出 constructor dependency。

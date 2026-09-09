@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, deadlineAtFromTimeoutSeconds, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, remainingDeadlineMs, retryTransientProviderRequest } from '../llm/connectionTimeout';
 
 test('uses a fresh active AbortSignal for an individual provider request', async () => {
     let seenSignal: AbortSignal | undefined;
@@ -83,6 +83,30 @@ test('uses bounded exponential jitter for transient generation responses', async
     assert.strictEqual(attempts, 3);
     assert.deepStrictEqual(delays, [375, 750]);
     assert.deepStrictEqual(retries, ['HTTP 503:2/3', 'HTTP 503:3/3']);
+});
+
+test('does not launch another provider retry after the shared deadline expires during backoff', async () => {
+    let attempts = 0;
+    let expired = false;
+    await assert.rejects(
+        retryTransientProviderRequest(
+            async () => ({ status: (++attempts, 503) }),
+            {
+                maxAttempts: 3,
+                isCancelled: () => expired,
+                wait: async () => { expired = true; }
+            }
+        ),
+        /deadline/
+    );
+    assert.strictEqual(attempts, 1);
+});
+
+test('keeps one absolute deadline when a request changes output format', () => {
+    const deadline = deadlineAtFromTimeoutSeconds(30, 1_000);
+    assert.strictEqual(deadline, 31_000);
+    assert.strictEqual(remainingDeadlineMs(deadline, 1_500), 29_500);
+    assert.strictEqual(remainingDeadlineMs(deadline, 31_001), 0);
 });
 
 test('retries a transient transport failure but not a cancelled request', async () => {
