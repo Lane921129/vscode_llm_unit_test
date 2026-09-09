@@ -64,6 +64,12 @@ export function getReviewerUserPrompt(
 
     if (astContext && !astContext.error) {
         prompt += `=== AST CONTEXT (structure and setup evidence; not an output oracle) ===\n`;
+        const typedParameters = (astContext.signature || [])
+            .filter((param: any) => typeof param.annotation === 'string' && param.annotation.trim())
+            .map((param: any) => `${param.name}: ${param.annotation}`);
+        if (typedParameters.length > 0) {
+            prompt += `- Source parameter type hints (input shape only): ${typedParameters.join('; ')}\n`;
+        }
         if (astContext.method_kind) {
             prompt += `- Binding: ${astContext.method_kind}${astContext.class_name ? ` of ${astContext.class_name}` : ''}\n`;
         }
@@ -71,6 +77,12 @@ export function getReviewerUserPrompt(
         if (astContext.class_context) {
             prompt += `- Class bases: ${(astContext.class_context.bases || []).join(', ') || 'none'}\n`;
             prompt += `- Constructor required parameters: ${(classInit?.required_params || []).join(', ') || 'none'}; initialized attributes: ${(classInit?.assigns || []).map((item: any) => item.name).join(', ') || 'none'}\n`;
+            const typedConstructorParameters = (classInit?.signature || [])
+                .filter((param: any) => typeof param.annotation === 'string' && param.annotation.trim())
+                .map((param: any) => `${param.name}: ${param.annotation}`);
+            if (typedConstructorParameters.length > 0) {
+                prompt += `- Constructor type hints (input shape only): ${typedConstructorParameters.join('; ')}\n`;
+            }
         }
         if (astContext.file_imports?.length > 0) {
             const imports = astContext.file_imports.map((item: any) => item.kind === 'from'

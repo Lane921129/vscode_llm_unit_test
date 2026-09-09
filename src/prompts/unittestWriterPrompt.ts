@@ -358,6 +358,12 @@ export function getUserPrompt(
                 const required = signature.filter((param: any) => param.required).map((param: any) => param.name);
                 const optional = signature.filter((param: any) => !param.required).map((param: any) => param.default === null ? param.name : `${param.name}=${param.default}`);
                 prompt += `- Required parameters: ${required.join(', ') || 'none'}; optional/variadic parameters: ${optional.join(', ') || 'none'}.\n`;
+                const typedParameters = signature
+                    .filter((param: any) => typeof param.annotation === 'string' && param.annotation.trim())
+                    .map((param: any) => `${param.name}: ${param.annotation}${param.default === null ? '' : ` = ${param.default}`}`);
+                if (typedParameters.length > 0) {
+                    prompt += `- Source parameter type hints: ${typedParameters.join('; ')}. Treat these as input-shape guidance only, never as a return-value or exception oracle.\n`;
+                }
                 prompt += `- Call with every required parameter. Optional parameters may be omitted unless the test intentionally covers their default or override behavior.\n`;
             } else {
                 prompt += `- EXACT signature: ${astContext.name}(${astContext.args.join(', ')}). Call with EXACTLY ${astContext.args.length} argument(s).\n`;
@@ -404,6 +410,12 @@ export function getUserPrompt(
             const init = astContext.class_context?.init;
             if (init) {
                 prompt += `  - Constructor required parameters: ${init.required_params?.join(', ') || 'none'}; optional parameters: ${init.optional_params?.join(', ') || 'none'}; initialized attributes: ${init.assigns?.map((item: any) => item.name).join(', ') || 'none'}.\n`;
+                const typedConstructorParameters = (init.signature || [])
+                    .filter((param: any) => typeof param.annotation === 'string' && param.annotation.trim())
+                    .map((param: any) => `${param.name}: ${param.annotation}`);
+                if (typedConstructorParameters.length > 0) {
+                    prompt += `  - Constructor type hints (input-shape guidance only): ${typedConstructorParameters.join('; ')}.\n`;
+                }
             }
         }
         prompt += `- CRITICAL: Do NOT invent keyword arguments such as extra_option=... that are not in the function signature.\n`;

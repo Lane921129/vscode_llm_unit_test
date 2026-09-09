@@ -75,7 +75,7 @@ export interface SemanticAstSetupContext {
         name?: string;
         bases?: string[];
         init?: {
-            signature?: Array<{ name?: string; kind?: string; default?: string | null; required?: boolean }>;
+            signature?: Array<{ name?: string; kind?: string; annotation?: string | null; default?: string | null; required?: boolean }>;
             assigns?: Array<{ name?: string; code?: string }>;
         };
     } | null;
@@ -141,7 +141,7 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
         const signature = (classInfo.init?.signature || []).slice(0, 12);
         if (signature.length > 0) {
             lines.push('Constructor parameters: ' + signature.map(param =>
-                `${param.name || '?'} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})`
+                `${param.name || '?'}${param.annotation ? `: ${param.annotation}` : ''} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})`
             ).join(', '));
         }
         const assigns = (classInfo.init?.assigns || []).filter(item => item.code).slice(0, 8);

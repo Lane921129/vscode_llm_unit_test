@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 將 AST 型別註記帶入測試生成語境
+
+- Writer、Semantic Analyzer 與 Reviewer 現在會接收 AST 已擷取的目標函式與建構子參數型別註記，例如 `list[str]`、`int` 與 `str`。這讓不同模型能更可靠地選擇可呼叫的輸入形狀，減少把字串、數字或集合混用造成的無效測試。
+- Prompt 明確標示型別註記只屬 source-level input guidance；精確回傳值與例外仍只能來自 Dynamic Trace、明確 source raise 或同測試控制的 mock。
+
 ### 讓純 Python 資格模型避開不支援的分析 JSON mode
 
 - 模型若資格探測已證明只能可靠輸出純 Python unittest，Semantic Analyzer 與 mutation triage 現在也會直接走普通文字請求，並由既有 JSON contract／parser 驗證回覆；不再先送一個可預期失敗的 provider JSON schema 請求。

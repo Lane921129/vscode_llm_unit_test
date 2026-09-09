@@ -70,6 +70,45 @@ test('reviewer prompt uses complete AST and skill context without treating sourc
     assert.match(prompt, /Input: \('x'\) => Returned: '>x'/);
 });
 
+test('prompts retain AST type annotations as input-shape guidance only', () => {
+    const writerPrompt = getUserPrompt('sample.py', 'transform', 'def transform(values, limit=1): return values', 'small', {
+        name: 'transform',
+        args: ['values', 'limit'],
+        signature: [
+            { name: 'values', annotation: 'list[str]', required: true, default: null },
+            { name: 'limit', annotation: 'int', required: false, default: '1' }
+        ],
+        class_name: 'Worker',
+        method_kind: 'instance',
+        class_context: {
+            init: {
+                required_params: ['label'], optional_params: [], assigns: [],
+                signature: [{ name: 'label', annotation: 'str', required: true, default: null }]
+            }
+        }
+    });
+    const reviewerPrompt = getReviewerUserPrompt(
+        'import unittest', 'example error', 'transform', ['values', 'limit'],
+        'def transform(values, limit=1): return values', {
+            signature: [{ name: 'values', annotation: 'list[str]', required: true, default: null }],
+            class_context: { init: { required_params: [], assigns: [], signature: [{ name: 'label', annotation: 'str' }] } }
+        }, 'sample'
+    );
+    const semanticPrompt = getSemanticAnalyzerUserPrompt(
+        'def transform(values): return values', [], [], {
+            class_name: 'Worker', method_kind: 'instance',
+            class_context: { name: 'Worker', init: { signature: [{ name: 'label', annotation: 'str', required: true, default: null }] } }
+        }
+    );
+
+    assert.match(writerPrompt, /Source parameter type hints: values: list\[str\]; limit: int = 1/);
+    assert.match(writerPrompt, /Constructor type hints \(input-shape guidance only\): label: str/);
+    assert.match(writerPrompt, /never as a return-value or exception oracle/);
+    assert.match(reviewerPrompt, /Source parameter type hints \(input shape only\): values: list\[str\]/);
+    assert.match(reviewerPrompt, /Constructor type hints \(input shape only\): label: str/);
+    assert.match(semanticPrompt, /Constructor parameters: label: str \(required\)/);
+});
+
 test('writer prompt calls static methods through the class without inventing an instance', () => {
     const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 
