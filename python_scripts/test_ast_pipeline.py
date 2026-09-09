@@ -1141,6 +1141,22 @@ class Settings:
         self.assertIsNone(trace['load_error'])
         self.assertEqual(trace['examples'], [{'args': [], 'result': "'ready'", 'result_type': 'str'}])
 
+    def test_dynamic_tracer_uses_literal_annotation_values_as_safe_probes(self):
+        source = '''from typing import Literal
+
+def render(stage: Literal["draft", "published"]):
+    return "stage:" + stage
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'literal_target.py'
+            target.write_text(source, encoding='utf-8')
+            trace = trace_function(str(target), 'render')
+
+        observed = {(item['args'][0], item['result']) for item in trace['examples']}
+        self.assertIsNone(trace['load_error'])
+        self.assertIn(("'draft'", "'stage:draft'"), observed)
+        self.assertIn(("'published'", "'stage:published'"), observed)
+
     def test_dynamic_tracer_reaches_scalar_branches_from_source_conditions(self):
         source = '''def route(value: str, mode: str):
     if not value or len(value) < 4:

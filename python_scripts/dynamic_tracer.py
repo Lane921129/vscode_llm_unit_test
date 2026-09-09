@@ -22,6 +22,7 @@ import inspect
 import itertools
 import io
 import math
+import typing
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -183,6 +184,52 @@ def selected_function_scope_nodes(func_node):
     for statement in func_node.body:
         visit(statement)
     return nodes
+
+
+def literal_annotation_values(annotation):
+    """Extract scalar ``typing.Literal`` values without evaluating source text.
+
+    Literal annotations are an explicit, source-declared finite input domain.
+    They are useful Trace probes but are never an output oracle.  String
+    annotations are parsed as Python syntax only; calls, attributes and other
+    non-literal expressions are deliberately ignored.
+    """
+    values = []
+    origin = typing.get_origin(annotation)
+    if origin is typing.Literal:
+        values = list(typing.get_args(annotation))
+    elif isinstance(annotation, str):
+        try:
+            parsed = ast.parse(annotation, mode='eval').body
+        except (SyntaxError, ValueError, TypeError):
+            return []
+        if not isinstance(parsed, ast.Subscript):
+            return []
+        base = parsed.value
+        is_literal = (
+            isinstance(base, ast.Name) and base.id == 'Literal'
+        ) or (
+            isinstance(base, ast.Attribute) and base.attr == 'Literal'
+        )
+        if not is_literal:
+            return []
+        elements = list(parsed.slice.elts) if isinstance(parsed.slice, ast.Tuple) else [parsed.slice]
+        for element in elements:
+            if not isinstance(element, ast.Constant) or not isinstance(element.value, (str, int, float, bool, type(None))):
+                return []
+            values.append(element.value)
+    else:
+        return []
+
+    unique, seen = [], set()
+    for value in values:
+        if not isinstance(value, (str, int, float, bool, type(None))):
+            return []
+        key = (type(value), repr(value))
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    return unique[:8]
 
 
 def infer_condition_guided_inputs(file_path: str, func_name: str, positional_args: list,
@@ -402,6 +449,9 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
         return []
 
     def default_value(name):
+        declared_values = literal_annotation_values(annotations.get(name))
+        if declared_values:
+            return declared_values[0]
         annotation = str(annotations.get(name, '')).lower()
         if 'bool' in annotation:
             return True
@@ -508,7 +558,12 @@ def infer_boundary_inputs(positional_args: list, annotations: dict = None, keywo
     all_args = positional_args + keyword_only_args
     per_arg_candidates = []
     for arg_name in all_args:
-        annotation = str((annotations or {}).get(arg_name, '')).lower()
+        raw_annotation = (annotations or {}).get(arg_name, '')
+        declared_values = literal_annotation_values(raw_annotation)
+        if declared_values:
+            per_arg_candidates.append(declared_values)
+            continue
+        annotation = str(raw_annotation).lower()
         if 'bool' in annotation:
             per_arg_candidates.append(bool_candidates + none_candidate)
         elif 'str' in annotation:

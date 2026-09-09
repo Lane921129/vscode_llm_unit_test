@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 以 `typing.Literal` 擴充安全 Dynamic Trace 輸入
+
+- Dynamic Trace 現在會辨識目標參數明確標註的 `typing.Literal[...]` 值，並將有限的 scalar 值用於實際函式執行。例如沒有 if/match 分支的 `Literal["draft", "published"]` API 也能取得兩個真實 I/O baseline。
+- 實作只接受字串、數字、布林和 `None`，不會執行 annotation 內的函式、attribute 或其他表達式；結果仍須由 Trace 實測後才能成為 assertion 依據。
+
 ### 將 AST 型別註記帶入測試生成語境
 
 - Writer、Semantic Analyzer 與 Reviewer 現在會接收 AST 已擷取的目標函式與建構子參數型別註記，例如 `list[str]`、`int` 與 `str`。這讓不同模型能更可靠地選擇可呼叫的輸入形狀，減少把字串、數字或集合混用造成的無效測試。
