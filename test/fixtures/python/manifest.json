@@ -57,7 +57,7 @@
       "source": "tier2_package/consumer.py",
       "target": "format_label",
       "context": {"calls": ["normalize"], "dependencies": [{"name": "normalize"}]},
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["mock_external_dependency"], "trace": "assertable", "caller_inputs": ["  Alpha  ", "Beta"], "trace_inputs": ["'  Alpha  '", "'Beta'"]},
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["mock_external_dependency"], "trace": "assertable", "caller_inputs": ["  Alpha  ", "Beta", "Gamma"], "trace_inputs": ["'  Alpha  '", "'Beta'", "'Gamma'"]},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["importing the target by a filesystem path"]}
     },
     {

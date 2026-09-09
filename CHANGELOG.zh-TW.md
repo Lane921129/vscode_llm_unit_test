@@ -17,6 +17,7 @@
 - Tier 1 corpus 的 AST、Trace、生成 unittest 與 mutation 整合驗收現在會使用工作區 `.venv` 的 Python，不再暗中依賴系統 `python`；fixture 的 `trace_inputs` 也會在 TypeScript 與 Python 驗收雙重確認。
 - Semantic Analyzer 現在清楚區分 target call sites 與 dependency calls；模型提出的測資提示會依 AST 目標函式 signature 過濾，避免將相依參數或回傳欄位誤送進 Tier 1／Tier 2 的 target call。
 - Caller Finder 現在可正確解析 package 內的相對 import（如 `from .consumer import target`）；會以完整 package 模組名排除另一個同名 package，並在 Tier 2 corpus 驗證 caller literal 確實進入 Dynamic Trace。
+- 也支援 `from . import module` 後以 `module.target(...)` 呼叫的相對 module alias；只在完整路徑精確對應 target 時收集，避免把未知 package attribute 當成呼叫證據。
 
 ### 將 AST 型別註記帶入測試生成語境
 

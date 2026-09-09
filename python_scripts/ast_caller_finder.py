@@ -14,19 +14,10 @@ def target_module_name(target_path, project_root):
     return os.path.splitext(relative)[0].replace(os.sep, '.').replace('/', '.')
 
 
-def resolved_import_from_module(node, caller_path, project_root):
-    """Resolve an ``ImportFrom`` module relative to the caller package.
-
-    ``ast.ImportFrom.module`` omits leading dots.  For example,
-    ``from .consumer import format_label`` exposes only ``consumer``.  Resolve
-    it before comparison so a same-named module in another package is never
-    treated as a caller of the selected target.
-    """
-    if not isinstance(node, ast.ImportFrom) or not node.module:
+def relative_import_package(node, caller_path, project_root):
+    """Return the package a relative ``ImportFrom`` starts from, if safe."""
+    if not isinstance(node, ast.ImportFrom) or not node.level:
         return None
-    if not node.level:
-        return node.module
-
     package_dir = os.path.dirname(os.path.abspath(caller_path))
     checked_dir = package_dir
     # Relative imports are valid only in packages. Check every parent crossed
@@ -41,8 +32,38 @@ def resolved_import_from_module(node, caller_path, project_root):
     relative = os.path.relpath(base_dir, project_root)
     if relative == os.pardir or relative.startswith(os.pardir + os.sep):
         return None
-    package_parts = [] if relative in ('.', '') else relative.replace('\\', '/').split('/')
-    return '.'.join(package_parts + node.module.split('.'))
+    return '' if relative in ('.', '') else relative.replace('\\', '/').replace('/', '.')
+
+
+def resolved_import_from_module(node, caller_path, project_root):
+    """Resolve an ``ImportFrom`` module relative to the caller package.
+
+    ``ast.ImportFrom.module`` omits leading dots.  For example,
+    ``from .consumer import format_label`` exposes only ``consumer``.  Resolve
+    it before comparison so a same-named module in another package is never
+    treated as a caller of the selected target.
+    """
+    if not isinstance(node, ast.ImportFrom) or not node.module:
+        return None
+    if not node.level:
+        return node.module
+    package = relative_import_package(node, caller_path, project_root)
+    return '.'.join(part for part in (package, node.module) if part)
+
+
+def resolved_relative_import_alias_module(node, alias, caller_path, project_root):
+    """Resolve ``from . import module`` aliases used as module references.
+
+    The empty ``ImportFrom.module`` form imports a package member.  Treat it
+    as a target module only when its complete resolved name exactly matches
+    the known target; other package attributes remain intentionally unknown.
+    """
+    if not isinstance(node, ast.ImportFrom) or node.module or not node.level:
+        return None
+    package = relative_import_package(node, caller_path, project_root)
+    if package is None or not alias.name or alias.name == '*':
+        return None
+    return '.'.join(part for part in (package, alias.name) if part)
 
 
 def expression_path(node):
@@ -272,6 +293,13 @@ def find_call_sites(func_name, project_root, target_path=None):
                                 class_aliases.add(alias.asname or alias.name)
                             elif not target_class and alias.name in (func_name, '*'):
                                 direct_names.add(alias.asname or alias.name)
+                    elif isinstance(node, ast.ImportFrom):
+                        for alias in node.names:
+                            imported_alias_module = resolved_relative_import_alias_module(
+                                node, alias, filepath, project_root
+                            )
+                            if imported_alias_module and module_matches(imported_alias_module, target_module):
+                                module_reference_paths.add((alias.asname or alias.name,))
                     elif isinstance(node, ast.Import):
                         for alias in node.names:
                             if module_matches(alias.name, target_module):

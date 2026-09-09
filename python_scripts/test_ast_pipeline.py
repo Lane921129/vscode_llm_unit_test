@@ -585,9 +585,10 @@ def unrelated_chain():
                 encoding='utf-8'
             )
             (package / 'entrypoints.py').write_text(
-                'from .consumer import format_label\n\n'
+                'from .consumer import format_label\nfrom . import consumer\n\n'
                 'def render_primary():\n    return format_label("  Alpha  ")\n\n'
-                'def render_secondary():\n    return format_label("Beta")\n',
+                'def render_secondary():\n    return format_label("Beta")\n\n'
+                'def render_module_reference():\n    return consumer.format_label("Gamma")\n',
                 encoding='utf-8'
             )
             unrelated = root / 'unrelated'
@@ -607,6 +608,7 @@ def unrelated_chain():
             [
                 ('sample_package/entrypoints.py', 'render_primary', ['  Alpha  ']),
                 ('sample_package/entrypoints.py', 'render_secondary', ['Beta']),
+                ('sample_package/entrypoints.py', 'render_module_reference', ['Gamma']),
             ]
         )
 
