@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 讓 Dynamic Trace 到達多參數 conjunction 分支
+
+- 先前 Trace 一次只替換一個參數；若 `a == literal and b == literal` 的基準輸入兩邊都不符合，便永遠無法執行共同成立的分支。現在只對可靜態驗證的直接 literal、長度與 membership 子條件，建立有限的共同滿足輸入，並優先放進固定 probe 預算。
+- 合成輸入僅用來執行目標；回傳值與例外仍完全由隔離 Dynamic Trace 記錄。巢狀 function／class／lambda 的條件不再污染 selected target 的輸入探索。
+
 ### 讓正式模型生成處理暫態供應商錯誤
 
 - 正式的 Semantic Analyzer、Tier 1／Tier 2 Writer、Reviewer 與 mutation triage 現在共用有限三次的指數退避重試。對網路暫斷及 `408`、`429`、`500`、`502`、`503`、`504` 才重試，並加入 bounded jitter，避免批次工作在同一時間再次壓向 provider。

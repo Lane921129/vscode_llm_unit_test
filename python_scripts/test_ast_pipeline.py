@@ -1124,6 +1124,41 @@ class Settings:
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
 
+    def test_dynamic_tracer_reaches_multi_parameter_conjunctions_from_source_conditions(self):
+        source = '''def route(state: str, mode: str):
+    if state == "enabled" and mode == "strict":
+        return "selected"
+    return "default"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'route')
+
+        self.assertIsNone(result['load_error'])
+        self.assertIn(
+            {'args': ["'enabled'", "'strict'"], 'result': "'selected'", 'result_type': 'str'},
+            result['examples']
+        )
+
+    def test_dynamic_tracer_ignores_nested_callable_conditions_when_deriving_inputs(self):
+        source = '''def route(value: str):
+    def deferred():
+        if value == "nested":
+            return "not-target"
+    if value == "outer":
+        return "target"
+    return "default"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'route_target.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'route')
+
+        observed_inputs = [item['args'] for item in result['examples']]
+        self.assertIn(["'outer'"], observed_inputs)
+        self.assertNotIn(["'nested'"], observed_inputs)
+
     def test_dynamic_tracer_reaches_reverse_and_literal_membership_branches(self):
         source = '''def route(value: int, mode: str):
     if 3 < value:

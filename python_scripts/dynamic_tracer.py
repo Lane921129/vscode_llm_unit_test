@@ -169,6 +169,22 @@ def _match_pattern_literals(pattern):
     return []
 
 
+def selected_function_scope_nodes(func_node):
+    """Yield target-body nodes without inheriting nested callable conditions."""
+    nodes = []
+
+    def visit(node):
+        if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in func_node.body:
+        visit(statement)
+    return nodes
+
+
 def infer_condition_guided_inputs(file_path: str, func_name: str, positional_args: list,
                                   annotations: dict = None, keyword_only_args: list = None) -> list:
     """
@@ -194,12 +210,110 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
 
     annotations = annotations or {}
     candidates = {name: [] for name in parameter_names}
+    joint_assignments = []
 
     def add(name, value):
         if value not in candidates[name]:
             candidates[name].append(value)
 
-    for node in ast.walk(target):
+    def compare_components(node):
+        """Resolve a direct parameter comparison to parameter, kind, op, rhs."""
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+            return None
+        subject = _condition_subject(node.left, parameter_names)
+        operator = node.ops[0]
+        right = node.comparators[0]
+        if not subject:
+            subject = _condition_subject(right, parameter_names)
+            if not subject or not _is_scalar_literal_node(node.left):
+                return None
+            operator = _reversed_comparison_operator(operator)
+            if operator is None:
+                return None
+            right = node.left
+        return subject[0], subject[1], operator, right
+
+    def satisfying_assignment(node):
+        """Produce one syntax-proven truth input for a direct condition.
+
+        The result is only an execution candidate. It deliberately does not
+        imply the target's output or that a larger boolean expression is
+        reachable in every runtime environment.
+        """
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            subject = _condition_subject(node.operand, parameter_names)
+            if subject and subject[1] == 'value':
+                annotation = str(annotations.get(subject[0], '')).lower()
+                return subject[0], '' if 'str' in annotation else 0
+
+        parts = compare_components(node)
+        if not parts:
+            return None
+        name, subject_kind, operator, right = parts
+        if isinstance(operator, (ast.In, ast.NotIn)) and subject_kind == 'value' and isinstance(right, (ast.List, ast.Tuple, ast.Set)):
+            literals = [_literal_value(item) for item in right.elts]
+            valid = [item for item in literals if item is not None]
+            if not valid:
+                return None
+            if isinstance(operator, ast.In):
+                return name, valid[0]
+            if any(isinstance(item, str) for item in valid):
+                return name, '__other_value__'
+            numeric = [item for item in valid if isinstance(item, (int, float)) and not isinstance(item, bool)]
+            return (name, max(numeric) + 1) if numeric else None
+
+        literal = _literal_value(right)
+        if not _is_scalar_literal_node(right):
+            return None
+        if subject_kind == 'length':
+            if not isinstance(literal, int) or isinstance(literal, bool) or literal < 0:
+                return None
+            if isinstance(operator, (ast.Lt, ast.LtE)):
+                length = max(0, literal - 1) if isinstance(operator, ast.Lt) else literal
+            elif isinstance(operator, (ast.Gt, ast.GtE)):
+                length = literal + 1 if isinstance(operator, ast.Gt) else literal
+            elif isinstance(operator, (ast.Eq, ast.Is)):
+                length = literal
+            elif isinstance(operator, (ast.NotEq, ast.IsNot)):
+                length = literal + 1
+            else:
+                return None
+            return name, 'x' * length
+
+        if isinstance(operator, (ast.Eq, ast.Is)):
+            return name, literal
+        if isinstance(operator, (ast.NotEq, ast.IsNot)):
+            if isinstance(literal, str):
+                return name, '__other_value__'
+            if isinstance(literal, bool):
+                return name, not literal
+            if literal is None:
+                annotation = str(annotations.get(name, '')).lower()
+                return name, '' if 'str' in annotation else 0
+            if isinstance(literal, (int, float)):
+                return name, literal + 1
+            return None
+        if isinstance(literal, (int, float)) and not isinstance(literal, bool):
+            if isinstance(operator, ast.Lt):
+                return name, literal - 1
+            if isinstance(operator, ast.LtE):
+                return name, literal
+            if isinstance(operator, ast.Gt):
+                return name, literal + 1
+            if isinstance(operator, ast.GtE):
+                return name, literal
+        return None
+
+    def flattened_and_terms(node):
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+            terms = []
+            for value in node.values:
+                terms.extend(flattened_and_terms(value))
+            return terms
+        return [node]
+
+    scoped_nodes = selected_function_scope_nodes(target)
+    for node in scoped_nodes:
         match_type = getattr(ast, 'Match', ())
         if match_type and isinstance(node, match_type):
             subject = _condition_subject(node.subject, parameter_names)
@@ -227,20 +341,10 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
                 annotation = str(annotations.get(subject[0], '')).lower()
                 add(subject[0], '' if 'str' in annotation else 0)
 
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        parts = compare_components(node)
+        if not parts:
             continue
-        subject = _condition_subject(node.left, parameter_names)
-        operator = node.ops[0]
-        right = node.comparators[0]
-        if not subject:
-            subject = _condition_subject(right, parameter_names)
-            if not subject or not _is_scalar_literal_node(node.left):
-                continue
-            operator = _reversed_comparison_operator(operator)
-            if operator is None:
-                continue
-            right = node.left
-        name, subject_kind = subject
+        name, subject_kind, operator, right = parts
 
         if isinstance(operator, (ast.In, ast.NotIn)) and subject_kind == 'value' and isinstance(right, (ast.List, ast.Tuple, ast.Set)):
             literal_items = [_literal_value(item) for item in right.elts]
@@ -274,6 +378,26 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
             add(name, literal - 1)
             add(name, literal + 1)
 
+    # A one-parameter-at-a-time probe cannot reach ``a == X and b == Y`` when
+    # the baseline values satisfy neither side. Build only the jointly true
+    # inputs that direct syntax proves, then let real tracing establish results.
+    for node in scoped_nodes:
+        if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.And):
+            continue
+        assignments = {}
+        for term in flattened_and_terms(node):
+            assignment = satisfying_assignment(term)
+            if assignment is None:
+                assignments = None
+                break
+            name, value = assignment
+            if name in assignments and assignments[name] != value:
+                assignments = None
+                break
+            assignments[name] = value
+        if assignments and len(assignments) >= 2 and assignments not in joint_assignments:
+            joint_assignments.append(assignments)
+
     if not any(candidates.values()):
         return []
 
@@ -293,7 +417,13 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
         return {'args': args, 'kwargs': kwargs} if kwargs else tuple(args)
 
     baseline = {name: default_value(name) for name in parameter_names}
+    # Keep conjunction candidates first so the bounded probe budget cannot
+    # crowd out a branch that requires multiple parameters to cooperate.
     results = []
+    for assignment in joint_assignments:
+        values = dict(baseline)
+        values.update(assignment)
+        results.append(build_input(values))
     for name in positional_args + keyword_only_args:
         for value in candidates[name]:
             values = dict(baseline)
