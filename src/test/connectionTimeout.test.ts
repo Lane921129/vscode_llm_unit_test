@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
 
 test('uses a fresh active AbortSignal for an individual provider request', async () => {
     let seenSignal: AbortSignal | undefined;
@@ -61,5 +61,49 @@ test('does not retry authentication or malformed-request responses', async () =>
     );
 
     assert.strictEqual(response.status, 400);
+    assert.strictEqual(attempts, 1);
+});
+
+test('uses bounded exponential jitter for transient generation responses', async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+    const retries: string[] = [];
+    const response = await retryTransientProviderRequest(
+        async () => ({ status: ++attempts < 3 ? 503 : 200 }),
+        {
+            maxAttempts: 3,
+            random: () => 0,
+            wait: async milliseconds => { delays.push(milliseconds); },
+            onRetry: event => { retries.push(`${event.reason}:${event.retryAttempt}/${event.maxAttempts}`); }
+        }
+    );
+
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(attempts, 3);
+    assert.deepStrictEqual(delays, [375, 750]);
+    assert.deepStrictEqual(retries, ['HTTP 503:2/3', 'HTTP 503:3/3']);
+});
+
+test('retries a transient transport failure but not a cancelled request', async () => {
+    let attempts = 0;
+    const recovered = await retryTransientProviderRequest(
+        async () => {
+            attempts++;
+            if (attempts === 1) { throw new Error('connection reset'); }
+            return { status: 200 };
+        },
+        { random: () => 0, wait: async () => undefined }
+    );
+    assert.strictEqual(recovered.status, 200);
+    assert.strictEqual(attempts, 2);
+
+    attempts = 0;
+    await assert.rejects(
+        retryTransientProviderRequest(
+            async () => { attempts++; throw new Error('aborted'); },
+            { isCancelled: () => true, wait: async () => undefined }
+        ),
+        /aborted/
+    );
     assert.strictEqual(attempts, 1);
 });

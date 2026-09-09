@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 讓正式模型生成處理暫態供應商錯誤
+
+- 正式的 Semantic Analyzer、Tier 1／Tier 2 Writer、Reviewer 與 mutation triage 現在共用有限三次的指數退避重試。對網路暫斷及 `408`、`429`、`500`、`502`、`503`、`504` 才重試，並加入 bounded jitter，避免批次工作在同一時間再次壓向 provider。
+- `400`、認證與權限等使用者可處理錯誤維持單次回覆；取消或總 timeout 不會因重試而被重設。這是 provider-neutral 行為，Cloud、Ollama 與 Custom API 使用相同規則。
+
 ### 修正 AST 將區域 binding 誤當模組語境
 
 - AST extractor 現在依 Python lexical scope 過濾模組 imports、相依與引用 globals。函式參數、區域 assign／loop／with／exception／import binding、巢狀 function／class、`nonlocal` 與 comprehension target 都不會再被錯誤當成目標模組的 setup 事實。

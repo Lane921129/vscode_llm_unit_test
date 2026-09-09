@@ -29,6 +29,7 @@ import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceAssertionEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
+import { GENERATION_RETRY_MAX_ATTEMPTS, retryTransientProviderRequest } from './llm/connectionTimeout';
 import * as path from 'path';
 import * as fs from 'fs';
 import { runSpawn } from './utils/processRunner';
@@ -607,9 +608,19 @@ async function requestLlmApi(
         log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
     }, params.timeoutSeconds * 1000);
     try {
-        const response = await fetch(apiUrl, {
-            method: 'POST', headers, body: JSON.stringify(bodyData), signal: controller.signal
-        });
+        const response = await retryTransientProviderRequest(
+            () => fetch(apiUrl, {
+                method: 'POST', headers, body: JSON.stringify(bodyData), signal: controller.signal
+            }),
+            {
+                maxAttempts: GENERATION_RETRY_MAX_ATTEMPTS,
+                isCancelled: () => controller.signal.aborted || isExecutionCancelled(),
+                onRetry: event => log(
+                    `[供應商重試] ${event.reason}；等待 ${event.delayMs}ms 後重試 `
+                    + `(${event.retryAttempt}/${event.maxAttempts})。`
+                )
+            }
+        );
         throwIfExecutionCancelled();
         if (!response.ok) {
             const errText = await response.text();

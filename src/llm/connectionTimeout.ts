@@ -11,7 +11,10 @@ export interface StatusResponse {
     status: number;
 }
 
-export const RETRYABLE_PROVIDER_STATUS_CODES = new Set([500, 502, 503, 504]);
+export const RETRYABLE_PROVIDER_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
+export const GENERATION_RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 750;
+const RETRY_MAX_DELAY_MS = 8_000;
 
 /**
  * Run exactly one provider request with its own deadline.
@@ -48,15 +51,82 @@ export async function fetchWithServerRetry<TResponse extends StatusResponse>(
     maxAttempts = 2,
     wait: (milliseconds: number) => Promise<void> = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 ): Promise<TResponse> {
-    let response: TResponse | undefined;
-    const attempts = Math.max(1, maxAttempts);
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-        response = await fetchWithTimeout(fetcher, input, init, timeoutMs);
-        if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt === attempts) {
-            return response;
+    return retryTransientProviderRequest(
+        () => fetchWithTimeout(fetcher, input, init, timeoutMs),
+        { maxAttempts, wait }
+    );
+}
+
+export interface ProviderRetryEvent {
+    /** 1-based ordinal of the retry which is about to start. */
+    retryAttempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    reason: string;
+}
+
+export interface ProviderRetryOptions {
+    maxAttempts?: number;
+    wait?: (milliseconds: number) => Promise<void>;
+    random?: () => number;
+    onRetry?: (event: ProviderRetryEvent) => void;
+    /** Avoid retrying cancellation/timeout errors supplied by the caller. */
+    isCancelled?: () => boolean;
+}
+
+/**
+ * Bounded exponential backoff for model-generation REST requests.
+ *
+ * Generation has no external side effect in this extension, so replaying a
+ * request after a transient transport or provider failure is safe. The caller
+ * retains ownership of the total deadline and cancellation signal; this helper
+ * only decides which failures merit another attempt.
+ */
+export async function retryTransientProviderRequest<TResponse extends StatusResponse>(
+    request: () => Promise<TResponse>,
+    options: ProviderRetryOptions = {}
+): Promise<TResponse> {
+    const maxAttempts = Math.max(1, options.maxAttempts ?? GENERATION_RETRY_MAX_ATTEMPTS);
+    const wait = options.wait ?? (milliseconds => new Promise<void>(resolve => setTimeout(resolve, milliseconds)));
+    const random = options.random ?? Math.random;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await request();
+            if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt === maxAttempts) {
+                return response;
+            }
+            const delayMs = retryDelay(attempt, random);
+            options.onRetry?.({
+                retryAttempt: attempt + 1,
+                maxAttempts,
+                delayMs,
+                reason: `HTTP ${response.status}`
+            });
+            await wait(delayMs);
+        } catch (error) {
+            lastError = error;
+            if (options.isCancelled?.() || attempt === maxAttempts) {
+                throw error;
+            }
+            const delayMs = retryDelay(attempt, random);
+            options.onRetry?.({
+                retryAttempt: attempt + 1,
+                maxAttempts,
+                delayMs,
+                reason: 'network error'
+            });
+            await wait(delayMs);
         }
-        await wait(750 * attempt);
     }
-    // The loop always returns, but keeps TypeScript's control-flow exhaustive.
-    return response as TResponse;
+    throw lastError instanceof Error ? lastError : new Error('Provider request failed without a response');
+}
+
+function retryDelay(failedAttempt: number, random: () => number): number {
+    const exponential = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, failedAttempt - 1));
+    // Full jitter prevents a batch of models from retrying at exactly the same
+    // moment. Clamp injectable test doubles to keep the result bounded.
+    const jitter = Math.max(0, Math.min(1, random()));
+    return Math.round(exponential * (0.5 + jitter * 0.5));
 }
