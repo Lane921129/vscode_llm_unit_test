@@ -13,6 +13,21 @@ export interface ModelQualificationRequest {
     modelName: string;
 }
 
+export type TestGenerationResponseFormat = 'test-code-json' | 'text';
+
+/**
+ * Use the exact response style that the selected model proved it can produce.
+ * Semantic analysis still uses JSON independently; this applies only to
+ * complete unittest/scaffold/repair code requests.
+ */
+export function selectTestGenerationResponseFormat(
+    profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
+): TestGenerationResponseFormat {
+    return profile.testGenerationReady === true && profile.testGenerationMode === '純 Python unittest'
+        ? 'text'
+        : 'test-code-json';
+}
+
 function compactLogValue(value: string | undefined, fallback: string): string {
     const compact = value?.replace(/[\r\n]+/g, ' ').trim();
     return compact || fallback;

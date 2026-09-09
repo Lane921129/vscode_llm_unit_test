@@ -4,6 +4,11 @@
 
 ## 2026-09-09
 
+### 讓已驗證純 Python 的模型沿用其正式輸出能力
+
+- 模型若在連線 probe 中只通過「純 Python unittest」，正式 Tier 1／Tier 2、Tier 3、Reviewer 與 Self-repair 現在會沿用純 Python code path，而非又強制 JSON schema。這修正了探測成功、正式生成卻因不支援 structured output 失敗的能力斷鏈。
+- Semantic Analyzer 與 mutation triage 仍獨立需要 JSON；若它們不相容，系統安全採用 AST 證據觸發的技能卡基線，而不會撤銷已驗證的 unittest code-generation 能力。
+
 ### 讓 Dynamic Trace 到達多參數 conjunction 分支
 
 - 先前 Trace 一次只替換一個參數；若 `a == literal and b == literal` 的基準輸入兩邊都不符合，便永遠無法執行共同成立的分支。現在只對可靜態驗證的直接 literal、長度與 membership 子條件，建立有限的共同滿足輸入，並優先放進固定 probe 預算。

@@ -14,6 +14,7 @@ import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
+import { selectTestGenerationResponseFormat } from './llm/modelQualification';
 import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
@@ -883,6 +884,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     );
     const tier1GenerationMode = resolveTier1GenerationMode(qualifiedForSelectedModel, userTierSetting);
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
+    const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
+    if (testGenerationResponseFormat === 'text') {
+        log('[模型能力] 此模型已驗證純 Python unittest 輸出；正式測試生成將不強制 JSON schema。');
+    }
     if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
             ? '[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。'
@@ -1398,7 +1403,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         semanticContext
                     );
                     try {
-                        const raw = await requestLlmApi(params, sysP, usrP, log, 'test-code-json');
+                        const raw = await requestLlmApi(params, sysP, usrP, log, testGenerationResponseFormat);
                         rawCode = raw;
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
@@ -1460,7 +1465,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     let subGenerationPrompt = subUserPrompt;
                     for (let retry = 0; retry < 2; retry++) {
                         try {
-                            subRaw = await requestLlmApi(params, systemPrompt, subGenerationPrompt, log, 'test-code-json');
+                            subRaw = await requestLlmApi(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat);
                             const subClean = sanitizeLlmResponse(subRaw);
                             if (subClean) {
                                 const subValidation = await validateGeneratedTestCode(
@@ -1514,7 +1519,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
                     if (llmRetry === 0) {log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);}
                     try {
-                        rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log, 'test-code-json');
+                        rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat);
                     } catch (err: any) {
                         if (llmRetry === 0) {
                             log(`[警告] 網路或 API 請求失敗: ${err.message}，嘗試自動重試 (1/1)...`);
@@ -1799,7 +1804,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     moduleName,
                                     semanticContext
                                 );
-                                const revRaw = await requestLlmApi(params, revSys, revUsr, log, 'test-code-json');
+                                const revRaw = await requestLlmApi(params, revSys, revUsr, log, testGenerationResponseFormat);
                                 const revCode = sanitizeLlmResponse(revRaw);
                                 const reviewValidation = await validateGeneratedTestCode(
                                     revCode,
@@ -1872,7 +1877,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             targetImportModule,
                                             semanticContext
                                         );
-                                        const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, 'test-code-json');
+                                        const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, testGenerationResponseFormat);
                                         const repairCode = sanitizeLlmResponse(repairRaw);
                                         const repairValidation = await validateGeneratedTestCode(
                                             repairCode,

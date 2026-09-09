@@ -72,6 +72,7 @@
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 - 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
+- 正式 Writer、Tier 2 分治、Tier 3 Scaffold、Reviewer 與 Self-repair 的 code request 必須使用該 provider／模型通過資格 probe 的輸出型式；通過「純 Python unittest」者不得重新強制 JSON schema。Semantic Analyzer 與 mutant triage 的 JSON 契約可獨立失敗並退回 deterministic AST 技能基線，不得阻擋已驗證的純 Python code path。
 - 尚未完成「測試連線」的 provider／model 視為尚未驗證；**Auto** 必須先使用有真實 Dynamic Trace 的 Tier 1 deterministic fallback，且只有同一 provider／model 通過可執行 unittest 探測後，Auto 才可使用 LLM 證據導向 Tier 1 與 Tier 2–4。使用者明確選擇 Tier 1–4 時必須保留其選擇，不得因探測缺失強制降階；其模型輸出仍必須通過結構、隔離執行、覆蓋率與突變閘門。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
 - 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
 - 正式 Semantic Analyzer、Writer、Reviewer 與 mutation triage 的模型生成請求必須對暫態傳輸錯誤及 `408`、`429`、`5xx` 採有限次數、帶 jitter 的指數退避；`400`、認證與權限錯誤不得重試。重試不得重設使用者選擇的總 timeout，取消後不得繼續發送請求，且不得依 provider 或模型名稱決定規則。

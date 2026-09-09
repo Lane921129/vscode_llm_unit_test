@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { findModelProfile, modelProfileKey, qualificationForSelectedProfile, restoreModelProfiles, upsertModelProfile } from '../llm/modelProfileRegistry';
+import { selectTestGenerationResponseFormat } from '../llm/modelQualification';
 
 const localProfile = {
     envType: 'local' as const,
@@ -57,4 +58,19 @@ test('does not let an unprobed model inherit another model\'s qualification', ()
     assert.strictEqual(qualificationForSelectedProfile([], {
         envType: 'local', modelName: 'first-model'
     }, false), undefined);
+});
+
+test('uses a verified model\'s plain-Python capability for code generation only', () => {
+    assert.strictEqual(selectTestGenerationResponseFormat({
+        testGenerationReady: true,
+        testGenerationMode: '純 Python unittest'
+    }), 'text');
+    assert.strictEqual(selectTestGenerationResponseFormat({
+        testGenerationReady: true,
+        testGenerationMode: '結構化 JSON unittest'
+    }), 'test-code-json');
+    assert.strictEqual(selectTestGenerationResponseFormat({
+        testGenerationReady: false,
+        testGenerationMode: '純 Python unittest'
+    }), 'test-code-json');
 });
