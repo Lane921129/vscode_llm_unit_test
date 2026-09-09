@@ -60,6 +60,19 @@ test('does not let an unprobed model inherit another model\'s qualification', ()
     }, false), undefined);
 });
 
+test('applies a Cloud qualification when Google changes only the models/ prefix', () => {
+    assert.strictEqual(qualificationForSelectedProfile([{
+        envType: 'cloud',
+        modelName: 'models/gemma-4-31b-it',
+        paramSize: 'Cloud',
+        contextLength: 1000000,
+        testGenerationReady: true,
+        testGenerationMode: '純 Python unittest'
+    }], {
+        envType: 'cloud', modelName: 'gemma-4-31b-it'
+    }, true), true);
+});
+
 test('uses a verified model\'s plain-Python capability without requesting provider JSON modes', () => {
     assert.strictEqual(selectTestGenerationResponseFormat({
         testGenerationReady: true,

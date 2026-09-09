@@ -17,6 +17,16 @@ export type TestGenerationResponseFormat = 'test-code-json' | 'text';
 export type AnalysisResponseFormat = 'json' | 'text';
 
 /**
+ * Google exposes identical models both as `models/name` and `name`.
+ * Capability identity must use the same provider-neutral spelling wherever a
+ * saved probe is looked up or applied; otherwise a successful Cloud probe can
+ * be found by the registry but rejected by the final qualification check.
+ */
+function normalizedModelName(modelName: string): string {
+    return modelName.trim().replace(/^models\//i, '').toLowerCase();
+}
+
+/**
  * Use the exact response style that the selected model proved it can produce.
  * Semantic analysis still uses JSON independently; this applies only to
  * complete unittest/scaffold/repair code requests.
@@ -87,7 +97,8 @@ export function qualificationForRequest(
         // Preserve compatibility with pre-qualification profiles.
         return profile.testGenerationReady;
     }
-    return profile.envType === request.envType && profile.modelName === request.modelName
+    return profile.envType === request.envType
+        && normalizedModelName(profile.modelName) === normalizedModelName(request.modelName)
         ? profile.testGenerationReady
         : false;
 }

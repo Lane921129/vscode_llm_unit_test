@@ -4,6 +4,10 @@
 
 ## 2026-09-09
 
+### 修正 Cloud 模型資格名稱比對
+
+- 統一 Cloud 模型資格判斷的模型名稱正規化：Google 回傳的 `models/<name>` 與介面選取的 `<name>` 現在會正確套用同一份資格資料，不會讓已通過探測的模型在 Auto 模式誤回退。
+
 ### 為 Cloud 結構化模型加入分析與 mutation triage schema
 
 - 除了 unittest code 以外，Cloud provider 現在也會對 Semantic Analyzer 與 mutation triage 附上最小任務 JSON Schema；這能讓支援 structured output 的模型在傳輸層先固定必要欄位，降低任意 JSON 或缺少 `verdicts` 的回覆機率。
