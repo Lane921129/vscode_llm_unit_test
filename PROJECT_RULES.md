@@ -63,6 +63,7 @@
 - 每一項新增 Trace 輸入推導能力，都必須新增中性 corpus fixture，並至少驗證 AST／Trace 取得預期輸入、deterministic Tier 1 unittest 可執行，以及符合該 fixture 的 mutation 門檻；不得只以單一 helper unit test 宣稱品質提升。
 - corpus 的 Python 整合驗收必須使用與 extension 相同的工作區 `.venv` 解析邏輯；不得在測試程式硬寫系統 `python`，避免本機套件遮蔽乾淨環境的依賴問題。
 - 語意分析師提出的 input hints 只是候選；在傳給 Writer 前必須以 AST 目標函式 signature 過濾，絕不得讓 dependency 的參數、回傳 key 或 caller 局部變數成為 target kwargs。目標呼叫站僅能提供候選輸入，不是相依行為或輸出 oracle。
+- Semantic Analyzer 的 scalar input hints 可在 AST signature 完整、每個 required 非 variadic 參數都有安全 literal／source default 時，轉為有上限的 Dynamic Trace 候選；只接受 `None`、布林、有限數字與無 expression 的短字串，禁止 eval、collection、call、attribute 或變數名。再次 Trace 必須與既有 I/O 合併保留，且新增結果仍須由真實執行決定 assertion／例外；候選本身永遠不是 oracle。
 - 相對 import 的 caller 解析必須先依 caller 所在 package 與 `ImportFrom.level` 正規化為絕對模組路徑，再與 target module 比對；不可只以短模組名相符就收集 caller。跨模組 caller literals 必須透過 corpus 實測傳到 Dynamic Trace。
 - `from . import module` 後的 `module.target(...)` 只能在該 relative alias 完整解析後精確匹配 selected target module 時視為 caller；不得把 package 的未知 attribute 或同名成員當作 module fact。
 - 已解析的 module alias 仍須在呼叫行通過 lexical scope／module binding 歷史檢查；函式參數、區域 assignment、`nonlocal`、或較晚的 module rebind 都使該 alias 失去 caller 證據資格。

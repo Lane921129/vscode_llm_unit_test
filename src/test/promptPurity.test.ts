@@ -124,6 +124,14 @@ test('semantic prompt distinguishes target caller inputs from dependency calls',
     assert.doesNotMatch(prompt, /HOW TARGET CALLS DEPENDENCIES/);
 });
 
+test('semantic prompt restricts re-traced candidates to safe scalar literals', () => {
+    const prompt = buildSemanticAnalyzerSystemPrompt();
+
+    assert.match(prompt, /emit only scalar Python literals/);
+    assert.match(prompt, /never an output oracle by themselves/);
+    assert.doesNotMatch(prompt, forbiddenDomainTerms);
+});
+
 test('writer prompt calls static methods through the class without inventing an instance', () => {
     const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
 

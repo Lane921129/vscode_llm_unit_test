@@ -31,6 +31,7 @@ import { validateTraceAssertionEvidence } from './validation/traceAssertionEvide
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
+import { buildSemanticTraceCandidates, SemanticTraceInput } from './tier/semanticTraceCandidates';
 import * as path from 'path';
 import * as fs from 'fs';
 import { runSpawn } from './utils/processRunner';
@@ -493,7 +494,7 @@ interface DynamicTraceResult {
     examples: TraceExample[];
     errors: TraceExample[];
     load_error: string | null;
-    input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry';
+    input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry' | 'semantic_guided';
 }
 
 /**
@@ -504,7 +505,8 @@ async function runDynamicTrace(
     filePath: string,
     funcName: string,
     callerArgs?: CallerContext[],
-    pythonExecutable: string = 'python'
+    pythonExecutable: string = 'python',
+    semanticInputs: SemanticTraceInput[] = []
 ): Promise<DynamicTraceResult | null> {
     const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
     const baseArgs = [pythonScript, filePath, funcName];
@@ -524,6 +526,12 @@ async function runDynamicTrace(
                 constructor_kwargs: ctx.trace_constructor_kwargs || {}
             }));
     }
+    const suppliedInputs = [...literalInputs, ...semanticInputs].filter(input =>
+        Array.isArray(input.args) && input.kwargs !== null && typeof input.kwargs === 'object'
+    );
+    const uniqueInputs = suppliedInputs.filter((input, index) =>
+        suppliedInputs.findIndex(candidate => JSON.stringify(candidate) === JSON.stringify(input)) === index
+    );
     try {
         const runTrace = async (inputs?: typeof literalInputs): Promise<DynamicTraceResult> => {
             const args = [...baseArgs];
@@ -534,19 +542,45 @@ async function runDynamicTrace(
             });
             return JSON.parse(stdout.trim()) as DynamicTraceResult;
         };
-        const initial = await runTrace(literalInputs);
-        if (shouldRetryTraceWithoutCallerInputs(initial, literalInputs.length)) {
+        const initial = await runTrace(uniqueInputs);
+        if (shouldRetryTraceWithoutCallerInputs(initial, uniqueInputs.length)) {
             const retry = await runTrace();
             return { ...retry, input_source: 'source_guided_retry' };
         }
         return {
             ...initial,
-            input_source: literalInputs.length > 0 ? 'caller_literals' : 'source_guided'
+            input_source: semanticInputs.length > 0
+                ? 'semantic_guided'
+                : literalInputs.length > 0 ? 'caller_literals' : 'source_guided'
         };
     } catch (e: any) {
         console.error(`[Trace ERROR] ${e.message || e}`);
         return { func_name: funcName, args: [], examples: [], errors: [], load_error: `spawn failed: ${e.message || 'unknown'}` } as DynamicTraceResult;
     }
+}
+
+/** Retain the initial Trace facts when semantic candidates add more executions. */
+function mergeDynamicTraceResults(
+    initial: DynamicTraceResult | undefined,
+    additional: DynamicTraceResult
+): DynamicTraceResult {
+    if (!initial || initial.load_error) {return additional;}
+    if (additional.load_error) {return initial;}
+    const mergeItems = (left: TraceExample[], right: TraceExample[]) => {
+        const seen = new Set<string>();
+        return [...left, ...right].filter(item => {
+            const key = JSON.stringify(item);
+            if (seen.has(key)) {return false;}
+            seen.add(key);
+            return true;
+        });
+    };
+    return {
+        ...additional,
+        examples: mergeItems(initial.examples, additional.examples),
+        errors: mergeItems(initial.errors, additional.errors),
+        input_source: 'semantic_guided'
+    };
 }
 
 async function requestLlmApi(
@@ -1253,6 +1287,30 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     astContext as any
                 );
                 semanticContext = formatSemanticContextForPrompt(semResult, semDeps);
+                const semanticTraceInputs = buildSemanticTraceCandidates(
+                    semResult,
+                    (astContext as any).signature
+                );
+                if (semanticTraceInputs.length > 0) {
+                    log(`[語意 Trace] 正在以 ${semanticTraceInputs.length} 組安全 scalar 候選取得真實 I/O...`);
+                    const semanticTrace = await runDynamicTrace(
+                        params.filePath,
+                        params.funcName,
+                        astContext.callerContexts,
+                        pythonExecutable,
+                        semanticTraceInputs
+                    );
+                    if (semanticTrace && !semanticTrace.load_error) {
+                        const mergedTrace = mergeDynamicTraceResults(
+                            (astContext as any).traceResult,
+                            semanticTrace
+                        );
+                        (astContext as any).traceResult = mergedTrace;
+                        log(`[語意 Trace] 完成！新增候選已實測；目前共 ${mergedTrace.examples.length} 個成功範例、${mergedTrace.errors.length} 個例外範例。`);
+                    } else if (semanticTrace?.load_error) {
+                        log(`[語意 Trace] 候選無法安全執行：${semanticTrace.load_error}（保留原有 Trace 事實）。`);
+                    }
+                }
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
                 finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;

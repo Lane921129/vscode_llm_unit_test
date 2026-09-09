@@ -16,6 +16,10 @@
 
 - Cloud、Ollama、Custom API 的 unittest 資格探測與正式測試生成現在一律要求純 Python code fence，不再先要求把完整測試檔 JSON 轉義。語意分析與突變分流仍可使用 JSON 欄位契約，並有本地 parser gate。
 
+### 語意候選回饋為真實 Trace 事實
+
+- Tier 1／Tier 2 的 Semantic Analyzer 提出的安全 scalar 邊界值，現在會在完整 AST signature 檢查後再交給 Dynamic Trace 實測；只有實際回傳或例外才會進入 Writer。原本 Trace I/O 不會被覆寫，並新增中性 corpus 驗證「語意候選→Trace→deterministic unittest→mutation」閉環。
+
 ### 為 Cloud 結構化模型加入分析與 mutation triage schema
 
 - 除了 unittest code 以外，Cloud provider 現在也會對 Semantic Analyzer 與 mutation triage 附上最小任務 JSON Schema；這能讓支援 structured output 的模型在傳輸層先固定必要欄位，降低任意 JSON 或缺少 `verdicts` 的回覆機率。

@@ -254,6 +254,7 @@ ANALYSIS RULES:
     * Does it call a verified imported HTTP client? → add "http_client_mocking"
     * ALWAYS add "import_module_name"
 - For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)
+- For test_strategy.input_hints: emit only scalar Python literals: None, True, False, a finite number, or a plain quoted string. Do not emit expressions, calls, collections, comprehensions, attributes, or variable names. Safe scalar candidates may be re-executed by Dynamic Trace; they are never an output oracle by themselves.
 - For test_strategy.key_rules: only add rules NOT already covered by the selected skill cards
 - If no dependencies, return empty arrays for dependency_behaviors, unreachable_paths, equivalent_mutant_candidates, mock_required_for
 - Return ONLY the JSON object, no explanation text`;

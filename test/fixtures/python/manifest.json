@@ -44,6 +44,14 @@
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["using generic values instead of declared Literal inputs"]}
     },
     {
+      "id": "tier1-semantic-trace-candidate",
+      "tier": 1,
+      "source": "tier1_semantic_trace.py",
+      "target": "mark_multiple",
+      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable", "semantic_trace_inputs": ["37"]},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["using an unexecuted semantic candidate as an assertion oracle"]}
+    },
+    {
       "id": "tier2-pattern-match",
       "tier": 2,
       "source": "tier2_pattern.py",
