@@ -4,11 +4,17 @@ export interface CallerTraceContext {
     kwargs?: Record<string, string>;
     trace_args?: unknown[] | null;
     trace_kwargs?: Record<string, unknown> | null;
+    trace_constructor_args?: unknown[] | null;
+    trace_constructor_kwargs?: Record<string, unknown> | null;
+    constructor_args?: string[] | null;
+    constructor_kwargs?: Record<string, string> | null;
 }
 
 export interface CallerTraceExample {
     args: string[];
     kwargs?: Record<string, string>;
+    constructor_args?: string[];
+    constructor_kwargs?: Record<string, string>;
     [key: string]: unknown;
 }
 
@@ -41,9 +47,17 @@ export function traceSubsetForCaller(
     }
     const expectedArgs = caller.args || [];
     const expectedKwargs = caller.kwargs || {};
+    const hasVerifiedConstructorContext = Array.isArray(caller.trace_constructor_args)
+        && caller.trace_constructor_kwargs !== null
+        && Array.isArray(caller.constructor_args)
+        && caller.constructor_kwargs !== null;
     const matches = (example: CallerTraceExample) =>
         JSON.stringify(example.args || []) === JSON.stringify(expectedArgs)
-        && sameRecord(example.kwargs, expectedKwargs);
+        && sameRecord(example.kwargs, expectedKwargs)
+        && (!hasVerifiedConstructorContext || (
+            JSON.stringify(example.constructor_args || []) === JSON.stringify(caller.constructor_args || [])
+            && sameRecord(example.constructor_kwargs, caller.constructor_kwargs || {})
+        ));
 
     return {
         ...trace,

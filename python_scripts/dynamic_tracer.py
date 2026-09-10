@@ -892,10 +892,12 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
     for inp in test_inputs:
         kwargs = {}
         constructor_args, constructor_kwargs = [], {}
+        constructor_context_supplied = False
         if isinstance(inp, dict):
             kwargs = inp.get('kwargs', {})
             constructor_args = inp.get('constructor_args', [])
             constructor_kwargs = inp.get('constructor_kwargs', {})
+            constructor_context_supplied = 'constructor_args' in inp and 'constructor_kwargs' in inp
             inp = inp.get('args', [])
         if not isinstance(inp, (list, tuple)):
             inp = (inp,)
@@ -941,6 +943,11 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                 name: trace_repr_with_oracle(value)
                 for name, value in kwargs.items()
             }
+            formatted_constructor_args = [trace_repr_with_oracle(argument) for argument in constructor_args]
+            formatted_constructor_kwargs = {
+                name: trace_repr_with_oracle(value)
+                for name, value in constructor_kwargs.items()
+            }
             formatted_result, result_assertable = trace_repr_with_oracle(ret)
             example = {
                 "args": [rendered for rendered, _ in formatted_args],
@@ -958,6 +965,16 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                 example['result_collection_limit'] = TRACE_COLLECTION_LIMIT
             if kwargs:
                 example["kwargs"] = {name: rendered for name, (rendered, _) in formatted_kwargs.items()}
+            if (func_is_method or func_is_property) and constructor_context_supplied:
+                example['constructor_args'] = [rendered for rendered, _ in formatted_constructor_args]
+                if formatted_constructor_kwargs:
+                    example['constructor_kwargs'] = {
+                        name: rendered for name, (rendered, _) in formatted_constructor_kwargs.items()
+                    }
+                if not all(assertable for _, assertable in formatted_constructor_args) or not all(
+                    assertable for _, assertable in formatted_constructor_kwargs.values()
+                ):
+                    example['call_assertable'] = False
             result["examples"].append(example)
         except TraceSafetyError as error:
             # A blocked operation is diagnostic only, never a claimed target
@@ -976,6 +993,11 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     name: trace_repr_with_oracle(value)
                     for name, value in kwargs.items()
                 }
+                formatted_constructor_args = [trace_repr_with_oracle(argument) for argument in constructor_args]
+                formatted_constructor_kwargs = {
+                    name: trace_repr_with_oracle(value)
+                    for name, value in constructor_kwargs.items()
+                }
                 error_record = {
                     "args": [rendered for rendered, _ in formatted_args],
                     "exception": exc_type,
@@ -987,6 +1009,16 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     error_record['call_assertable'] = False
                 if kwargs:
                     error_record["kwargs"] = {name: rendered for name, (rendered, _) in formatted_kwargs.items()}
+                if (func_is_method or func_is_property) and constructor_context_supplied:
+                    error_record['constructor_args'] = [rendered for rendered, _ in formatted_constructor_args]
+                    if formatted_constructor_kwargs:
+                        error_record['constructor_kwargs'] = {
+                            name: rendered for name, (rendered, _) in formatted_constructor_kwargs.items()
+                        }
+                    if not all(assertable for _, assertable in formatted_constructor_args) or not all(
+                        assertable for _, assertable in formatted_constructor_kwargs.values()
+                    ):
+                        error_record['call_assertable'] = False
                 result["errors"].append(error_record)
             # 其他例外（ImportError 等）靜默跳過
 

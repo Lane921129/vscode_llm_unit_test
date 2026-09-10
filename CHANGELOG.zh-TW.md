@@ -17,6 +17,11 @@
 - Tier 2 的子任務先前雖可通過結構驗證，但合併器只識別 `unittest.TestCase` 的固定拼寫；模型若使用 `import unittest as ut` 或 `from unittest import TestCase as Case`，已驗證子測試可能在合併時被漏掉。
 - 合併器現在依每個子檔的標準庫 import 解析允許的 TestCase base，保留普通與非同步別名 TestCase，並仍拒絕未證實來源的任意 class base。
 
+### 隔離不同實例的 Tier 2 Trace 事實
+
+- Dynamic Trace 對已由 caller literal 證實的 instance method／property 呼叫，現在會記錄建構子 args／kwargs；Tier 2 的 caller partition 會要求方法與建構子兩者都精確對應。
+- 因此兩個不同物件即使以完全相同的方法引數呼叫，也不會互借另一個 prefix、config 或 client state 的回傳 oracle；缺少可比較的建構語境時維持保守空 subset。
+
 ### 防止未驗證 Auto 模式偷偷啟動模型修補
 
 - 當未完成資格探測的 Auto 模型使用 deterministic Tier 1 fallback，而該 fallback 未通過執行或 coverage gate 時，系統現在會保留報告並停止；不再啟動 Reviewer 或 Self-repair 產生未驗證模型程式碼。

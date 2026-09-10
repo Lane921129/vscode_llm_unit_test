@@ -1191,6 +1191,30 @@ class TestService(unittest.TestCase):
         self.assertIn(("'known'", "'prefix:known'"), observed)
         self.assertIn(("'other'", "'prefix:fallback'"), observed)
 
+    def test_dynamic_tracer_records_constructor_context_with_instance_trace_facts(self):
+        source = '''class Service:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def render(self, value):
+        return self.prefix + value
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'Service.render', [
+                {'args': ['value'], 'kwargs': {}, 'constructor_args': ['first:'], 'constructor_kwargs': {}},
+                {'args': ['value'], 'kwargs': {}, 'constructor_args': ['second:'], 'constructor_kwargs': {}},
+            ])
+
+        observed = {
+            (item['constructor_args'][0], item['args'][0], item['result'])
+            for item in result['examples']
+        }
+        self.assertIsNone(result['load_error'])
+        self.assertIn(("'first:'", "'value'", "'first:value'"), observed)
+        self.assertIn(("'second:'", "'value'", "'second:value'"), observed)
+
     def test_dynamic_tracer_preserves_required_keyword_only_arguments(self):
         source = '''def multiply(value: int, *, factor: int):
     return value * factor

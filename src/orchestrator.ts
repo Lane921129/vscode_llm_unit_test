@@ -481,6 +481,8 @@ async function findCallerContexts(
 interface TraceExample {
     args: string[];
     kwargs?: Record<string, string>;
+    constructor_args?: string[];
+    constructor_kwargs?: Record<string, string>;
     result?: string;
     result_type?: string;
     result_assertable?: boolean;
