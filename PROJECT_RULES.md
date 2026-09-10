@@ -56,6 +56,7 @@
 - Tier 1 fixture scorecard 必須以機讀 `llm-evidence-bound` 或 `deterministic-fallback` provenance 分開評分；同一份彙整含有兩種模式而未選擇模式時，必須拒絕形成單一品質結論。舊報告缺少 provenance 時不可計入 LLM 成績。
 - 若要宣稱 Tier 1 LLM 已通過發行品質驗收，必須使用 scorecard 的 `--model-identity <provider/model>` 與 `--require-tier1-llm-release`；每個 Tier 1 corpus fixture 都必須是同一個模型識別、實際 Tier 1、`llm-evidence-bound`、無執行中斷且 coverage／mutation 均達各自門檻。deterministic fallback、混合模式、不同 provider／模型、缺報告、未計分或 Tier 不符一律不可替代。
 - Tier 2 分治合流的每一份模型子回覆都必須先通過 Python/unittest 結構與 Trace assertion evidence gate，兩者缺一不可；不合格子回覆只能對該子任務帶著原因重試，不得合併污染其他已通過子測試。
+- Tier 2 合併器必須以每個已驗證子回覆的標準庫 `unittest` import 解析其 `TestCase`／`IsolatedAsyncioTestCase` base 與 alias；不得只認固定 `unittest.TestCase` 字串而靜默遺失合法子測試，也不得接受未追溯到標準庫 import 的任意 base class。
 - Tier 2 依 caller 分治時，每個子 prompt 與其 Trace assertion gate 只能接收 source literal 可精確匹配該 caller 的 Trace I/O；repr、動態值、近似值或未解析 caller 一律不可借用其他 caller 的 oracle。分治完成後才由全域 Trace augmentation 保留所有已驗證目標行為。
 - Tier 2 合流不得把不同 caller context 的 `setUp`／`tearDown`／Mock 狀態塞進同一個 TestCase；每個已驗證子回覆必須保留為獨立且名稱唯一的 TestCase，只可去重共用 imports。
 - 每份中斷報告必須寫入 provider-neutral 的機讀失敗分類；分類只用於後續 Tier／模型品質分析，不能改變驗證 gate、重試或把失敗轉成通過。至少區分 API、格式、AST／Trace、執行驗證、coverage、mutation、環境與 timeout。

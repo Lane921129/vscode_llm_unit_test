@@ -8,11 +8,36 @@ interface ExtractedTestClass {
     testMethodCount: number;
 }
 
+/** Resolve only standard-library unittest TestCase spellings imported by a snippet. */
+function unittestTestCaseBases(lines: string[]): Set<string> {
+    const bases = new Set<string>();
+    for (const line of lines) {
+        const importMatch = line.match(/^\s*import\s+unittest(?:\s+as\s+([A-Za-z_]\w*))?\s*$/);
+        if (importMatch) {
+            const moduleName = importMatch[1] || 'unittest';
+            bases.add(`${moduleName}.TestCase`);
+            bases.add(`${moduleName}.IsolatedAsyncioTestCase`);
+            continue;
+        }
+        const fromMatch = line.match(/^\s*from\s+unittest\s+import\s+(.+?)\s*$/);
+        if (!fromMatch) {continue;}
+        for (const imported of fromMatch[1].split(',')) {
+            const aliasMatch = imported.trim().match(/^(TestCase|IsolatedAsyncioTestCase)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+            if (aliasMatch) {
+                bases.add(aliasMatch[2] || aliasMatch[1]);
+            }
+        }
+    }
+    return bases;
+}
+
 function extractTopLevelTestClass(snippet: string): ExtractedTestClass | undefined {
     const lines = snippet.split(/\r?\n/);
-    const classStart = lines.findIndex(line =>
-        /^class\s+\w+\s*\(\s*unittest\.(?:TestCase|IsolatedAsyncioTestCase)\s*\)\s*:/.test(line)
-    );
+    const allowedBases = unittestTestCaseBases(lines);
+    const classStart = lines.findIndex(line => {
+        const match = line.match(/^class\s+\w+\s*\(\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\)\s*:/);
+        return Boolean(match && allowedBases.has(match[1]));
+    });
     if (classStart < 0) {return undefined;}
 
     let classEnd = lines.length;

@@ -37,3 +37,32 @@ test('keeps independently validated Tier 2 TestCase setup isolated during merge'
     assert.match(merged.mergedCode, /from unittest\.mock import patch/);
     assert.doesNotMatch(merged.mergedCode, /class TestTarget\(unittest\.TestCase\):/);
 });
+
+test('keeps a structurally valid unittest alias subtask instead of silently dropping it', () => {
+    const aliased = [
+        'import unittest as ut',
+        'from sample import target',
+        '',
+        'class TestTarget(ut.TestCase):',
+        '    def test_alias_style(self):',
+        "        self.assertEqual(target('value'), 'value')",
+    ].join('\n');
+
+    const directAlias = [
+        'from unittest import IsolatedAsyncioTestCase as AsyncCase',
+        'from sample import target_async',
+        '',
+        'class TestAsyncTarget(AsyncCase):',
+        '    async def test_direct_alias_style(self):',
+        "        self.assertEqual(await target_async('value'), 'value')",
+    ].join('\n');
+    const merged = mergeTestSnippets([aliased, directAlias], 'TestTargetMerged');
+
+    assert.strictEqual(merged.totalMethodsCount, 2);
+    assert.match(merged.mergedCode, /import unittest as ut/);
+    assert.match(merged.mergedCode, /class TestTargetMerged_Site1\(ut\.TestCase\):/);
+    assert.match(merged.mergedCode, /def test_alias_style/);
+    assert.match(merged.mergedCode, /from unittest import IsolatedAsyncioTestCase as AsyncCase/);
+    assert.match(merged.mergedCode, /class TestTargetMerged_Site2\(AsyncCase\):/);
+    assert.match(merged.mergedCode, /async def test_direct_alias_style/);
+});

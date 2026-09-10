@@ -12,6 +12,11 @@
 - 若多重繼承鏈含有任何匯入或動態 base，系統也不會跳過它而採用後方本地 base 的 `__init__`；這可避免依錯誤 MRO 猜測建構子。
 - Tier 1 neutral corpus 新增「繼承必要建構參數」的完整驗收，覆蓋 AST、caller literal、Dynamic Trace、deterministic unittest 與 scoped mutation；corpus runner 同時使用 `effective_init`，避免實作端與驗收端對建構子來源不一致。
 
+### 修正 Tier 2 合流遺失合法 unittest 別名
+
+- Tier 2 的子任務先前雖可通過結構驗證，但合併器只識別 `unittest.TestCase` 的固定拼寫；模型若使用 `import unittest as ut` 或 `from unittest import TestCase as Case`，已驗證子測試可能在合併時被漏掉。
+- 合併器現在依每個子檔的標準庫 import 解析允許的 TestCase base，保留普通與非同步別名 TestCase，並仍拒絕未證實來源的任意 class base。
+
 ### 防止未驗證 Auto 模式偷偷啟動模型修補
 
 - 當未完成資格探測的 Auto 模型使用 deterministic Tier 1 fallback，而該 fallback 未通過執行或 coverage gate 時，系統現在會保留報告並停止；不再啟動 Reviewer 或 Self-repair 產生未驗證模型程式碼。
