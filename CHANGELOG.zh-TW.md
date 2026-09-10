@@ -9,6 +9,7 @@
 - AST 現在會在不猜測匯入類別、動態 base 或 metaclass 的前提下，擷取同一個 Python 模組內可解析父類別的 class attributes、`__init__` 賦值及有效繼承建構子簽名。
 - Tier 1 的 deterministic constructor gate、Semantic Analyzer、Writer 與 Reviewer 都會使用該語境辨識子類別實際仍需要的建構參數；語境只作 setup 指引，不能自行產生 constructor 值、回傳值或例外 assertion。
 - 匯入父類別與可能改寫 MRO 的類別不會宣稱有效建構子，寧可要求真實 caller literal 或停止生成，也不會把不可靠推論寫成測試。
+- 若多重繼承鏈含有任何匯入或動態 base，系統也不會跳過它而採用後方本地 base 的 `__init__`；這可避免依錯誤 MRO 猜測建構子。
 
 ### 防止未驗證 Auto 模式偷偷啟動模型修補
 

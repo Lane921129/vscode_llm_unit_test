@@ -199,6 +199,25 @@ class Worker(BaseWorker):
         self.assertEqual(data['class_context']['inherited_context'], [])
         self.assertNotIn('effective_init', data['class_context'])
 
+    def test_extractor_does_not_skip_an_unknown_earlier_multiple_inheritance_base(self):
+        source = '''from framework import ExternalBase
+
+class LocalBase:
+    def __init__(self, client):
+        self.client = client
+
+class Worker(ExternalBase, LocalBase):
+    def process(self, payload):
+        return self.client.send(payload)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'Worker.process')
+
+        self.assertEqual([item['name'] for item in data['class_context']['inherited_context']], ['LocalBase'])
+        self.assertNotIn('effective_init', data['class_context'])
+
     def test_extractor_keeps_a_declared_global_but_not_a_nonlocal_as_module_context(self):
         source = '''LIMIT = 10
 

@@ -376,7 +376,13 @@ def resolve_effective_local_init_owner(class_node, local_classes, seen=None):
         return class_node
     if class_node.decorator_list or class_node.keywords:
         return None
-    for base_node in local_base_classes(class_node, local_classes):
+    local_bases = local_base_classes(class_node, local_classes)
+    # With multiple inheritance an earlier imported or dynamic base can supply
+    # ``__init__`` before a later local base in MRO.  Do not skip that unknown
+    # base and claim the local signature is effective.
+    if len(local_bases) != len(class_node.bases):
+        return None
+    for base_node in local_bases:
         owner = resolve_effective_local_init_owner(base_node, local_classes, seen)
         if owner is not None:
             return owner
