@@ -4,6 +4,11 @@
 
 ## 2026-09-10
 
+### 防止未驗證 Auto 模式偷偷啟動模型修補
+
+- 當未完成資格探測的 Auto 模型使用 deterministic Tier 1 fallback，而該 fallback 未通過執行或 coverage gate 時，系統現在會保留報告並停止；不再啟動 Reviewer 或 Self-repair 產生未驗證模型程式碼。
+- 使用者明確選擇任一 Tier，或同一 provider／model 已通過 unittest 資格探測時，既有 Reviewer 與修補流程仍可使用，且持續受結構、Trace、執行、coverage 與 mutation gate 約束。
+
 ### 建立 Tier 1 LLM 發行門檻
 
 - `fixture_scorecard.py` 現在會確認報告中的實際 Tier 必須與 corpus fixture 相符，避免把高 Tier 或錯誤路由的分數冒充為 Tier 1 結果。

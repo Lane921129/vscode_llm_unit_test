@@ -79,6 +79,16 @@ export function canUseTierOneLlmGeneration(testGenerationReady?: boolean, userTi
     return testGenerationReady === true || userTier !== 'auto';
 }
 
+/**
+ * Reviewer and self-repair author new test code, so they must follow the same
+ * capability rule as the initial Tier 1 writer. In unqualified Auto mode the
+ * deterministic fallback remains diagnostic-only; it must not silently turn
+ * into an unverified model repair request after coverage or execution fails.
+ */
+export function canUseModelAuthoredRepair(testGenerationReady?: boolean, userTier = 'auto'): boolean {
+    return canUseTierOneLlmGeneration(testGenerationReady, userTier);
+}
+
 export type Tier1GenerationMode = 'llm-evidence-bound' | 'deterministic-fallback';
 
 /**

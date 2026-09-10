@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { canUseDeterministicTierOne, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from '../tier/tierRouter';
+import { canUseDeterministicTierOne, canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from '../tier/tierRouter';
 
 test('preserves a manual Tier selection even when a model is unqualified', () => {
     assert.strictEqual(resolveTier(70, 90, 'tier4', false), 4);
@@ -49,6 +49,14 @@ test('permits evidence-bound LLM Tier 1 after a probe or an explicit Tier choice
     assert.strictEqual(canUseTierOneLlmGeneration(undefined), false);
     assert.strictEqual(canUseTierOneLlmGeneration(false, 'tier2'), true);
     assert.strictEqual(canUseTierOneLlmGeneration(undefined, 'tier4'), true);
+});
+
+test('does not let an unqualified Auto fallback invoke a model-authored repair', () => {
+    assert.strictEqual(canUseModelAuthoredRepair(false, 'auto'), false);
+    assert.strictEqual(canUseModelAuthoredRepair(undefined, 'auto'), false);
+    assert.strictEqual(canUseModelAuthoredRepair(true, 'auto'), true);
+    assert.strictEqual(canUseModelAuthoredRepair(false, 'tier1'), true);
+    assert.strictEqual(canUseModelAuthoredRepair(undefined, 'tier3'), true);
 });
 
 test('labels deterministic output as fallback instead of an LLM result', () => {

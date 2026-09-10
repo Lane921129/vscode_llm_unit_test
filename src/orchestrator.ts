@@ -15,7 +15,7 @@ import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat } from './llm/modelQualification';
-import { canUseDeterministicTierOne, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
+import { canUseDeterministicTierOne, canUseModelAuthoredRepair, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
@@ -924,6 +924,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     );
     const tier1GenerationMode = resolveTier1GenerationMode(qualifiedForSelectedModel, userTierSetting);
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
+    const mayUseModelAuthoredRepair = canUseModelAuthoredRepair(qualifiedForSelectedModel, userTierSetting);
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
@@ -1863,6 +1864,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     if (!initialRun.ok || coverageError) {
                         log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
                         finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
+
+                        if (!mayUseModelAuthoredRepair) {
+                            const blockedRepairMessage = '確定性 Tier 1 未通過執行或 coverage 品質閘門；Auto 模式的未驗證模型不會啟動 Reviewer 或 Self-repair。請先完成測試連線，或明確選擇 Tier 後再使用模型修復。';
+                            log(`[模型能力] ${blockedRepairMessage}`);
+                            finalReportMarkdown += `> [!NOTE]\n> ${blockedRepairMessage}\n\n`;
+                            throw new Error(blockedRepairMessage);
+                        }
 
                         // ─── Reviewer LLM 修復（適用所有 Tier）───
                         log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行修復及補充測資（最多 2 次）...`);
