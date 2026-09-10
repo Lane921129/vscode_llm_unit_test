@@ -230,6 +230,48 @@ function hasAssertion(code: string): boolean {
     return /\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(code);
 }
 
+/**
+ * Resolve only standard-library unittest bases that are explicitly imported by
+ * the generated file. Models commonly prefer `from unittest import TestCase`
+ * or `import unittest as ut`; both forms are equivalent to the canonical
+ * spelling and should not be rejected merely for their style.
+ */
+function unittestTestCaseExpressions(code: string): string[] {
+    const expressions = new Set<string>();
+    for (const line of code.split(/\r?\n/)) {
+        const namespaceImport = line.match(/^\s*import\s+unittest(?:\s+as\s+([A-Za-z_]\w*))?\s*(?:#.*)?$/);
+        if (namespaceImport) {
+            const namespace = namespaceImport[1] || 'unittest';
+            expressions.add(`${namespace}.TestCase`);
+            expressions.add(`${namespace}.IsolatedAsyncioTestCase`);
+            continue;
+        }
+        const directImport = line.match(/^\s*from\s+unittest\s+import\s+(.+?)\s*(?:#.*)?$/);
+        if (!directImport) {
+            continue;
+        }
+        for (const part of directImport[1].split(',')) {
+            const imported = part.trim().match(/^(TestCase|IsolatedAsyncioTestCase)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+            if (imported) {
+                expressions.add(imported[2] || imported[1]);
+            }
+        }
+    }
+    return [...expressions];
+}
+
+function hasUnittestTestCaseClass(code: string): boolean {
+    const bases = unittestTestCaseExpressions(code);
+    if (bases.length === 0) {
+        return false;
+    }
+    const basePattern = bases.map(escapeRegex).join('|');
+    return new RegExp(
+        '^\\s*class\\s+\\w+\\s*\\(\\s*(?:' + basePattern + ')\\s*\\)\\s*:',
+        'm'
+    ).test(code);
+}
+
 function lineUsesTarget(line: string, callableName: string, targetUsage: TargetUsage,
                         callReference?: TargetCallReference): boolean {
     return targetUsage === 'property'
@@ -524,8 +566,8 @@ export function validateUnittestStructure(
     if (!/^\s*(?:from\s+unittest\s+import|import\s+unittest\b)/m.test(trimmed)) {
         return { valid: false, reason: '缺少 unittest import' };
     }
-    if (!/^\s*class\s+\w+\s*\(\s*unittest\.(?:TestCase|IsolatedAsyncioTestCase)\s*\)\s*:/m.test(trimmed)) {
-        return { valid: false, reason: '缺少 unittest.TestCase 或 unittest.IsolatedAsyncioTestCase 類別' };
+    if (!hasUnittestTestCaseClass(trimmed)) {
+        return { valid: false, reason: '缺少已明確匯入的 unittest.TestCase 或 unittest.IsolatedAsyncioTestCase 類別' };
     }
     if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
         return { valid: false, reason: '缺少 test_ 測試方法' };

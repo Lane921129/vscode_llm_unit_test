@@ -37,6 +37,7 @@
 
 - LLM 回應必須先通過 unittest 結構檢查與 Python AST 解析，才可寫入 `loop*_test.py`。
 - 結構驗證必須接受可追溯的合法匯入別名，但不得允許測試碼重新定義被測函式或其匯入別名。
+- `unittest.TestCase`／`IsolatedAsyncioTestCase` 類別可使用明確由標準庫 `unittest` 匯入的直接名稱或別名；驗證器必須追溯該 import，不可因模型選擇慣用拼寫而誤拒，也不可接受未證實來源的同名類別。
 - 結構驗證必須確認 assertion 直接驗證目標呼叫、目標的回傳值，或 `assertRaises` 區塊中的目標例外；不得將無關 assertion 視為行為測試。
 - 行為驗證只能採用可執行的 Python 語句；註解、docstring、字串或 Markdown 中出現的目標函式與 assertion 文字不得視為測試證據。
 - 生成測試不得直接啟動 shell／子程序、直接連網、直接檔案 I/O、動態執行程式碼或做破壞性檔案操作；外部行為必須使用 `unittest.mock.patch`／`mock_open` 模擬。
@@ -88,6 +89,7 @@
 - Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 - 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
+- 最小資格 probe 可接受安全的 fixture 結果暫存、固定 expected scalar、`assertEqual` 訊息與 `-> None` 註記；允許集合必須為可靜態驗證的 unittest 語句，不能為了相容性執行任意模型 Python。
 - 正式 Writer、Tier 2 分治、Tier 3 Scaffold、Reviewer 與 Self-repair 的完整 unittest code request 必須一律要求純 Python code fence，不得把整份測試檔包進 provider JSON／schema；本地 extractor、結構、隔離執行、coverage 與 mutation gate 是唯一驗證依據。Semantic Analyzer 與 mutant triage 的 JSON 契約可獨立失敗並退回 deterministic AST 技能基線，不得阻擋已驗證的純 Python code path。
 - 尚未完成「測試連線」的 provider／model 視為尚未驗證；**Auto** 必須先使用有真實 Dynamic Trace 的 Tier 1 deterministic fallback，且只有同一 provider／model 通過可執行 unittest 探測後，Auto 才可使用 LLM 證據導向 Tier 1 與 Tier 2–4。使用者明確選擇 Tier 1–4 時必須保留其選擇，不得因探測缺失強制降階；其模型輸出仍必須通過結構、隔離執行、覆蓋率與突變閘門。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
 - 模型資格的儲存、查詢與套用必須使用同一個 provider／模型身分正規化規則；Google 的 `models/<name>` 與 `<name>` 是同一模型，不得因 resource prefix 讓已通過的 Cloud 探測在 Auto 路由中失效；不同 provider 仍必須嚴格隔離。

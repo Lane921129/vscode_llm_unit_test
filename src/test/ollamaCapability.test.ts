@@ -218,3 +218,30 @@ test('failed isolated qualification retains the fixed-fixture reply for local di
     assert.strictEqual(result.capability, 'unverified');
     assert.match(result.responsePreview || '', /open/);
 });
+
+test('runnable qualification accepts safe conventional unittest aliases and result variables', async () => {
+    const code = [
+        'from unittest import TestCase as Case',
+        '',
+        'class TestIncrement(Case):',
+        '    def test_positive(self) -> None:',
+        '        actual = increment(1)',
+        '        expected = 2',
+        "        self.assertEqual(actual, expected, 'positive input')",
+        '',
+        '    def test_negative(self) -> None:',
+        '        actual = increment(-1)',
+        '        expected = 0',
+        "        self.assertEqual(actual, expected, 'negative input')",
+    ].join('\n');
+    const payload = { response: code };
+
+    assert.strictEqual(assessTestGenerationProbe(payload).capability, 'verified');
+    assert.strictEqual(isIsolatedProbeCode(code), true);
+    assert.strictEqual(await runIsolatedProbe(code), true);
+    assert.strictEqual(
+        (await verifyRunnableTestGenerationProbe(payload, async isolatedCode => isolatedCode === code)).capability,
+        'verified'
+    );
+    assert.strictEqual(isIsolatedProbeCode(code + '\nopen("unsafe", "w")'), false);
+});

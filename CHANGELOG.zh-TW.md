@@ -2,6 +2,13 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-10
+
+### 放寬安全的 unittest 資格探測格式
+
+- 正式測試與模型資格探測現在接受明確從標準庫 `unittest` 匯入的 `TestCase`／別名，以及 `import unittest as ...` 的同等寫法；不再要求模型只能輸出唯一的 `unittest.TestCase` 拼寫。
+- 資格探測也接受無副作用的 `actual = increment(...)`、常數 expected value、`assertEqual(..., "訊息")` 與 `-> None` 型別註記。這些寫法仍只可表達固定 fixture 的兩個已知案例，任何檔案、網路、shell、動態執行或任意呼叫仍會在隔離執行前拒絕。
+
 ## 2026-09-09
 
 ### 修正 Cloud 模型資格名稱比對

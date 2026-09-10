@@ -48,16 +48,64 @@ export function extractQualificationProbeCode(response: string): string {
     return extractPythonTestCode(response).trim();
 }
 
-/** Require both known probe cases, not merely one copied syntactic call. */
+const PROBE_STRING_LITERAL = String.raw`(?:[rRuU]{0,2})?(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`;
+
+/**
+ * Require both known probe cases, while accepting the harmless `actual =
+ * increment(...)` / `expected = ...` spelling used by many models. Only
+ * exact fixture scalars are recognised; arbitrary expressions never become
+ * qualification evidence.
+ */
 function hasProbeBehaviorAssertions(code: string): boolean {
-    const hasCase = (input: string, expected: string) => {
-        const escapedInput = input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const escapedExpected = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const forward = new RegExp('\\bself\\.assertEqual\\s*\\(\\s*increment\\s*\\(\\s*' + escapedInput + '\\s*\\)\\s*,\\s*' + escapedExpected + '\\s*\\)');
-        const reverse = new RegExp('\\bself\\.assertEqual\\s*\\(\\s*' + escapedExpected + '\\s*,\\s*increment\\s*\\(\\s*' + escapedInput + '\\s*\\)\\s*\\)');
-        return forward.test(code) || reverse.test(code);
+    const values = new Map<string, number>();
+    const matchedCases = new Set<string>();
+    const fixtureTerm = '(?:increment\\(\\s*(?:1|-1)\\s*\\)|[A-Za-z_]\\w*|[20])';
+    const assertion = new RegExp(
+        '^\\s*self\\.assertEqual\\s*\\(\\s*(' + fixtureTerm + ')\\s*,\\s*(' + fixtureTerm
+        + ')(?:\\s*,\\s*' + PROBE_STRING_LITERAL + ')?\\s*\\)\\s*$'
+    );
+    const valueOf = (token: string): number | undefined => {
+        const normalized = token.replace(/\s+/g, '');
+        if (normalized === 'increment(1)') {
+            return 2;
+        }
+        if (normalized === 'increment(-1)') {
+            return 0;
+        }
+        if (normalized === '2') {
+            return 2;
+        }
+        if (normalized === '0') {
+            return 0;
+        }
+        return values.get(normalized);
     };
-    return hasCase('1', '2') && hasCase('-1', '0');
+
+    for (const line of code.split(/\r?\n/)) {
+        const assignment = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*increment\s*\(\s*(-?1)\s*\)\s*$/);
+        if (assignment) {
+            values.set(assignment[1], assignment[2] === '1' ? 2 : 0);
+            continue;
+        }
+        const expectedAssignment = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*([20])\s*$/);
+        if (expectedAssignment) {
+            values.set(expectedAssignment[1], Number(expectedAssignment[2]));
+            continue;
+        }
+        const match = line.match(assertion);
+        if (!match) {
+            continue;
+        }
+        const actual = valueOf(match[1]);
+        const expected = valueOf(match[2]);
+        if (actual === 2 && expected === 2) {
+            matchedCases.add('positive');
+        }
+        if (actual === 0 && expected === 0) {
+            matchedCases.add('negative');
+        }
+    }
+    return matchedCases.has('positive') && matchedCases.has('negative');
 }
 
 /** Validates the provider-neutral JSON response used by every connection probe. */

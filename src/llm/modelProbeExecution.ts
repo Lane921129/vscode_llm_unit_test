@@ -41,24 +41,63 @@ export interface IsolatedProbeCodeAssessment {
     reason?: string;
 }
 
+const PROBE_STRING_LITERAL = String.raw`(?:[rRuU]{0,2})?(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`;
+
+function probeTestCaseBases(lines: string[]): string[] {
+    const bases = new Set<string>();
+    for (const line of lines) {
+        const namespaceImport = line.match(/^import unittest(?:\s+as\s+([A-Za-z_]\w*))?$/);
+        if (namespaceImport) {
+            bases.add(`${namespaceImport[1] || 'unittest'}.TestCase`);
+            continue;
+        }
+        const directImport = line.match(/^from unittest import TestCase(?:\s+as\s+([A-Za-z_]\w*))?$/);
+        if (directImport) {
+            bases.add(directImport[1] || 'TestCase');
+        }
+    }
+    return [...bases];
+}
+
+function isSafeProbeAssertion(line: string): boolean {
+    const fixtureTerm = '(?:increment\\(\\s*(?:1|-1)\\s*\\)|[A-Za-z_]\\w*|2|0)';
+    return new RegExp(
+        '^self\\.assertEqual\\(\\s*' + fixtureTerm + '\\s*,\\s*' + fixtureTerm
+        + '(?:\\s*,\\s*' + PROBE_STRING_LITERAL + ')?\\s*\\)$'
+    ).test(line);
+}
+
+function isSafeProbeAssignment(line: string): boolean {
+    return /^[A-Za-z_]\w*\s*=\s*increment\(\s*(?:1|-1)\s*\)$/.test(line)
+        || /^[A-Za-z_]\w*\s*=\s*(?:2|0)$/.test(line);
+}
+
 export function assessIsolatedProbeCode(code: string): IsolatedProbeCodeAssessment {
+    const lines = code.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    const testCaseBases = probeTestCaseBases(lines);
+    const escapedBases = testCaseBases.map(base => base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const classPattern = escapedBases
+        ? new RegExp('^class Test[A-Za-z_]\\w*\\((?:' + escapedBases + ')\\):$')
+        : /^(?!)$/;
     const allowed = [
-        /^import unittest$/,
+        /^import unittest(?:\s+as\s+[A-Za-z_]\w*)?$/,
+        /^from unittest import TestCase(?:\s+as\s+[A-Za-z_]\w*)?$/,
         /^def increment\(value\):(?: return value \+ 1)?$/,
         /^return value \+ 1$/,
-        /^class Test[A-Za-z_]\w*\(unittest\.TestCase\):$/,
-        /^def test_[A-Za-z_]\w*\(self\):$/,
-        /^self\.assertEqual\(increment\(1\), 2\)$/,
-        /^self\.assertEqual\(2, increment\(1\)\)$/,
-        /^self\.assertEqual\(increment\(-1\), 0\)$/,
-        /^self\.assertEqual\(0, increment\(-1\)\)$/,
+        classPattern,
+        /^def test_[A-Za-z_]\w*\(self\)(?:\s*->\s*None)?:$/,
         /^if __name__ == ['"]__main__['"]:$/,
         /^unittest\.main\(\)$/,
         /^unittest\.main\(\s*verbosity\s*=\s*\d+\s*\)$/,
         /^#.*$/,
     ];
-    const lines = code.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    const unsupportedLines = lines.filter(line => !allowed.some(pattern => pattern.test(line)));
+    const stringStatement = new RegExp('^' + PROBE_STRING_LITERAL + '$');
+    const unsupportedLines = lines.filter(line =>
+        !allowed.some(pattern => pattern.test(line))
+        && !isSafeProbeAssertion(line)
+        && !isSafeProbeAssignment(line)
+        && !stringStatement.test(line)
+    );
     return unsupportedLines.length === 0 && lines.length > 0
         ? { valid: true }
         : {
