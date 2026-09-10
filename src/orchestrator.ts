@@ -271,6 +271,8 @@ interface CallerContext {
 
 interface AstContext {
     name: string;
+    /** Python AST uses null for module-level functions without an owning class. */
+    class_name?: string | null;
     args: string[];
     signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>;
     required_args?: string[];
