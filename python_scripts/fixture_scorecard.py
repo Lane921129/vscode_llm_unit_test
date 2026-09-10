@@ -9,7 +9,7 @@ comparable without adding credentials to the repository.
 Usage:
     python python_scripts/fixture_scorecard.py <report-root>
     python python_scripts/fixture_scorecard.py <report-root> --output-dir <dir> --require-complete
-    python python_scripts/fixture_scorecard.py <report-root> --require-tier1-llm-release
+    python python_scripts/fixture_scorecard.py <report-root> --model-identity cloud/example --require-tier1-llm-release
 """
 
 import argparse
@@ -42,6 +42,7 @@ def report_fields(report_path):
     target_match = re.search(r'^- \*\*目標檔案\*\*:\s*(.+)$', text, re.MULTILINE)
     function_match = re.search(r'^- \*\*測試函式\*\*:\s*(.+)$', text, re.MULTILINE)
     tier_match = re.search(r'^- \*\*策略\*\*:\s*請求\s+([^，\n]+)，實際 Tier\s+(\d+)', text, re.MULTILINE)
+    model_identity_match = re.search(r'^- \*\*模型識別\*\*:\s*`?([^`\n]+?)`?\s*$', text, re.MULTILINE)
     generation_mode_match = re.search(r'^- \*\*Tier 1 generation mode\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     failure_category_match = re.search(r'^- \*\*失敗分類\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     coverage = percentage_values(text, '覆蓋率')
@@ -51,6 +52,7 @@ def report_fields(report_path):
         'target_function': function_match.group(1).strip() if function_match else None,
         'requested_tier': tier_match.group(1).strip() if tier_match else None,
         'resolved_tier': int(tier_match.group(2)) if tier_match else None,
+        'model_identity': model_identity_match.group(1).strip() if model_identity_match else None,
         'tier1_generation_mode': generation_mode_match.group(1) if generation_mode_match else None,
         'failure_category': failure_category_match.group(1) if failure_category_match else None,
         # A report can contain several repair loops. The rollback implementation
@@ -78,7 +80,7 @@ def matching_reports(report_root, fixture):
     return sorted(matches, key=lambda pair: pair[0].stat().st_mtime, reverse=True)
 
 
-def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
+def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_identity=None):
     """Classify one fixture without treating missing data as a passing score."""
     matches = matching_reports(report_root, fixture)
     result = {
@@ -95,11 +97,31 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
         'resolved_tier': None,
         'tier1_generation_mode': None,
         'available_tier1_generation_modes': [],
+        'model_identity': None,
+        'available_model_identities': [],
         'failure_category': None,
         'reason': '找不到對應的 final_report.md。',
     }
     if not matches:
         return result
+
+    known_model_identities = sorted({
+        fields['model_identity']
+        for _, fields in matches
+        if fields['model_identity']
+    })
+    result['available_model_identities'] = known_model_identities
+    if model_identity:
+        matches = [
+            (path, fields) for path, fields in matches
+            if fields['model_identity'] == model_identity
+        ]
+        if not matches:
+            result.update(
+                status='missing_report',
+                reason=f'找不到模型識別為 {model_identity} 的對應 final_report.md。'
+            )
+            return result
 
     if fixture['tier'] == 1:
         known_modes = sorted({
@@ -133,6 +155,7 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
         'mutation_score': fields['mutation_score'],
         'requested_tier': fields['requested_tier'],
         'resolved_tier': fields['resolved_tier'],
+        'model_identity': fields['model_identity'],
         'tier1_generation_mode': fields['tier1_generation_mode'],
         'failure_category': fields['failure_category'],
     })
@@ -156,7 +179,7 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
     return result
 
 
-def tier1_llm_release_summary(results, tier1_generation_mode):
+def tier1_llm_release_summary(results, tier1_generation_mode, model_identity):
     """Return a narrow, auditable gate for an LLM Tier 1 quality claim."""
     tier1_results = [item for item in results if item['tier'] == 1]
     blockers = [
@@ -171,8 +194,15 @@ def tier1_llm_release_summary(results, tier1_generation_mode):
             'status': 'wrong_generation_mode_filter',
             'reason': 'Tier 1 LLM 發行門檻必須以 --tier1-generation-mode llm-evidence-bound 建立 scorecard。'
         })
+    if not model_identity:
+        blockers.insert(0, {
+            'id': 'model-identity-filter',
+            'status': 'missing_model_identity_filter',
+            'reason': 'Tier 1 LLM 發行門檻必須指定單一 --model-identity，不能混合不同 provider 或模型的報告。'
+        })
     return {
         'required_generation_mode': 'llm-evidence-bound',
+        'model_identity_filter': model_identity,
         'fixture_count': len(tier1_results),
         'passed': sum(item['status'] == 'passed' and item['tier1_generation_mode'] == 'llm-evidence-bound' for item in tier1_results),
         'ready': bool(tier1_results) and filter_is_llm and not blockers,
@@ -180,13 +210,13 @@ def tier1_llm_release_summary(results, tier1_generation_mode):
     }
 
 
-def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generation_mode=None):
+def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generation_mode=None, model_identity=None):
     report_root = Path(report_root).resolve()
     manifest = load_manifest(manifest_path)
     if tier1_generation_mode and tier1_generation_mode not in TIER1_GENERATION_MODES:
         raise ValueError(f'unsupported Tier 1 generation mode: {tier1_generation_mode}')
     results = [
-        evaluate_fixture(report_root, fixture, tier1_generation_mode)
+        evaluate_fixture(report_root, fixture, tier1_generation_mode, model_identity)
         for fixture in manifest['fixtures']
     ]
     status_counts = Counter(item['status'] for item in results)
@@ -199,13 +229,14 @@ def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generatio
             'scored': sum(item['status'] in {'passed', 'threshold_failed'} for item in entries),
         }
     return {
-        'schema_version': 2,
+        'schema_version': 3,
         'manifest_schema_version': manifest['schema_version'],
         'tier1_generation_mode_filter': tier1_generation_mode,
+        'model_identity_filter': model_identity,
         'fixture_count': len(results),
         'status_counts': dict(sorted(status_counts.items())),
         'tier_summary': tier_summary,
-        'tier1_llm_release': tier1_llm_release_summary(results, tier1_generation_mode),
+        'tier1_llm_release': tier1_llm_release_summary(results, tier1_generation_mode, model_identity),
         'results': results,
     }
 
@@ -221,17 +252,18 @@ def format_markdown(scorecard):
         f"- 已計分但未達門檻：{scorecard['status_counts'].get('threshold_failed', 0)}",
         f"- 未計分／缺報告／執行中斷：{scorecard['fixture_count'] - scorecard['status_counts'].get('passed', 0) - scorecard['status_counts'].get('threshold_failed', 0)}",
         f"- Tier 1 產生模式篩選：{scorecard['tier1_generation_mode_filter'] or '未篩選（混合模式會拒絕計分）'}",
+        f"- 模型識別篩選：{scorecard['model_identity_filter'] or '未篩選（不可作為單一模型發行證據）'}",
         f"- Tier 1 LLM 發行門檻：{'通過' if scorecard['tier1_llm_release']['ready'] else '未通過'}（{scorecard['tier1_llm_release']['passed']}/{scorecard['tier1_llm_release']['fixture_count']}）",
         '',
-        '| Tier | Fixture | 產生模式 | 狀態 | 失敗分類 | Coverage | Mutation | 報告 |',
-        '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        '| Tier | Fixture | 模型識別 | 產生模式 | 狀態 | 失敗分類 | Coverage | Mutation | 報告 |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ]
     for result in scorecard['results']:
         coverage = f"{result['coverage']:g}%" if result['coverage'] is not None else 'N/A'
         mutation = f"{result['mutation_score']:g}%" if result['mutation_score'] is not None else 'N/A'
         report = result['report'] or '—'
         lines.append(
-            f"| {result['tier']} | {result['id']} | {result['tier1_generation_mode'] or '—'} | {result['status']} | {result['failure_category'] or '—'} | {coverage} / {result['min_line_coverage']}% | "
+            f"| {result['tier']} | {result['id']} | {result['model_identity'] or '—'} | {result['tier1_generation_mode'] or '—'} | {result['status']} | {result['failure_category'] or '—'} | {coverage} / {result['min_line_coverage']}% | "
             f"{mutation} / {result['min_mutation_score']}% | {report} |"
         )
     lines.extend(['', '## 判定說明', ''])
@@ -260,6 +292,7 @@ def main(argv=None):
     parser.add_argument('--output-dir', help='Destination for fixture_scorecard.json and fixture_scorecard.md.')
     parser.add_argument('--require-complete', action='store_true', help='Return non-zero unless every fixture passes its thresholds.')
     parser.add_argument('--tier1-generation-mode', choices=sorted(TIER1_GENERATION_MODES), help='Score LLM and deterministic Tier 1 reports separately.')
+    parser.add_argument('--model-identity', help='Exact provider/model identity recorded by the extension, for example cloud/gemma-4-31b-it.')
     parser.add_argument('--require-tier1-llm-release', action='store_true', help='Return non-zero unless every Tier 1 fixture has a passing llm-evidence-bound report.')
     args = parser.parse_args(argv)
 
@@ -268,13 +301,16 @@ def main(argv=None):
         parser.error(f'report root is not a directory: {root}')
     if args.require_tier1_llm_release and args.tier1_generation_mode not in {None, 'llm-evidence-bound'}:
         parser.error('--require-tier1-llm-release requires llm-evidence-bound, not deterministic-fallback.')
+    if args.require_tier1_llm_release and not args.model_identity:
+        parser.error('--require-tier1-llm-release requires one --model-identity.')
     generation_mode = 'llm-evidence-bound' if args.require_tier1_llm_release else args.tier1_generation_mode
-    scorecard = build_scorecard(root, tier1_generation_mode=generation_mode)
+    scorecard = build_scorecard(root, tier1_generation_mode=generation_mode, model_identity=args.model_identity)
     output_dir = Path(args.output_dir) if args.output_dir else root / 'fixture_scorecard'
     json_path, markdown_path = write_scorecard(scorecard, output_dir)
     print(json.dumps({
         'fixture_count': scorecard['fixture_count'],
         'status_counts': scorecard['status_counts'],
+        'model_identity_filter': scorecard['model_identity_filter'],
         'tier1_llm_release': scorecard['tier1_llm_release'],
         'json': str(json_path),
         'markdown': str(markdown_path),

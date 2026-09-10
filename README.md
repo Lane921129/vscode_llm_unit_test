@@ -102,6 +102,15 @@ Each analysis run creates an output session. The main `final_report.md` records 
 
 Coverage is a required quality gate, not an optional display value. If the Python interpreter used by VS Code cannot import `coverage`, analysis stops before scoring and reports the exact dependency command. Install `requirements.txt` using that same interpreter, then restart the Extension Development Host.
 
+To make a Tier 1 LLM release-quality claim for one exact provider/model, build a scorecard with its recorded model identity:
+
+```bash
+.venv/Scripts/python.exe python_scripts/fixture_scorecard.py <report-root> \
+  --model-identity cloud/gemma-4-31b-it --require-tier1-llm-release
+```
+
+The gate requires every Tier 1 fixture to have an `llm-evidence-bound`, actual Tier 1 report that passes its coverage and mutation thresholds. It never combines Cloud, Ollama, Custom API, fallback, or different-model results.
+
 ## Current limitations
 
 - LLM quality varies. Tier 2–4 output is validated but cannot make an incapable model reason correctly.
@@ -219,6 +228,15 @@ npm run compile
 每次分析的 `final_report.md` 會記錄模型、Tier、Trace、驗證失敗、coverage、mutation baseline、survived mutant 與修補嘗試。只有原始 baseline 在相同隔離匯入環境通過後，才會報告 mutation score。
 
 Coverage 是必要的品質閘門，不是可省略的顯示欄位。若 VS Code 實際使用的 Python 無法匯入 `coverage`，分析會在計分前停止，並提供相同直譯器的安裝指令。請用該直譯器安裝 `requirements.txt` 後重啟 Extension Development Host。
+
+若要針對單一 provider／模型宣稱 Tier 1 LLM 已達發行品質，請用 report 中的模型識別建立 scorecard：
+
+```bash
+.venv/Scripts/python.exe python_scripts/fixture_scorecard.py <報告資料夾> \
+  --model-identity cloud/gemma-4-31b-it --require-tier1-llm-release
+```
+
+此 gate 要求每個 Tier 1 fixture 都有 `llm-evidence-bound`、實際 Tier 1、coverage 與 mutation 達標的報告；不會混合 Cloud、Ollama、Custom API、fallback 或不同模型的成績。
 
 ## 已知限制
 

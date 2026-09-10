@@ -3,6 +3,8 @@ export interface ReportProvenance {
     extensionVersion: string;
     buildTimestamp: string;
     extensionMode: 'development' | 'production' | 'test' | 'unknown';
+    /** Provider-neutral transport identity; model names alone are not globally unique. */
+    modelProvider: 'local' | 'cloud' | 'custom';
     modelName: string;
     requestedTier: string;
     resolvedTier: number;
@@ -27,6 +29,7 @@ export function formatReportProvenance(provenance: ReportProvenance): string {
         `- **擴充功能**: \`${provenance.extensionId}@${provenance.extensionVersion}\``,
         `- **建置識別**: \`${provenance.buildTimestamp}\``,
         `- **執行模式**: ${provenance.extensionMode}`,
+        `- **模型識別**: \`${provenance.modelProvider}/${provenance.modelName}\``,
         `- **模型**: \`${provenance.modelName}\``,
         `- **策略**: 請求 ${provenance.requestedTier}，實際 Tier ${provenance.resolvedTier}`, 
         `- **模型 unittest 生成能力（測試連線驗證）**: ${qualification}`,

@@ -8,6 +8,7 @@
 
 - `fixture_scorecard.py` 現在會確認報告中的實際 Tier 必須與 corpus fixture 相符，避免把高 Tier 或錯誤路由的分數冒充為 Tier 1 結果。
 - 新增 `--require-tier1-llm-release`：只有全部 Tier 1 fixture 都以 `llm-evidence-bound` 模式、實際 Tier 1、完整 coverage 與 mutation 分數通過各自門檻時，命令才回傳成功。缺報告、fallback、混合模式、執行中斷、未計分或 Tier 不符都會阻擋發行宣稱。
+- final report 現在機讀記錄 provider／model 組成的模型識別；scorecard 與發行 gate 必須指定該識別，不能把 Cloud、Ollama、Custom API 或不同模型的報告拼成單一模型的品質成績。
 
 ### 放寬安全的 unittest 資格探測格式
 

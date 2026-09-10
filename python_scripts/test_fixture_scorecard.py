@@ -10,7 +10,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from fixture_scorecard import build_scorecard, format_markdown, load_manifest, main, write_scorecard
 
 
-def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None, resolved_tier=1):
+def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None, resolved_tier=1, model_identity='cloud/test-model'):
     interrupted = '\n### ❌ 執行中斷（第 2 輪）\n' if error else ''
     mode_line = f'- **Tier 1 generation mode**: {generation_mode}\n' if generation_mode else ''
     failure_line = f'- **失敗分類**: {failure_category}\n' if failure_category else ''
@@ -19,6 +19,7 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 - **目標檔案**: {target_file}
 - **測試函式**: {target_function}
 
+- **模型識別**: `{model_identity}`
 - **策略**: 請求 tier{resolved_tier}，實際 Tier {resolved_tier}
 {mode_line}{failure_line}- **覆蓋率**: {coverage}% (未覆蓋行號: 無)
 - **突變分數**: {mutation}%
@@ -61,7 +62,7 @@ class FixtureScorecardTests(unittest.TestCase):
         result = next(item for item in card['results'] if item['id'] == 'tier1-boundary')
         self.assertEqual(result['status'], 'execution_error')
         self.assertEqual(result['failure_category'], 'model-format')
-        self.assertEqual(stored['schema_version'], 2)
+        self.assertEqual(stored['schema_version'], 3)
         self.assertIn('execution_error', format_markdown(card))
         self.assertIn('Fixture Corpus Scorecard', markdown)
 
@@ -94,6 +95,21 @@ class FixtureScorecardTests(unittest.TestCase):
         result = next(item for item in card['results'] if item['id'] == 'tier1-boundary')
         self.assertEqual(result['status'], 'incomplete_provenance')
 
+    def test_scorecard_filters_the_exact_provider_model_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            self.write_report(root, 'cloud', report('/portable/tier1_boundary.py', 'clamp', 100, 100, model_identity='cloud/shared-name'))
+            self.write_report(root, 'local', report('/portable/tier1_boundary.py', 'clamp', 100, 100, model_identity='local/shared-name'))
+            cloud = build_scorecard(root, model_identity='cloud/shared-name')
+            unavailable = build_scorecard(root, model_identity='custom/shared-name')
+
+        cloud_result = next(item for item in cloud['results'] if item['id'] == 'tier1-boundary')
+        unavailable_result = next(item for item in unavailable['results'] if item['id'] == 'tier1-boundary')
+        self.assertEqual(cloud_result['status'], 'passed')
+        self.assertEqual(cloud_result['model_identity'], 'cloud/shared-name')
+        self.assertEqual(cloud_result['available_model_identities'], ['cloud/shared-name', 'local/shared-name'])
+        self.assertEqual(unavailable_result['status'], 'missing_report')
+
     def test_tier1_llm_release_gate_requires_all_llm_reports_at_the_correct_tier(self):
         tier1_fixtures = [fixture for fixture in load_manifest()['fixtures'] if fixture['tier'] == 1]
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -108,19 +124,19 @@ class FixtureScorecardTests(unittest.TestCase):
                     )
                 )
             unfiltered = build_scorecard(root)
-            llm_only = build_scorecard(root, tier1_generation_mode='llm-evidence-bound')
+            llm_only = build_scorecard(root, tier1_generation_mode='llm-evidence-bound', model_identity='cloud/test-model')
             self.assertFalse(unfiltered['tier1_llm_release']['ready'])
             self.assertTrue(llm_only['tier1_llm_release']['ready'])
             self.assertEqual(llm_only['tier1_llm_release']['passed'], len(tier1_fixtures))
-            self.assertEqual(main([str(root), '--require-tier1-llm-release']), 0)
+            self.assertEqual(main([str(root), '--model-identity', 'cloud/test-model', '--require-tier1-llm-release']), 0)
 
             self.write_report(
                 root,
                 'wrong-tier',
                 report('/portable/tier1_boundary.py', 'clamp', 100, 100, resolved_tier=2)
             )
-            mismatch = build_scorecard(root, tier1_generation_mode='llm-evidence-bound')
-            self.assertEqual(main([str(root), '--require-tier1-llm-release']), 1)
+            mismatch = build_scorecard(root, tier1_generation_mode='llm-evidence-bound', model_identity='cloud/test-model')
+            self.assertEqual(main([str(root), '--model-identity', 'cloud/test-model', '--require-tier1-llm-release']), 1)
 
         result = next(item for item in mismatch['results'] if item['id'] == 'tier1-boundary')
         self.assertEqual(result['status'], 'tier_mismatch')

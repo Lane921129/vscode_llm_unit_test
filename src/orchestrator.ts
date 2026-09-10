@@ -964,6 +964,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **使用的策略**: Tier ${currentTier} (${userTierSetting === 'auto' ? 'Auto 自動路由' : '使用者指定 Tier ' + currentTier})\n- **日期**: ${reportDateStr}\n\n`;
     finalReportMarkdown += formatReportProvenance({
         ...extensionBuildIdentity,
+        modelProvider: params.envType,
         modelName: params.modelName,
         requestedTier: userTierSetting,
         resolvedTier,

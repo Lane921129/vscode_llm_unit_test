@@ -8,6 +8,7 @@ test('report provenance identifies a portable extension build without local path
         extensionVersion: '1.2.3',
         buildTimestamp: '2026-09-02T00:00:00.000Z',
         extensionMode: 'production',
+        modelProvider: 'local',
         modelName: 'local-instruct',
         requestedTier: 'tier3',
         resolvedTier: 1,
@@ -16,6 +17,7 @@ test('report provenance identifies a portable extension build without local path
         qualificationMode: '純 Python unittest',
     });
     assert.match(text, /lane\.llm-unit-test@1\.2\.3/);
+    assert.match(text, /模型識別\*\*: `local\/local-instruct`/);
     assert.match(text, /2026-09-02T00:00:00\.000Z/);
     assert.doesNotMatch(text, /[A-Z]:[\\/]/);
     assert.match(text, /請求 tier3，實際 Tier 1/);
