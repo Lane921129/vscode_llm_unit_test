@@ -74,6 +74,12 @@ class FixtureCorpusTests(unittest.TestCase):
                 self.assertEqual(data['is_async'], fixture['expected']['is_async'])
                 if data['method_kind'] == 'property':
                     self.assertIsNotNone(data['property_context'])
+                inherited_required = fixture['expected'].get('inherited_constructor_required')
+                if inherited_required is not None:
+                    self.assertEqual(
+                        data['class_context'].get('effective_init', {}).get('required_params'),
+                        inherited_required
+                    )
                 self.assertGreater(fixture['acceptance']['min_line_coverage'], 0)
                 self.assertGreater(fixture['acceptance']['min_mutation_score'], 0)
                 self.assertTrue(fixture['acceptance']['forbidden'])

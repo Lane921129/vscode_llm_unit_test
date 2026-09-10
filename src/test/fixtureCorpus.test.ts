@@ -24,6 +24,7 @@ interface FixtureSpec {
         is_async: boolean;
         skills: string[];
         trace: string;
+        inherited_constructor_required?: string[];
     };
     acceptance: {
         min_line_coverage: number;

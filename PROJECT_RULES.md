@@ -66,6 +66,7 @@
 - Dynamic Trace 對直接 AST `and` 條件可合成同時滿足多個不同參數之 literal／長度／集合子條件的單一探索輸入；只能在每個子條件皆可靜態證明且不衝突時使用，必須優先受限於 probe 預算，且仍不得將該輸入推定為任何輸出 oracle。巢狀 callable 的條件不得進入 selected target 的探索。
 - Dynamic Trace 可從明確 `typing.Literal[...]` annotation 擷取有限 scalar 值作為探索輸入；只接受字串、數字、布林與 `None`，不得評估 annotation 中的 call、attribute 或任意表達式。這些值僅用於實際執行 Trace，不是 output oracle。
 - 每一項新增 Trace 輸入推導能力，都必須新增中性 corpus fixture，並至少驗證 AST／Trace 取得預期輸入、deterministic Tier 1 unittest 可執行，以及符合該 fixture 的 mutation 門檻；不得只以單一 helper unit test 宣稱品質提升。
+- 每一項新增類別建構語境（包括可安全解析的繼承 `__init__`）都必須有中性 corpus fixture，端到端驗證有效 constructor signature、caller literal、Dynamic Trace、deterministic Tier 1 unittest 與 scoped mutation；corpus 不得回讀舊的子類別空 `__init__` 而略過有效建構子。
 - corpus 的 Python 整合驗收必須使用與 extension 相同的工作區 `.venv` 解析邏輯；不得在測試程式硬寫系統 `python`，避免本機套件遮蔽乾淨環境的依賴問題。
 - 語意分析師提出的 input hints 只是候選；在傳給 Writer 前必須以 AST 目標函式 signature 過濾，絕不得讓 dependency 的參數、回傳 key 或 caller 局部變數成為 target kwargs。目標呼叫站僅能提供候選輸入，不是相依行為或輸出 oracle。
 - Semantic Analyzer 的 scalar input hints 可在 AST signature 完整、每個 required 非 variadic 參數都有安全 literal／source default 時，轉為有上限的 Dynamic Trace 候選；只接受 `None`、布林、有限數字與無 expression 的短字串，禁止 eval、collection、call、attribute 或變數名。再次 Trace 必須與既有 I/O 合併保留，且新增結果仍須由真實執行決定 assertion／例外；候選本身永遠不是 oracle。

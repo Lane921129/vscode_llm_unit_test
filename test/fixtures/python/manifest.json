@@ -27,6 +27,15 @@
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["constructing Labeler without its required prefix"]}
     },
     {
+      "id": "tier1-inherited-class-method",
+      "tier": 1,
+      "source": "tier1_inherited_class.py",
+      "target": "InheritedLabeler.render",
+      "context": {"class_name": "InheritedLabeler", "method_kind": "instance"},
+      "expected": {"method_kind": "instance", "is_async": false, "skills": ["class_method_testing"], "trace": "assertable", "inherited_constructor_required": ["prefix"]},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["constructing InheritedLabeler without a verified inherited constructor literal"]}
+    },
+    {
       "id": "tier1-property",
       "tier": 1,
       "source": "tier1_property.py",

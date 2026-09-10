@@ -18,6 +18,7 @@ interface Fixture {
         is_async: boolean;
         trace_inputs?: string[];
         semantic_trace_inputs?: string[];
+        inherited_constructor_required?: string[];
     };
     acceptance: { min_mutation_score: number };
 }
@@ -50,6 +51,13 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                 [join(scriptsRoot, 'ast_extractor.py'), sourcePath, fixture.target],
                 `${fixture.id} AST extraction`
             );
+            if (fixture.expected.inherited_constructor_required) {
+                assert.deepStrictEqual(
+                    ast.class_context?.effective_init?.required_params,
+                    fixture.expected.inherited_constructor_required,
+                    `${fixture.id}: inherited constructor requirements were not preserved`
+                );
+            }
             const callers = pythonJson(
                 [join(scriptsRoot, 'ast_caller_finder.py'), fixture.target, tempDir, sourcePath],
                 `${fixture.id} caller extraction`
@@ -123,7 +131,8 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                 errors: trace.errors,
                 className: ast.class_name,
                 methodKind: ast.method_kind,
-                constructorParams: ast.class_context?.init?.required_params,
+                constructorParams: ast.class_context?.effective_init?.required_params
+                    || ast.class_context?.init?.required_params,
                 callerContexts: callers as any,
                 isAsync: ast.is_async,
             });
