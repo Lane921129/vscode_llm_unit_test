@@ -274,7 +274,7 @@ def extract_parameters(arguments, excluded_names=None):
     return parameters
 
 
-def extract_class_context(class_node, lines):
+def extract_class_context(class_node, lines, local_classes=None):
     if class_node is None:
         return None
     attrs, init_assigns, init_params, init_signature = [], [], [], []
@@ -299,7 +299,7 @@ def extract_class_context(class_node, lines):
                     visit_init_statement(child)
             for statement in item.body:
                 visit_init_statement(statement)
-    return {
+    context = {
         'name': class_node.name,
         'bases': [unparse(base) for base in class_node.bases],
         'class_attrs': attrs,
@@ -311,6 +311,76 @@ def extract_class_context(class_node, lines):
             'assigns': init_assigns,
         }
     }
+    if local_classes:
+        inherited_context = extract_local_inheritance_context(class_node, local_classes, lines)
+        context['inherited_context'] = inherited_context
+        effective_init_owner = resolve_effective_local_init_owner(class_node, local_classes)
+        if effective_init_owner is not None:
+            owner_context = extract_class_context(effective_init_owner, lines)
+            context['effective_init'] = {
+                'defined_on': effective_init_owner.name,
+                **owner_context['init'],
+            }
+    return context
+
+
+def local_base_classes(class_node, local_classes):
+    """Return source-local simple base classes without guessing imports or MRO."""
+    bases = []
+    for base in class_node.bases:
+        if isinstance(base, ast.Name) and base.id in local_classes:
+            bases.append(local_classes[base.id])
+    return bases
+
+
+def extract_local_inheritance_context(class_node, local_classes, lines):
+    """Expose bounded source setup inherited from classes in the same module.
+
+    This is setup context for a model, not proof that a constructor call is
+    safe. Imported bases, dynamic bases and arbitrary MRO manipulation remain
+    intentionally unresolved.
+    """
+    ancestors, seen = [], {class_node.name}
+
+    def visit(node):
+        for base_node in local_base_classes(node, local_classes):
+            if base_node.name in seen:
+                continue
+            seen.add(base_node.name)
+            base_context = extract_class_context(base_node, lines)
+            ancestors.append({
+                'name': base_context['name'],
+                'bases': base_context['bases'],
+                'class_attrs': base_context['class_attrs'],
+                'init': base_context['init'],
+            })
+            visit(base_node)
+
+    visit(class_node)
+    return ancestors
+
+
+def resolve_effective_local_init_owner(class_node, local_classes, seen=None):
+    """Find a conservative source-local inherited ``__init__`` owner.
+
+    Only plain local inheritance is followed. A decorated class, class keyword
+    (for example a metaclass), imported base or cycle may alter construction
+    semantics, so no effective signature is claimed in those cases.
+    """
+    seen = set() if seen is None else seen
+    if class_node.name in seen:
+        return None
+    seen.add(class_node.name)
+    if any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == '__init__'
+           for item in class_node.body):
+        return class_node
+    if class_node.decorator_list or class_node.keywords:
+        return None
+    for base_node in local_base_classes(class_node, local_classes):
+        owner = resolve_effective_local_init_owner(base_node, local_classes, seen)
+        if owner is not None:
+            return owner
+    return None
 
 
 def method_kind(func_node, class_node):
@@ -600,6 +670,10 @@ def extract_info(filepath, func_name):
             source = f.read()
         lines = source.split('\n')
         tree = ast.parse(source, filename=filepath)
+        local_classes = {
+            node.name: node for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
 
         file_imports, imported_symbols, module_globals = [], {}, {}
         for node in tree.body:
@@ -667,7 +741,7 @@ def extract_info(filepath, func_name):
             'file_imports': file_imports,
             'referenced_globals': referenced_globals,
             'class_name': class_name,
-            'class_context': extract_class_context(class_node, lines),
+            'class_context': extract_class_context(class_node, lines, local_classes),
             'method_kind': method_kind(func_node, class_node),
             'property_context': extract_property_context(class_node, lines, func_node.name),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),

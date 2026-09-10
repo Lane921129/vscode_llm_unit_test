@@ -80,6 +80,19 @@ export interface SemanticAstSetupContext {
             signature?: Array<{ name?: string; kind?: string; annotation?: string | null; default?: string | null; required?: boolean }>;
             assigns?: Array<{ name?: string; code?: string }>;
         };
+        effective_init?: {
+            defined_on?: string;
+            signature?: Array<{ name?: string; kind?: string; annotation?: string | null; default?: string | null; required?: boolean }>;
+            assigns?: Array<{ name?: string; code?: string }>;
+        };
+        inherited_context?: Array<{
+            name?: string;
+            class_attrs?: Array<{ name?: string; code?: string }>;
+            init?: {
+                signature?: Array<{ name?: string; kind?: string; annotation?: string | null; default?: string | null; required?: boolean }>;
+                assigns?: Array<{ name?: string; code?: string }>;
+            };
+        }>;
     } | null;
 }
 
@@ -157,6 +170,23 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
             lines.push('Constructor assignments (source setup):');
             for (const item of assigns) {
                 lines.push(`  - ${item.code}`);
+            }
+        }
+        const effectiveInit = classInfo.effective_init;
+        if (effectiveInit?.defined_on && effectiveInit.defined_on !== (context.class_name || classInfo.name)) {
+            const inheritedSignature = (effectiveInit.signature || []).slice(0, 12);
+            lines.push(`Inherited constructor source: ${effectiveInit.defined_on}.`);
+            if (inheritedSignature.length > 0) {
+                lines.push('Inherited constructor parameters: ' + inheritedSignature.map(param =>
+                    `${param.name || '?'}${param.annotation ? `: ${param.annotation}` : ''} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})`
+                ).join(', '));
+            }
+            const inheritedAssigns = (effectiveInit.assigns || []).filter(item => item.code).slice(0, 8);
+            if (inheritedAssigns.length > 0) {
+                lines.push('Inherited constructor assignments (source setup):');
+                for (const item of inheritedAssigns) {
+                    lines.push(`  - ${item.code}`);
+                }
             }
         }
     }

@@ -18,6 +18,7 @@
 - 產生測試前必須保留必要的語境：目標函式、imports、引用的模組常數、類別與 `__init__`、相依函式、呼叫站與動態追蹤結果。
 - AST 已取得的目標與建構子參數型別註記必須以「輸入形狀提示」完整傳給 Writer、Semantic Analyzer 與 Reviewer；型別註記不得單獨推導回傳值、例外或 assertion oracle。
 - `__init__` 語境只可包含建構子本體實際執行路徑中的 `self` 賦值；不得把巢狀 helper、lambda、內部類別的 `self` 賦值誤列為初始化狀態。
+- 當 selected class 沒有自己的 `__init__` 時，AST 只可從同一模組、無 decorator／class keyword 且以簡單名稱可解析的繼承鏈提供有效建構子語境；匯入 base、動態 base、metaclass、cycle 或無法證明的 MRO 不得猜測。繼承簽名與父類別 `self` 賦值僅是 setup 指引，仍須依真實 caller literal 或隔離執行驗證，不能直接建構測試 oracle。
 - 生成、Mock Scaffold、Reviewer 與救援程式必須使用同一個可匯入的目標模組路徑；不得以檔名匯入而建立與 package 模組不同的第二個模組實例。
 - 呼叫站搜尋必須以目標模組／匯入關係確認，不得只依同名函式全域比對。
 - 直接匯入的函式別名也必須在該呼叫行仍解析到目標 binding；函式參數、local／closure／`nonlocal` binding、同 scope import 與模組層後續重綁定都必須排除，不得把同名 callable 的參數注入 Trace。

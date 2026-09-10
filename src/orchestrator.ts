@@ -278,7 +278,7 @@ interface AstContext {
     dependencies?: { name: string, module: string, level?: number }[];
     file_imports?: { kind: string, module: string, level?: number, name: string | null, alias: string | null, bound_name: string }[];
     referenced_globals?: { name: string, code: string }[];
-    class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] } } | null;
+    class_context?: { name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] }, effective_init?: { defined_on: string, params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] }, inherited_context?: Array<{ name: string, bases: string[], class_attrs: { name: string, code: string }[], init: { params: string[], required_params?: string[], optional_params?: string[], signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>, assigns: { name: string, code: string }[] } }> } | null;
     method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
     property_context?: { name: string, getter?: unknown, setter?: unknown, deleter?: unknown } | null;
     is_async?: boolean;
@@ -1127,7 +1127,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             if (astContext.class_context) {
                 const init = astContext.class_context.init;
-                astReport += `- 類別語境: \`${astContext.class_context.name}\`，__init__ 參數：\`${init.params.join(', ') || '無'}\`，初始化屬性：\`${init.assigns.map(item => item.name).join(', ') || '無'}\`\n`;
+                const effectiveInit = astContext.class_context.effective_init;
+                const inherited = effectiveInit && effectiveInit.defined_on !== astContext.class_context.name
+                    ? `；繼承建構子：\`${effectiveInit.defined_on}(${effectiveInit.params.join(', ') || '無'})\``
+                    : '';
+                astReport += `- 類別語境: \`${astContext.class_context.name}\`，__init__ 參數：\`${init.params.join(', ') || '無'}\`，初始化屬性：\`${init.assigns.map(item => item.name).join(', ') || '無'}\`${inherited}\n`;
             }
             if (astContext.callerContexts && astContext.callerContexts.length > 0) {
                 astReport += `- 呼叫站語境 (${astContext.callerContexts.length} 個):\n`;
@@ -1170,7 +1174,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const args: string[] = astContext?.args || [];
         const methodKind = (astContext?.method_kind || 'module') as
             'module' | 'instance' | 'static' | 'class' | 'property';
-        const requiredConstructorParams = (astContext?.class_context?.init?.required_params || []) as string[];
+        const requiredConstructorParams = (astContext?.class_context?.effective_init?.required_params
+            || astContext?.class_context?.init?.required_params
+            || []) as string[];
         const stubPlan = buildStubTestPlan(
             moduleName,
             targetFuncName,
@@ -1426,7 +1432,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     log(`[Tier 1 備援] 模型未驗證，使用已驗證 Dynamic Trace 機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const className = (astContext as any)?.class_name as string | null;
-                    const constructorParams = ((astContext as any)?.class_context?.init?.required_params
+                    const constructorParams = ((astContext as any)?.class_context?.effective_init?.required_params
+                        || (astContext as any)?.class_context?.effective_init?.params
+                        || (astContext as any)?.class_context?.init?.required_params
                         || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
                     const tier1File = buildTier1TestFile({
                         moduleName: targetImportModule,
@@ -1748,7 +1756,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 } else {
                     const className = (astContext as any)?.class_name as string | null;
-                    const constructorParams = ((astContext as any)?.class_context?.init?.required_params
+                    const constructorParams = ((astContext as any)?.class_context?.effective_init?.required_params
+                        || (astContext as any)?.class_context?.effective_init?.params
+                        || (astContext as any)?.class_context?.init?.required_params
                         || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
                     const traceFile = buildTier1TestFile({
                         moduleName: targetImportModule,

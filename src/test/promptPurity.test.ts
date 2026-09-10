@@ -54,7 +54,10 @@ test('reviewer prompt uses complete AST and skill context without treating sourc
     const prompt = getReviewerUserPrompt(
         'import unittest', 'coverage missed line 5', 'render', ['value'], 'def render(value):\n    return PREFIX + value', {
             method_kind: 'instance', class_name: 'Renderer',
-            class_context: { bases: ['BaseRenderer'], init: { required_params: ['prefix'], assigns: [{ name: 'prefix' }] } },
+            class_context: {
+                bases: ['BaseRenderer'], init: { required_params: ['prefix'], assigns: [{ name: 'prefix' }] },
+                effective_init: { defined_on: 'BaseRenderer', required_params: ['prefix'], assigns: [{ name: 'prefix' }] }
+            },
             file_imports: [{ kind: 'from', module: 'settings', name: 'PREFIX', level: 0 }],
             referenced_globals: [{ name: 'PREFIX', code: "PREFIX = '>'" }],
             traceResult: { examples: [{ args: ["'x'"], kwargs: {}, result: "'>x'" }] }
@@ -65,6 +68,7 @@ test('reviewer prompt uses complete AST and skill context without treating sourc
     assert.doesNotMatch(systemPrompt, /If the code returns a string|value\[:N\]/);
     assert.match(prompt, /AST CONTEXT/);
     assert.match(prompt, /Constructor required parameters: prefix/);
+    assert.match(prompt, /Inherited constructor source: BaseRenderer/);
     assert.match(prompt, /PREFIX = '>'/);
     assert.match(prompt, /EVIDENCE-BOUND SKILL AND STRATEGY GUIDANCE/);
     assert.match(prompt, /Input: \('x'\) => Returned: '>x'/);
@@ -84,6 +88,9 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
             init: {
                 required_params: ['label'], optional_params: [], assigns: [],
                 signature: [{ name: 'label', annotation: 'str', required: true, default: null }]
+            },
+            effective_init: {
+                defined_on: 'BaseWorker', required_params: ['label'], assigns: [{ name: 'label' }]
             }
         }
     });
@@ -104,6 +111,7 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
 
     assert.match(writerPrompt, /Source parameter type hints: values: list\[str\]; limit: int = 1/);
     assert.match(writerPrompt, /Constructor type hints \(input-shape guidance only\): label: str/);
+    assert.match(writerPrompt, /Inherited constructor source: BaseWorker/);
     assert.match(writerPrompt, /never as a return-value or exception oracle/);
     assert.match(reviewerPrompt, /Source parameter type hints \(input shape only\): values: list\[str\]/);
     assert.match(reviewerPrompt, /Constructor type hints \(input shape only\): label: str/);
@@ -254,6 +262,11 @@ test('semantic analyzer receives bounded AST setup context without treating it a
                 init: {
                     signature: [{ name: 'client', required: true, default: null }],
                     assigns: [{ name: 'client', code: 'self.client = client' }]
+                },
+                effective_init: {
+                    defined_on: 'BaseWorker',
+                    signature: [{ name: 'client', required: true, default: null }],
+                    assigns: [{ name: 'client', code: 'self.client = client' }]
                 }
             }
         }
@@ -266,6 +279,8 @@ test('semantic analyzer receives bounded AST setup context without treating it a
     assert.match(prompt, /Target binding: instance member of Worker/);
     assert.match(prompt, /Constructor parameters: client \(required\)/);
     assert.match(prompt, /self\.client = client/);
+    assert.match(prompt, /Inherited constructor source: BaseWorker/);
+    assert.match(prompt, /Inherited constructor parameters: client \(required\)/);
     assert.match(prompt, /does not prove a return value, exception, or external side effect/);
 });
 

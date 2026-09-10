@@ -417,6 +417,10 @@ export function getUserPrompt(
                     prompt += `  - Constructor type hints (input-shape guidance only): ${typedConstructorParameters.join('; ')}.\n`;
                 }
             }
+            const effectiveInit = astContext.class_context?.effective_init;
+            if (effectiveInit?.defined_on && effectiveInit.defined_on !== astContext.class_name) {
+                prompt += `  - Inherited constructor source: ${effectiveInit.defined_on}; required parameters: ${effectiveInit.required_params?.join(', ') || 'none'}; initialized attributes: ${effectiveInit.assigns?.map((item: any) => item.name).join(', ') || 'none'}. This is source setup context, not permission to guess constructor values.\n`;
+            }
         }
         prompt += `- CRITICAL: Do NOT invent keyword arguments such as extra_option=... that are not in the function signature.\n`;
 

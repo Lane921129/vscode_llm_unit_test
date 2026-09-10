@@ -83,6 +83,10 @@ export function getReviewerUserPrompt(
             if (typedConstructorParameters.length > 0) {
                 prompt += `- Constructor type hints (input shape only): ${typedConstructorParameters.join('; ')}\n`;
             }
+            const effectiveInit = astContext.class_context?.effective_init;
+            if (effectiveInit?.defined_on && effectiveInit.defined_on !== astContext.class_name) {
+                prompt += `- Inherited constructor source: ${effectiveInit.defined_on}; required parameters: ${(effectiveInit.required_params || []).join(', ') || 'none'}; initialized attributes: ${(effectiveInit.assigns || []).map((item: any) => item.name).join(', ') || 'none'}. This remains setup context, not an assertion oracle.\n`;
+            }
         }
         if (astContext.file_imports?.length > 0) {
             const imports = astContext.file_imports.map((item: any) => item.kind === 'from'

@@ -4,6 +4,12 @@
 
 ## 2026-09-10
 
+### 補齊同模組繼承類別的建構語境
+
+- AST 現在會在不猜測匯入類別、動態 base 或 metaclass 的前提下，擷取同一個 Python 模組內可解析父類別的 class attributes、`__init__` 賦值及有效繼承建構子簽名。
+- Tier 1 的 deterministic constructor gate、Semantic Analyzer、Writer 與 Reviewer 都會使用該語境辨識子類別實際仍需要的建構參數；語境只作 setup 指引，不能自行產生 constructor 值、回傳值或例外 assertion。
+- 匯入父類別與可能改寫 MRO 的類別不會宣稱有效建構子，寧可要求真實 caller literal 或停止生成，也不會把不可靠推論寫成測試。
+
 ### 防止未驗證 Auto 模式偷偷啟動模型修補
 
 - 當未完成資格探測的 Auto 模型使用 deterministic Tier 1 fallback，而該 fallback 未通過執行或 coverage gate 時，系統現在會保留報告並停止；不再啟動 Reviewer 或 Self-repair 產生未驗證模型程式碼。

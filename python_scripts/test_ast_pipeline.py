@@ -152,6 +152,53 @@ def process(normalize, value):
         self.assertEqual(data['referenced_globals'], [])
         self.assertEqual(data['calls'], ['normalize'])
 
+    def test_extractor_exposes_safe_same_module_inherited_constructor_context(self):
+        source = '''class BaseWorker:
+    DEFAULT_RETRIES = 2
+
+    def __init__(self, client, retries=DEFAULT_RETRIES):
+        self.client = client
+        self.retries = retries
+
+class Worker(BaseWorker):
+    def process(self, payload):
+        return self.client.send(payload, retries=self.retries)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'Worker.process')
+
+        context = data['class_context']
+        self.assertEqual(context['init']['params'], [])
+        self.assertEqual(context['effective_init']['defined_on'], 'BaseWorker')
+        self.assertEqual(context['effective_init']['required_params'], ['client'])
+        self.assertEqual(context['effective_init']['optional_params'], ['retries'])
+        self.assertEqual(
+            [item['name'] for item in context['effective_init']['assigns']],
+            ['client', 'retries']
+        )
+        self.assertEqual([item['name'] for item in context['inherited_context']], ['BaseWorker'])
+        self.assertEqual(
+            [item['name'] for item in context['inherited_context'][0]['class_attrs']],
+            ['DEFAULT_RETRIES']
+        )
+
+    def test_extractor_does_not_claim_an_imported_base_constructor_signature(self):
+        source = '''from framework import BaseWorker
+
+class Worker(BaseWorker):
+    def process(self, payload):
+        return self.client.send(payload)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'worker.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'Worker.process')
+
+        self.assertEqual(data['class_context']['inherited_context'], [])
+        self.assertNotIn('effective_init', data['class_context'])
+
     def test_extractor_keeps_a_declared_global_but_not_a_nonlocal_as_module_context(self):
         source = '''LIMIT = 10
 
