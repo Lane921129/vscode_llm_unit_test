@@ -4,6 +4,11 @@
 
 ## 2026-09-10
 
+### 建立 Tier 1 LLM 發行門檻
+
+- `fixture_scorecard.py` 現在會確認報告中的實際 Tier 必須與 corpus fixture 相符，避免把高 Tier 或錯誤路由的分數冒充為 Tier 1 結果。
+- 新增 `--require-tier1-llm-release`：只有全部 Tier 1 fixture 都以 `llm-evidence-bound` 模式、實際 Tier 1、完整 coverage 與 mutation 分數通過各自門檻時，命令才回傳成功。缺報告、fallback、混合模式、執行中斷、未計分或 Tier 不符都會阻擋發行宣稱。
+
 ### 放寬安全的 unittest 資格探測格式
 
 - 正式測試與模型資格探測現在接受明確從標準庫 `unittest` 匯入的 `TestCase`／別名，以及 `import unittest as ...` 的同等寫法；不再要求模型只能輸出唯一的 `unittest.TestCase` 拼寫。

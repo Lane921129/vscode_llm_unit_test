@@ -9,6 +9,7 @@ comparable without adding credentials to the repository.
 Usage:
     python python_scripts/fixture_scorecard.py <report-root>
     python python_scripts/fixture_scorecard.py <report-root> --output-dir <dir> --require-complete
+    python python_scripts/fixture_scorecard.py <report-root> --require-tier1-llm-release
 """
 
 import argparse
@@ -137,6 +138,11 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
     })
     if fixture['tier'] == 1 and fields['tier1_generation_mode'] not in TIER1_GENERATION_MODES:
         result.update(status='incomplete_provenance', reason='Tier 1 報告缺少可機讀的 generation mode；不與 LLM 或 deterministic fallback 成績混算。')
+    elif fields['resolved_tier'] != fixture['tier']:
+        result.update(
+            status='tier_mismatch',
+            reason=f"報告實際 Tier 為 {fields['resolved_tier'] if fields['resolved_tier'] is not None else '未知'}，與 fixture 要求的 Tier {fixture['tier']} 不一致。"
+        )
     elif fields['execution_error']:
         result.update(status='execution_error', reason='報告記錄了執行中斷；不採計既有分數。')
     elif fields['coverage'] is None or fields['mutation_score'] is None:
@@ -148,6 +154,30 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None):
     if len(matches) > 1:
         result['reason'] += f' 已選用最新的 {len(matches)} 份對應報告。'
     return result
+
+
+def tier1_llm_release_summary(results, tier1_generation_mode):
+    """Return a narrow, auditable gate for an LLM Tier 1 quality claim."""
+    tier1_results = [item for item in results if item['tier'] == 1]
+    blockers = [
+        {'id': item['id'], 'status': item['status'], 'reason': item['reason']}
+        for item in tier1_results
+        if item['status'] != 'passed' or item['tier1_generation_mode'] != 'llm-evidence-bound'
+    ]
+    filter_is_llm = tier1_generation_mode == 'llm-evidence-bound'
+    if not filter_is_llm:
+        blockers.insert(0, {
+            'id': 'generation-mode-filter',
+            'status': 'wrong_generation_mode_filter',
+            'reason': 'Tier 1 LLM 發行門檻必須以 --tier1-generation-mode llm-evidence-bound 建立 scorecard。'
+        })
+    return {
+        'required_generation_mode': 'llm-evidence-bound',
+        'fixture_count': len(tier1_results),
+        'passed': sum(item['status'] == 'passed' and item['tier1_generation_mode'] == 'llm-evidence-bound' for item in tier1_results),
+        'ready': bool(tier1_results) and filter_is_llm and not blockers,
+        'blockers': blockers,
+    }
 
 
 def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generation_mode=None):
@@ -175,6 +205,7 @@ def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generatio
         'fixture_count': len(results),
         'status_counts': dict(sorted(status_counts.items())),
         'tier_summary': tier_summary,
+        'tier1_llm_release': tier1_llm_release_summary(results, tier1_generation_mode),
         'results': results,
     }
 
@@ -190,6 +221,7 @@ def format_markdown(scorecard):
         f"- 已計分但未達門檻：{scorecard['status_counts'].get('threshold_failed', 0)}",
         f"- 未計分／缺報告／執行中斷：{scorecard['fixture_count'] - scorecard['status_counts'].get('passed', 0) - scorecard['status_counts'].get('threshold_failed', 0)}",
         f"- Tier 1 產生模式篩選：{scorecard['tier1_generation_mode_filter'] or '未篩選（混合模式會拒絕計分）'}",
+        f"- Tier 1 LLM 發行門檻：{'通過' if scorecard['tier1_llm_release']['ready'] else '未通過'}（{scorecard['tier1_llm_release']['passed']}/{scorecard['tier1_llm_release']['fixture_count']}）",
         '',
         '| Tier | Fixture | 產生模式 | 狀態 | 失敗分類 | Coverage | Mutation | 報告 |',
         '| --- | --- | --- | --- | --- | --- | --- | --- |',
@@ -205,6 +237,10 @@ def format_markdown(scorecard):
     lines.extend(['', '## 判定說明', ''])
     for result in scorecard['results']:
         lines.append(f"- `{result['id']}`：{result['reason']}")
+    if scorecard['tier1_llm_release']['blockers']:
+        lines.extend(['', '## Tier 1 LLM 發行門檻阻擋原因', ''])
+        for blocker in scorecard['tier1_llm_release']['blockers']:
+            lines.append(f"- `{blocker['id']}`（{blocker['status']}）：{blocker['reason']}")
     return '\n'.join(lines) + '\n'
 
 
@@ -224,21 +260,28 @@ def main(argv=None):
     parser.add_argument('--output-dir', help='Destination for fixture_scorecard.json and fixture_scorecard.md.')
     parser.add_argument('--require-complete', action='store_true', help='Return non-zero unless every fixture passes its thresholds.')
     parser.add_argument('--tier1-generation-mode', choices=sorted(TIER1_GENERATION_MODES), help='Score LLM and deterministic Tier 1 reports separately.')
+    parser.add_argument('--require-tier1-llm-release', action='store_true', help='Return non-zero unless every Tier 1 fixture has a passing llm-evidence-bound report.')
     args = parser.parse_args(argv)
 
     root = Path(args.report_root)
     if not root.is_dir():
         parser.error(f'report root is not a directory: {root}')
-    scorecard = build_scorecard(root, tier1_generation_mode=args.tier1_generation_mode)
+    if args.require_tier1_llm_release and args.tier1_generation_mode not in {None, 'llm-evidence-bound'}:
+        parser.error('--require-tier1-llm-release requires llm-evidence-bound, not deterministic-fallback.')
+    generation_mode = 'llm-evidence-bound' if args.require_tier1_llm_release else args.tier1_generation_mode
+    scorecard = build_scorecard(root, tier1_generation_mode=generation_mode)
     output_dir = Path(args.output_dir) if args.output_dir else root / 'fixture_scorecard'
     json_path, markdown_path = write_scorecard(scorecard, output_dir)
     print(json.dumps({
         'fixture_count': scorecard['fixture_count'],
         'status_counts': scorecard['status_counts'],
+        'tier1_llm_release': scorecard['tier1_llm_release'],
         'json': str(json_path),
         'markdown': str(markdown_path),
     }, ensure_ascii=False))
     if args.require_complete and scorecard['status_counts'].get('passed', 0) != scorecard['fixture_count']:
+        return 1
+    if args.require_tier1_llm_release and not scorecard['tier1_llm_release']['ready']:
         return 1
     return 0
 
