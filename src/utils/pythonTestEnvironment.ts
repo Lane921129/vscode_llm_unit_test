@@ -64,11 +64,13 @@ export function buildGeneratedTestEnvironment(
 export function generatedUnittestArguments(
     testModule: string,
     targetDirectory: string,
-    useCoverage: boolean
+    useCoverage: boolean,
+    verbose: boolean = false
 ): string[] {
-    return useCoverage
+    const args = useCoverage
         ? ['-m', 'coverage', 'run', '--branch', `--source=${targetDirectory}`, '-m', 'unittest', testModule]
         : ['-m', 'unittest', testModule];
+    return verbose ? [...args, '-v'] : args;
 }
 
 /**

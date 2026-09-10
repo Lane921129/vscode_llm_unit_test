@@ -1,3 +1,4 @@
+import { RepairFeedback } from './validation/repairFeedback';
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
 import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './prompts/unittestWriterPrompt';
@@ -10,9 +11,9 @@ import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
-import { buildTier1TestMethods, buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
+import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
-import { appendTraceMethodsToUnittestClass, appendVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
+import { restoreVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat } from './llm/modelQualification';
 import { canUseDeterministicTierOne, canUseModelAuthoredRepair, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
@@ -758,7 +759,8 @@ async function validateGeneratedTestCode(
     targetSignature?: unknown[],
     allowedExceptionNames?: string[],
     targetClassName?: string,
-    pythonExecutable: string = 'python'
+    pythonExecutable: string = 'python',
+    bindingContext?: { module: string; target: string; className?: string | null; dependencies: Record<string, string> }
 ): Promise<{ valid: boolean; reason?: string }> {
     const structure = validateUnittestStructure(
         code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName
@@ -770,11 +772,17 @@ async function validateGeneratedTestCode(
     try {
         const parsed = await runSpawn(
             pythonExecutable,
-            ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
+            bindingContext
+                ? [path.join(__dirname, '..', 'python_scripts', 'validate_test_bindings.py'), JSON.stringify(bindingContext)]
+                : ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
             { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
         );
         if (parsed.code !== 0) {
             return { valid: false, reason: `Python AST 無法解析：${(parsed.stderr || parsed.stdout).trim().slice(0, 300)}` };
+        }
+        if (bindingContext) {
+            const bindings = JSON.parse(parsed.stdout) as { valid: boolean; reason?: string };
+            if (!bindings.valid) { return bindings; }
         }
         if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature) && targetSignature.length > 0) {
             const validatorScript = path.join(__dirname, '..', 'python_scripts', 'validate_target_calls.py');
@@ -1163,6 +1171,15 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         else { log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`); }
     }
     const targetImportModule = inferTargetImportModule(params.filePath, astContext?.file_imports || []);
+    const testBindingContext = {
+        module: targetImportModule,
+        target: targetFuncName,
+        className: astContext?.class_name,
+        dependencies: Object.fromEntries((astContext?.file_imports || [])
+            .filter((item: any) => item.kind === 'from' && item.name && item.name !== '*'
+                && (astContext?.calls || []).includes(item.alias || item.bound_name || item.name))
+            .map((item: any) => [item.alias || item.bound_name || item.name, `${item.module}.${item.name}`])) as Record<string, string>
+    };
     if (astContext && !astContext.error) {
         (astContext as any).target_import_module = targetImportModule;
     }
@@ -1569,7 +1586,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     (astContext as any)?.signature,
                                     exceptionNamesFromEvidence(astContext),
                                     (astContext as any)?.class_name,
-                                    pythonExecutable
+                                    pythonExecutable,
+                                    testBindingContext
                                 );
                                 const subTraceEvidence = validateTraceAssertionEvidence(
                                     subClean,
@@ -1669,7 +1687,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         (astContext as any)?.signature,
                         exceptionNamesFromEvidence(astContext),
                         (astContext as any)?.class_name,
-                        pythonExecutable
+                        pythonExecutable,
+                        testBindingContext
                     );
                     const traceEvidenceValidation = validateTraceAssertionEvidence(
                         sanitizedCode,
@@ -1736,55 +1755,30 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
             }
 
-            // A capable model can add mocks and higher-level scenarios, but it
-            // must not discard concrete target behavior already verified by
-            // Dynamic Trace. Class/property traces keep a separate TestCase so
-            // their verified setUp never overwrites model-authored setup.
-            const traceForAugmentation = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
-            const isTopLevelFunction = !(astContext as any)?.class_name;
-            if (shouldPreserveVerifiedTrace(currentTier, tier1GenerationMode)
-                && canUseDeterministicTierOne(traceForAugmentation)) {
-                if (isTopLevelFunction) {
-                    const traceMethods = buildTier1TestMethods(
-                        targetFuncName,
-                        traceForAugmentation!.examples,
-                        traceForAugmentation!.errors,
-                        Boolean((astContext as any)?.is_async)
-                    );
-                    const augmented = appendTraceMethodsToUnittestClass(finalCode, traceMethods);
-                    finalCode = augmented.code;
-                    if (augmented.addedMethodCount > 0) {
-                        log(`[Trace 保底] 已將 ${augmented.addedMethodCount} 個已驗證 I/O 測試加入 Tier ${currentTier} 測試類別。`);
-                    }
-                } else {
-                    const className = (astContext as any)?.class_name as string | null;
-                    const constructorParams = ((astContext as any)?.class_context?.effective_init?.required_params
-                        || (astContext as any)?.class_context?.effective_init?.params
-                        || (astContext as any)?.class_context?.init?.required_params
-                        || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
-                    const traceFile = buildTier1TestFile({
-                        moduleName: targetImportModule,
-                        functionName: targetFuncName,
-                        examples: traceForAugmentation!.examples,
-                        errors: traceForAugmentation!.errors,
-                        className,
-                        methodKind: (astContext as any)?.method_kind,
-                        constructorParams,
-                        callerContexts: astContext?.callerContexts,
-                        isAsync: Boolean((astContext as any)?.is_async),
-                    });
-                    if (traceFile.code) {
-                        const augmented = appendVerifiedTraceTestFile(
-                            finalCode, traceFile.code, traceFile.methodCount, targetFuncName
-                        );
-                        finalCode = augmented.code;
-                        if (augmented.addedMethodCount > 0) {
-                            log(`[Trace 保底] 已將 ${augmented.addedMethodCount} 個已驗證 Class/Property I/O 測試加入獨立 ${augmented.addedClassName} 類別。`);
-                        }
-                    } else if (traceFile.missingConstructorFacts) {
-                        log(`[Trace 保底] 類別 ${className} 缺少可驗證 constructor literal（${traceFile.missingConstructorFacts.join(', ')}），不會猜測 Trace 測試 setup。`);
-                    }
-                }
+            // All real Trace cases run in their own runner-owned class, including functions.
+            const traceForAugmentation = astContext?.traceResult;
+            const verifiedTrace = shouldPreserveVerifiedTrace(currentTier, tier1GenerationMode)
+                && canUseDeterministicTierOne(traceForAugmentation)
+                ? buildTier1TestFile({
+                    moduleName: targetImportModule,
+                    functionName: targetFuncName,
+                    examples: traceForAugmentation!.examples,
+                    errors: traceForAugmentation!.errors,
+                    className: astContext?.class_name,
+                    methodKind: astContext?.method_kind,
+                    constructorParams: astContext?.class_context?.effective_init?.required_params
+                        || astContext?.class_context?.effective_init?.params
+                        || astContext?.class_context?.init?.required_params
+                        || astContext?.class_context?.init?.params,
+                    callerContexts: astContext?.callerContexts,
+                    isAsync: Boolean(astContext?.is_async),
+                }) : undefined;
+            const preserveTrace = (candidate: string): string => verifiedTrace?.code
+                ? restoreVerifiedTraceTestFile(candidate, verifiedTrace.code, verifiedTrace.methodCount, targetFuncName).code
+                : candidate;
+            finalCode = preserveTrace(finalCode);
+            if (verifiedTrace?.code) {
+                log(`[Trace 保底] 已保留 ${verifiedTrace.methodCount} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。`);
             }
 
             const generatedValidation = await validateGeneratedTestCode(
@@ -1795,7 +1789,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 (astContext as any)?.signature,
                 exceptionNamesFromEvidence(astContext),
                 (astContext as any)?.class_name,
-                pythonExecutable
+                pythonExecutable,
+                testBindingContext
             );
             const generatedTraceEvidence = validateTraceAssertionEvidence(
                 finalCode,
@@ -1835,7 +1830,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const runPrecheck = async (): Promise<{ ok: boolean; out: string }> => {
                     const testRun = await runSpawn(
                         pythonExecutable,
-                        generatedUnittestArguments(testModule, targetDir, hasCoverage),
+                        generatedUnittestArguments(testModule, targetDir, hasCoverage, true),
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
                     );
                     let output = `${testRun.stdout}${testRun.stderr}`.trim();
@@ -1887,18 +1882,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         // ─── Reviewer LLM 修復（適用所有 Tier）───
                         log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行修復及補充測資（最多 2 次）...`);
                         let reviewerFixed = false;
+                        const repairFeedback = new RepairFeedback(fs.readFileSync(testPath, 'utf8'), out);
                         const funcArgs: string[] = (astContext as any)?.args || [];
                         for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
                             if (isExecutionCancelled()) {break;}
                             log(`[Reviewer] 第 ${reviewAttempt} 次修復嘗試...`);
+                            const brokenCode = fs.readFileSync(testPath, 'utf8');
                             try {
-                                const brokenCode = fs.readFileSync(testPath, 'utf8');
                                 const revSys = getReviewerSystemPrompt();
                                 const moduleName = targetImportModule;
                                 const targetSource = (astContext as any)?.code || targetCode;
                                 const revUsr = getReviewerUserPrompt(
                                     brokenCode,
-                                    out,
+                                    repairFeedback.output,
                                     targetFuncName || '',
                                     funcArgs,
                                     targetSource,
@@ -1907,7 +1903,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     semanticContext
                                 );
                                 const revRaw = await requestLlmApi(params, revSys, revUsr, log, testGenerationResponseFormat);
-                                const revCode = sanitizeLlmResponse(revRaw);
+                                const revCode = preserveTrace(sanitizeLlmResponse(revRaw));
+                                if (!repairFeedback.consider(revCode)) {
+                                    out = repairFeedback.output;
+                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次未產生新修改，略過重複執行。\n\n`;
+                                    continue;
+                                }
                                 const reviewValidation = await validateGeneratedTestCode(
                                     revCode,
                                     targetFuncName,
@@ -1916,7 +1917,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     (astContext as any)?.signature,
                                     exceptionNamesFromEvidence(astContext),
                                     (astContext as any)?.class_name,
-                                    pythonExecutable
+                                    pythonExecutable,
+                                    testBindingContext
                                 );
                                 const reviewerTraceEvidence = validateTraceAssertionEvidence(
                                     revCode,
@@ -1927,6 +1929,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     throwIfExecutionCancelled();
                                     fs.writeFileSync(testPath, revCode, 'utf8');
                                     const revCheck = await runPrecheck();
+                                    const progress = repairFeedback.record(revCheck.out);
+                                    out = repairFeedback.output;
+                                    if (!progress.accepted) {
+                                        fs.writeFileSync(testPath, brokenCode, 'utf8');
+                                        finalReportMarkdown += `### Reviewer 第 ${reviewAttempt} 次修改退步，已還原前版\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
+                                        continue;
+                                    }
                                     const reviewerCoverage = assessExecution(revCheck.out);
                                     const reviewerMissedTarget = reviewerCoverage?.targetExecuted === false;
                                     const reviewerCoverageIncomplete = reviewerCoverage?.targetFullyCovered === false;
@@ -1945,17 +1954,25 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                 ? `Coverage 顯示被測函式本體仍有未覆蓋行：${reviewerCoverage?.missingTargetLines?.join(', ') || '未知'}。`
                                                 : reviewerBranchesIncomplete
                                                     ? `Coverage 顯示被測函式本體仍有未覆蓋分支：${reviewerCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
-                                                    : revCheck.out.substring(0, 300);
+                                                    : revCheck.out;
+                                        repairFeedback.output = reviewerFailure === revCheck.out ? revCheck.out : `${revCheck.out}\n${reviewerFailure}`;
+                                        out = repairFeedback.output;
                                         log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${reviewerFailure}`);
-                                        finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out.substring(0, 600)}\n\`\`\`\n</details>\n\n`;
+                                        finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out}\n\`\`\`\n</details>\n\n`;
                                     }
                                 } else {
                                     const reviewerReason = reviewerTraceEvidence.reason || reviewValidation.reason;
+                                    repairFeedback.reject(reviewerReason || 'Validation failed');
+                                    out = repairFeedback.output;
                                     log(`[Reviewer] 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}`);
-                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}\n\n`;
+                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n`;
                                 }
                             } catch (revErr: any) {
+                                fs.writeFileSync(testPath, brokenCode, 'utf8');
+                                repairFeedback.reject(`Repair request failed: ${revErr.message}`);
+                                out = repairFeedback.output;
                                 log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);
+                                finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次修復請求失敗：${revErr.message}\n\n`;
                             }
                         }
 
@@ -1967,11 +1984,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
                                     if (isExecutionCancelled()) {break;}
                                     log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
+                                    const previousCode = fs.readFileSync(testPath, 'utf8');
                                     try {
                                         const repairSys = getTier4SystemPrompt();
                                         const repairUsr = getTier4SelfRepairPrompt(
-                                            out,
-                                            fs.readFileSync(testPath, 'utf8'),
+                                            repairFeedback.output,
+                                            previousCode,
                                             targetFuncName || '',
                                             funcArgs,
                                             (astContext as any)?.code || targetCode,
@@ -1980,7 +1998,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             semanticContext
                                         );
                                         const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, testGenerationResponseFormat);
-                                        const repairCode = sanitizeLlmResponse(repairRaw);
+                                        const repairCode = preserveTrace(sanitizeLlmResponse(repairRaw));
+                                        if (!repairFeedback.consider(repairCode)) {
+                                            out = repairFeedback.output;
+                                            finalReportMarkdown += `> Self-repair 第 ${repairAttempt} 次未產生新修改。\n\n`;
+                                            continue;
+                                        }
                                         const repairValidation = await validateGeneratedTestCode(
                                             repairCode,
                                             targetFuncName,
@@ -1989,7 +2012,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             (astContext as any)?.signature,
                                             exceptionNamesFromEvidence(astContext),
                                         (astContext as any)?.class_name,
-                                        pythonExecutable
+                                            pythonExecutable,
+                                            testBindingContext
                                         );
                                         const repairTraceEvidence = validateTraceAssertionEvidence(
                                             repairCode,
@@ -2000,6 +2024,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                             throwIfExecutionCancelled();
                                             fs.writeFileSync(testPath, repairCode, 'utf8');
                                             const result2 = await runPrecheck();
+                                            const progress = repairFeedback.record(result2.out);
+                                            out = repairFeedback.output;
+                                            finalReportMarkdown += `### Self-repair 第 ${repairAttempt} 次驗證\n\n\`\`\`python\n${repairCode}\n\`\`\`\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
+                                            if (!progress.accepted) {
+                                                fs.writeFileSync(testPath, previousCode, 'utf8');
+                                                continue;
+                                            }
                                             const repairCoverage = assessExecution(result2.out);
                                             const repairMissedTarget = repairCoverage?.targetExecuted === false;
                                             const repairCoverageIncomplete = repairCoverage?.targetFullyCovered === false;
@@ -2017,13 +2048,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                                         ? `Coverage 顯示被測函式本體仍有未覆蓋行：${repairCoverage?.missingTargetLines?.join(', ') || '未知'}。`
                                                         : repairBranchesIncomplete
                                                             ? `Coverage 顯示被測函式本體仍有未覆蓋分支：${repairCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
-                                                            : result2.out.substring(0, 200);
+                                                            : result2.out;
+                                                repairFeedback.output = repairFailure === result2.out ? result2.out : `${result2.out}\n${repairFailure}`;
+                                                out = repairFeedback.output;
                                                 log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${repairFailure}`);
                                             }
                                         } else {
+                                            repairFeedback.reject(repairTraceEvidence.reason || repairValidation.reason || 'Validation failed');
+                                            out = repairFeedback.output;
+                                            finalReportMarkdown += `> Self-repair 第 ${repairAttempt} 次候選被拒絕：${out}\n\n`;
                                             log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次回應未通過格式／Trace 證據驗證：${repairTraceEvidence.reason || repairValidation.reason}`);
                                         }
                                     } catch (repairErr: any) {
+                                        fs.writeFileSync(testPath, previousCode, 'utf8');
+                                        repairFeedback.reject(`Repair request failed: ${repairErr.message}`);
+                                        out = repairFeedback.output;
                                         log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);
                                     }
                                 }
@@ -2381,7 +2420,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const eqReport = formatEquivalentMutantsReport(triageResult);
                     if (eqReport) {
                         finalReportMarkdown += eqReport;
-                        log(`[變異體分流師] 等效變異體已記錄於報告，下輪將跳過重試。`);
+                        log(`[變異體分流師] 等效候選已記錄於報告，仍保留於後續驗證。`);
                     }
                     // KILLABLE：把 kill_test 提示注入 survivedMutants，讓下一輪 LLM 直接看到
                     if (triageResult.has_killable) {
@@ -2391,11 +2430,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             log(`[變異體分流師] 已將 ${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個 kill_test 注入下一輪 Prompt。`);
                         }
                     }
-                    // 若所有存活變異體均為等效，不再繼續循環
-                    if (!triageResult.has_killable && triageResult.equivalent_count > 0) {
-                        log(`[變異體分流師] 所有存活變異體均為等效變異體，無需繼續重試，結束循環。`);
-                        finalReportMarkdown += `\n> [!NOTE]\n> 🔵 所有剩餘存活變異體已被判定為等效變異體，不計入突變分數分母。\n\n`;
-                        currentLoop = params.maxLoops + 1; // 強制結束 while 迴圈
+                    if (triageResult.equivalent_count > 0) {
+                        finalReportMarkdown += `\n> 等效判定僅為模型候選，尚未驗證；保留存活變異體與原始分母，繼續至設定的輪數上限。\n\n`;
                     }
                 } else {
                     log(`[變異體分流師] ⚠️ 回應未符合分流 schema，跳過分流（不影響主流程）。`);

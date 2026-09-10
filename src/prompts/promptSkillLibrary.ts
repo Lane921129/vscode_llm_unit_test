@@ -25,6 +25,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - Choose inputs on each reachable side of that condition; N-1, N, and N+1 are candidates only when they fit the source comparison and input type.',
             '  - Do NOT infer that either side raises, returns normally, or returns a specific value. Assertions require an explicit source path or exact Dynamic Trace evidence.',
             '  - Build strings with a deliberately known length; do not use a slice unless its resulting length is independently clear.',
+            '  - Make a case table: exact predicate, threshold, concrete input length, prerequisite guards, and verified observation. A lower bound never implies an upper bound.',
         ]
     },
     {
@@ -113,7 +114,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - CORRECT:   with self.assertRaises(ValueError): followed by the call',
             '  - WRONG:     self.assertRaises(ValueError, "message") — TypeError!',
             '  - WRONG:     result = func(...) then assertRaises — exception already propagated!',
-            '  - Only use assertRaises when the source code has an explicit raise ExceptionType.',
+            '  - Only use assertRaises for an explicit source raise, an exact verified Trace exception, or a configured mock side_effect that propagates out of the target.',
         ]
     },
     {
@@ -122,7 +123,8 @@ export const SKILL_LIBRARY: SkillCard[] = [
         trigger_hint: 'Use when function catches exceptions internally and returns an error message string instead of re-raising',
         rules: [
             'try/except RETURNS STRING: this function catches exceptions and returns an error string.',
-            '  - Do NOT use assertRaises — the exception is swallowed internally.',
+            '  - Only the exception types named by the matching except clause are caught. Other exceptions may propagate; do not invent a catch-all contract.',
+            '  - For the caught path, configure the dependency side_effect with that exception. return_value is a normal return and cannot enter except.',
             '  - Use assertEqual(result, "exact error message string").',
             '  - Check the exact return statement in the source code for the error string.',
         ]
@@ -133,7 +135,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         trigger_hint: 'Always include — reminds writer to use the correct module name in imports',
         rules: [
             'IMPORT MODULE NAME:',
-            '  - Import from the MODULE FILE NAME, not from the function name.',
+            '  - Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.',
             '  - Correct: from module_name import target_function',
             '  - WRONG:   from target_function import target_function',
             '  - WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths.',
@@ -171,6 +173,31 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - Use from unittest.mock import patch, MagicMock',
             '  - Patch at the point of USE: @patch("module_under_test.external_function")',
             '  - Set mock return value: mock_fn.return_value = expected_value',
+            '  - Derive the full patch target from the canonical target module and its imported binding (including aliases), never the dependency definition module.',
+            '  - Verify mock.assert_called_once_with using the actual target-source call arguments so an unused patch cannot pass accidentally.',
+        ]
+    },
+    {
+        id: 'trace_mock_isolation',
+        title: 'Real Trace and Mock Isolation',
+        trigger_hint: 'Use when dependencies may be mocked alongside real execution Trace tests',
+        rules: [
+            'TRACE / MOCK ISOLATION:',
+            '  - Real Trace assertions belong to a separate TestCase without the model test class setUp, decorators, or mock state.',
+            '  - Prefer a per-test patch context and explicit return_value or side_effect. Never apply a module-wide patch to real Trace tests.',
+            '  - Do not copy or change runner-owned TestVerifiedTrace_* classes; the runner restores them after repair.',
+        ]
+    },
+    {
+        id: 'caller_dependency_contract',
+        title: 'Caller Constraints and Dependency Outcomes',
+        trigger_hint: 'Use when the target has resolved dependencies',
+        rules: [
+            'CALLER / DEPENDENCY CONTRACT:',
+            '  - Bind the actual positional and keyword arguments at the target call site before selecting dependency observations.',
+            '  - A dependency Trace under different fixed arguments is not an observation of this target call.',
+            '  - If a target branch requires a controlled dependency result, patch its use point and execute the target under that exact mock before trusting the assertion.',
+            '  - For and/or conditions, explore mixed truth values as well as all-true/all-false when inputs or mocks can reach them. Short-circuiting and accessed keys still apply.',
         ]
     },
     {
@@ -309,7 +336,11 @@ export function inferSkillIdsFromCode(
     const needsInstance = context?.method_kind === 'instance' || context?.method_kind === 'property';
     const bindingUnknown = (context?.class_name || context?.class_context) && !context?.method_kind;
     if (needsInstance || bindingUnknown) { ids.add('class_method_testing'); }
-    if ((context?.dependencies?.length || 0) > 0) { ids.add('mock_external_dependency'); }
+    if ((context?.dependencies?.length || 0) > 0) {
+        ids.add('mock_external_dependency');
+        ids.add('trace_mock_isolation');
+        ids.add('caller_dependency_contract');
+    }
     const importedModuleText = (context?.file_imports || [])
         .map(item => `${item.module || ''} ${item.name || ''}`)
         .join(' ');

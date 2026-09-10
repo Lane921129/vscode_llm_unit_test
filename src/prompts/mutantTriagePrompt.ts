@@ -4,7 +4,7 @@
  *
  * Triggered from Loop 2 onwards when survived mutants exist.
  * Determines for each mutant:
- *   EQUIVALENT - unkillable without mocking/architecture changes
+ *   EQUIVALENT - model hypothesis, never execution proof
  *   KILLABLE   - can be killed with a specific test case
  * For KILLABLE mutants, provides exact kill_test Python code.
  */
@@ -32,15 +32,15 @@ export function getMutantTriageSystemPrompt(): string {
     return `You are a mutation testing expert and Python unit test specialist.
 
 Your task is to analyze survived mutation testing results and triage each mutant:
-- EQUIVALENT: The mutant is logically equivalent to the original in all reachable paths (unkillable without mocking)
+- EQUIVALENT: A hypothesis that no supported direct input OR allowed dependency mock distinguishes the mutant
 - KILLABLE: A specific test case exists that can detect this mutation
 
 For KILLABLE mutants, provide the EXACT Python test method code (starting with "def test_kill_...") that would make the mutant fail.
 
 EQUIVALENT MUTANT DETECTION RULES:
-1. If a condition is ALWAYS True/False due to fixed dependency return values -> likely EQUIVALENT
-2. If the mutated path is unreachable through normal function calls -> likely EQUIVALENT
-3. Consider mock.patch as a feasible option before declaring EQUIVALENT
+1. Fixed real dependency results do not establish equivalence: dependency mock.patch is allowed at the target use point.
+2. For And/Or mutations, try mixed truth values (True/False and False/True), respecting short-circuit evaluation and required result fields.
+3. Unreachable without mocking is not equivalent when a supported mock can expose the difference. If evidence is insufficient, omit the verdict instead of claiming equivalence.
 
 KILLABLE MUTANT RULES:
 1. If a branch condition is testable with direct inputs -> KILLABLE via direct test
@@ -169,7 +169,7 @@ export function extractKillTestMethods(result: MutantTriageResult): string {
 export function formatEquivalentMutantsReport(result: MutantTriageResult): string {
     const eqs = result.verdicts.filter(v => v.verdict === 'EQUIVALENT');
     if (eqs.length === 0) { return ''; }
-    let out = '\n### Equivalent Mutants (Logically unkillable - excluded from score denominator)\n\n';
+    let out = '\n### Candidate Equivalent Mutants (model hypotheses; retained in score denominator)\n\n';
     for (const eq of eqs) {
         out += '- `' + eq.mutant + '`\n  > ' + eq.reason + '\n';
     }

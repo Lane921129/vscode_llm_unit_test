@@ -4,6 +4,17 @@
 
 ## 2026-09-10
 
+### 修正預先驗證修復回饋與 Trace／Mock 隔離
+
+- Reviewer 與 Tier 4 Self-repair 每輪使用最新執行或格式錯誤；長堆疊摘要保留各失敗案例及錯誤尾端，報告保留完整執行輸出。重複候選不再重跑。
+- 預先驗證以 verbose unittest 記錄已通過案例；候選讓既有案例失敗、消失或略過時還原前版。修復請求或執行中途例外也會還原前版。
+- 頂層函式與 class/property 的已驗證 Trace 一律使用獨立 TestCase；每次模型修復後還原系統保留的 Trace 類別，避免 model setUp 的 Mock 污染真實執行案例。
+- Writer、Reviewer 與 Self-repair 共用 AST 匯入／patch 檢查，拒絕裸檔名與 package 模組混用，以及已解析相依函式的錯誤 patch 使用點。完整舊式 `[pytest]`／`[python]` 外框先擷取，不完整外框在執行前拒絕。
+- 補強邊界條件、例外傳播與 Mock 使用技能，新增 Trace 隔離與 caller 相依約束技能。布林條件提示加入一真一假的組合；模型提出的等效變異體僅列候選，不再據此停止重試或宣稱排除分母。
+- 修正失敗分類誤把 traceback 的 `last` 當成 AST 錯誤。
+- 驗證：新增 10 個回歸測試，實際執行 Python 驗證 Trace／Mock 隔離、模組綁定、修復退步與 And／Or 區分案例；完整 TypeScript 單元測試、94 個 Python 測試、介面語法、型別、lint、建置與密鑰掃描均通過。
+- 限制：未重新呼叫使用者的本機模型生成整批測試；靜態 patch 檢查針對可解析的標準 unittest.mock.patch 字串與直接相依綁定，動態 patch 仍依執行與 coverage gate 驗證。已通過案例保護依 unittest 執行結果，不代表可證明任意 assertion 改寫的語意等價。
+
 ### 補齊同模組繼承類別的建構語境
 
 - AST 現在會在不猜測匯入類別、動態 base 或 metaclass 的前提下，擷取同一個 Python 模組內可解析父類別的 class attributes、`__init__` 賦值及有效繼承建構子簽名。

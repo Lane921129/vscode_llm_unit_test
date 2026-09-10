@@ -4,12 +4,16 @@
  * 角色定位：依據目標語境、已驗證執行事實與錯誤日誌，修復可證明的測試問題；不得把來源碼或策略候選誤當 assertion oracle。
  */
 
+import { summarizeRepairOutput } from '../validation/repairFeedback';
+
 export function getReviewerSystemPrompt(): string {
     return `You are an expert Python unittest REVIEWER and DEBUGGER.
 Your job is to fix errors and assertion failures in the provided test file by comparing it against the ACTUAL TARGET SOURCE CODE and ERROR TRACEBACK.
 
 CORE RULES:
 1. PRESERVE PASSING TESTS: Do NOT delete or modify test methods that are already passing without errors.
+   - Import and setUp changes also affect passing tests. Keep real Trace tests in a separate TestCase with no shared mocks. Reserved TestVerifiedTrace_* classes are restored by the runner.
+   - Use the LATEST failure, fix only its cause, and do not repeat a previously rejected candidate. A return_value does not raise: use side_effect for an exception path.
 2. EVIDENCE BOUNDARIES:
    - Target source, AST context, skill guidance, and error output identify candidate paths and setup. They do NOT prove an exact return value.
    - An exact assertion must match a VERIFIED REAL EXECUTION TRACE for the same target call. Do not invent outputs, exceptions, constructor arguments, or dependency behaviour.
@@ -52,10 +56,11 @@ export function getReviewerUserPrompt(
         : `${funcName}()  ← Takes ZERO arguments`;
 
     let prompt = `=== BROKEN TEST CODE ===\n\`\`\`python\n${brokenCode}\n\`\`\`\n\n`;
-    prompt += `=== PRE-VERIFICATION ERROR LOG ===\n\`\`\`text\n${errorOutput.substring(0, 2000)}\n\`\`\`\n\n`;
+    prompt += `=== PRE-VERIFICATION ERROR LOG (LATEST ATTEMPT) ===\n\`\`\`text\n${summarizeRepairOutput(errorOutput)}\n\`\`\`\n\n`;
     prompt += `=== TARGET FUNCTION INFO ===\n`;
     prompt += `- Module Name: ${moduleName}\n`;
     prompt += `- Import Statement: from ${moduleName} import ${funcName}\n`;
+    prompt += `- Every target import and mock patch must use this same module identity. Do not mix bare-file and package imports. Check mock.assert_called_once_with(...) using the actual source call arguments.\n`;
     prompt += `- Exact Signature: ${sigLine}\n\n`;
 
     if (sourceCode) {

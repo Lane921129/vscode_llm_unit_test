@@ -114,3 +114,23 @@ export function appendVerifiedTraceTestFile(
     lines.splice(insertAt, 0, ...separator, '# Verified Dynamic Trace tests (not model-authored)', ...classBlock, '');
     return { code: lines.join('\n'), addedMethodCount: methodCount, addedClassName: className };
 }
+
+/** Restore runner-owned Trace classes after every model repair, outside its fixtures. */
+export function restoreVerifiedTraceTestFile(
+    code: string, deterministicFile: string, methodCount: number, targetName: string
+): TraceFileAugmentation {
+    const prefix = `TestVerifiedTrace_${targetName.replace(/\W+/g, '_') || 'target'}`;
+    const lines = code.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index--) {
+        if (!new RegExp(`^class\\s+${prefix}(?:_\\d+)?\\s*\\(`).test(lines[index])) { continue; }
+        let end = index + 1;
+        while (end < lines.length && (!lines[end].trim() || /^\s/.test(lines[end]) || /^#/.test(lines[end]))) { end++; }
+        let start = index;
+        while (start > 0 && /^@/.test(lines[start - 1])) { start--; }
+        if (start > 0 && lines[start - 1] === '# Verified Dynamic Trace tests (not model-authored)') { start--; }
+        while (start > 0 && !lines[start - 1].trim()) { start--; }
+        lines.splice(start, end - start);
+    }
+    const restored = appendVerifiedTraceTestFile(lines.join('\n').trim(), deterministicFile, methodCount, targetName);
+    return { ...restored, code: restored.code.trim() + '\n' };
+}

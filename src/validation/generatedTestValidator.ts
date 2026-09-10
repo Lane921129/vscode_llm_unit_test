@@ -521,6 +521,9 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
  */
 export function extractPythonTestCode(response: string): string {
     const unwrapped = unwrapGeneratedCodeEnvelope(response).trim();
+    // Legacy model wrappers are transport markup, never Python expressions.
+    const wrapper = unwrapped.match(/^\[(python|pytest)\]\s*\r?\n([\s\S]*?)\r?\n\[\/\1\]$/i);
+    if (wrapper) { return extractPythonTestCode(wrapper[2]); }
     const fencedBlocks: Array<{ language: string; code: string }> = [];
     const fence = /```([^\r\n`]*)\r?\n([\s\S]*?)```/g;
     let match: RegExpExecArray | null;
@@ -559,6 +562,9 @@ export function validateUnittestStructure(
     const trimmed = code.trim();
     if (!trimmed) {
         return { valid: false, reason: '輸出為空' };
+    }
+    if (/^\s*\[\/?(?:pytest|python)\]\s*$/im.test(executablePythonText(trimmed))) {
+        return { valid: false, reason: '輸出含有不完整或未擷取的 code wrapper；請輸出單一完整 Python code fence' };
     }
     if (/```|^\s*[-*]\s+/m.test(trimmed)) {
         return { valid: false, reason: '輸出包含 Markdown，而不是純 Python 測試檔' };
