@@ -32,6 +32,11 @@ BINARY_REPLACEMENTS = {
     ast.Sub: ast.Add,
     ast.Mult: ast.FloorDiv,
     ast.FloorDiv: ast.Mult,
+    # Division is common in calculations but was previously invisible to the
+    # builtin fallback, which could overstate a suite's mutation score when no
+    # native engine is available. Floor division is a portable syntax-level
+    # replacement that callers can distinguish with a non-integral example.
+    ast.Div: ast.FloorDiv,
 }
 
 BOOLEAN_OPERATOR_REPLACEMENTS = {

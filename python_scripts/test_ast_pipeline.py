@@ -1687,6 +1687,33 @@ class TestIncrement(unittest.TestCase):
         self.assertEqual(len(binary_mutants), 1)
         self.assertEqual(binary_mutants[0]['status'], 'KILLED')
 
+    def test_builtin_mutation_runner_mutates_true_division_in_selected_scope(self):
+        source = '''def average(total, count):
+    return total / count
+'''
+        test_source = '''import unittest
+from sample import average
+
+class TestAverage(unittest.TestCase):
+    def test_non_integral_result(self):
+        self.assertEqual(average(5, 2), 2.5)
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            source_path = root / 'sample.py'
+            test_path = root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text(test_source, encoding='utf-8')
+            result = run_mutation_trials(source_path, test_path, target_function='average')
+
+        division_mutants = [
+            mutant for mutant in result['mutants']
+            if mutant['kind'] == 'binary' and mutant['from'] == 'Div'
+        ]
+        self.assertEqual(len(division_mutants), 1)
+        self.assertEqual(division_mutants[0]['to'], 'FloorDiv')
+        self.assertEqual(division_mutants[0]['status'], 'KILLED')
+
     def test_builtin_mutation_runner_excludes_nested_callable_mutants_from_selected_function_score(self):
         source = '''def increment(value):
     def unrelated_helper(flag):

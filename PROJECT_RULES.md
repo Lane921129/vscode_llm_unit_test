@@ -85,6 +85,7 @@
 - 若模型在同一個測試方法中將非 target callable 的結果存入變數，該變數至少必須實際傳入 target、參與 assertion 或注入 mock；完全未使用的結果是無效相依 setup，必須在寫檔前拒絕。這個 gate 不得拒絕 target result、有效 target input 或 mock 設定。
 - 突變分數必須以相同隔離匯入環境下可通過的原始 unittest baseline 為前提；baseline 失敗不得計算 killed mutant 或宣稱高品質分數。
 - 內建突變 fallback 對選取的 `Class.method` 必須同時驗證限定 scope、隔離 baseline 與所有 mutant 執行；非同步實例方法的 mutation score 不得因 event loop、建構子或原模組匯入而失真。
+- 內建突變 fallback 新增常見 Python operator 時，必須以可區分原始與突變行為的中性輸入驗證 mutant 確實被殺死；不得只增加候選數量便將未執行、等效或無法觀察的 mutation 計入品質分數。
 
 ## 憑證與外部服務
 

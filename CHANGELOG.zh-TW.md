@@ -22,6 +22,11 @@
 - Dynamic Trace 對已由 caller literal 證實的 instance method／property 呼叫，現在會記錄建構子 args／kwargs；Tier 2 的 caller partition 會要求方法與建構子兩者都精確對應。
 - 因此兩個不同物件即使以完全相同的方法引數呼叫，也不會互借另一個 prefix、config 或 client state 的回傳 oracle；缺少可比較的建構語境時維持保守空 subset。
 
+### 補足內建 mutation fallback 的真除法覆蓋
+
+- 當原生 `mutatest`／`mutmut` 不可用時，內建 fallback 現在會為 Python 真除法 `/` 建立 `/ → //` mutant；先前這類公式運算可能完全不計入 fallback mutation 分數。
+- 新增非整除結果的回歸驗收，確認 generated test 能實際殺死該 mutant，而不是只檢查候選清單有出現。
+
 ### 防止未驗證 Auto 模式偷偷啟動模型修補
 
 - 當未完成資格探測的 Auto 模型使用 deterministic Tier 1 fallback，而該 fallback 未通過執行或 coverage gate 時，系統現在會保留報告並停止；不再啟動 Reviewer 或 Self-repair 產生未驗證模型程式碼。
