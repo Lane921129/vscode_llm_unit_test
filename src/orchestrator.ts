@@ -178,7 +178,8 @@ async function runAnalysisSession<T extends object>(
         return sidebar.webview?.postMessage(message) ?? Promise.resolve(false);
     } } };
     const log = (text: string) => { void view.webview?.postMessage({ command: 'appendLog', text }); };
-    const runParams = { ...params, sessionDate: `${formatSessionDate()}_${execution.id}` };
+    // Group this run's results under its local date and minute.
+    const runParams = { ...params, sessionDate: formatSessionDate() };
     await runInExecution(execution, async () => {
         try { await operation(runParams, log, view); }
         catch (error: any) {
@@ -296,13 +297,14 @@ interface AstContext {
     error?: string;
 }
 
-/** 產生可用於檔名的 session 日期時間字串（格式：YYYY_MM_DD_HH_MM，不依賴 locale） */
+/** 產生可用於檔名的 session 日期時間字串（格式：YYYY_MM_DD_HH_MM，使用本機時間） */
 function formatSessionDate(now: Date = new Date()): string {
-    const iso = now.toISOString(); // e.g. "2026-09-05T11:30:00.000Z"
-    const [datePart, timePart] = iso.split('T');
-    const date = datePart.replace(/-/g, '_');
-    const time = timePart.substring(0, 5).replace(':', '_'); // "HH:MM" → "HH_MM"
-    return `${date}_${time}`;
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${year}_${month}_${day}_${hours}_${minutes}`;
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -989,8 +991,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const baseDir = params.outputPath || path.dirname(params.filePath);
     
     // 建立本次測試的專屬資料夾
-    const now = new Date();
-    const dateStr = params.sessionDate || (now.toISOString().split('T')[0].replace(/-/g, '_') + '_' + now.toLocaleTimeString('en-GB', {hour12: false}).substring(0,5).replace(':', '_'));
+    const dateStr = params.sessionDate || formatSessionDate();
     const safeFuncName = params.funcName || 'file';
     const baseName = path.basename(params.filePath, '.py');
     const displayName = params.funcName ? `${path.basename(params.filePath)}:${params.funcName}` : path.basename(params.filePath);
