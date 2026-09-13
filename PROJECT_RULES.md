@@ -5,8 +5,8 @@
 ## 通用性與語境
 
 - `python_scripts/dynamic_tracer.py`、`python_scripts/ast_extractor.py` 與基礎提示詞不得硬編碼任何業務領域關鍵字、固定閾值或特定回傳結構。
-- 領域特化必須由 Semantic Analyzer 根據目標原始碼選取 Skill Cards；不得把某個專案的規則帶進其他專案。
-- Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
+- 技能必須由 Skill Dispatcher 根據目標原始碼與 AST 選取 Skill Cards；不得把某個專案的規則帶進其他專案。
+- Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；模型不再負責選取技能 ID，舊 required_skills 僅保留讀取相容性；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
 - 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕並保留 AST 推導的技能卡基線。
 - 供應商支援 JSON Schema 時，Semantic Analyzer 與 mutant triage 必須帶最小任務 schema；供應商 schema 只提供傳輸層結構保證，所有回覆仍需通過本地語意／分流 parser 和 execution quality gates。不得因 schema 成功就把模型候選升格為事實。
 - 已驗證僅支援純 Python unittest 的模型，正式 Writer、Semantic Analyzer 與 mutation triage 都不得再強制供應商 JSON mode／schema；分析與分流仍須以 prompt 的 JSON 契約及本地 schema parser 驗證，不得放寬資料品質 gate。
@@ -133,6 +133,14 @@
 - 跨輪案例識別不可依 loop 檔名；純更名只能在測試 AST 與設定指紋一致時對應，不得猜測任意重寫的語意等價。
 - 來源或已解析相依的版本變更後停止沿用舊證據。函式紀錄區分來源結構、已驗證執行與待驗證假設，禁止自動把舊執行資料當成新版本的事實。
 - 連續三輪沒有改善已測量的缺口時停止相同策略重試並明示品質未達標；最後一輪結束後不再呼叫無後續用途的品質分析。結果目錄維持時分命名，同分鐘既有紀錄不可默默覆寫。
+
+## 閱讀入口、探針與斷言證據
+
+- 五個正式角色只能實作於 `src/roles/`；`src/prompts/` 放共用素材，不增加角色轉發檔。流程与 TypeScript／Python 對照維護在 `ARCHITECTURE.md` 與 `src/pipeline/pythonTools.ts`。
+- 角色提示詞與 provider schema 不得要求模型重新選取已由程式決定的技能；技能分配需記錄為確定性階段。
+- 探針資格必須匹配探針契約版本及不含憑證的端點識別；舊結果只可標記過期，不能未實測就升格為當前格式通過。版本僅在探針契約改變時更新，不因一般 UI 改動失效。
+- 精確 Trace 斷言以 Python AST 與可安全解析的 literal 驗證；不可移除字串內容空白或把註解視為程式。Mock、fixture、未知實例及不確定的流程必須保留未知，交執行驗證處理，不能套用不同設定的真實 Trace。
+- 正式 Python 工具不得以 `test_` 命名，以免被套件測試檔排除規則移除。
 
 ## 品質、Git 與紀錄
 

@@ -26,7 +26,7 @@ test('provides minimal schema contracts for semantic analysis and mutant triage'
 
     assert.deepStrictEqual((semantic as { required: string[] }).required, [
         'dependency_behaviors', 'unreachable_paths', 'equivalent_mutant_candidates',
-        'mock_required_for', 'required_skills', 'test_strategy'
+        'mock_required_for', 'test_strategy'
     ]);
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'

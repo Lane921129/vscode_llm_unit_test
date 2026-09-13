@@ -3,9 +3,8 @@
  * 技能卡庫 - Unittest Writer 可用的專項提示規則集合
  *
  * 運作原理：
- *   語意分析師讀取目標函式原始碼後，輸出 required_skills 陣列。
- *   格式化函式依此清單從庫中取出對應技能卡，組合成給 Unittest Writer 的專屬 prompt。
- *   就像購物車：有用到的模式才加入，不做全量注入。
+ *   SkillDispatcher 依原始碼與 AST 情境確定性選取技能。
+ *   格式化函式只注入選中的卡片，分析師負責情境規劃而不選技能 ID。
  */
 
 export interface SkillCard {

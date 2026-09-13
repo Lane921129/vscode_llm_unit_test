@@ -87,12 +87,11 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
                 unreachable_paths: { type: 'array' },
                 equivalent_mutant_candidates: { type: 'array' },
                 mock_required_for: { type: 'array' },
-                required_skills: { type: 'array', items: { type: 'string' } },
                 test_strategy: { type: 'object' }
             },
             required: [
                 'dependency_behaviors', 'unreachable_paths', 'equivalent_mutant_candidates',
-                'mock_required_for', 'required_skills', 'test_strategy'
+                'mock_required_for', 'test_strategy'
             ]
         };
     }

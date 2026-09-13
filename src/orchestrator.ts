@@ -1,14 +1,15 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt } from './prompts/unittestWriterPrompt';
-import { getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence } from './prompts/bugFixerPrompt';
-import { fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview } from './prompts/testReviewerPrompt';
-import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis } from './prompts/semanticAnalyzerPrompt';
-import { getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints } from './prompts/qualityAnalystPrompt';
+import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt } from './roles/unittestWriter';
+import { getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence } from './roles/bugFixer';
+import { fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview } from './roles/testReviewer';
+import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis } from './roles/semanticAnalyzer';
+import { getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints } from './roles/qualityAnalyst';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from './validation/scenarioIdentity';
-import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompts/promptSkillLibrary';
+import { dispatchSkills } from './pipeline/skillDispatcher';
+import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
@@ -18,7 +19,7 @@ import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { restoreVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
-import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat } from './llm/modelQualification';
+import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey } from './llm/modelQualification';
 import { canUseDeterministicTierOne, canUseModelAuthoredRepair, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
@@ -31,7 +32,7 @@ import { buildStubTestPlan } from './tier/stubTestPlan';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable, resolvePythonExecutable } from './utils/pythonTestEnvironment';
 import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
-import { validateTraceAssertionEvidence } from './validation/traceAssertionEvidence';
+import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
@@ -59,7 +60,7 @@ async function assessFunctionComplexity(
     funcName: string,
     pythonExecutable: string
 ): Promise<ComplexityResult> {
-    const script = path.join(__dirname, '..', 'python_scripts', 'complexity_assessor.py');
+    const script = pythonToolPath('complexity');
     try {
         const { stdout } = await runSpawn(pythonExecutable, [script, filePath, funcName], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
@@ -119,7 +120,7 @@ async function runMockScaffold(
     targetModule?: string,
     pythonExecutable: string = 'python'
 ): Promise<{ scaffold: string; patches: string[]; mock_names: string[]; class_name?: string | null; is_async?: boolean } | null> {
-    const script = path.join(__dirname, '..', 'python_scripts', 'mock_scaffold_generator.py');
+    const script = pythonToolPath('scaffold');
     const scriptArgs = [script, filePath, funcName];
     if (traceResult || targetModule) {
         scriptArgs.push(JSON.stringify(traceResult || {}));
@@ -147,6 +148,8 @@ interface ModelProfile {
     testGenerationReady?: boolean;
     testGenerationReason?: string;
     testGenerationMode?: string;
+    qualificationVersion?: string;
+    endpointKey?: string;
 }
 
 function defaultModelProfile(): ModelProfile {
@@ -415,6 +418,8 @@ export function activate(context: vscode.ExtensionContext) {
         testGenerationReady?: boolean;
         testGenerationReason?: string;
         testGenerationMode?: string;
+    qualificationVersion?: string;
+    endpointKey?: string;
     }) => {
         const updatedProfile: ModelProfile = {
             paramSize: profile.paramSize,
@@ -424,6 +429,8 @@ export function activate(context: vscode.ExtensionContext) {
             modelName: profile.modelName,
             testGenerationReady: profile.testGenerationReady,
             testGenerationReason: profile.testGenerationReason,
+            qualificationVersion: profile.qualificationVersion,
+            endpointKey: profile.endpointKey,
             testGenerationMode: profile.testGenerationMode
         };
         currentModelProfile = updatedProfile;
@@ -435,6 +442,8 @@ export function activate(context: vscode.ExtensionContext) {
                 contextLength: updatedProfile.contextLength,
                 testGenerationReady: updatedProfile.testGenerationReady,
                 testGenerationReason: updatedProfile.testGenerationReason,
+                qualificationVersion: updatedProfile.qualificationVersion,
+                endpointKey: updatedProfile.endpointKey,
                 testGenerationMode: updatedProfile.testGenerationMode
             });
             void context.globalState.update(MODEL_PROFILE_STORE_KEY, storedModelProfiles);
@@ -451,7 +460,7 @@ async function extractAstContext(
     funcName: string,
     pythonExecutable: string
 ): Promise<AstContext | null> {
-    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_extractor.py');
+    const pythonScript = pythonToolPath('ast');
     try {
         const { stdout, stderr, code } = await runSpawn(pythonExecutable, [pythonScript, targetPath, funcName], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
@@ -471,7 +480,7 @@ async function findCallerContexts(
     targetPath?: string,
     pythonExecutable: string = 'python'
 ): Promise<CallerContext[]> {
-    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'ast_caller_finder.py');
+    const pythonScript = pythonToolPath('callers');
     try {
         const args = [pythonScript, funcName, projectRoot];
         if (targetPath) {
@@ -520,7 +529,7 @@ async function runDynamicTrace(
     pythonExecutable: string = 'python',
     semanticInputs: SemanticTraceInput[] = []
 ): Promise<DynamicTraceResult | null> {
-    const pythonScript = path.join(__dirname, '..', 'python_scripts', 'dynamic_tracer.py');
+    const pythonScript = pythonToolPath('trace');
     const baseArgs = [pythonScript, filePath, funcName];
     let literalInputs: Array<{
         args: unknown[] | null | undefined;
@@ -781,7 +790,7 @@ async function validateGeneratedTestCode(
         const parsed = await runSpawn(
             pythonExecutable,
             bindingContext
-                ? [path.join(__dirname, '..', 'python_scripts', 'validate_test_bindings.py'), JSON.stringify(bindingContext)]
+                ? [pythonToolPath('bindings'), JSON.stringify(bindingContext)]
                 : ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
             { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
         );
@@ -793,7 +802,7 @@ async function validateGeneratedTestCode(
             if (!bindings.valid) { return bindings; }
         }
         if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature) && targetSignature.length > 0) {
-            const validatorScript = path.join(__dirname, '..', 'python_scripts', 'validate_target_calls.py');
+            const validatorScript = pythonToolPath('calls');
             const compatibility = await runSpawn(
                 pythonExecutable,
                 [validatorScript, targetCallable, JSON.stringify(targetSignature)],
@@ -846,7 +855,7 @@ function stripUniformIndent(code: string): string {
 /** Parse bare asserts with Python AST; the normal validation gates still apply. */
 async function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: string, importModule?: string, pythonExecutable: string = 'python'): Promise<string> {
     const moduleName = importModule || path.basename(srcFilePath, '.py');
-    const script = path.join(__dirname, '..', 'python_scripts', 'rescue_unittest.py');
+    const script = pythonToolPath('rescue');
     const result = await runSpawn(pythonExecutable, [script], {
         input: JSON.stringify({ code: rawCode, module: moduleName }),
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
@@ -933,13 +942,15 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     } else if (dummyNameMarked) {
         log(`[快速通道] 偵測到 dummy 名稱標記，跳過複雜度評估與後續 AST 分析。`);
     }
+    const selectedEndpointKey = qualificationEndpointKey(params.envType, params.envType === 'local' ? params.ollamaUrl : params.envType === 'custom' ? params.customUrl : undefined);
     const selectedStoredProfile = findModelProfile(modelSnapshot.stored, {
         envType: params.envType,
-        modelName: params.modelName
+        modelName: params.modelName, endpointKey: selectedEndpointKey
     });
     const activeModelProfile = selectedStoredProfile
         ? withBudget(selectedStoredProfile)
         : (modelSnapshot.current.envType === params.envType && modelSnapshot.current.modelName === params.modelName
+            && (modelSnapshot.current.endpointKey || qualificationEndpointKey(params.envType)) === selectedEndpointKey
             ? modelSnapshot.current
             : defaultModelProfile());
     const modelParamBillion = parseFloat(activeModelProfile.paramSize);
@@ -948,7 +959,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     // A fresh extension with no probe data stays neutral for compatibility.
     const qualifiedForSelectedModel = qualificationForSelectedProfile(
         modelSnapshot.stored,
-        { envType: params.envType, modelName: params.modelName },
+        { envType: params.envType, modelName: params.modelName, endpointKey: selectedEndpointKey },
         modelSnapshot.current.testGenerationReady !== undefined
     );
     const tier1GenerationMode = resolveTier1GenerationMode(qualifiedForSelectedModel, userTierSetting);
@@ -1311,9 +1322,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     };
     finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
     let semanticContext: string | undefined;
-    const deterministicSkillIds = astContext && !astContext.error
-        ? inferSkillIdsFromCode((astContext as any).code || '', astContext as any)
-        : [];
+    const skillSelection = dispatchSkills(astContext?.code || '', astContext || undefined);
+    const deterministicSkillIds = skillSelection.ids;
+    recordRole('skill-dispatcher', 'source-derived', { ids: deterministicSkillIds });
     if (astContext && !astContext.error && mayUseModelAuthoredTests) {
         log(`[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）...`);
         try {
@@ -1348,12 +1359,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     parsedSemResult,
                     Array.isArray((astContext as any).args) ? (astContext as any).args : undefined
                 );
-                semResult.required_skills = mergeEvidenceBoundSkillIds(
-                    (astContext as any).code || '',
-                    semResult.required_skills,
-                    astContext as any
-                );
-                semanticContext = formatSemanticContextForPrompt(semResult, semDeps);
+                semanticContext = skillSelection.guidance + formatSemanticContextForPrompt(semResult, semDeps);
                 const semanticTraceInputs = buildSemanticTraceCandidates(
                     semResult,
                     (astContext as any).signature
@@ -1393,7 +1399,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     if (!semanticContext && deterministicSkillIds.length > 0) {
         semanticContext = '=== DETERMINISTIC SKILL BASELINE (Derived from source syntax) ===\n\n'
-            + formatSkillCardsForPrompt(getSkillCards(deterministicSkillIds));
+            + skillSelection.guidance;
         log(mayUseModelAuthoredTests
             ? `[技能卡] 使用程式碼特徵的保守技能組合：${deterministicSkillIds.join(', ')}。`
             : `[技能卡] 模型尚未驗證；略過 LLM 語意分析，使用程式碼特徵的確定性技能組合：${deterministicSkillIds.join(', ')}。`);
@@ -1641,11 +1647,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     pythonExecutable,
                                     testBindingContext
                                 );
-                                const subTraceEvidence = validateTraceAssertionEvidence(
+                                const subTraceEvidence = await validateTraceEvidence(
                                     subClean,
                                     targetFuncName,
-                                    subTraceResult
-                                );
+                                    subTraceResult, targetImportModule, pythonExecutable, astContext?.class_name);
                                 const subGate = resolveTierTwoSubtaskGate(subValidation, subTraceEvidence);
                                 if (subGate.accepted) {
                                     subSnippets.push(subClean);
@@ -1742,11 +1747,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         pythonExecutable,
                         testBindingContext
                     );
-                    const traceEvidenceValidation = validateTraceAssertionEvidence(
+                    const traceEvidenceValidation = await validateTraceEvidence(
                         sanitizedCode,
                         targetFuncName,
-                        (astContext as any)?.traceResult
-                    );
+                        astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name);
                     if (!candidateValidation.valid || !traceEvidenceValidation.valid) {
                         const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
                         if (llmRetry === 0) {
@@ -1852,7 +1856,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const hash = evidenceHash(code);
                 if (!inventories.has(hash)) {
                     const result = await runSpawn(pythonExecutable,
-                        ['-B', path.join(__dirname, '..', 'python_scripts', 'test_scenario_inventory.py')],
+                        ['-B', pythonToolPath('scenarios')],
                         { input: code, timeout: 5000, env: testExecutionEnv });
                     if (result.code !== 0) { throw new Error('無法建立測試情境識別：' + result.stderr); }
                     inventories.set(hash, JSON.parse(result.stdout));
@@ -1867,7 +1871,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
                         exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
-                    const trace = validateTraceAssertionEvidence(code, targetFuncName, astContext?.traceResult);
+                    const trace = await validateTraceEvidence(code, targetFuncName, astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name);
                     return !structural.valid || !trace.valid ? trace.reason || structural.reason || 'Validation failed' : undefined;
                 },
                 review: async (code) => {
@@ -2024,7 +2028,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             let noMutationCandidates = false;
             let mutpyResult: string;
             if (engine === 'builtin') {
-                const fallbackScript = path.join(__dirname, '..', 'python_scripts', 'basic_mutation_runner.py');
+                const fallbackScript = pythonToolPath('mutation');
                 const perMutationTimeout = Math.max(1, Math.min(10, Math.floor(params.timeoutSeconds / 3)));
                 const selectedClassName = (astContext as any)?.class_name as string | undefined;
                 const fallbackRun = await runSpawn(

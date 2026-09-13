@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { formatSemanticContextForPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters } from '../prompts/semanticAnalyzerPrompt';
+import { formatSemanticContextForPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters } from '../roles/semanticAnalyzer';
 
 test('drops unfinished semantic placeholders before they reach a Writer prompt', () => {
     const parsed = parseSemanticAnalysis(JSON.stringify({

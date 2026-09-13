@@ -7,7 +7,7 @@
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 
 export function getBugFixerSystemPrompt(): string {
-    return `You are an Python unittest Bug Fixer.
+    return `You are a Python unittest Bug Fixer.
 Your job is to fix errors and assertion failures in the provided test file by comparing it against the ACTUAL TARGET SOURCE CODE and ERROR TRACEBACK.
 
 CORE RULES:
@@ -142,10 +142,6 @@ export function getBugFixerUserPrompt(
     prompt += `INSTRUCTION:\nCarefully read the error log and all supplied evidence. Fix failures without weakening passing tests, preserve exact verified Trace facts, and output the complete corrected test file in a \`\`\`python code block.`;
     return prompt;
 }
-
-/** Compatibility exports for existing callers; the orchestrator uses explicit role names. */
-export const getReviewerSystemPrompt = getBugFixerSystemPrompt;
-export const getReviewerUserPrompt = getBugFixerUserPrompt;
 
 export function getReviewEvidence(...args: Parameters<typeof getBugFixerUserPrompt>): string {
     const context = getBugFixerUserPrompt(...args);

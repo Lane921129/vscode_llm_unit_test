@@ -4,6 +4,17 @@
 
 ## 2026-09-13
 
+### 統一角色入口、精簡技能選擇與版本化探針
+
+- 新增 ARCHITECTURE.md 閱讀導覽、角色與 Python 工具對照；角色實作统一至 src/roles，移除 src/prompts 的轉發入口，舊分流器移至明確標示的 legacy 目錄。
+- 集中正式 Python 工具路徑；把執行中使用的 test_scenario_inventory.py 更名為 scenario_inventory.py，避免被套件 test_*.py 排除規則誤移除。
+- 新增確定性 Skill Dispatcher 階段；語意分析師提示詞與 provider schema 不再要求 required_skills，移除整份技能目錄與重複選擇規則。舊回應欄位可讀取，但不影響技能分配。
+- 探針資格加入契約版本與端點雜湊識別；過期紀錄保留原格式並要求重新測試，不會自動改標為通過；端點不儲存認證、query 或 API key。新資格戳記由實際連線驗證流程產生。
+- 以 Python AST 取代正式流程的逐行 Trace 斷言比對，補上暫存結果、多行、無參數、布林 identity 與字串空白；保留 Mock／fixture／未知控制流程為未知，避免錯套 Trace。
+- 驗證：完整 TypeScript 單元、Python 回歸、介面語法、型別、lint、建置、套件工具路徑與提交快照檢查。包含固定模型回應搭配真實 Python／coverage／mutation 的端到端測試。
+- 限制：不自動重跑付費／本機模型探針；同一端點下同名模型若被替換仍需手動重測。AST 證據檢查不證明任意狀態、Mock 或類別行為符合業務規格，範圍與未知情況記錄於 docs/assertion-evidence.md。
+
+
 ### 拆分審查、執行修復與品質分析流程
 
 - Reviewer 改為輸出有原文證據的問題清單；結構與審查問題交 Writer，實際測試失敗才交 Bug Fixer。移除重複的 Tier 4 Self-repair 呼叫路徑，所有修订候選重新審查與驗證。

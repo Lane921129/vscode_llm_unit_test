@@ -1,5 +1,5 @@
-import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from './fewShotExamples';
-import { getReviewerUserPrompt } from './bugFixerPrompt';
+import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from '../prompts/fewShotExamples';
+import { getBugFixerUserPrompt } from './bugFixer';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 1：填空法 Prompt（2–3B 極小模型）
@@ -145,7 +145,7 @@ export function getTier4SelfRepairPrompt(
     semanticGuidance?: string
 ): string {
     const evidenceContext = brokenCode
-        ? getReviewerUserPrompt(
+        ? getBugFixerUserPrompt(
             brokenCode, stderr, funcName, funcArgs, sourceCode, astContext, moduleName, semanticGuidance
         )
         : `=== PRE-VERIFICATION ERROR LOG ===\n\`\`\`text\n${stderr.substring(0, 2000)}\n\`\`\``;

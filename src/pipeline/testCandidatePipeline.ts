@@ -1,5 +1,5 @@
 import { RepairFeedback } from '../validation/repairFeedback';
-import { TestReview } from '../prompts/testReviewerPrompt';
+import { TestReview } from '../roles/testReviewer';
 
 export interface CandidateExecution {
     ok: boolean;

@@ -10,7 +10,7 @@
  * The test_strategy output replaces all hardcoded boundary rules in the unittest writer prompt.
  */
 
-import { getSkillCards, formatSkillCardsForPrompt, getSkillLibrarySummaryForPrompt } from './promptSkillLibrary';
+
 
 // === Type Definitions ===
 
@@ -52,7 +52,7 @@ export interface SemanticAnalysis {
     unreachable_paths: UnreachablePath[];
     equivalent_mutant_candidates: EquivalentMutantCandidate[];
     mock_required_for?: { path: string; mock_target: string; example: string }[];
-    required_skills: string[];       // 技能 IDs，對應 prompt_skill_library.ts 中的 SkillCard.id
+    required_skills: string[];       // 僅讀取舊回應；不再參與技能分配
     test_strategy: TestStrategy;     // AI-derived test data strategy for this specific function
 }
 
@@ -197,10 +197,10 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
 
 // === System Prompt ===
 
-export function getSemanticAnalyzerSystemPrompt(skillLibrarySummary: string): string {
+export function getSemanticAnalyzerSystemPrompt(_legacySkillSummary?: string): string {
     return `You are a Python code analyst with two responsibilities:
 1. Analyze cross-function dependency behavior in a specific calling context
-2. Select the appropriate test skill cards for the Unittest Writer
+2. Propose evidence-bound input scenarios for the Unittest Writer; skill selection is handled by the runner
 
 Your output must be a single valid JSON object with this exact schema:
 {
@@ -231,7 +231,6 @@ Your output must be a single valid JSON object with this exact schema:
       "example": "<one-line mock example>"
     }
   ],
-  "required_skills": ["<skill_id_1>", "<skill_id_2>"],
   "test_strategy": {
     "approach": "<overall test strategy for this specific function>",
     "input_hints": [
@@ -246,13 +245,10 @@ Your output must be a single valid JSON object with this exact schema:
     "assertion_style": "assertEqual | assertRaises | mixed",
     "mock_needed": false,
     "key_rules": [
-      "<any extra rule not covered by required_skills>"
+      "<concise source-specific testing observation>"
     ]
   }
 }
-
-AVAILABLE SKILL IDs (for required_skills array):
-${skillLibrarySummary}
 
 ANALYSIS RULES:
 - MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.
@@ -261,31 +257,9 @@ ANALYSIS RULES:
 - When VERIFIED DEPENDENCY EXECUTION FACTS are provided, reproduce their Python repr values exactly. Never replace a Python dict/list/tuple with a JavaScript-style description such as "[object Object]".
 - Without verified dependency execution facts, do not claim a dependency "always returns" a concrete value; leave dependency_behaviors empty and let the Writer rely on source code or mock.patch.
 - For unreachable_paths: if dependency always returns X, which if-conditions are always True/False?
-- For required_skills: scan the source code and pick the IDs of ALL applicable skills:
-    * Does it use len(x) < N? → add "string_length_boundary"
-    * Does it use x[:N] or x[-N:]? → add "python_slicing"
-    * Does it have if/elif on numeric thresholds? → add "branch_threshold_coverage"
-    * Does it use round() or float math? → add "float_precision"
-    * Does it return a tuple? → add "tuple_return"
-    * Does it return a dict? → add "dict_return"
-    * Does it check None or empty? → add "none_input_handling"
-    * Does it have raise statements? → add "assert_raises_syntax"
-    * Does it use try/except and return error strings? → add "try_except_returns_string"
-    * Does it do division? → add "zero_division"
-    * Is it an instance method or property that needs an object instance? → add "class_method_testing"
-      Do not add it for staticmethod or classmethod; their binding is supplied by AST context.
-    * Does it call external modules/IO/DB? → add "mock_external_dependency"
-    * Is it declared with async def or does it await a coroutine? → add "async_coroutine_testing"
-    * Does it open, read, or write files? → add "file_io_mocking"
-    * Does it read the current date, time, or timezone? → add "datetime_freezing"
-    * Does the selected callable yield values? → add "generator_result_testing"
-    * Does it contain with or async with? → add "context_manager_testing"
-    * Does it contain async with? → also add "async_context_manager_testing"
-    * Does it call a verified imported HTTP client? → add "http_client_mocking"
-    * ALWAYS add "import_module_name"
 - For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)
 - For test_strategy.input_hints: emit only scalar Python literals: None, True, False, a finite number, or a plain quoted string. Do not emit expressions, calls, collections, comprehensions, attributes, or variable names. Safe scalar candidates may be re-executed by Dynamic Trace; they are never an output oracle by themselves.
-- For test_strategy.key_rules: only add rules NOT already covered by the selected skill cards
+- For test_strategy.key_rules: include only concise observations tied to this target; do not repeat generic unittest advice
 - If no dependencies, return empty arrays for dependency_behaviors, unreachable_paths, equivalent_mutant_candidates, mock_required_for
 - Return ONLY the JSON object, no explanation text`;
 }
@@ -513,12 +487,7 @@ export function formatSemanticContextForPrompt(
     }
 
     // === 技能購物車：注入選取的技能卡 ===
-    if (analysis.required_skills && analysis.required_skills.length > 0) {
-        const cards = getSkillCards(analysis.required_skills);
-        if (cards.length > 0) {
-            out += '\n' + formatSkillCardsForPrompt(cards);
-        }
-    }
+
 
     // === AI 推導的測資策略 ===
     const ts = analysis.test_strategy;
@@ -562,10 +531,9 @@ export function formatSemanticContextForPrompt(
 }
 
 /**
- * 建立語意分析師系統 prompt（含動態技能庫摘要）
- * 此為對外呼叫的工廠函式，自動注入技能庫說明
+ * 建立只負責函式分析與測試情境的提示詞
+ * 技能由 pipeline/skillDispatcher 決定，不向模型提供技能目錄
  */
 export function buildSemanticAnalyzerSystemPrompt(): string {
-    const summary = getSkillLibrarySummaryForPrompt();
-    return getSemanticAnalyzerSystemPrompt(summary);
+    return getSemanticAnalyzerSystemPrompt();
 }

@@ -1,4 +1,4 @@
-import type { SemanticAnalysis } from '../prompts/semanticAnalyzerPrompt';
+import type { SemanticAnalysis } from '../roles/semanticAnalyzer';
 
 export interface SemanticTraceParameter {
     name: string;

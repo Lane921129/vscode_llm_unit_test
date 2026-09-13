@@ -8,9 +8,9 @@ import { buildTier1TestFile } from '../tier/tier1TestFileBuilder';
 import { restoreVerifiedTraceTestFile } from '../tier/traceTestAugmenter';
 import { generatedUnittestArguments, resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { classifyExecutionFailure } from '../utils/executionFailureCategory';
-import { getReviewerUserPrompt } from '../prompts/bugFixerPrompt';
+import { getBugFixerUserPrompt } from '../roles/bugFixer';
 import { getSkillCards, inferSkillIdsFromCode } from '../prompts/promptSkillLibrary';
-import { formatEquivalentMutantsReport, getMutantTriageSystemPrompt } from '../prompts/mutantTriagePrompt';
+import { formatEquivalentMutantsReport, getMutantTriageSystemPrompt } from '../roles/legacy/mutantTriage';
 
 const root = resolve(__dirname, '../..');
 const python = resolvePythonExecutable(undefined, root);
@@ -85,7 +85,7 @@ test('all failure types and actual/expected tails survive long error summaries',
     const output = ['runner header', ...['alpha', 'beta', 'gamma'].map(name =>
         `FAIL: test_${name} (suite.Test.test_${name})\n${'  stack frame\n'.repeat(300)}AssertionError: actual_${name} != expected_${name}\n`)].join('\n');
     const summary = summarizeRepairOutput(output);
-    const prompt = getReviewerUserPrompt(modelCode, output, 'render', ['value'], '', undefined, 'worker');
+    const prompt = getBugFixerUserPrompt(modelCode, output, 'render', ['value'], '', undefined, 'worker');
     for (const name of ['alpha', 'beta', 'gamma']) {
         assert.match(summary, new RegExp(`test_${name}`));
         assert.match(prompt, new RegExp(`actual_${name} != expected_${name}`));

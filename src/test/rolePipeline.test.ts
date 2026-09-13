@@ -6,8 +6,8 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CandidatePipelineHooks, validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { AnalysisJournal, QualityProgress } from '../pipeline/analysisJournal';
-import { fitReviewPrompt, parseTestReview } from '../prompts/testReviewerPrompt';
-import { parseQualityTasks, qualityStrategyHints } from '../prompts/qualityAnalystPrompt';
+import { fitReviewPrompt, parseTestReview } from '../roles/testReviewer';
+import { parseQualityTasks, qualityStrategyHints } from '../roles/qualityAnalyst';
 import { normalizeScenarioOutput, reconcileScenarios } from '../validation/scenarioIdentity';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
@@ -122,7 +122,7 @@ test('journal preserves raw candidates and refuses overwriting a same-minute run
 const root = path.resolve(__dirname, '../..');
 const python = resolvePythonExecutable(undefined, root);
 function inventory(code: string): Array<{ id: string; fingerprint: string }> {
-    const run = spawnSync(python, ['-B', path.join(root, 'python_scripts/test_scenario_inventory.py')], { input: code, encoding: 'utf8' });
+    const run = spawnSync(python, ['-B', path.join(root, 'python_scripts/scenario_inventory.py')], { input: code, encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);
     return JSON.parse(run.stdout);
 }

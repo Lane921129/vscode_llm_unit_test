@@ -1,3 +1,4 @@
+import { QUALIFICATION_VERSION } from '../llm/modelQualification';
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { findModelProfile, modelProfileKey, qualificationForSelectedProfile, restoreModelProfiles, upsertModelProfile } from '../llm/modelProfileRegistry';
@@ -8,7 +9,7 @@ const localProfile = {
     modelName: 'reliable-instruct',
     paramSize: '8B',
     contextLength: 8192,
-    testGenerationReady: true,
+    qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true,
     testGenerationReason: '模型已通過行為 assertion 驗證。',
     testGenerationMode: '結構化 JSON unittest'
 };
@@ -19,7 +20,7 @@ test('keeps qualification metadata for multiple provider/model pairs', () => {
         modelName: 'models/gemma-4-31b-it',
         paramSize: 'Cloud',
         contextLength: 1000000,
-        testGenerationReady: true
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true
     });
 
     assert.strictEqual(findModelProfile(profiles, {
@@ -35,7 +36,7 @@ test('keeps qualification metadata for multiple provider/model pairs', () => {
 
 test('replaces only the probe result for the same model', () => {
     const first = upsertModelProfile([], localProfile);
-    const updated = upsertModelProfile(first, { ...localProfile, testGenerationReady: false });
+    const updated = upsertModelProfile(first, { ...localProfile, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: false });
     assert.strictEqual(updated.length, 1);
     assert.strictEqual(updated[0].testGenerationReady, false);
 });
@@ -66,7 +67,7 @@ test('applies a Cloud qualification when Google changes only the models/ prefix'
         modelName: 'models/gemma-4-31b-it',
         paramSize: 'Cloud',
         contextLength: 1000000,
-        testGenerationReady: true,
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true,
         testGenerationMode: '純 Python unittest'
     }], {
         envType: 'cloud', modelName: 'gemma-4-31b-it'

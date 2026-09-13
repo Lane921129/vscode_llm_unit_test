@@ -1,5 +1,7 @@
 # LLM Unit Test & Mutation Analyzer
 
+**閱讀專案請從 [專案結構與流程導覽](ARCHITECTURE.md) 開始**：角色入口、Python 工具對照、驗證流程與結果檔案都集中在此。
+
 > A VS Code extension that turns Python source into **evidence-checked** unit tests. It combines AST context extraction, real execution traces, LLM-assisted strategies, coverage, and mutation testing instead of trusting generated code at face value.
 
 > [!WARNING]

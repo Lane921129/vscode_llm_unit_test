@@ -2,22 +2,22 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { test } from 'node:test';
-import { getReviewerSystemPrompt, getReviewerUserPrompt } from '../prompts/bugFixerPrompt';
+import { getBugFixerSystemPrompt, getBugFixerUserPrompt } from '../roles/bugFixer';
 import { getBaseFewShotExamples } from '../prompts/fewShotExamples';
 import {
     buildSemanticAnalyzerSystemPrompt,
     formatSemanticContextForPrompt,
     getSemanticAnalyzerUserPrompt,
     SemanticAnalysis
-} from '../prompts/semanticAnalyzerPrompt';
-import { compactSemanticGuidanceForBudget, getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../prompts/unittestWriterPrompt';
+} from '../roles/semanticAnalyzer';
+import { compactSemanticGuidanceForBudget, getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../roles/unittestWriter';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
 test('shared prompts and active base examples contain no project-domain vocabulary', () => {
     const sharedPromptText = [
-        getReviewerSystemPrompt(),
-        getReviewerUserPrompt('import unittest', 'example error', 'transform_value', ['value'], 'def transform_value(value):\n    return value', {}, 'utility_module'),
+        getBugFixerSystemPrompt(),
+        getBugFixerUserPrompt('import unittest', 'example error', 'transform_value', ['value'], 'def transform_value(value):\n    return value', {}, 'utility_module'),
         buildSemanticAnalyzerSystemPrompt(),
         ...getBaseFewShotExamples().flatMap(example => [example.sourceCode, example.thinking, example.testCode])
     ].join('\n');
@@ -26,13 +26,13 @@ test('shared prompts and active base examples contain no project-domain vocabula
 });
 
 test('writer prompt source does not retain legacy application-specific examples', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
 
     assert.ok(!/payment_token|login_user|validate_and_format_token/i.test(writerSource));
 });
 
 test('writer output contract does not branch on a provider or model name', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
 
     assert.ok(!/useThinkingTag|noThinkingModels|qwen|tinyllama|gemma|mistral/i.test(writerSource));
     assert.match(writerSource, /const thinking = false;/);
@@ -50,8 +50,8 @@ test('Tier 1 LLM prompt binds assertions to execution evidence and keeps skill c
 });
 
 test('reviewer prompt uses complete AST and skill context without treating source as an output oracle', () => {
-    const systemPrompt = getReviewerSystemPrompt();
-    const prompt = getReviewerUserPrompt(
+    const systemPrompt = getBugFixerSystemPrompt();
+    const prompt = getBugFixerUserPrompt(
         'import unittest', 'coverage missed line 5', 'render', ['value'], 'def render(value):\n    return PREFIX + value', {
             method_kind: 'instance', class_name: 'Renderer',
             class_context: {
@@ -94,7 +94,7 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
             }
         }
     });
-    const reviewerPrompt = getReviewerUserPrompt(
+    const reviewerPrompt = getBugFixerUserPrompt(
         'import unittest', 'example error', 'transform', ['values', 'limit'],
         'def transform(values, limit=1): return values', {
             signature: [{ name: 'values', annotation: 'list[str]', required: true, default: null }],
@@ -141,7 +141,7 @@ test('semantic prompt restricts re-traced candidates to safe scalar literals', (
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
 
     assert.match(writerSource, /method_kind === 'static'.*method_kind === 'class'/s);
     assert.match(writerSource, /Do NOT instantiate the class/);
@@ -197,7 +197,7 @@ test('Tier 3 scaffold prompt receives source and evidence-bound skill guidance',
 });
 
 test('Tier 4 repair prompt does not require habitual None or empty-input tests', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
 
     assert.match(writerSource, /Do not add None or empty-input tests merely by habit/);
     assert.doesNotMatch(writerSource, /Cover all edge cases: None, empty, boundary values, all exception paths/);
@@ -221,7 +221,7 @@ test('Tier 4 self-repair receives the same source, AST, Trace, and skill evidenc
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/prompts/unittestWriterPrompt.ts'), 'utf8');
+    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
 
     assert.match(writerSource, /astContext\?\.target_import_module/);
     assert.match(writerSource, /from \$\{moduleName\} import \$\{funcName\}/);

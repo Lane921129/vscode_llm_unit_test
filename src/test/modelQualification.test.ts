@@ -1,3 +1,4 @@
+import { QUALIFICATION_VERSION } from '../llm/modelQualification';
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { formatModelQualificationLog, qualificationForRequest } from '../llm/modelQualification';
@@ -6,7 +7,7 @@ test('uses a generation qualification only for the exact probed model', () => {
     const profile = {
         envType: 'local' as const,
         modelName: 'reliable-instruct',
-        testGenerationReady: true
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true
     };
 
     assert.strictEqual(
@@ -37,7 +38,7 @@ test('formats a non-secret system log for a successful connection that fails qua
     const message = formatModelQualificationLog({
         envType: 'cloud',
         modelName: 'gemma-4-31b-it',
-        testGenerationReady: false,
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: false,
         testGenerationMode: '純 Python unittest',
         testGenerationReason: '模型沒有產生有效的 unittest 結構。'
     });
@@ -52,7 +53,7 @@ test('keeps newlines out of qualification logs', () => {
     const message = formatModelQualificationLog({
         envType: 'local',
         modelName: 'local\nmodel',
-        testGenerationReady: true,
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true,
         testGenerationMode: '結構化 JSON unittest'
     });
 
@@ -64,13 +65,13 @@ test('appends the fixed-fixture probe reply only when qualification fails', () =
     const failed = formatModelQualificationLog({
         envType: 'cloud',
         modelName: 'gemma-4-31b-it',
-        testGenerationReady: false,
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: false,
         testGenerationReason: '安全 fixture 拒絕。'
     }, '```python\n# probe reply\n```');
     const passed = formatModelQualificationLog({
         envType: 'cloud',
         modelName: 'gemma-4-31b-it',
-        testGenerationReady: true
+        qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true
     }, 'this reply must not be logged after success');
 
     assert.match(failed, /\[模型探測回應\][\s\S]*# probe reply/);

@@ -1,3 +1,4 @@
+import { QUALIFICATION_VERSION } from '../llm/modelQualification';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -75,7 +76,7 @@ class Cases(unittest.TestCase):
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
-            paramSize: '32B', contextLength: 32768, testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+            paramSize: '32B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: 'plain-unittest' });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });

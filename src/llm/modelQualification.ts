@@ -1,3 +1,18 @@
+import { createHash } from 'node:crypto';
+
+/** Bump only when the executable probe contract changes, not for unrelated UI releases. */
+export const QUALIFICATION_VERSION = 'python-unittest-v2';
+
+export function qualificationEndpointKey(envType: string, endpoint?: string): string {
+    const fallback = envType === 'local' ? 'http://127.0.0.1:11434' : envType === 'cloud'
+        ? 'https://generativelanguage.googleapis.com' : 'https://api.openai.com/v1/chat/completions';
+    try {
+        const url = new URL(endpoint || fallback);
+        // Never persist credentials, query parameters, or API keys with metadata.
+        return createHash('sha256').update(url.origin + url.pathname.replace(/\/+$/, '')).digest('hex');
+    } catch { return 'invalid-endpoint'; }
+}
+
 export interface ModelQualificationProfile {
     envType?: 'local' | 'cloud' | 'custom';
     modelName?: string;
@@ -6,11 +21,14 @@ export interface ModelQualificationProfile {
     testGenerationReason?: string;
     /** Structured JSON or plain-Python compatibility path that passed the probe. */
     testGenerationMode?: string;
+    qualificationVersion?: string;
+    endpointKey?: string;
 }
 
 export interface ModelQualificationRequest {
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
+    endpointKey?: string;
 }
 
 export type TestGenerationResponseFormat = 'test-code-json' | 'text';
@@ -71,6 +89,10 @@ export function formatModelQualificationLog(profile: ModelQualificationProfile, 
     const mode = compactLogValue(profile.testGenerationMode, 'unittest 生成探測');
     const reason = compactLogValue(profile.testGenerationReason, '未提供原因');
 
+    if (profile.testGenerationReady !== undefined && profile.qualificationVersion !== QUALIFICATION_VERSION) {
+        return `[模型資格] ${provider}／${model}：舊探針結果已過期（原紀錄：${mode}）；請重新執行測試連線。正式測試生成使用純 Python。`;
+    }
+
     const summary = profile.testGenerationReady === true
         ? `[模型資格] ${provider}／${model}：連線成功，已通過 ${mode}。`
         : `[模型資格] ${provider}／${model}：連線成功，但未通過 ${mode}（${reason}）。Auto 將保守使用 Tier 1。`;
@@ -91,6 +113,10 @@ export function qualificationForRequest(
     if (profile.testGenerationReady === undefined) {
         return undefined;
     }
+    if (profile.qualificationVersion !== QUALIFICATION_VERSION) { return false; }
+    const profileEndpoint = profile.endpointKey || qualificationEndpointKey(profile.envType || request.envType);
+    const requestEndpoint = request.endpointKey || qualificationEndpointKey(request.envType);
+    if (profileEndpoint !== requestEndpoint) { return false; }
     if (!profile.envType || !profile.modelName) {
         // Preserve compatibility with pre-qualification profiles.
         return profile.testGenerationReady;

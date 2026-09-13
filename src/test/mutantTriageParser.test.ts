@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { extractKillTestMethods, parseMutantTriageResult } from '../prompts/mutantTriagePrompt';
+import { extractKillTestMethods, parseMutantTriageResult } from '../roles/legacy/mutantTriage';
 
 test('normalizes only actionable mutant-triage verdicts', () => {
     const result = parseMutantTriageResult(JSON.stringify({

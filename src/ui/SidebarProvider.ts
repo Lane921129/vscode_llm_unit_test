@@ -6,7 +6,7 @@ import { initI18n, t } from '../i18n';
 import { extractFunctionsWithAst } from '../utils/utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from '../llm/cloudApi';
 import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
-import { formatModelQualificationLog, ModelQualificationProfile } from '../llm/modelQualification';
+import { formatModelQualificationLog, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
 import { buildOllamaPlainTestGenerationProbe } from '../llm/ollamaCapability';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
@@ -336,6 +336,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 paramSize,
                                                 contextLength,
                                                 envType: 'local' as const,
+                                                endpointKey: qualificationEndpointKey('local', baseUrl),
                                                 modelName: message.modelName
                                             };
                                             // 傳送探針結果給 webview 顯示
@@ -356,7 +357,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     ...profile,
                                                     testGenerationReady: capability.capability === 'verified',
                                                     testGenerationReason: capability.reason,
-                                                    testGenerationMode: '純 Python unittest'
+                                                    qualificationVersion: QUALIFICATION_VERSION,
+                                    testGenerationMode: '純 Python unittest'
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
@@ -373,6 +375,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             } catch {
                                                 const qualificationProfile = {
                                                     ...profile,
+                                                    qualificationVersion: QUALIFICATION_VERSION,
                                                     testGenerationReady: false,
                                                     testGenerationReason: '測試連線逾時或無法完成 unittest 生成探針。',
                                                     testGenerationMode: '未完成'
@@ -444,9 +447,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     paramSize: connectionMetadata.paramSize,
                                     contextLength: connectionMetadata.contextLength,
                                     envType: 'cloud' as const,
+                                    endpointKey: qualificationEndpointKey('cloud'),
                                     modelName: credential.model,
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
+                                    qualificationVersion: QUALIFICATION_VERSION,
                                     testGenerationMode: '純 Python unittest'
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
@@ -486,9 +491,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     paramSize: 'Custom API',
                                     contextLength: 8192,
                                     envType: 'custom',
+                                    endpointKey: qualificationEndpointKey('custom', message.customUrl),
                                     modelName: message.modelName,
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
+                                    qualificationVersion: QUALIFICATION_VERSION,
                                     testGenerationMode: '純 Python unittest'
                                 } as const;
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
