@@ -1,11 +1,14 @@
-import { RepairFeedback } from './validation/repairFeedback';
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt, getTier4SystemPrompt, getTier4SelfRepairPrompt } from './prompts/unittestWriterPrompt';
-import { getReviewerSystemPrompt, getReviewerUserPrompt } from './prompts/bugFixerPrompt';
+import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt } from './prompts/unittestWriterPrompt';
+import { getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence } from './prompts/bugFixerPrompt';
+import { fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview } from './prompts/testReviewerPrompt';
 import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis } from './prompts/semanticAnalyzerPrompt';
+import { getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints } from './prompts/qualityAnalystPrompt';
+import { validateTestCandidate } from './pipeline/testCandidatePipeline';
+import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
+import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from './validation/scenarioIdentity';
 import { formatSkillCardsForPrompt, getSkillCards, inferSkillIdsFromCode, mergeEvidenceBoundSkillIds } from './prompts/promptSkillLibrary';
-import { getMutantTriageSystemPrompt, getMutantTriageUserPrompt, parseMutantTriageResult, extractKillTestMethods, formatEquivalentMutantsReport } from './prompts/mutantTriagePrompt';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
@@ -292,6 +295,7 @@ interface AstContext {
     condition_facts?: Array<{ kind: 'comparison' | 'membership' | 'match'; parameter: string; subject: 'value' | 'length'; operator?: string; literal?: string | null; literals?: string[]; line: number }>;
     traceResult?: DynamicTraceResult;
     dependencyContexts?: AstContext[];
+    sourceVersions?: Array<{ file: string; hash: string }>;
     callerContexts?: CallerContext[];
     code: string;
     error?: string;
@@ -901,6 +905,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let bestScore = -1;
     let bestCode = '';
     let bestTestPath = '';
+    let bestSurvivors = '';
+    let bestExecution = '';
+    let bestScenarios: ScenarioIdentity[] = [];
+    let acceptedScenarios: ScenarioIdentity[] = [];
+    let measuredQualityGaps: string[] = [];
+    let bestMeasuredGaps: string[] = [];
+    let bestGaps: string[] = [];
+    let bestCoverage: { coverageText: string; missingLines: string } | null = null;
+    let qualityGaps: string[] = [];
+    let analystTasks = '';
+    const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
     // the AST-confirmed leaf name when building Python calls and assertions.
     let targetFuncName = params.funcName;
@@ -988,6 +1003,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         qualificationMode: activeModelProfile.testGenerationMode,
     });
 
+    const initialSource = fs.readFileSync(params.filePath, 'utf8');
     const baseDir = params.outputPath || path.dirname(params.filePath);
     
     // 建立本次測試的專屬資料夾
@@ -1061,6 +1077,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (astContext.dependencies && astContext.dependencies.length > 0) {
                 log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
                 astContext.dependencyContexts = [];
+                astContext.sourceVersions = [];
                 // 取得專案根目錄（batchPath 本身就是資料夾；否則用 workspace 根目錄）
                 const projectRoot = (params as any).batchPath
                     ? (params as any).batchPath
@@ -1070,6 +1087,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const depFilePath = resolvePythonDependencyPath(params.filePath, projectRoot, dep);
                     
                     if (fs.existsSync(depFilePath)) {
+                    
+                        astContext.sourceVersions.push({ file: depFilePath, hash: evidenceHash(fs.readFileSync(depFilePath, 'utf8')) });
                             const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
                         if (depAst && !depAst.error) {
                             // 🔍 呼叫站掃描：找出這個依賴函式在全專案的所有呼叫點
@@ -1275,6 +1294,22 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     // 對所有函式啟動（不限有跨檔案相依的函式）：
     //   1. 計算各相依函式在此呼叫情境的固定行為（原有功能）
     //   2. 推導此函式的最佳測資策略（新功能）—— AI 決定邊界值，不再硬編碼
+    const manifestPath = path.join(sessionDir, 'run_manifest.json');
+    if (fs.existsSync(manifestPath)) {
+        log('[系統] 同分鐘已有執行紀錄；保留現有候選與證據，請於下一分鐘建立新執行。');
+        return;
+    }
+    const journal = new AnalysisJournal(sessionDir, initialSource,
+        params.funcName || 'file', params.modelName);
+    const evidenceStillCurrent = () => evidenceHash(fs.readFileSync(params.filePath, 'utf8')) === journal.sourceHash
+        && (astContext?.sourceVersions || []).every(version => fs.existsSync(version.file)
+            && evidenceHash(fs.readFileSync(version.file, 'utf8')) === version.hash);
+    const recordRole = (stage: string, status: string, detail: unknown) => {
+        journal.record(currentLoop, stage, status, detail);
+        log(`[${stage}] ${status}`);
+        finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
+    };
+    finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
     let semanticContext: string | undefined;
     const deterministicSkillIds = astContext && !astContext.error
         ? inferSkillIdsFromCode((astContext as any).code || '', astContext as any)
@@ -1307,6 +1342,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 analysisResponseFormat === 'text' ? 'text' : 'semantic-json'
             );
             const parsedSemResult = parseSemanticAnalysis(semRaw);
+            recordRole('analyst-planning', parsedSemResult ? 'parsed-hypotheses' : 'invalid-response', { raw: semRaw, result: parsedSemResult });
             if (parsedSemResult) {
                 const semResult = restrictSemanticInputHintsToTargetParameters(
                     parsedSemResult,
@@ -1343,12 +1379,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 }
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
+                journal.knowledge({ planningHypotheses: semResult, verifiedTrace: astContext.traceResult, dependencies: astContext.dependencyContexts });
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
                 finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
             } else {
                 log(`[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵技能基線（不影響主流程）。`);
             }
         } catch (semErr: any) {
+            recordRole('analyst-planning', 'failed', { reason: semErr.message });
             log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
         }
     }
@@ -1361,7 +1399,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             : `[技能卡] 模型尚未驗證；略過 LLM 語意分析，使用程式碼特徵的確定性技能組合：${deterministicSkillIds.join(', ')}。`);
     }
 
-    while (currentLoop <= params.maxLoops && mutationScore < 100) {
+    while (currentLoop <= params.maxLoops && (mutationScore < 100 || qualityGaps.length > 0)) {
 
         if (isExecutionCancelled()) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
@@ -1375,6 +1413,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         let targetCode: string;
         try {
             targetCode = fs.readFileSync(params.filePath, 'utf-8');
+            if (!evidenceStillCurrent()) {
+                recordRole('source', 'changed', { reason: '來源版本已改變；停止沿用舊 Trace 與品質證據。' });
+                journal.knowledge({ terminalStatus: 'source-changed', evidenceValid: false });
+                break;
+            }
         } catch {
             log('[錯誤] 讀取檔案失敗');
             return;
@@ -1386,7 +1429,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
         let focusContext = "";
-        if (currentLoop > 1 && survivedMutants) {
+        if (currentLoop > 1 && (survivedMutants || qualityGaps.length)) {
             focusContext = extractFocusContext(survivedMutants, targetCode);
             if (focusContext) {
                 log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
@@ -1399,6 +1442,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
         }
 
+        if (qualityGaps.length || analystTasks) {
+            focusContext += '\n=== NEXT QUALITY TASKS (hypotheses; validate before acceptance) ===\n'
+                + qualityGaps.slice(0, 5).join('\n') + '\n' + analystTasks;
+        }
         const userPrompt = getUserPrompt(
             params.filePath,
             targetFuncName,
@@ -1417,6 +1464,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
         let loopCoverage: { coverageText: string, missingLines: string } | null = null;
+        let loopExecution = '';
+        qualityGaps = [];
         try {
             // ─── Tier 降階修復迴圈 ───
             let tierSuccess = false;
@@ -1537,7 +1586,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
             }
 
-                // ─── Tier 4：全自主（由下方標準流程處理，Self-repair 在預先驗證失敗後觸發）
+                // ─── Tier 4：全自主（由下方標準流程處理，Bug Fixer 僅在執行驗證失敗後觸發）
                 if (currentTier === 4 && !sanitizedCode) {
                 evalStrategy = 'large'; // 強制使用 large 模型 prompt
             }
@@ -1784,314 +1833,128 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 log(`[Trace 保底] 已保留 ${verifiedTrace.methodCount} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。`);
             }
 
-            const generatedValidation = await validateGeneratedTestCode(
-                finalCode,
-                targetFuncName,
-                baseName,
-                (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                (astContext as any)?.signature,
-                exceptionNamesFromEvidence(astContext),
-                (astContext as any)?.class_name,
-                pythonExecutable,
-                testBindingContext
+            recordRole('writer', 'candidate', { tier: currentTier, raw: rawCode, code: finalCode });
+            const testDir = path.dirname(testPath);
+            const targetDir = path.dirname(params.filePath);
+            const testExecutionEnv = buildGeneratedTestEnvironment(process.env, [
+                targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), testDir
+            ]);
+            const coverageProbe = await runSpawn(pythonExecutable, ['-c', 'import coverage'], {
+                env: testExecutionEnv, timeout: 5000
+            });
+            if (coverageProbe.code !== 0) { throw new Error(coverageRequiredMessage(pythonExecutable)); }
+            const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
+                code, failure, targetFuncName, astContext?.args || [], astContext?.code || targetCode,
+                astContext, targetImportModule
             );
-            const generatedTraceEvidence = validateTraceAssertionEvidence(
-                finalCode,
-                targetFuncName,
-                (astContext as any)?.traceResult
-            );
-            if (!generatedValidation.valid || !generatedTraceEvidence.valid) {
-                throw new Error(`模型輸出未通過 Python/unittest 格式或 Trace 證據驗證：${generatedTraceEvidence.reason || generatedValidation.reason}`);
+            const inventories = new Map<string, ScenarioIdentity[]>();
+            const inventory = async (code: string): Promise<ScenarioIdentity[]> => {
+                const hash = evidenceHash(code);
+                if (!inventories.has(hash)) {
+                    const result = await runSpawn(pythonExecutable,
+                        ['-B', path.join(__dirname, '..', 'python_scripts', 'test_scenario_inventory.py')],
+                        { input: code, timeout: 5000, env: testExecutionEnv });
+                    if (result.code !== 0) { throw new Error('無法建立測試情境識別：' + result.stderr); }
+                    inventories.set(hash, JSON.parse(result.stdout));
+                }
+                return inventories.get(hash)!;
+            };
+            let baselineScenarios = bestScenarios.length ? bestScenarios : bestCode ? await inventory(bestCode) : [];
+            const accepted = await validateTestCandidate(finalCode, {
+                checkCancelled: throwIfExecutionCancelled,
+                event: recordRole,
+                validate: async (code) => {
+                    const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
+                        astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
+                        exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
+                    const trace = validateTraceAssertionEvidence(code, targetFuncName, astContext?.traceResult);
+                    return !structural.valid || !trace.valid ? trace.reason || structural.reason || 'Validation failed' : undefined;
+                },
+                review: async (code) => {
+                    if (!mayUseModelAuthoredTests) {
+                        recordRole('reviewer', 'skipped-deterministic', {});
+                        return { issues: [] };
+                    }
+                    const evidence = getReviewEvidence('', '', targetFuncName, astContext?.args || [],
+                        astContext?.code || targetCode, astContext, targetImportModule);
+                    const sys = getTestReviewerSystemPrompt();
+                    const prompt = fitReviewPrompt({ tests: code, evidence },
+                        Math.max(0, Math.floor(activeModelProfile.budgetTokens * 2) - sys.length));
+                    if (!prompt) {
+                        recordRole('reviewer', 'budget-exceeded', { reason: '完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。' });
+                        return undefined;
+                    }
+                    try {
+                        const raw = await requestLlmApi(params, sys, prompt, log, 'text');
+                        const result = parseTestReview(raw, prompt);
+                        recordRole('reviewer', result ? 'parsed' : 'invalid-response', { raw, result });
+                        return result;
+                    } catch (error: any) {
+                        throwIfExecutionCancelled();
+                        recordRole('reviewer', 'failed', { reason: error.message });
+                        return undefined;
+                    }
+                },
+                revise: async (code, failure, role) => {
+                    if (!mayUseModelAuthoredRepair) { throw new Error('Auto 未驗證模型不可呼叫模型修復。'); }
+                    const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
+                        : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
+                    const prompt = role === 'bug-fixer' ? repairContext(code, failure)
+                        : repairContext(code, failure).replace('PRE-VERIFICATION ERROR LOG (LATEST ATTEMPT)', 'WRITER REVISION FINDINGS');
+                    if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
+                        throw new Error('修訂所需完整證據超過模型預算；未截斷來源碼或 Trace。');
+                    }
+                    return preserveTrace(sanitizeLlmResponse(await requestLlmApi(params, sys, prompt, log, testGenerationResponseFormat)));
+                },
+                execute: async (code) => {
+                    throwIfExecutionCancelled();
+                    if (!evidenceStillCurrent()) {
+                        throw new Error('來源版本已改變，停止使用舊證據。');
+                    }
+                    fs.writeFileSync(testPath, code, 'utf8');
+                    const run = await runSpawn(pythonExecutable,
+                        generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
+                        { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
+                    const scenarios = await inventory(code);
+                    let out = normalizeScenarioOutput(`${run.stdout}${run.stderr}`.trim(), scenarios, baselineScenarios);
+                    acceptedScenarios = reconcileScenarios(scenarios, baselineScenarios);
+                    if (!baselineScenarios.length) { baselineScenarios = acceptedScenarios; }
+                    recordRole('scenarios', 'observed', { codeHash: evidenceHash(code), scenarios, rawExecution: run.stdout + run.stderr });
+                    if (run.code !== 0 || !/Ran ([1-9]\d*) tests?/.test(out)) {
+                        return { ok: false, out: out || 'No executable unittest cases', qualityGaps: [] };
+                    }
+                    const coverage = await runSpawn(pythonExecutable, ['-m', 'coverage', 'report', '-m'],
+                        { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
+                    out += '\n' + coverage.stdout + coverage.stderr;
+                    if (coverage.code !== 0) { throw new Error('Coverage 工具執行失敗：' + out); }
+                    const assessment = assessTargetCoverage(out, params.filePath, astContext?.executable_lines || []);
+                    const gaps: string[] = [];
+                    if (!assessment.available) { gaps.push('Coverage 無法辨識目標模組；目標覆蓋狀態未知。'); }
+                    if (assessment.targetFullyCovered === undefined) { gaps.push('目標行覆蓋狀態未知。'); }
+                    if (assessment.targetBranchesCovered === undefined) { gaps.push('目標分支覆蓋狀態未知。'); }
+                    if (assessment.targetExecuted === false) { gaps.push('目標函式未執行。'); }
+                    if (assessment.missingTargetLines?.length) { gaps.push('目標未覆蓋行：' + assessment.missingTargetLines.join(', ')); }
+                    if (assessment.missingTargetBranches?.length) { gaps.push('目標未覆蓋分支：' + assessment.missingTargetBranches.join(', ')); }
+                    recordRole('coverage', 'measured', assessment);
+                    return { ok: true, out, qualityGaps: gaps };
+                }
+            }, 2, bestCode ? { code: bestCode, output: bestExecution } : undefined);
+            finalCode = accepted.code;
+            loopExecution = accepted.execution.out;
+            loopCoverage = extractCoverage(loopExecution, params.filePath);
+            qualityGaps = accepted.qualityIssues;
+            measuredQualityGaps = accepted.execution.qualityGaps;
+            recordRole('validation', 'accepted', { codeHash: evidenceHash(finalCode), qualityGaps });
+            finalReportMarkdown += `\n### 執行驗證\n\n\`\`\`text\n${loopExecution}\n\`\`\`\n`;
+            if (qualityGaps.length) {
+                finalReportMarkdown += `\n### 品質待補強（交分析師與 Writer）\n\n${qualityGaps.map(gap => '- ' + gap).join('\n')}\n`;
             }
-
-            log(`[系統] 準備將生成的測試程式碼存檔...`);
-            throwIfExecutionCancelled();
-            fs.writeFileSync(testPath, finalCode, 'utf8');
-            log(`[系統] 測試腳本已存檔至: ${testPath}`);
-
-            // 【預先驗證】先距行一次 unittest 確認測試檔能跟上
-            {
-                const testDir = path.dirname(testPath);
-                const testModule = path.basename(testPath, '.py');
-                const targetDir = path.dirname(params.filePath);
-                const parentDir = path.dirname(targetDir);
-                const grandParentDir = path.dirname(parentDir);
-                const coverageProbe = await runSpawn(pythonExecutable, ['-c', 'import coverage'], {
-                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-                    timeout: 5000
-                });
-                const hasCoverage = coverageProbe.code === 0;
-                if (!hasCoverage) {
-                    const coverageMessage = coverageRequiredMessage(pythonExecutable);
-                    log(`[預先驗證阻擋] ${coverageMessage}`);
-                    finalReportMarkdown += `### ⚠️ Coverage 品質閘門不可用\n\n${coverageMessage}\n\n`;
-                    throw new Error(coverageMessage);
-                }
-                const testExecutionEnv = buildGeneratedTestEnvironment(process.env, [
-                    targetDir, parentDir, grandParentDir, testDir
-                ]);
-                const runPrecheck = async (): Promise<{ ok: boolean; out: string }> => {
-                    const testRun = await runSpawn(
-                        pythonExecutable,
-                        generatedUnittestArguments(testModule, targetDir, hasCoverage, true),
-                        { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
-                    );
-                    let output = `${testRun.stdout}${testRun.stderr}`.trim();
-                    if (hasCoverage && testRun.code === 0) {
-                        const coverageReport = await runSpawn(
-                            pythonExecutable, ['-m', 'coverage', 'report', '-m'],
-                            { cwd: testDir, env: testExecutionEnv, timeout: 30000 }
-                        );
-                        output = [output, coverageReport.stdout, coverageReport.stderr]
-                            .filter(Boolean)
-                            .join('\n')
-                            .trim();
-                        return { ok: coverageReport.code === 0, out: output };
-                    }
-                    return { ok: testRun.code === 0, out: output };
-                };
-                const initialRun = await runPrecheck();
-                let out = initialRun.out;
-                    const assessExecution = (coverageOutput: string) => hasCoverage
-                        ? assessTargetCoverage(coverageOutput, params.filePath, astContext?.executable_lines || [])
-                        : undefined;
-                    const initialCoverage = assessExecution(out);
-                    const targetWasNotExecuted = initialCoverage?.targetExecuted === false;
-                    const targetCoverageIncomplete = initialCoverage?.targetFullyCovered === false;
-                    const targetBranchesIncomplete = initialCoverage?.targetBranchesCovered === false;
-                    const coverageError = targetWasNotExecuted
-                        ? 'Coverage 顯示被測函式本體的可執行行均未執行。'
-                        : targetCoverageIncomplete
-                            ? `Coverage 顯示被測函式本體尚有未覆蓋行：${initialCoverage?.missingTargetLines?.join(', ') || '未知'}。`
-                            : targetBranchesIncomplete
-                                ? `Coverage 顯示被測函式本體尚有未覆蓋分支：${initialCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
-                                : undefined;
-                    if (coverageError) {
-                        out = `${out}\n${coverageError}`.trim();
-                        log(`[預先驗證失敗] ${coverageError}`);
-                        finalReportMarkdown += `### ⚠️ 目標覆蓋驗證失敗\n\n${coverageError}\n\n`;
-                    }
-                    if (!initialRun.ok || coverageError) {
-                        log(`[預先驗證失敗] 測試檔無法順利執行，詳細資訊: ${out}`);
-                        finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
-
-                        if (!mayUseModelAuthoredRepair) {
-                            const blockedRepairMessage = '確定性 Tier 1 未通過執行或 coverage 品質閘門；Auto 模式的未驗證模型不會啟動 Reviewer 或 Self-repair。請先完成測試連線，或明確選擇 Tier 後再使用模型修復。';
-                            log(`[模型能力] ${blockedRepairMessage}`);
-                            finalReportMarkdown += `> [!NOTE]\n> ${blockedRepairMessage}\n\n`;
-                            throw new Error(blockedRepairMessage);
-                        }
-
-                        // ─── Reviewer LLM 修復（適用所有 Tier）───
-                        log(`[Reviewer] 🔍 啟動 Reviewer LLM 進行修復及補充測資（最多 2 次）...`);
-                        let reviewerFixed = false;
-                        const repairFeedback = new RepairFeedback(fs.readFileSync(testPath, 'utf8'), out);
-                        const funcArgs: string[] = (astContext as any)?.args || [];
-                        for (let reviewAttempt = 1; reviewAttempt <= 2; reviewAttempt++) {
-                            if (isExecutionCancelled()) {break;}
-                            log(`[Reviewer] 第 ${reviewAttempt} 次修復嘗試...`);
-                            const brokenCode = fs.readFileSync(testPath, 'utf8');
-                            try {
-                                const revSys = getReviewerSystemPrompt();
-                                const moduleName = targetImportModule;
-                                const targetSource = (astContext as any)?.code || targetCode;
-                                const revUsr = getReviewerUserPrompt(
-                                    brokenCode,
-                                    repairFeedback.output,
-                                    targetFuncName || '',
-                                    funcArgs,
-                                    targetSource,
-                                    astContext,
-                                    moduleName,
-                                    semanticContext
-                                );
-                                const revRaw = await requestLlmApi(params, revSys, revUsr, log, testGenerationResponseFormat);
-                                const revCode = preserveTrace(sanitizeLlmResponse(revRaw));
-                                if (!repairFeedback.consider(revCode)) {
-                                    out = repairFeedback.output;
-                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次未產生新修改，略過重複執行。\n\n`;
-                                    continue;
-                                }
-                                const reviewValidation = await validateGeneratedTestCode(
-                                    revCode,
-                                    targetFuncName,
-                                    path.basename(params.filePath, '.py'),
-                                    (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                                    (astContext as any)?.signature,
-                                    exceptionNamesFromEvidence(astContext),
-                                    (astContext as any)?.class_name,
-                                    pythonExecutable,
-                                    testBindingContext
-                                );
-                                const reviewerTraceEvidence = validateTraceAssertionEvidence(
-                                    revCode,
-                                    targetFuncName,
-                                    (astContext as any)?.traceResult
-                                );
-                                if (reviewValidation.valid && reviewerTraceEvidence.valid) {
-                                    throwIfExecutionCancelled();
-                                    fs.writeFileSync(testPath, revCode, 'utf8');
-                                    const revCheck = await runPrecheck();
-                                    const progress = repairFeedback.record(revCheck.out);
-                                    out = repairFeedback.output;
-                                    if (!progress.accepted) {
-                                        fs.writeFileSync(testPath, brokenCode, 'utf8');
-                                        finalReportMarkdown += `### Reviewer 第 ${reviewAttempt} 次修改退步，已還原前版\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
-                                        continue;
-                                    }
-                                    const reviewerCoverage = assessExecution(revCheck.out);
-                                    const reviewerMissedTarget = reviewerCoverage?.targetExecuted === false;
-                                    const reviewerCoverageIncomplete = reviewerCoverage?.targetFullyCovered === false;
-                                    const reviewerBranchesIncomplete = reviewerCoverage?.targetBranchesCovered === false;
-                                    if (revCheck.ok && !reviewerMissedTarget && !reviewerCoverageIncomplete && !reviewerBranchesIncomplete) {
-                                        log(`[Reviewer] ✅ 第 ${reviewAttempt} 次修復成功！測試檔已通過預先驗證。`);
-                                        finalReportMarkdown += `### ✅ Reviewer LLM 修復成功（第 ${reviewAttempt} 次）\n\n`;
-                                        finalReportMarkdown += `<details>\n<summary>🔍 Reviewer 修復後的測試碼</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n</details>\n\n`;
-                                        loopCoverage = extractCoverage(revCheck.out, params.filePath);
-                                        reviewerFixed = true;
-                                        break;
-                                    } else {
-                                        const reviewerFailure = reviewerMissedTarget
-                                            ? 'Coverage 顯示被測函式本體仍未執行。'
-                                            : reviewerCoverageIncomplete
-                                                ? `Coverage 顯示被測函式本體仍有未覆蓋行：${reviewerCoverage?.missingTargetLines?.join(', ') || '未知'}。`
-                                                : reviewerBranchesIncomplete
-                                                    ? `Coverage 顯示被測函式本體仍有未覆蓋分支：${reviewerCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
-                                                    : revCheck.out;
-                                        repairFeedback.output = reviewerFailure === revCheck.out ? revCheck.out : `${revCheck.out}\n${reviewerFailure}`;
-                                        out = repairFeedback.output;
-                                        log(`[Reviewer] 第 ${reviewAttempt} 次修復後仍有錯誤: ${reviewerFailure}`);
-                                        finalReportMarkdown += `<details>\n<summary>⚠️ Reviewer 第 ${reviewAttempt} 次修復內容（驗證仍失敗）</summary>\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n**驗證錯誤**:\n\`\`\`text\n${revCheck.out}\n\`\`\`\n</details>\n\n`;
-                                    }
-                                } else {
-                                    const reviewerReason = reviewerTraceEvidence.reason || reviewValidation.reason;
-                                    repairFeedback.reject(reviewerReason || 'Validation failed');
-                                    out = repairFeedback.output;
-                                    log(`[Reviewer] 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}`);
-                                    finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次回應未通過格式／Trace 證據驗證：${reviewerReason}\n\n\`\`\`python\n${revCode}\n\`\`\`\n\n`;
-                                }
-                            } catch (revErr: any) {
-                                fs.writeFileSync(testPath, brokenCode, 'utf8');
-                                repairFeedback.reject(`Repair request failed: ${revErr.message}`);
-                                out = repairFeedback.output;
-                                log(`[Reviewer] 第 ${reviewAttempt} 次修復請求失敗: ${revErr.message}`);
-                                finalReportMarkdown += `> Reviewer 第 ${reviewAttempt} 次修復請求失敗：${revErr.message}\n\n`;
-                            }
-                        }
-
-                        if (!reviewerFixed) {
-                            // ─── Tier 4 Self-repair（Reviewer 失敗後的最後防線）───
-                            if (currentTier === 4) {
-                                log(`[Tier 4 Self-repair] Reviewer 無法修復，嘗試 Tier 4 自我修正（最多 2 次）...`);
-                                let repaired = false;
-                                for (let repairAttempt = 1; repairAttempt <= 2; repairAttempt++) {
-                                    if (isExecutionCancelled()) {break;}
-                                    log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次自我修正...`);
-                                    const previousCode = fs.readFileSync(testPath, 'utf8');
-                                    try {
-                                        const repairSys = getTier4SystemPrompt();
-                                        const repairUsr = getTier4SelfRepairPrompt(
-                                            repairFeedback.output,
-                                            previousCode,
-                                            targetFuncName || '',
-                                            funcArgs,
-                                            (astContext as any)?.code || targetCode,
-                                            astContext,
-                                            targetImportModule,
-                                            semanticContext
-                                        );
-                                        const repairRaw = await requestLlmApi(params, repairSys, repairUsr, log, testGenerationResponseFormat);
-                                        const repairCode = preserveTrace(sanitizeLlmResponse(repairRaw));
-                                        if (!repairFeedback.consider(repairCode)) {
-                                            out = repairFeedback.output;
-                                            finalReportMarkdown += `> Self-repair 第 ${repairAttempt} 次未產生新修改。\n\n`;
-                                            continue;
-                                        }
-                                        const repairValidation = await validateGeneratedTestCode(
-                                            repairCode,
-                                            targetFuncName,
-                                            path.basename(params.filePath, '.py'),
-                                            (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                                            (astContext as any)?.signature,
-                                            exceptionNamesFromEvidence(astContext),
-                                        (astContext as any)?.class_name,
-                                            pythonExecutable,
-                                            testBindingContext
-                                        );
-                                        const repairTraceEvidence = validateTraceAssertionEvidence(
-                                            repairCode,
-                                            targetFuncName,
-                                            (astContext as any)?.traceResult
-                                        );
-                                        if (repairValidation.valid && repairTraceEvidence.valid) {
-                                            throwIfExecutionCancelled();
-                                            fs.writeFileSync(testPath, repairCode, 'utf8');
-                                            const result2 = await runPrecheck();
-                                            const progress = repairFeedback.record(result2.out);
-                                            out = repairFeedback.output;
-                                            finalReportMarkdown += `### Self-repair 第 ${repairAttempt} 次驗證\n\n\`\`\`python\n${repairCode}\n\`\`\`\n\n\`\`\`text\n${out}\n\`\`\`\n\n`;
-                                            if (!progress.accepted) {
-                                                fs.writeFileSync(testPath, previousCode, 'utf8');
-                                                continue;
-                                            }
-                                            const repairCoverage = assessExecution(result2.out);
-                                            const repairMissedTarget = repairCoverage?.targetExecuted === false;
-                                            const repairCoverageIncomplete = repairCoverage?.targetFullyCovered === false;
-                                            const repairBranchesIncomplete = repairCoverage?.targetBranchesCovered === false;
-                                            if (result2.ok && !repairMissedTarget && !repairCoverageIncomplete && !repairBranchesIncomplete) {
-                                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正成功！`);
-                                                finalReportMarkdown += `### ✅ Self-repair 成功（第 ${repairAttempt} 次）\n\n`;
-                                                loopCoverage = extractCoverage(result2.out, params.filePath);
-                                                repaired = true;
-                                                break;
-                                            } else {
-                                                const repairFailure = repairMissedTarget
-                                                    ? 'Coverage 顯示被測函式本體仍未執行。'
-                                                    : repairCoverageIncomplete
-                                                        ? `Coverage 顯示被測函式本體仍有未覆蓋行：${repairCoverage?.missingTargetLines?.join(', ') || '未知'}。`
-                                                        : repairBranchesIncomplete
-                                                            ? `Coverage 顯示被測函式本體仍有未覆蓋分支：${repairCoverage?.missingTargetBranches?.join(', ') || '未知'}。`
-                                                            : result2.out;
-                                                repairFeedback.output = repairFailure === result2.out ? result2.out : `${result2.out}\n${repairFailure}`;
-                                                out = repairFeedback.output;
-                                                log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正後仍有錯誤: ${repairFailure}`);
-                                            }
-                                        } else {
-                                            repairFeedback.reject(repairTraceEvidence.reason || repairValidation.reason || 'Validation failed');
-                                            out = repairFeedback.output;
-                                            finalReportMarkdown += `> Self-repair 第 ${repairAttempt} 次候選被拒絕：${out}\n\n`;
-                                            log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次回應未通過格式／Trace 證據驗證：${repairTraceEvidence.reason || repairValidation.reason}`);
-                                        }
-                                    } catch (repairErr: any) {
-                                        fs.writeFileSync(testPath, previousCode, 'utf8');
-                                        repairFeedback.reject(`Repair request failed: ${repairErr.message}`);
-                                        out = repairFeedback.output;
-                                        log(`[Tier 4 Self-repair] 第 ${repairAttempt} 次修正失敗: ${repairErr.message}`);
-                                    }
-                                }
-                                if (!repaired) {
-                                    throw new Error(`測試檔預先驗證失敗（Reviewer + Tier 4 Self-repair 均無法修正）: ${out.substring(0, 200)}`);
-                                }
-                            } else {
-                                throw new Error(`測試檔預先驗證失敗（Reviewer 無法修正）: ${out.substring(0, 200)}`);
-                            }
-                        }
-                    } else {
-                        const ran = out.match(/Ran (\d+) test/);
-                        if (ran && parseInt(ran[1]) > 0) {
-                            log(`[預先驗證通過] 執行了 ${ran[1]} 個測試，即將進行突變測試...`);
-                            loopCoverage = extractCoverage(out, params.filePath);
-                        } else {
-                            const msg = `測試檔都沒有跟 0 個測試（\`Ran 0 tests\`），測試名稱必須以 test_ 開頭`;
-                            finalReportMarkdown += `### ⚠️ 預先驗證失敗\n\n${msg}\n\n`;
-                            throw new Error(msg);
-                        }
-                    }
-                }
 
             tierSuccess = true;
             break; // 預先驗證成功，跳出 Tier 降階迴圈
         } catch (tierErr: any) {
+            throwIfExecutionCancelled();
+            recordRole('writer', 'tier-failed', { tier: currentTier, reason: tierErr.message, raw: rawCode });
             if (currentTier > 1) {
                 const prevTier = currentTier;
                 currentTier--;
@@ -2302,23 +2165,49 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 finalReportMarkdown += `- **存活變異體**: 無\n`;
             }
 
-            // ── Rollback 保底：更新或回滾至歷史最優解 ──
-            if (!noMutationCandidates && mutationScore > bestScore) {
+            // Bind code, execution, gaps and survivors to the same accepted version.
+            const survivorIds = survivedMutants.split('\n').filter(Boolean);
+            const oldSurvivorIds = bestSurvivors.split('\n').filter(Boolean);
+            const reintroduced = Boolean(bestCode) && survivorIds.some(id => !oldSurvivorIds.includes(id));
+            const lostQuality = Boolean(bestCode) && measuredQualityGaps.some(gap => !bestMeasuredGaps.includes(gap));
+            if (!evidenceStillCurrent()) { throw new Error('來源或相依版本改變，捨棄本輪品質證據。'); }
+            recordRole('mutation', 'measured', { code: fs.readFileSync(testPath, 'utf8'),
+                score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps });
+            if (!noMutationCandidates && !reintroduced && !lostQuality && mutationScore >= bestScore) {
                 bestScore = mutationScore;
                 bestCode = fs.readFileSync(testPath, 'utf8');
                 bestTestPath = testPath;
-                log(`[Rollback] 💾 新最高分！已將第 ${currentLoop} 輪測試檔記錄為歷史最優解（${mutationScore}%）。`);
-                finalReportMarkdown += `> [!NOTE]\n> 💾 本輪為目前最高分（${mutationScore}%），已存為歷史最優解。\n\n`;
-            } else if (!noMutationCandidates && currentLoop > 1 && mutationScore < bestScore && bestCode) {
-                // 分數下降：自動回滾至歷史最優解
-                const droppedScore = mutationScore;
+                bestSurvivors = survivedMutants;
+                bestExecution = loopExecution;
+                bestScenarios = acceptedScenarios;
+                bestMeasuredGaps = [...measuredQualityGaps];
+                bestGaps = [...qualityGaps];
+                bestCoverage = loopCoverage;
+                recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
+                    survivors: survivorIds, qualityGaps });
+            } else if (bestCode) {
+                recordRole('baseline', 'rollback', { rejectedScore: mutationScore, retainedScore: bestScore,
+                    reintroduced, lostQuality, retainedCodeHash: evidenceHash(bestCode) });
                 throwIfExecutionCancelled();
                 fs.writeFileSync(testPath, bestCode, 'utf8');
-                mutationScore = bestScore; // 維持最高分不歸零
-                log(`[Rollback] ⚠️ 第 ${currentLoop} 輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解。`);
-                finalReportMarkdown += `> [!WARNING]\n> ⚠️ 本輪分數（${droppedScore}%）低於歷史最優解（${bestScore}%），已自動回滾至最優解測試集。\n\n`;
+                mutationScore = bestScore;
+                survivedMutants = bestSurvivors;
+                loopExecution = bestExecution;
+                loopCoverage = bestCoverage;
+                qualityGaps = [...bestGaps];
+                measuredQualityGaps = [...bestMeasuredGaps];
+                acceptedScenarios = bestScenarios;
+                finalReportMarkdown += `> 已還原歷史基線，測試、分數（${bestScore}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n`;
             }
-
+            journal.knowledge({ target: targetFuncName, verifiedTrace: astContext?.traceResult,
+                sourceStructure: astContext?.code, dependencies: astContext?.dependencyContexts,
+                planningHypotheses: semanticContext, acceptedTest: path.basename(bestTestPath || testPath),
+                acceptedCodeHash: evidenceHash(fs.readFileSync(testPath, 'utf8')),
+                dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })),
+                scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
+                survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
+                nextTasks: qualityStrategyHints(survivedMutants), taskStatus: 'hypotheses-require-execution' });
+            if (qualityGaps.length) { reasonStr = '執行通過；品質仍有待補強項目'; }
             let finalReason = reasonStr;
             if (!finalReason) {
                 if (typeof mutationScore === 'number') {
@@ -2353,15 +2242,23 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
             }
 
+            if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), measuredQualityGaps)) {
+                recordRole('analyst-quality', 'stagnated', { reason: '連續 3 輪沒有減少已測量缺口；保留基線並停止。' });
+                finalReportMarkdown += '> 品質尚未達標：連續 3 輪沒有進步，停止相同策略重試。\n';
+                journal.knowledge({ terminalStatus: 'stagnated' });
+                break;
+            }
             if (noMutationCandidates) {
                 log(`[優化] 本輪沒有可評分的突變點，停止重複迴圈。`);
+                journal.knowledge({ terminalStatus: 'no-mutation-candidates' });
                 break;
             }
-            if (mutationScore >= 100) {
-                log(`[優化] 突變分數已達到 100%，自我修復成功！`);
+            if (mutationScore >= 100 && qualityGaps.length === 0) {
+                log(`[優化] 突變分數已達到 100%，且沒有未解決品質項目。`);
+                journal.knowledge({ terminalStatus: 'passed' });
                 break;
             }
-            if (survivedMutants && !mayUseModelAuthoredTests) {
+            if ((survivedMutants || qualityGaps.length) && !mayUseModelAuthoredTests) {
                 const note = 'Auto 模式下目前模型尚未通過 unittest 生成探測；已保留 deterministic Tier 1 測試與存活變異體報告，停止 LLM 修補以避免猜測性測試。請先執行「測試連線」，或明確選擇 Tier 2–4 後再啟用受驗證閘門保護的自我修復。';
                 log(`[優化] ${note}`);
                 finalReportMarkdown += `> [!NOTE]\n> ${note}\n\n`;
@@ -2370,6 +2267,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error && error.stack ? error.stack : '';
+            recordRole('pipeline', 'failed', { reason: message });
+            journal.knowledge({ terminalStatus: 'failed', failure: message });
+            if (bestCode) { fs.writeFileSync(testPath, bestCode, 'utf8'); }
             const failureCategory = classifyExecutionFailure(message);
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
             finalReportMarkdown += `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
@@ -2394,56 +2294,34 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             break;
         }
 
-        // ─── 變異體分流師（Mutant Triage）───────────────────────────
-        // 從 Loop 2 起，若仍有存活變異體，呼叫分流師判斷：
-        //   EQUIVALENT → 標記為不可殺，停止重試該變異體
-        //   KILLABLE   → 提取 kill_test 程式碼，注入下一輪 focusContext
-        if (currentLoop >= 2 && survivedMutants) {
-            log(`[變異體分流師] 啟動分流分析，判斷 ${survivedMutants.split('mutation').length - 1} 個存活變異體...`);
+        // Analyst proposes bounded scenarios; Writer owns code. Do not spend a call after the last round.
+        analystTasks = qualityStrategyHints(survivedMutants).join('\n');
+        if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
+            const measured = [survivedMutants, ...qualityGaps].filter(Boolean).join('\n');
             try {
-                const triageSys = getMutantTriageSystemPrompt();
-                const currentTestCode = fs.existsSync(testPath) ? fs.readFileSync(testPath, 'utf8') : '';
-                const moduleName = targetImportModule;
-                const triageUsr = getMutantTriageUserPrompt(
-                    survivedMutants,
-                    (astContext as any)?.code || '',
-                    currentTestCode,
-                    moduleName,
-                    targetFuncName || '',
-                    semanticContext
-                );
-                const triageRaw = await requestLlmApi(
-                    params, triageSys, triageUsr, log,
-                    analysisResponseFormat === 'text' ? 'text' : 'mutant-triage-json'
-                );
-                const triageResult = parseMutantTriageResult(triageRaw);
-                if (triageResult) {
-                    log(`[變異體分流師] ✅ 分流完成：${triageResult.equivalent_count} 個等效、${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個可殺。`);
-                    // 等效變異體報告加入最終報告
-                    const eqReport = formatEquivalentMutantsReport(triageResult);
-                    if (eqReport) {
-                        finalReportMarkdown += eqReport;
-                        log(`[變異體分流師] 等效候選已記錄於報告，仍保留於後續驗證。`);
-                    }
-                    // KILLABLE：把 kill_test 提示注入 survivedMutants，讓下一輪 LLM 直接看到
-                    if (triageResult.has_killable) {
-                        const killMethods = extractKillTestMethods(triageResult);
-                        if (killMethods) {
-                            survivedMutants += `\n\n[Triage Hint] The following test methods are suggested to kill the KILLABLE mutants above:\n\`\`\`python\n${killMethods}\n\`\`\``;
-                            log(`[變異體分流師] 已將 ${triageResult.verdicts.filter(v => v.verdict === 'KILLABLE').length} 個 kill_test 注入下一輪 Prompt。`);
-                        }
-                    }
-                    if (triageResult.equivalent_count > 0) {
-                        finalReportMarkdown += `\n> 等效判定僅為模型候選，尚未驗證；保留存活變異體與原始分母，繼續至設定的輪數上限。\n\n`;
-                    }
+                const sys = getQualityAnalystSystemPrompt();
+                const prompt = `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
+                    + `MEASURED GAPS\n${measured}\nCURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
+                    + `CONDITIONAL STRATEGIES (not output facts)\n${analystTasks}`;
+                if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
+                    recordRole('analyst-quality', 'budget-exceeded', { measured });
                 } else {
-                    log(`[變異體分流師] ⚠️ 回應未符合分流 schema，跳過分流（不影響主流程）。`);
+                    const raw = await requestLlmApi(params, sys, prompt, log, 'text');
+                    const tasks = parseQualityTasks(raw, measured);
+                    recordRole('analyst-quality', tasks ? 'parsed-hypotheses' : 'invalid-response', { raw, tasks, measured });
+                    if (tasks) {
+                        analystTasks += '\n' + JSON.stringify(tasks);
+                        journal.record(currentLoop, 'next-tasks', 'unverified', { tasks });
+                        journal.knowledge({ nextTasks: tasks, taskStatus: 'hypotheses-require-execution' });
+                    }
                 }
-            } catch (triageErr: any) {
-                log(`[變異體分流師] ⚠️ 分流呼叫失敗: ${triageErr.message}，繼續主流程。`);
+            } catch (error: any) {
+                throwIfExecutionCancelled();
+                recordRole('analyst-quality', 'failed', { reason: error.message });
             }
         }
 
+        if (currentLoop === params.maxLoops) { journal.knowledge({ terminalStatus: 'round-limit', qualityGaps }); }
         currentLoop++;
     }
 

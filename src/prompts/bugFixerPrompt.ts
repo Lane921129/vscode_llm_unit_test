@@ -1,13 +1,13 @@
 /**
- * Reviewer LLM 專用提示詞模組
- * 預先驗證失敗後，由 Reviewer LLM 進行精準修復及補充測資。
+ * Bug Fixer 專用提示詞模組
+ * 只處理實際驗證失敗；審查與品質補測使用獨立契約。
  * 角色定位：依據目標語境、已驗證執行事實與錯誤日誌，修復可證明的測試問題；不得把來源碼或策略候選誤當 assertion oracle。
  */
 
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 
-export function getReviewerSystemPrompt(): string {
-    return `You are an expert Python unittest REVIEWER and DEBUGGER.
+export function getBugFixerSystemPrompt(): string {
+    return `You are an Python unittest Bug Fixer.
 Your job is to fix errors and assertion failures in the provided test file by comparing it against the ACTUAL TARGET SOURCE CODE and ERROR TRACEBACK.
 
 CORE RULES:
@@ -41,7 +41,7 @@ CORE RULES:
 `;
 }
 
-export function getReviewerUserPrompt(
+export function getBugFixerUserPrompt(
     brokenCode: string,
     errorOutput: string,
     funcName: string,
@@ -141,4 +141,13 @@ export function getReviewerUserPrompt(
 
     prompt += `INSTRUCTION:\nCarefully read the error log and all supplied evidence. Fix failures without weakening passing tests, preserve exact verified Trace facts, and output the complete corrected test file in a \`\`\`python code block.`;
     return prompt;
+}
+
+/** Compatibility exports for existing callers; the orchestrator uses explicit role names. */
+export const getReviewerSystemPrompt = getBugFixerSystemPrompt;
+export const getReviewerUserPrompt = getBugFixerUserPrompt;
+
+export function getReviewEvidence(...args: Parameters<typeof getBugFixerUserPrompt>): string {
+    const context = getBugFixerUserPrompt(...args);
+    return context.slice(context.indexOf('=== TARGET FUNCTION INFO ==='), context.lastIndexOf('INSTRUCTION:'));
 }
