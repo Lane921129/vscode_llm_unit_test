@@ -44,6 +44,17 @@ test('syntax-based skill inference selects pattern matching only for match/case 
     assert.ok(!ordinaryIds.includes('pattern_matching'));
 });
 
+test('truthiness skill requires an AST direct-branch fact rather than a source-name guess', () => {
+    const source = 'def choose(enabled: bool):\n    if enabled:\n        return "yes"\n    return "no"';
+    const withFact = inferSkillIdsFromCode(source, {
+        condition_facts: [{ kind: 'truthiness', parameter: 'enabled', subject: 'value', polarity: 'truthy' }],
+    });
+    const withoutFact = inferSkillIdsFromCode(source);
+
+    assert.ok(withFact.includes('boolean_truthiness_coverage'));
+    assert.ok(!withoutFact.includes('boolean_truthiness_coverage'));
+});
+
 test('evidence-bound skill cart rejects unrelated semantic cards', () => {
     const source = `
 def render(value):

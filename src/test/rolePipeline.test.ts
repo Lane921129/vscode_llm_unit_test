@@ -43,6 +43,20 @@ test('execution failure calls Bug Fixer with latest error; quality gaps never tr
     assert.deepEqual(result.qualityIssues, ['uncovered branch']);
 });
 
+test('structural pre-validation failures are repaired by Bug Fixer, not Writer', async () => {
+    const roles: string[] = [];
+    const result = await validateTestCandidate('broken', hooks({
+        validate: async code => code === 'broken' ? 'missing unittest import' : undefined,
+        revise: async (_, failure, role) => {
+            roles.push(role);
+            assert.match(failure, /missing unittest import/);
+            return 'fixed';
+        }
+    }));
+    assert.equal(result.code, 'fixed');
+    assert.deepEqual(roles, ['bug-fixer']);
+});
+
 test('malformed/unavailable review remains unresolved even if execution passes', async () => {
     const result = await validateTestCandidate('draft', hooks({ review: async () => undefined }));
     assert.match(result.qualityIssues.join(), /審查未完成/);
@@ -83,11 +97,41 @@ test('review parser rejects invented evidence, malformed envelopes and placehold
     assert.equal(parseTestReview(JSON.stringify({ issues: [{ ...issue, action: '<guess>' }] }), issue.evidence), undefined);
     assert.equal(parseTestReview(JSON.stringify({ issues: [issue] }), issue.evidence)?.issues.length, 1);
     assert.deepEqual(parseTestReview('```json\n{"issues":[]}\n```', ''), { issues: [] });
+    assert.deepEqual(parseTestReview('{"blocking":[],"quality":[]}', ''), { issues: [] });
+    const compact = '{"blocking":[{"evidence":"assertFalse(value)","action":"use exact identity"}],"quality":[]}';
+    assert.equal(parseTestReview(`trace text before JSON\n${compact}\ntrailing text`, issue.evidence)?.issues[0].severity, 'blocking');
+});
+
+test('Bug Fixer revision contract rejects broad rewrites and permits one failing method', () => {
+    const script = path.join(root, 'python_scripts', 'validate_repair_scope.py');
+    const previous = `import unittest
+class Cases(unittest.TestCase):
+    def test_keep(self):
+        self.assertTrue(True)
+    def test_fix(self):
+        self.assertTrue(False)
+`;
+    const run = (candidate: string) => {
+        const result = spawnSync(python, ['-B', script], {
+            input: JSON.stringify({
+                previous,
+                candidate,
+                failure: 'test_fix (Cases.test_fix) ... FAIL'
+            }),
+            encoding: 'utf8'
+        });
+        assert.equal(result.status, 0, result.stderr);
+        return JSON.parse(result.stdout) as { valid: boolean; reason: string };
+    };
+    assert.equal(run(previous.replace('self.assertTrue(False)', 'self.assertFalse(False)')).valid, true);
+    const broad = previous.replace('self.assertTrue(True)', 'self.assertEqual(True, True)');
+    assert.equal(run(broad).valid, false);
+    assert.match(run(broad).reason, /test_keep/);
 });
 
 test('prompt budget refuses partial evidence, and quality tasks must quote measured gaps', () => {
     assert.equal(fitReviewPrompt({ tests: 'complete tests', evidence: 'complete source' }, 10), undefined);
-    assert.ok(fitReviewPrompt({ tests: 'complete tests', evidence: 'complete source' }, 100));
+    assert.ok(fitReviewPrompt({ tests: 'complete tests', evidence: 'complete source' }, 200));
     const task = { evidence: 'line 4: And to Or', hypothesis: 'missing combination', scenario: 'mixed truth values', verification: 'compare original and mutant' };
     assert.equal(parseQualityTasks(JSON.stringify({ tasks: [task] }), 'different gap'), undefined);
     assert.equal(parseQualityTasks(JSON.stringify({ tasks: [task] }), task.evidence)?.length, 1);

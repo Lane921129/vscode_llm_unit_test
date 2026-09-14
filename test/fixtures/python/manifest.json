@@ -61,6 +61,15 @@
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["using an unexecuted semantic candidate as an assertion oracle"]}
     },
     {
+      "id": "tier1-bool-truthiness",
+      "tier": 1,
+      "source": "tier1_bool_truthiness.py",
+      "target": "choose",
+      "context": {"condition_facts": [{"kind": "truthiness", "parameter": "enabled", "subject": "value", "polarity": "truthy"}]},
+      "expected": {"method_kind": "module", "is_async": false, "skills": ["boolean_truthiness_coverage"], "trace": "assertable", "trace_inputs": ["True", "False"], "truthiness_parameters": ["enabled"]},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["covering only one direct boolean branch"]}
+    },
+    {
       "id": "tier2-pattern-match",
       "tier": 2,
       "source": "tier2_pattern.py",

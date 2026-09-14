@@ -92,3 +92,29 @@ test('adds verified class trace tests as a separate TestCase without replacing m
     assert.match(augmented.code, /class TestVerifiedTrace_render[\s\S]*self\._instance = Service\('trace:'\)/);
     assert.ok(augmented.code.indexOf('class TestVerifiedTrace_render') < augmented.code.indexOf("if __name__"));
 });
+
+test('inserts missing imports after __future__ imports', () => {
+    const modelCode = [
+        'from __future__ import annotations',
+        'import unittest',
+        '',
+        'class TestFoo(unittest.TestCase):',
+        '    def test_foo(self):',
+        '        pass',
+    ].join('\n');
+    const deterministicFile = [
+        'import unittest',
+        'from extra_module import extra_fn',
+        '',
+        'class TestTier1foo(unittest.TestCase):',
+        '    def test_case_1(self):',
+        '        self.assertEqual(extra_fn(), 1)',
+    ].join('\n');
+
+    const augmented = appendVerifiedTraceTestFile(modelCode, deterministicFile, 1, 'foo');
+    const lines = augmented.code.split('\n');
+    assert.strictEqual(lines[0], 'from __future__ import annotations');
+    assert.ok(augmented.code.includes('from extra_module import extra_fn'));
+    assert.ok(augmented.code.indexOf('from __future__ import annotations') < augmented.code.indexOf('from extra_module import extra_fn'));
+});
+

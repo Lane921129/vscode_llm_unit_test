@@ -77,3 +77,11 @@ test('appends the fixed-fixture probe reply only when qualification fails', () =
     assert.match(failed, /\[模型探測回應\][\s\S]*# probe reply/);
     assert.ok(!passed.includes('this reply must not be logged after success'));
 });
+
+test('selectAnalysisResponseFormat handles legacy and normalized python mode identifiers', () => {
+    const { selectAnalysisResponseFormat, TEST_GEN_MODE_PYTHON, TEST_GEN_MODE_JSON } = require('../llm/modelQualification');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON }), 'text');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'plain-python' }), 'text');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_JSON }), 'json');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: false, testGenerationMode: TEST_GEN_MODE_PYTHON }), 'json');
+});

@@ -20,7 +20,10 @@ export function buildStubTestPlan(
     requiredConstructorParams: string[] = [],
     callerContexts?: Tier1ConstructorContext[]
 ): StubTestPlan | null {
-    const callArgs = methodArgs.map(() => 'None').join(', ');
+    const effectiveArgs = className
+        ? methodArgs.filter((arg, idx) => !(idx === 0 && (arg === 'self' || arg === 'cls')))
+        : methodArgs;
+    const callArgs = effectiveArgs.map(() => 'None').join(', ');
     if (!className) {
         return {
             importLine: `from ${moduleName} import ${methodName}`,

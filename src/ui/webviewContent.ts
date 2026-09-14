@@ -360,6 +360,16 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
     <script>
         const vscode = acquireVsCodeApi();
+
+        window.addEventListener('error', (event) => {
+            console.error('Webview runtime error:', event.error || event.message);
+            vscode.postMessage({ command: 'appendLog', text: '[Webview Error] ' + (event.message || event.error) });
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Webview unhandled rejection:', event.reason);
+            vscode.postMessage({ command: 'appendLog', text: '[Webview Unhandled Rejection] ' + event.reason });
+        });
+
         let currentKeys = {};
         let currentCustomKeys = {};
         let lastTestedProjectPath = '';
@@ -579,15 +589,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
                 case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
                 case 'updateCoverage': {
-                    const fileName = msg.fileName;
+                    const fileName = msg.fileName || '';
                     let file = msg.file || '';
                     let func = msg.func || '';
-                    if (!file && fileName.includes(':')) {
-                        const parts = fileName.split(':');
-                        file = parts[0];
-                        func = parts.slice(1).join(':');
-                    } else if (!file) {
-                        file = fileName;
+                    if (!file) {
+                        const match = fileName.match(/^([a-zA-Z]:[\\/][^:]+|[^:]+):(.*)$/);
+                        if (match) {
+                            file = match[1];
+                            func = match[2];
+                        } else {
+                            file = fileName;
+                        }
                     }
                     resultsMap.set(fileName, {
                         id: fileName,
@@ -735,6 +747,30 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             vscode.postMessage({ command: 'testConnection', envType: 'custom', customUrl, modelName, customKey });
         };
 
+        function getCommonExecutionOptions() {
+            return {
+                ollamaUrl: document.getElementById('ollama-url').value,
+                promptStrategy: document.getElementById('prompt-strategy').value,
+                maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 3,
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 5,
+                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value, 10) || 60,
+                outputPath: document.getElementById('output-path').value,
+                customUrl: document.getElementById('custom-url').value,
+                customKey: document.getElementById('custom-key').value
+            };
+        }
+
+        function setRunningState(isBatch) {
+            document.getElementById('btn-run').disabled = true;
+            document.getElementById('btn-batch-run').disabled = true;
+            if (isBatch) {
+                document.getElementById('btn-batch-run').innerText = '⏳ Batch Testing...';
+            } else {
+                document.getElementById('btn-run').innerText = '⏳ Testing...';
+            }
+            document.getElementById('btn-abort').style.display = 'block';
+        }
+
         document.getElementById('btn-run').onclick = () => {
             const { envType, modelName, cloudKeyName } = getStartParams();
             const filePath = document.getElementById('file-select').value;
@@ -744,30 +780,20 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 return;
             }
 
-            document.getElementById('btn-run').disabled = true;
-            document.getElementById('btn-batch-run').disabled = true;
-            document.getElementById('btn-run').innerText = '⏳ Testing...';
-            document.getElementById('btn-abort').style.display = 'block';
+            setRunningState(false);
 
             const currentProj = document.getElementById('project-path').value;
             if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
-                const tbody = document.querySelector('#coverage-table tbody');
-                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">' + i18n.noCoverageData + '</td></tr>';
+                resultsMap.clear();
+                renderDashboard();
             }
             lastTestedProjectPath = currentProj;
 
             vscode.postMessage({
                 command: 'startAnalysis',
                 envType, modelName, cloudKeyName, filePath,
-                ollamaUrl: document.getElementById('ollama-url').value,
                 funcName: document.getElementById('func-select').value,
-                promptStrategy: document.getElementById('prompt-strategy').value,
-                maxLoops: parseInt(document.getElementById('max-loop').value),
-                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value),
-                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
-                outputPath: document.getElementById('output-path').value,
-                customUrl: document.getElementById('custom-url').value,
-                customKey: document.getElementById('custom-key').value
+                ...getCommonExecutionOptions()
             });
         };
 
@@ -780,29 +806,19 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 return;
             }
 
-            document.getElementById('btn-run').disabled = true;
-            document.getElementById('btn-batch-run').disabled = true;
-            document.getElementById('btn-batch-run').innerText = '⏳ Batch Testing...';
-            document.getElementById('btn-abort').style.display = 'block';
+            setRunningState(true);
 
             const currentProj = batchPath;
             if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
-                const tbody = document.querySelector('#coverage-table tbody');
-                tbody.innerHTML = '<tr><td colspan="4" style="padding:10px; text-align:center; opacity:0.5;">' + i18n.noCoverageData + '</td></tr>';
+                resultsMap.clear();
+                renderDashboard();
             }
             lastTestedProjectPath = currentProj;
 
             vscode.postMessage({
                 command: 'startBatchAnalysis',
                 envType, modelName, cloudKeyName, batchPath,
-                ollamaUrl: document.getElementById('ollama-url').value,
-                promptStrategy: document.getElementById('prompt-strategy').value,
-                maxLoops: parseInt(document.getElementById('max-loop').value),
-                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value),
-                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value),
-                outputPath: document.getElementById('output-path').value,
-                customUrl: document.getElementById('custom-url').value,
-                customKey: document.getElementById('custom-key').value
+                ...getCommonExecutionOptions()
             });
         };
     </script>

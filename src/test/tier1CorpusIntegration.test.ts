@@ -19,6 +19,7 @@ interface Fixture {
         trace_inputs?: string[];
         semantic_trace_inputs?: string[];
         inherited_constructor_required?: string[];
+        truthiness_parameters?: string[];
     };
     acceptance: { min_mutation_score: number };
 }
@@ -56,6 +57,16 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                     ast.class_context?.effective_init?.required_params,
                     fixture.expected.inherited_constructor_required,
                     `${fixture.id}: inherited constructor requirements were not preserved`
+                );
+            }
+            if (fixture.expected.truthiness_parameters) {
+                const observed = (ast.condition_facts || [])
+                    .filter((fact: { kind?: string }) => fact.kind === 'truthiness')
+                    .map((fact: { parameter?: string }) => fact.parameter);
+                assert.deepStrictEqual(
+                    [...new Set(observed)],
+                    fixture.expected.truthiness_parameters,
+                    `${fixture.id}: direct truthiness branch facts were not preserved`
                 );
             }
             const callers = pythonJson(

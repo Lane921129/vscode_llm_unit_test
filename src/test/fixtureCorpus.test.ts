@@ -11,6 +11,7 @@ interface FixtureContext {
     method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
     is_generator?: boolean;
     file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
+    condition_facts?: Array<{ kind?: string; parameter?: string; subject?: string; polarity?: string }>;
 }
 
 interface FixtureSpec {

@@ -138,6 +138,10 @@ export function runIsolatedProbe(
             clearTimeout(timer);
             resolve(exitCode === 0);
         });
+        process.stdin.on('error', () => {
+            clearTimeout(timer);
+            resolve(false);
+        });
         process.stdin.end(code);
     });
 }

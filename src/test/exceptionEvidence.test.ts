@@ -20,3 +20,9 @@ test('does not turn arbitrary diagnostic text into an exception fact', () => {
         traceResult: { errors: [{ exception: 'blocked external write' }] }
     }), []);
 });
+
+test('captures custom business exceptions from trace errors', () => {
+    assert.deepStrictEqual(exceptionNamesFromEvidence({
+        traceResult: { errors: [{ exception: 'auth.InvalidToken', call_assertable: true }] }
+    }), ['InvalidToken']);
+});

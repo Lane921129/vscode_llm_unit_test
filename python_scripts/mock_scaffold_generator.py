@@ -14,7 +14,7 @@ import json
 import os
 
 
-def find_import_bindings(tree: ast.Module) -> set[str]:
+def find_import_bindings(tree):
     """回傳在被測模組命名空間中可被 patch 的匯入綁定名稱。"""
     bindings = set()
     for node in tree.body:
@@ -209,9 +209,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     lines.append(f"{test_prefix} test_{selected_method_name}({mock_param_str}):")
 
     # Mock return value hints
-    for mock_name, ec in zip(mock_names, external_calls):
-        hint = return_value_hints[0] if return_value_hints else "# set appropriate return value"
-        lines.append(f"    {mock_name}.return_value = None  {hint}")
+    for mock_name in mock_names:
+        lines.append(f"    {mock_name}.return_value = None  # TODO: set appropriate mock return value")
 
     lines.append(f"")
 
@@ -238,6 +237,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     else:
         lines.append(f"    result = {call_target}")
     lines.append(f"    # TODO: add assertions here")
+    if return_value_hints:
+        lines.append(f"    {return_value_hints[0]}")
     lines.append(f"    # Example: self.assertEqual(result, expected_value)")
 
     scaffold = "\n".join(lines)

@@ -23,7 +23,9 @@ export function exceptionNamesFromEvidence(context?: ExceptionEvidenceContext | 
         if (error.call_assertable === false || !error.exception) {
             continue;
         }
-        const name = normalizedExceptionName(error.exception);
+        const candidate = normalizedExceptionName(error.exception)
+            || (error.exception.includes('.') ? error.exception.split('.').pop()?.trim() : undefined);
+        const name = candidate && /^[A-Za-z_]\w*$/.test(candidate) ? candidate : undefined;
         if (name) {
             names.add(name);
         }

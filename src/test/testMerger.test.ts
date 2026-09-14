@@ -66,3 +66,22 @@ test('keeps a structurally valid unittest alias subtask instead of silently drop
     assert.match(merged.mergedCode, /class TestTargetMerged_Site2\(AsyncCase\):/);
     assert.match(merged.mergedCode, /async def test_direct_alias_style/);
 });
+
+test('preserves multiline parenthesized imports in merged snippets', () => {
+    const snippet = [
+        'import unittest',
+        'from my_package.calculator import (',
+        '    add,',
+        '    subtract',
+        ')',
+        '',
+        'class TestCalc(unittest.TestCase):',
+        '    def test_add(self):',
+        '        self.assertEqual(add(1, 2), 3)',
+    ].join('\n');
+
+    const merged = mergeTestSnippets([snippet], 'TestCalcMerged');
+    assert.strictEqual(merged.totalMethodsCount, 1);
+    assert.match(merged.mergedCode, /from my_package\.calculator import \(\n\s*add,\n\s*subtract\n\)/);
+});
+

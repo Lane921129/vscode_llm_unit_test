@@ -1,4 +1,4 @@
-﻿/**
+/**
  * mutant_triage_prompt.ts
  * Role: Mutant Triage Analyst
  *
@@ -140,21 +140,29 @@ function normalizeMutantTriage(value: unknown): MutantTriageResult | null {
 }
 
 export function parseMutantTriageResult(llmResponse: string): MutantTriageResult | null {
-    try {
-        const trimmed = llmResponse.trim();
-        if (trimmed.startsWith('{')) {
+    const trimmed = llmResponse.trim();
+    if (trimmed.startsWith('{')) {
+        try {
             return normalizeMutantTriage(JSON.parse(trimmed));
+        } catch {
+            // trimmed parse failed; proceed to code block or regex match
         }
-        const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (codeBlockMatch) {
+    }
+    const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) {
+        try {
             return normalizeMutantTriage(JSON.parse(codeBlockMatch[1].trim()));
+        } catch {
+            // proceed to json match
         }
-        const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
+    }
+    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+        try {
             return normalizeMutantTriage(JSON.parse(jsonMatch[0]));
+        } catch {
+            // all parse attempts failed
         }
-    } catch {
-        // Parse failed - caller handles null gracefully
     }
     return null;
 }

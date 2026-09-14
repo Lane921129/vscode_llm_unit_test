@@ -529,3 +529,19 @@ test('unwraps a structured code envelope placed inside a JSON code fence', () =>
 
     assert.strictEqual(extractPythonTestCode(fencedEnvelope), code);
 });
+
+test('permits string replace method in generated test code', () => {
+    const code = [
+        'import unittest',
+        'from target import format_text',
+        '',
+        'class TestFormatText(unittest.TestCase):',
+        '    def test_replace(self):',
+        "        cleaned = 'hello world'.replace('world', 'there')",
+        "        self.assertEqual(format_text(cleaned), 'hello there')",
+    ].join('\n');
+
+    const result = validateUnittestStructure(code, 'format_text');
+    assert.strictEqual(result.valid, true);
+});
+

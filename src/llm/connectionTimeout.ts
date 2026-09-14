@@ -101,9 +101,9 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
     const maxAttempts = Math.max(1, options.maxAttempts ?? GENERATION_RETRY_MAX_ATTEMPTS);
     const wait = options.wait ?? (milliseconds => new Promise<void>(resolve => setTimeout(resolve, milliseconds)));
     const random = options.random ?? Math.random;
-    let lastError: unknown;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let attempt = 1;
+    while (true) {
         // A response can arrive just before a deadline and spend the remaining
         // time in backoff. Do not launch one more request after that deadline.
         // Keep the first attempt unchanged so an already-aborted caller retains
@@ -113,7 +113,7 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
         }
         try {
             const response = await request();
-            if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt === maxAttempts) {
+            if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt >= maxAttempts) {
                 return response;
             }
             const delayMs = retryDelay(attempt, random);
@@ -125,8 +125,7 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
             });
             await wait(delayMs);
         } catch (error) {
-            lastError = error;
-            if (options.isCancelled?.() || attempt === maxAttempts) {
+            if (options.isCancelled?.() || attempt >= maxAttempts) {
                 throw error;
             }
             const delayMs = retryDelay(attempt, random);
@@ -138,8 +137,8 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
             });
             await wait(delayMs);
         }
+        attempt++;
     }
-    throw lastError instanceof Error ? lastError : new Error('Provider request failed without a response');
 }
 
 function retryDelay(failedAttempt: number, random: () => number): number {

@@ -50,7 +50,7 @@ export function appendTraceMethodsToUnittestClass(
 
     const lines = code.split(/\r?\n/);
     const classIndex = lines.findIndex(line =>
-        /^class\s+\w+\s*\(\s*unittest\.(?:TestCase|IsolatedAsyncioTestCase)\s*\)\s*:$/.test(line)
+        /^class\s+\w+\s*\(\s*(?:unittest\.)?(?:TestCase|IsolatedAsyncioTestCase)\s*\)\s*:$/.test(line)
     );
     if (classIndex < 0) {
         return { code, addedMethodCount: 0 };
@@ -104,9 +104,32 @@ export function appendVerifiedTraceTestFile(
     classBlock[0] = classBlock[0].replace(/^class\s+TestTier1\w*/, `class ${className}`);
 
     const missingImports = deterministicImports.filter(importLine => !code.split(/\r?\n/).includes(importLine));
-    let augmented = missingImports.length > 0
-        ? `${missingImports.join('\n')}\n${code}`
-        : code;
+    let augmented = code;
+    if (missingImports.length > 0) {
+        const codeLines = code.split(/\r?\n/);
+        let futureEndIndex = -1;
+        let inFutureParen = false;
+        for (let i = 0; i < codeLines.length; i++) {
+            const line = codeLines[i];
+            if (/^\s*from\s+__future__\s+import\b/.test(line)) {
+                futureEndIndex = i;
+                if (line.includes('(') && !line.includes(')')) {
+                    inFutureParen = true;
+                }
+            } else if (inFutureParen) {
+                futureEndIndex = i;
+                if (line.includes(')')) {
+                    inFutureParen = false;
+                }
+            }
+        }
+        if (futureEndIndex >= 0) {
+            codeLines.splice(futureEndIndex + 1, 0, ...missingImports);
+            augmented = codeLines.join('\n');
+        } else {
+            augmented = `${missingImports.join('\n')}\n${code}`;
+        }
+    }
     const lines = augmented.split(/\r?\n/);
     const mainLine = lines.findIndex(line => /^if __name__ == ['"]__main__['"]:/.test(line));
     const insertAt = mainLine >= 0 ? mainLine : lines.length;

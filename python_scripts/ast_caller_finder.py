@@ -10,7 +10,10 @@ def module_matches(module, target_module):
 
 
 def target_module_name(target_path, project_root):
-    relative = os.path.relpath(target_path, project_root)
+    try:
+        relative = os.path.relpath(target_path, project_root)
+    except ValueError:
+        return os.path.splitext(os.path.basename(target_path))[0]
     return os.path.splitext(relative)[0].replace(os.sep, '.').replace('/', '.')
 
 
@@ -29,7 +32,10 @@ def relative_import_package(node, caller_path, project_root):
     base_dir = package_dir
     for _ in range(node.level - 1):
         base_dir = os.path.dirname(base_dir)
-    relative = os.path.relpath(base_dir, project_root)
+    try:
+        relative = os.path.relpath(base_dir, project_root)
+    except ValueError:
+        return None
     if relative == os.pardir or relative.startswith(os.pardir + os.sep):
         return None
     return '' if relative in ('.', '') else relative.replace('\\', '/').replace('/', '.')

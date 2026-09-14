@@ -6,7 +6,6 @@ test('drops unfinished semantic placeholders before they reach a Writer prompt',
     const parsed = parseSemanticAnalysis(JSON.stringify({
         dependency_behaviors: [],
         unreachable_paths: [{ condition: '<to be determined>', reason: '<to be determined>' }],
-        equivalent_mutant_candidates: [],
         mock_required_for: [],
         required_skills: ['import_module_name', '<to be determined>'],
         test_strategy: {
@@ -31,7 +30,6 @@ test('drops unfinished semantic placeholders before they reach a Writer prompt',
     assert.doesNotMatch(promptContext, /to be determined/i);
     assert.match(promptContext, /candidate branch input/);
 });
-
 test('rejects unrelated JSON so orchestration keeps the AST skill baseline', () => {
     assert.strictEqual(parseSemanticAnalysis(JSON.stringify({
         message: 'temporary gateway metadata',
@@ -61,4 +59,11 @@ test('keeps semantic input candidates scoped to the selected target signature', 
     assert.deepStrictEqual(restricted.test_strategy.input_hints.map(hint => hint.param_name), ['value']);
     assert.match(formatSemanticContextForPrompt(restricted), /Param "value"/);
     assert.doesNotMatch(formatSemanticContextForPrompt(restricted), /dependency_flag/);
+});
+
+test('parses JSON when followed by trailing commentary', () => {
+    const raw = '{"required_skills": ["boundary"]}\n\nHope this helps!';
+    const parsed = parseSemanticAnalysis(raw);
+    assert.ok(parsed);
+    assert.deepStrictEqual(parsed!.required_skills, ['boundary']);
 });

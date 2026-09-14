@@ -15,7 +15,12 @@ export interface CallerTraceExample {
     kwargs?: Record<string, string>;
     constructor_args?: string[];
     constructor_kwargs?: Record<string, string>;
-    [key: string]: unknown;
+    result?: string;
+    result_type?: string;
+    result_assertable?: boolean;
+    call_assertable?: boolean;
+    exception?: string;
+    message?: string;
 }
 
 export interface CallerTraceResult {

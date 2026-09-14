@@ -327,19 +327,34 @@ def package_mutant_targets(source_file, test_file, temp_root):
     source_chain = list(source_file.parents)
     modules = set()
     test_text = test_file.read_text(encoding='utf-8')
-    for raw_line in test_text.splitlines():
-        from_match = re.match(r'^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$', raw_line)
-        if from_match:
-            module_name, imported = from_match.groups()
-            names = [part.strip().split(' as ')[0].strip() for part in imported.split(',')]
-            if module_name.split('.')[-1] == source_stem:
-                modules.add(module_name)
-            elif source_stem in names:
-                modules.add(f'{module_name}.{source_stem}')
-            continue
-        import_match = re.match(r'^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)', raw_line)
-        if import_match and import_match.group(1).split('.')[-1] == source_stem:
-            modules.add(import_match.group(1))
+    try:
+        tree = ast.parse(test_text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module_name = node.module or ''
+                if module_name.split('.')[-1] == source_stem:
+                    modules.add(module_name)
+                for alias in node.names:
+                    if alias.name == source_stem:
+                        modules.add(f'{module_name}.{source_stem}' if module_name else source_stem)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split('.')[-1] == source_stem:
+                        modules.add(alias.name)
+    except Exception:
+        for raw_line in test_text.splitlines():
+            from_match = re.match(r'^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$', raw_line)
+            if from_match:
+                module_name, imported = from_match.groups()
+                names = [part.strip().split(' as ')[0].strip() for part in imported.split(',')]
+                if module_name.split('.')[-1] == source_stem:
+                    modules.add(module_name)
+                elif source_stem in names:
+                    modules.add(f'{module_name}.{source_stem}')
+                continue
+            import_match = re.match(r'^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)', raw_line)
+            if import_match and import_match.group(1).split('.')[-1] == source_stem:
+                modules.add(import_match.group(1))
 
     targets = []
     copied_roots = set()
@@ -362,6 +377,41 @@ def package_mutant_targets(source_file, test_file, temp_root):
             copied_roots.add(root_key)
         targets.append(destination_root / source_file.relative_to(package_root))
     return targets
+
+
+def prepare_trial_directory(source_file, test_file, trial_root, source_text):
+    """Create one import-isolated filesystem for a baseline or mutant trial.
+
+    Each trial receives a fresh package tree. Reusing one directory lets
+    Python reuse timestamp-based ``.pyc`` files when two AST variants have the
+    same size and are written within one filesystem timestamp tick, producing
+    nondeterministic mutation scores.
+    """
+    trial_root.mkdir(parents=True, exist_ok=False)
+    test_copy = trial_root / test_file.name
+    test_copy.write_text(test_file.read_text(encoding='utf-8'), encoding='utf-8')
+    mirrored_targets = package_mutant_targets(source_file, test_file, trial_root)
+    (trial_root / source_file.name).write_text(source_text, encoding='utf-8')
+    for mirrored_target in mirrored_targets:
+        mirrored_target.write_text(source_text, encoding='utf-8')
+    return test_copy
+
+
+def trial_environment(temp_root, source_file):
+    python_path = os.pathsep.join([
+        str(temp_root),
+        str(source_file.parent),
+        str(source_file.parent.parent),
+        os.environ.get('PYTHONPATH', ''),
+    ])
+    return {
+        **os.environ,
+        'PYTHONPATH': python_path,
+        'PYTHONIOENCODING': 'utf-8',
+        # A mutation trial must execute its .py source, never bytecode left by
+        # the baseline or another mutant.
+        'PYTHONDONTWRITEBYTECODE': '1',
+    }
 
 
 def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
@@ -396,27 +446,19 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
 
     with tempfile.TemporaryDirectory(prefix='llm_unit_mutation_') as temp_dir:
         temp_root = Path(temp_dir)
-        test_copy = temp_root / test_file.name
-        test_copy.write_text(test_file.read_text(encoding='utf-8'), encoding='utf-8')
-        mirrored_targets = package_mutant_targets(source_file, test_file, temp_root)
         original_source = source_file.read_text(encoding='utf-8')
         # Run the unmodified target in exactly the same isolated import layout
         # used for every mutant. A failing baseline is infrastructure/test
         # failure, never evidence that every mutant was killed.
-        (temp_root / source_file.name).write_text(original_source, encoding='utf-8')
-        python_path = os.pathsep.join([
-            str(temp_root),
-            str(source_file.parent),
-            str(source_file.parent.parent),
-            os.environ.get('PYTHONPATH', ''),
-        ])
-        environment = {**os.environ, 'PYTHONPATH': python_path, 'PYTHONIOENCODING': 'utf-8'}
+        baseline_root = temp_root / 'baseline'
+        baseline_test = prepare_trial_directory(source_file, test_file, baseline_root, original_source)
+        baseline_environment = trial_environment(baseline_root, source_file)
 
         try:
             baseline = subprocess.run(
-                [sys.executable, '-m', 'unittest', test_copy.stem],
-                cwd=temp_root,
-                env=environment,
+                [sys.executable, '-B', '-m', 'unittest', baseline_test.stem],
+                cwd=baseline_root,
+                env=baseline_environment,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -459,15 +501,15 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             )
             ast.fix_missing_locations(mutant_tree)
             mutant_source = ast.unparse(mutant_tree) + '\n'
-            (temp_root / source_file.name).write_text(mutant_source, encoding='utf-8')
-            for mirrored_target in mirrored_targets:
-                mirrored_target.write_text(mutant_source, encoding='utf-8')
+            mutant_root = temp_root / f'mutant_{index:04d}'
+            mutant_test = prepare_trial_directory(source_file, test_file, mutant_root, mutant_source)
+            mutant_environment = trial_environment(mutant_root, source_file)
 
             try:
                 completed = subprocess.run(
-                    [sys.executable, '-m', 'unittest', test_copy.stem],
-                    cwd=temp_root,
-                    env=environment,
+                    [sys.executable, '-B', '-m', 'unittest', mutant_test.stem],
+                    cwd=mutant_root,
+                    env=mutant_environment,
                     capture_output=True,
                     text=True,
                     encoding='utf-8',

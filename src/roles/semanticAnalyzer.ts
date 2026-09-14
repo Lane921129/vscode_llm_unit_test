@@ -4,7 +4,7 @@
  *
  * Triggered for ALL functions (not just cross-file dependencies).
  * Runs BEFORE test generation to:
- *   1. Compute fixed dependency behaviors, unreachable paths, equivalent mutant candidates
+ *   1. Compute fixed dependency behaviors and candidate unreachable paths
  *   2. Decide the optimal test data strategy for this specific function (AI-derived, not hardcoded)
  *
  * The test_strategy output replaces all hardcoded boundary rules in the unittest writer prompt.
@@ -23,11 +23,6 @@ export interface DependencyBehavior {
 
 export interface UnreachablePath {
     condition: string;
-    reason: string;
-}
-
-export interface EquivalentMutantCandidate {
-    description: string;
     reason: string;
 }
 
@@ -50,7 +45,6 @@ export interface TestStrategy {
 export interface SemanticAnalysis {
     dependency_behaviors: DependencyBehavior[];
     unreachable_paths: UnreachablePath[];
-    equivalent_mutant_candidates: EquivalentMutantCandidate[];
     mock_required_for?: { path: string; mock_target: string; example: string }[];
     required_skills: string[];       // 僅讀取舊回應；不再參與技能分配
     test_strategy: TestStrategy;     // AI-derived test data strategy for this specific function
@@ -218,12 +212,6 @@ Your output must be a single valid JSON object with this exact schema:
       "reason": "<why it cannot be False/True in normal calls>"
     }
   ],
-  "equivalent_mutant_candidates": [
-    {
-      "description": "<mutation type, e.g. If_Statement to If_True>",
-      "reason": "<why this mutation has no observable effect>"
-    }
-  ],
   "mock_required_for": [
     {
       "path": "<description of unreachable path>",
@@ -260,7 +248,8 @@ ANALYSIS RULES:
 - For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)
 - For test_strategy.input_hints: emit only scalar Python literals: None, True, False, a finite number, or a plain quoted string. Do not emit expressions, calls, collections, comprehensions, attributes, or variable names. Safe scalar candidates may be re-executed by Dynamic Trace; they are never an output oracle by themselves.
 - For test_strategy.key_rules: include only concise observations tied to this target; do not repeat generic unittest advice
-- If no dependencies, return empty arrays for dependency_behaviors, unreachable_paths, equivalent_mutant_candidates, mock_required_for
+- If no dependencies, return empty arrays for dependency_behaviors, unreachable_paths, and mock_required_for
+- Do not predict, classify, or mention equivalent mutants. Equivalence is evaluated only after mutation execution from measured survivor evidence.
 - Return ONLY the JSON object, no explanation text`;
 }
 
@@ -295,7 +284,7 @@ export function getSemanticAnalyzerUserPrompt(
     }
 
     prompt += 'TASK:\n';
-    prompt += '1. Analyze target dependency usage (if any) to identify fixed behaviors, unreachable paths, equivalent mutants.\n';
+    prompt += '1. Analyze target dependency usage (if any) to identify fixed behaviors and candidate unreachable paths.\n';
     prompt += '2. Study the target function source code and derive a test_strategy:\n';
     prompt += '   - Use only selected target parameter names in input_hints; never name dependency parameters or dependency return keys.\n';
     prompt += '   - What are the valid/invalid input ranges for each parameter?\n';
@@ -315,7 +304,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const semanticTopLevelFields = new Set([
     'dependency_behaviors',
     'unreachable_paths',
-    'equivalent_mutant_candidates',
     'mock_required_for',
     'required_skills',
     'test_strategy'
@@ -361,11 +349,6 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
             condition: meaningfulText(item.condition), reason: meaningfulText(item.reason)
         } : undefined)
         .filter((item): item is { condition: string; reason: string } => Boolean(item?.condition && item.reason));
-    const equivalent_mutant_candidates = (Array.isArray(value.equivalent_mutant_candidates) ? value.equivalent_mutant_candidates : [])
-        .map(item => isRecord(item) ? {
-            description: meaningfulText(item.description), reason: meaningfulText(item.reason)
-        } : undefined)
-        .filter((item): item is { description: string; reason: string } => Boolean(item?.description && item.reason));
     const mock_required_for = (Array.isArray(value.mock_required_for) ? value.mock_required_for : [])
         .map(item => isRecord(item) ? {
             path: meaningfulText(item.path), mock_target: meaningfulText(item.mock_target), example: meaningfulText(item.example)
@@ -394,7 +377,6 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
     return {
         dependency_behaviors,
         unreachable_paths,
-        equivalent_mutant_candidates,
         mock_required_for,
         required_skills: meaningfulTextList(value.required_skills),
         test_strategy: {
@@ -408,21 +390,29 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
 }
 
 export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | null {
-    try {
-        const trimmed = llmResponse.trim();
-        if (trimmed.startsWith('{')) {
+    const trimmed = llmResponse.trim();
+    if (trimmed.startsWith('{')) {
+        try {
             return normalizeSemanticAnalysis(JSON.parse(trimmed));
+        } catch {
+            // trimmed parse failed; proceed to code block or regex match
         }
-        const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (codeBlockMatch) {
+    }
+    const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) {
+        try {
             return normalizeSemanticAnalysis(JSON.parse(codeBlockMatch[1].trim()));
+        } catch {
+            // proceed to json match
         }
-        const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
+    }
+    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+        try {
             return normalizeSemanticAnalysis(JSON.parse(jsonMatch[0]));
+        } catch {
+            // all parse attempts failed
         }
-    } catch {
-        // Parse failed - caller will handle null gracefully
     }
     return null;
 }
@@ -467,13 +457,6 @@ export function formatSemanticContextForPrompt(
         out += '\nCandidate unreachable paths (verify against source or trace; do not omit a test solely because of this suggestion):\n';
         for (const up of analysis.unreachable_paths) {
             out += '  X "' + up.condition + '" -- ' + up.reason + '\n';
-        }
-    }
-
-    if (analysis.equivalent_mutant_candidates.length > 0) {
-        out += '\nCandidate equivalent mutants (verify observability before treating them as unkillable):\n';
-        for (const em of analysis.equivalent_mutant_candidates) {
-            out += '  ~ ' + em.description + ': ' + em.reason + '\n';
         }
     }
 

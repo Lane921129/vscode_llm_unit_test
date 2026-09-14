@@ -10,6 +10,7 @@ export const PYTHON_TOOLS = {
     bindings: 'validate_test_bindings.py',
     calls: 'validate_target_calls.py',
     assertionEvidence: 'validate_assertion_evidence.py',
+    repairScope: 'validate_repair_scope.py',
     rescue: 'rescue_unittest.py',
     scenarios: 'scenario_inventory.py',
     mutation: 'basic_mutation_runner.py'

@@ -13,5 +13,6 @@
 export * from './semanticAnalyzer';
 export * from './unittestWriter';
 export * from './testReviewer';
+export * from './roleContracts';
 export * from './bugFixer';
 export * from './qualityAnalyst';

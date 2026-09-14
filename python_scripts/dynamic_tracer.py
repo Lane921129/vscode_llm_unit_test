@@ -15,8 +15,6 @@ import os
 import shutil
 import socket
 import subprocess
-import traceback
-import types
 import asyncio
 import inspect
 import itertools
@@ -237,8 +235,9 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
     """
     Derive a small set of safe scalar inputs from the target function's own
     comparisons. This is intentionally syntax-only: it recognises parameter
-    equality, numeric boundaries and length boundaries, without encoding domain
-    vocabulary or attempting to execute source expressions.
+    equality, numeric boundaries, length boundaries, and direct annotated
+    boolean truthiness checks, without encoding domain vocabulary or attempting
+    to execute source expressions.
     """
     keyword_only_args = keyword_only_args or []
     parameter_names = set(positional_args + keyword_only_args)
@@ -381,6 +380,25 @@ def infer_condition_guided_inputs(file_path: str, func_name: str, positional_arg
                 elif any(isinstance(value, (int, float)) and not isinstance(value, bool) for value in literals):
                     numeric = [value for value in literals if isinstance(value, (int, float)) and not isinstance(value, bool)]
                     add(name, max(numeric) + 1)
+
+        # Only a direct ``if enabled`` / ``if not enabled`` condition backed
+        # by a bool annotation warrants both boolean probes.  Inferring bool
+        # from an unannotated truthiness check would be a type guess: the
+        # parameter could instead be a string, collection, or custom object.
+        if isinstance(node, (ast.If, ast.While, ast.IfExp)):
+            boolean_parameter = None
+            if isinstance(node.test, ast.Name) and node.test.id in parameter_names:
+                boolean_parameter = node.test.id
+            elif (
+                isinstance(node.test, ast.UnaryOp)
+                and isinstance(node.test.op, ast.Not)
+                and isinstance(node.test.operand, ast.Name)
+                and node.test.operand.id in parameter_names
+            ):
+                boolean_parameter = node.test.operand.id
+            if boolean_parameter and 'bool' in str(annotations.get(boolean_parameter, '')).lower():
+                add(boolean_parameter, True)
+                add(boolean_parameter, False)
 
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             subject = _condition_subject(node.operand, parameter_names)
@@ -984,10 +1002,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         except Exception as e:
             exc_type = type(e).__name__
             exc_msg = str(e)[:200]
-            # 只記錄「預期的」例外（ValueError, TypeError, KeyError 等），不記錄系統錯誤
-            if exc_type in ('ValueError', 'TypeError', 'KeyError', 'AttributeError',
-                            'IndexError', 'RuntimeError', 'PermissionError', 'FileNotFoundError',
-                            'NotImplementedError', 'AssertionError', 'ZeroDivisionError'):
+            # 記錄目標引發的有效例外，排除非目標行為的嚴重系統錯誤
+            if exc_type not in ('MemoryError', 'RecursionError', 'SystemExit', 'KeyboardInterrupt'):
                 formatted_args = [trace_repr_with_oracle(argument) for argument in inp]
                 formatted_kwargs = {
                     name: trace_repr_with_oracle(value)

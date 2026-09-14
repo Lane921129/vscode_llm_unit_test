@@ -11,15 +11,19 @@ export function isStructurallyInertStub(sourceCode: string | undefined): boolean
         return false;
     }
 
-    const allLines = sourceCode.trim().split('\n');
-    if (allLines.length === 0 || !/^\s*(async\s+)?def\s+/.test(allLines[0])) {
+    const allLines = sourceCode.trim().split(/\r?\n/);
+    let defIndex = 0;
+    while (defIndex < allLines.length && /^\s*(@|#)/.test(allLines[defIndex])) {
+        defIndex++;
+    }
+    if (defIndex >= allLines.length || !/^\s*(?:async\s+)?def\s+/.test(allLines[defIndex])) {
         return false;
     }
-    if (hasDummyNameMarker(allLines[0])) {
+    if (hasDummyNameMarker(allLines[defIndex])) {
         return true;
     }
 
-    const bodyLines = allLines.slice(1)
+    const bodyLines = allLines.slice(defIndex + 1)
         .map(line => line.trim())
         .filter(line => line && !line.startsWith('#'));
     const executableLines = removeLeadingDocstring(bodyLines);

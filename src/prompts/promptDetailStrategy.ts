@@ -14,9 +14,15 @@ export function selectPromptDetail(
     if (resolvedTier >= 3) {
         return 'large';
     }
-    const parameters = Number.parseFloat(paramSize);
-    if (Number.isFinite(parameters) && parameters >= 20) {
-        return 'large';
+    const trimmed = paramSize.trim();
+    let parameters = Number.parseFloat(trimmed);
+    if (Number.isFinite(parameters)) {
+        if (/m$/i.test(trimmed)) {
+            parameters = parameters / 1000;
+        }
+        if (parameters >= 20) {
+            return 'large';
+        }
     }
     return contextLength >= 16_000 ? 'large' : 'small';
 }

@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
-import { getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt } from './roles/unittestWriter';
-import { getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence } from './roles/bugFixer';
-import { fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview } from './roles/testReviewer';
-import { buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis } from './roles/semanticAnalyzer';
-import { getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints } from './roles/qualityAnalyst';
+import {
+    getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt,
+    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence,
+    fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview,
+    buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
+    getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints,
+    buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
+} from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from './validation/scenarioIdentity';
@@ -280,8 +283,9 @@ interface AstContext {
     name: string;
     /** Python AST uses null for module-level functions without an owning class. */
     class_name?: string | null;
+    target_import_module?: string;
     args: string[];
-    signature?: Array<{ name: string; kind: string; annotation: string | null; default: string | null; required: boolean }>;
+    signature?: Array<{ name: string; kind: 'positional_only' | 'positional_or_keyword' | 'keyword_only' | 'var_positional' | 'var_keyword'; annotation: string | null; default: string | null; required: boolean }>;
     required_args?: string[];
     docstring: string;
     calls: string[];
@@ -624,6 +628,7 @@ async function requestLlmApi(
     const contractedSystemPrompt = addOutputContract(systemPrompt, outputFormat);
     const expectsJsonObject = outputFormat === 'json'
         || outputFormat === 'semantic-json'
+        || outputFormat === 'review-json'
         || outputFormat === 'mutant-triage-json';
 
     if (params.envType === 'local') {
@@ -775,7 +780,7 @@ async function validateGeneratedTestCode(
     targetUsage: 'call' | 'property' = 'call',
     targetSignature?: unknown[],
     allowedExceptionNames?: string[],
-    targetClassName?: string,
+    targetClassName?: string | null,
     pythonExecutable: string = 'python',
     bindingContext?: { module: string; target: string; className?: string | null; dependencies: Record<string, string> }
 ): Promise<{ valid: boolean; reason?: string }> {
@@ -902,6 +907,125 @@ function parseMutmutSurvived(mutatestResult: string): string {
         if (capture && line.trim() !== '') {survivedList.push(line.trim());}
     }
     return survivedList.join('\n');
+}
+
+function buildAstMarkdownReport(astContext: AstContext): string {
+    let astReport = `### AST 靜態解析結果\n`;
+    astReport += `- 函式名稱: \`${astContext.name}\`\n`;
+    astReport += `- 參數列表: \`${astContext.args.join(', ') || '無'}\`\n`;
+    astReport += `- 相依呼叫: \`${astContext.calls.join(', ') || '無'}\`\n`;
+    if (astContext.docstring) {
+        astReport += `- 文件註解: \`${astContext.docstring.trim().replace(/\n/g, ' ')}\`\n`;
+    }
+    if (astContext.dependencies && astContext.dependencies.length > 0) {
+        astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${formatPythonImport(d)}.${d.name}\``).join(', ')}\n`;
+    }
+    if (astContext.file_imports && astContext.file_imports.length > 0) {
+        astReport += `- 模組 Imports: ${astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', ')}\n`;
+    }
+    if (astContext.referenced_globals && astContext.referenced_globals.length > 0) {
+        astReport += `- 引用模組常數: ${astContext.referenced_globals.map(item => `\`${item.name}\``).join(', ')}\n`;
+    }
+    if (astContext.class_context) {
+        const init = astContext.class_context.init;
+        const effectiveInit = astContext.class_context.effective_init;
+        const inherited = effectiveInit && effectiveInit.defined_on !== astContext.class_context.name
+            ? `；繼承建構子：\`${effectiveInit.defined_on}(${effectiveInit.params.join(', ') || '無'})\``
+            : '';
+        astReport += `- 類別語境: \`${astContext.class_context.name}\`，__init__ 參數：\`${init.params.join(', ') || '無'}\`，初始化屬性：\`${init.assigns.map(item => item.name).join(', ') || '無'}\`${inherited}\n`;
+    }
+    if (astContext.callerContexts && astContext.callerContexts.length > 0) {
+        astReport += `- 呼叫站語境 (${astContext.callerContexts.length} 個):\n`;
+        for (const ctx of astContext.callerContexts) {
+            const argsStr = ctx.args.join(', ');
+            const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
+            const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
+            astReport += `  - \`${ctx.caller_file}\` / \`${ctx.caller_func}()\`: \`${astContext.name}(${callSig})\`\n`;
+        }
+    }
+    if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
+        for (const dep of astContext.dependencyContexts) {
+            if (dep.callerContexts && dep.callerContexts.length > 0) {
+                astReport += `- \`${dep.name}\` 的呼叫站語境 (${dep.callerContexts.length} 個):\n`;
+                for (const ctx of dep.callerContexts) {
+                    const argsStr = ctx.args.join(', ');
+                    const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
+                    const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
+                    astReport += `  - \`${ctx.caller_file}\` / \`${ctx.caller_func}()\`: \`${dep.name}(${callSig})\`\n`;
+                }
+            }
+        }
+    }
+    astReport += `\n`;
+    return astReport;
+}
+
+async function resolveAstAndDependencies(
+    filePath: string,
+    funcName: string,
+    projectRoot: string,
+    pythonExecutable: string,
+    log: (text: string) => void
+): Promise<AstContext | null> {
+    log(`[AST] 正在解析函式 \`${funcName}\` 的結構與依賴...`);
+    const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
+    if (!astContext || astContext.error) {
+        return astContext;
+    }
+    log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+
+    if (astContext.dependencies && astContext.dependencies.length > 0) {
+        log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
+        astContext.dependencyContexts = [];
+        astContext.sourceVersions = [];
+
+        for (const dep of astContext.dependencies) {
+            const depFilePath = resolvePythonDependencyPath(filePath, projectRoot, dep);
+            if (fs.existsSync(depFilePath)) {
+                astContext.sourceVersions.push({ file: depFilePath, hash: evidenceHash(fs.readFileSync(depFilePath, 'utf8')) });
+                const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
+                if (depAst && !depAst.error) {
+                    log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
+                    const callers = await findCallerContexts(dep.name, projectRoot, depFilePath, pythonExecutable);
+                    if (callers.length > 0) {
+                        depAst.callerContexts = callers;
+                        log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
+                    }
+                    const dependencyTrace = await runDynamicTrace(depFilePath, dep.name, callers, pythonExecutable);
+                    if (dependencyTrace && !dependencyTrace.load_error) {
+                        depAst.traceResult = dependencyTrace;
+                        log(`[Trace] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
+                    } else if (dependencyTrace?.load_error) {
+                        log(`[Trace] 相依 ${dep.name} 無法安全取得事實：${dependencyTrace.load_error}（保留原始碼語境，不中止分析）。`);
+                    }
+                    astContext.dependencyContexts.push(depAst);
+                    log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
+                }
+            }
+        }
+    }
+
+    const selfCallers = await findCallerContexts(funcName, projectRoot, filePath, pythonExecutable);
+    if (selfCallers.length > 0) {
+        astContext.callerContexts = selfCallers;
+        log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
+    }
+
+    log(`[Trace] 正在動態執行函式以取得真實輸入輸出範例...`);
+    const traceResult = await runDynamicTrace(filePath, funcName, astContext.callerContexts, pythonExecutable);
+    if (traceResult && !traceResult.load_error) {
+        astContext.traceResult = traceResult;
+        const exCount = traceResult.examples.length;
+        const errCount = traceResult.errors.length;
+        const sourceLabel = traceResult.input_source === 'source_guided_retry'
+            ? '（caller 字面值無效，已改用原始碼導向輸入）'
+            : traceResult.input_source === 'caller_literals' ? '（含 caller 字面值）' : '';
+        log(`[Trace] 完成！取得 ${exCount} 個成功範例、${errCount} 個預期例外範例。${sourceLabel}`);
+    } else if (traceResult?.load_error) {
+        log(`[Trace] 動態追蹤失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
+    }
+
+    return astContext;
 }
 
 async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
@@ -1078,130 +1202,22 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
     let astContext: AstContext | null = null;
     if (params.funcName) {
-        log(`[AST] 正在解析函式 \`${params.funcName}\` 的結構與依賴...`);
-        astContext = await extractAstContext(params.filePath, params.funcName, pythonExecutable);
+        const projectRoot = (params as any).batchPath
+            ? (params as any).batchPath
+            : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
+        astContext = await resolveAstAndDependencies(
+            params.filePath,
+            params.funcName,
+            projectRoot,
+            pythonExecutable,
+            log
+        );
         if (astContext && !astContext.error) {
             targetFuncName = astContext.name || targetFuncName;
-            log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
-            
-            // 深度跨檔案 AST 解析 (Deep Dependency Resolution)
-            if (astContext.dependencies && astContext.dependencies.length > 0) {
-                log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
-                astContext.dependencyContexts = [];
-                astContext.sourceVersions = [];
-                // 取得專案根目錄（batchPath 本身就是資料夾；否則用 workspace 根目錄）
-                const projectRoot = (params as any).batchPath
-                    ? (params as any).batchPath
-                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
-
-                for (const dep of astContext.dependencies) {
-                    const depFilePath = resolvePythonDependencyPath(params.filePath, projectRoot, dep);
-                    
-                    if (fs.existsSync(depFilePath)) {
-                    
-                        astContext.sourceVersions.push({ file: depFilePath, hash: evidenceHash(fs.readFileSync(depFilePath, 'utf8')) });
-                            const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
-                        if (depAst && !depAst.error) {
-                            // 🔍 呼叫站掃描：找出這個依賴函式在全專案的所有呼叫點
-                            log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
-                            const callers = await findCallerContexts(dep.name, projectRoot, depFilePath, pythonExecutable);
-                            if (callers.length > 0) {
-                                depAst.callerContexts = callers;
-                                log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
-                            }
-                            const dependencyTrace = await runDynamicTrace(depFilePath, dep.name, callers, pythonExecutable);
-                            if (dependencyTrace && !dependencyTrace.load_error) {
-                                depAst.traceResult = dependencyTrace;
-                                log(`[Trace] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
-                            } else if (dependencyTrace?.load_error) {
-                                log(`[Trace] 相依 ${dep.name} 無法安全取得事實：${dependencyTrace.load_error}（保留原始碼語境，不中止分析）。`);
-                            }
-                            astContext.dependencyContexts.push(depAst);
-                            log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
-                        }
-                    }
-                }
-            }
-
-            // 同時也掃描目標函式本身的呼叫站（在大專案中作為被呼叫者時使用）
-            {
-                const projectRoot = (params as any).batchPath
-                    ? (params as any).batchPath
-                    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
-                const selfCallers = await findCallerContexts(params.funcName, projectRoot, params.filePath, pythonExecutable);
-                if (selfCallers.length > 0) {
-                    astContext.callerContexts = selfCallers;
-                    log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
-                }
-            }
-
-            // 動態執行追蹤：取得真實的 input→output 範例，讓 LLM 的 assert 值不再是猜的
-            log(`[Trace] 正在動態執行函式以取得真實輸入輸出範例...`);
-            const traceResult = await runDynamicTrace(params.filePath, params.funcName, astContext.callerContexts, pythonExecutable);
-            if (traceResult && !traceResult.load_error) {
-                (astContext as any).traceResult = traceResult;
-                const exCount = traceResult.examples.length;
-                const errCount = traceResult.errors.length;
-                const sourceLabel = traceResult.input_source === 'source_guided_retry'
-                    ? '（caller 字面值無效，已改用原始碼導向輸入）'
-                    : traceResult.input_source === 'caller_literals' ? '（含 caller 字面值）' : '';
-                log(`[Trace] 完成！取得 ${exCount} 個成功範例、${errCount} 個預期例外範例。${sourceLabel}`);
-            } else if (traceResult?.load_error) {
-                log(`[Trace] 動態追蹤失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
-            }
-
-
-            // 寫入 AST 分析結果到報告（包含呼叫站語境）
-            let astReport = `### AST 靜態解析結果\n`;
-            astReport += `- 函式名稱: \`${astContext.name}\`\n`;
-            astReport += `- 參數列表: \`${astContext.args.join(', ') || '無'}\`\n`;
-            astReport += `- 相依呼叫: \`${astContext.calls.join(', ') || '無'}\`\n`;
-            if (astContext.docstring) {
-                astReport += `- 文件註解: \`${astContext.docstring.trim().replace(/\n/g, ' ')}\`\n`;
-            }
-            if (astContext.dependencies && astContext.dependencies.length > 0) {
-                astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${formatPythonImport(d)}.${d.name}\``).join(', ')}\n`;
-            }
-            if (astContext.file_imports && astContext.file_imports.length > 0) {
-                astReport += `- 模組 Imports: ${astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', ')}\n`;
-            }
-            if (astContext.referenced_globals && astContext.referenced_globals.length > 0) {
-                astReport += `- 引用模組常數: ${astContext.referenced_globals.map(item => `\`${item.name}\``).join(', ')}\n`;
-            }
-            if (astContext.class_context) {
-                const init = astContext.class_context.init;
-                const effectiveInit = astContext.class_context.effective_init;
-                const inherited = effectiveInit && effectiveInit.defined_on !== astContext.class_context.name
-                    ? `；繼承建構子：\`${effectiveInit.defined_on}(${effectiveInit.params.join(', ') || '無'})\``
-                    : '';
-                astReport += `- 類別語境: \`${astContext.class_context.name}\`，__init__ 參數：\`${init.params.join(', ') || '無'}\`，初始化屬性：\`${init.assigns.map(item => item.name).join(', ') || '無'}\`${inherited}\n`;
-            }
-            if (astContext.callerContexts && astContext.callerContexts.length > 0) {
-                astReport += `- 呼叫站語境 (${astContext.callerContexts.length} 個):\n`;
-                for (const ctx of astContext.callerContexts) {
-                    const argsStr = ctx.args.join(', ');
-                    const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
-                    const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
-                    astReport += `  - \`${ctx.caller_file}\` / \`${ctx.caller_func}()\`: \`${astContext.name}(${callSig})\`\n`;
-                }
-            }
-            if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
-                for (const dep of astContext.dependencyContexts) {
-                    if (dep.callerContexts && dep.callerContexts.length > 0) {
-                        astReport += `- \`${dep.name}\` 的呼叫站語境 (${dep.callerContexts.length} 個):\n`;
-                        for (const ctx of dep.callerContexts) {
-                            const argsStr = ctx.args.join(', ');
-                            const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
-                            const callSig = [argsStr, kwargsStr].filter(Boolean).join(', ');
-                            astReport += `  - \`${ctx.caller_file}\` / \`${ctx.caller_func}()\`: \`${dep.name}(${callSig})\`\n`;
-                        }
-                    }
-                }
-            }
-            astReport += `\n`;
-            finalReportMarkdown += astReport;
+            finalReportMarkdown += buildAstMarkdownReport(astContext);
+        } else {
+            log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);
         }
-        else { log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`); }
     }
     const targetImportModule = inferTargetImportModule(params.filePath, astContext?.file_imports || []);
     const testBindingContext = {
@@ -1214,7 +1230,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             .map((item: any) => [item.alias || item.bound_name || item.name, `${item.module}.${item.name}`])) as Record<string, string>
     };
     if (astContext && !astContext.error) {
-        (astContext as any).target_import_module = targetImportModule;
+        astContext.target_import_module = targetImportModule;
     }
 
     // ─── 優化一：Stub/Dummy 函式快速通道 ───
@@ -1246,7 +1262,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             log(`[快速通道] ⏭️ ${reason} 已安全略過。`);
             return;
         }
-        const smokeAssertion = buildStubSmokeAssertion((astContext as any)?.code || '');
+        const smokeAssertion = buildStubSmokeAssertion(astContext?.code || '');
         const smokeBody = smokeAssertion
             ? [
                 `        ${stubPlan.callLine}`,
@@ -1343,7 +1359,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     call_expr: c.call_expr as string || ''
                 })) || [];
             const semUsr = getSemanticAnalyzerUserPrompt(
-                (astContext as any).code || '',
+                astContext.code || '',
                 semDeps,
                 semCallSites,
                 astContext
@@ -1357,12 +1373,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (parsedSemResult) {
                 const semResult = restrictSemanticInputHintsToTargetParameters(
                     parsedSemResult,
-                    Array.isArray((astContext as any).args) ? (astContext as any).args : undefined
+                    Array.isArray(astContext.args) ? astContext.args : undefined
                 );
                 semanticContext = skillSelection.guidance + formatSemanticContextForPrompt(semResult, semDeps);
                 const semanticTraceInputs = buildSemanticTraceCandidates(
                     semResult,
-                    (astContext as any).signature
+                    astContext.signature
                 );
                 if (semanticTraceInputs.length > 0) {
                     log(`[語意 Trace] 正在以 ${semanticTraceInputs.length} 組安全 scalar 候選取得真實 I/O...`);
@@ -1375,10 +1391,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     );
                     if (semanticTrace && !semanticTrace.load_error) {
                         const mergedTrace = mergeDynamicTraceResults(
-                            (astContext as any).traceResult,
+                            astContext.traceResult,
                             semanticTrace
                         );
-                        (astContext as any).traceResult = mergedTrace;
+                        astContext.traceResult = mergedTrace;
                         log(`[語意 Trace] 完成！新增候選已實測；目前共 ${mergedTrace.examples.length} 個成功範例、${mergedTrace.errors.length} 個例外範例。`);
                     } else if (semanticTrace?.load_error) {
                         log(`[語意 Trace] 候選無法安全執行：${semanticTrace.load_error}（保留原有 Trace 事實）。`);
@@ -1386,7 +1402,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
                 journal.knowledge({ planningHypotheses: semResult, verifiedTrace: astContext.traceResult, dependencies: astContext.dependencyContexts });
-                log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、不可達路徑: ${semResult.unreachable_paths.length} 個、等效變異體: ${semResult.equivalent_mutant_candidates.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
+                log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、候選不可達路徑: ${semResult.unreachable_paths.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
                 finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
             } else {
                 log(`[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵技能基線（不影響主流程）。`);
@@ -1486,7 +1502,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
                 // ─── Tier 1：LLM 證據導向生成；未驗證 Auto 才使用確定性備援 ───
                 if (currentTier === 1 && !survivedMutants) {
-                const traceResult = (astContext as any)?.traceResult as DynamicTraceResult | undefined;
+                const traceResult = astContext?.traceResult;
                 if (!tier1GenerationModeRecorded) {
                     const modeLabel = tier1GenerationMode === 'llm-evidence-bound'
                         ? 'LLM 證據導向生成（來源碼 + AST + Dynamic Trace + 技能卡）'
@@ -1508,21 +1524,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         );
                     }
                     log(`[Tier 1 備援] 模型未驗證，使用已驗證 Dynamic Trace 機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
-                    const className = (astContext as any)?.class_name as string | null;
-                    const constructorParams = ((astContext as any)?.class_context?.effective_init?.required_params
-                        || (astContext as any)?.class_context?.effective_init?.params
-                        || (astContext as any)?.class_context?.init?.required_params
-                        || (astContext as any)?.class_context?.init?.params) as string[] | undefined;
+                    const className = astContext?.class_name as string | null | undefined;
+                    const constructorParams = (astContext?.class_context?.effective_init?.required_params
+                        || astContext?.class_context?.effective_init?.params
+                        || astContext?.class_context?.init?.required_params
+                        || astContext?.class_context?.init?.params) as string[] | undefined;
                     const tier1File = buildTier1TestFile({
                         moduleName: targetImportModule,
                         functionName: targetFuncName,
                         examples: traceResult.examples,
                         errors: traceResult.errors,
                         className,
-                        methodKind: (astContext as any)?.method_kind,
+                        methodKind: astContext?.method_kind,
                         constructorParams,
                         callerContexts: astContext?.callerContexts,
-                        isAsync: Boolean((astContext as any)?.is_async),
+                        isAsync: Boolean(astContext?.is_async),
                     });
                     if (tier1File.missingConstructorFacts) {
                         throw new Error(
@@ -1542,7 +1558,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 // ─── Tier 3：Mock Scaffold（34–70B 模型） ───
                 if (currentTier === 3 && !sanitizedCode && !survivedMutants) {
                 log(`[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…`);
-                const traceResult = (astContext as any)?.traceResult;
+                const traceResult = astContext?.traceResult;
                 const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult, targetImportModule, pythonExecutable);
                 if (scaffoldResult && scaffoldResult.scaffold) {
                     log(`[Tier 3] 骨架產生完成！patches: ${scaffoldResult.patches.join(', ') || '(無外部依賴)'}`);
@@ -1558,7 +1574,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         moduleName,
                         traceExamples,
                         verifiedConstructorCall,
-                        (astContext as any)?.code || targetCode,
+                        astContext?.code || targetCode,
                         semanticContext
                     );
                     try {
@@ -1609,7 +1625,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     // 打造微型 AST／Trace context：子任務只能看到本 caller
                     // 可精確對應的實測 I/O，不能借用其他 caller 的 oracle。
                     const subTraceResult = traceSubsetForCaller(
-                        (astContext as any).traceResult,
+                        astContext.traceResult,
                         ctx
                     );
                     const subAstContext = {
@@ -1640,10 +1656,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     subClean,
                                     targetFuncName,
                                     path.basename(params.filePath, '.py'),
-                                    (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                                    (astContext as any)?.signature,
+                                    astContext?.method_kind === 'property' ? 'property' : 'call',
+                                    astContext?.signature,
                                     exceptionNamesFromEvidence(astContext),
-                                    (astContext as any)?.class_name,
+                                    astContext?.class_name,
                                     pythonExecutable,
                                     testBindingContext
                                 );
@@ -1740,10 +1756,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         sanitizedCode,
                         targetFuncName,
                         path.basename(params.filePath, '.py'),
-                        (astContext as any)?.method_kind === 'property' ? 'property' : 'call',
-                        (astContext as any)?.signature,
+                        astContext?.method_kind === 'property' ? 'property' : 'call',
+                        astContext?.signature,
                         exceptionNamesFromEvidence(astContext),
-                        (astContext as any)?.class_name,
+                        astContext?.class_name,
                         pythonExecutable,
                         testBindingContext
                     );
@@ -1849,8 +1865,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (coverageProbe.code !== 0) { throw new Error(coverageRequiredMessage(pythonExecutable)); }
             const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
                 code, failure, targetFuncName, astContext?.args || [], astContext?.code || targetCode,
-                astContext, targetImportModule
+                astContext, targetImportModule, undefined,
+                Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`)
             );
+            const roleEvidence = getReviewEvidence('', '', targetFuncName, astContext?.args || [],
+                astContext?.code || targetCode, astContext, targetImportModule, undefined,
+                Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`));
             const inventories = new Map<string, ScenarioIdentity[]>();
             const inventory = async (code: string): Promise<ScenarioIdentity[]> => {
                 const hash = evidenceHash(code);
@@ -1879,19 +1899,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         recordRole('reviewer', 'skipped-deterministic', {});
                         return { issues: [] };
                     }
-                    const evidence = getReviewEvidence('', '', targetFuncName, astContext?.args || [],
-                        astContext?.code || targetCode, astContext, targetImportModule);
                     const sys = getTestReviewerSystemPrompt();
-                    const prompt = fitReviewPrompt({ tests: code, evidence },
+                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence },
                         Math.max(0, Math.floor(activeModelProfile.budgetTokens * 2) - sys.length));
                     if (!prompt) {
                         recordRole('reviewer', 'budget-exceeded', { reason: '完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。' });
                         return undefined;
                     }
                     try {
-                        const raw = await requestLlmApi(params, sys, prompt, log, 'text');
+                        const raw = await requestLlmApi(params, sys, prompt, log, 'review-json');
                         const result = parseTestReview(raw, prompt);
-                        recordRole('reviewer', result ? 'parsed' : 'invalid-response', { raw, result });
+                        recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
+                            contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result
+                        });
                         return result;
                     } catch (error: any) {
                         throwIfExecutionCancelled();
@@ -1904,11 +1924,40 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
                     const prompt = role === 'bug-fixer' ? repairContext(code, failure)
-                        : repairContext(code, failure).replace('PRE-VERIFICATION ERROR LOG (LATEST ATTEMPT)', 'WRITER REVISION FINDINGS');
+                        : buildWriterRevisionRequest({
+                            code,
+                            findings: failure,
+                            moduleName: targetImportModule,
+                            functionName: targetFuncName,
+                            evidence: roleEvidence
+                        });
                     if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
                         throw new Error('修訂所需完整證據超過模型預算；未截斷來源碼或 Trace。');
                     }
                     return preserveTrace(sanitizeLlmResponse(await requestLlmApi(params, sys, prompt, log, testGenerationResponseFormat)));
+                },
+                validateRevision: async (previousCode, candidateCode, failure, role) => {
+                    if (role !== 'bug-fixer') { return undefined; }
+                    const scope = await runSpawn(pythonExecutable,
+                        ['-B', pythonToolPath('repairScope')], {
+                            input: JSON.stringify({
+                                contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
+                                previous: previousCode,
+                                candidate: candidateCode,
+                                failure
+                            }),
+                            timeout: 5000,
+                            env: testExecutionEnv
+                        });
+                    if (scope.code !== 0) {
+                        return 'Bug Fixer 修改範圍檢查無法執行：' + (scope.stderr || scope.stdout);
+                    }
+                    try {
+                        const result = JSON.parse(scope.stdout) as { valid?: boolean; reason?: string };
+                        return result.valid === true ? undefined : result.reason || 'Bug Fixer 修改超出允許範圍。';
+                    } catch {
+                        return 'Bug Fixer 修改範圍檢查回傳無效資料。';
+                    }
                 },
                 execute: async (code) => {
                     throwIfExecutionCancelled();
@@ -2030,7 +2079,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (engine === 'builtin') {
                 const fallbackScript = pythonToolPath('mutation');
                 const perMutationTimeout = Math.max(1, Math.min(10, Math.floor(params.timeoutSeconds / 3)));
-                const selectedClassName = (astContext as any)?.class_name as string | undefined;
+                const selectedClassName = (astContext?.class_name as string | undefined);
                 const fallbackRun = await runSpawn(
                     pythonExecutable,
                     [

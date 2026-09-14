@@ -11,6 +11,8 @@ export interface CandidatePipelineHooks {
     validate(code: string): Promise<string | undefined>;
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer'): Promise<string>;
+    validateRevision?(previousCode: string, candidateCode: string, failure: string,
+        role: 'writer' | 'bug-fixer'): Promise<string | undefined>;
     execute(code: string): Promise<CandidateExecution>;
     event(stage: string, status: string, detail: unknown): void;
     checkCancelled(): void;
@@ -29,6 +31,7 @@ export async function validateTestCandidate(
     for (let attempt = 0; attempt <= maxRevisions; attempt++) {
         hooks.checkCancelled();
         if (attempt > 0) {
+            const previousCode = code;
             const candidate = await hooks.revise(code, lastFailure, role);
             hooks.checkCancelled();
             hooks.event(role, 'candidate', { attempt, code: candidate });
@@ -37,11 +40,28 @@ export async function validateTestCandidate(
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure });
                 continue;
             }
+            const revisionViolation = await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
+            if (revisionViolation) {
+                feedback.reject(revisionViolation);
+                lastFailure = feedback.output;
+                code = retainedCode;
+                hooks.event(role, 'scope-rejected', { attempt, reason: revisionViolation });
+                role = 'bug-fixer';
+                continue;
+            }
             code = candidate;
         }
         const invalid = await hooks.validate(code);
         hooks.event('structure', invalid ? 'rejected' : 'passed', { attempt, reason: invalid });
-        if (invalid) { lastFailure = invalid; code = retainedCode; role = 'writer'; continue; }
+        if (invalid) {
+            lastFailure = invalid;
+            code = retainedCode;
+            // Structural and evidence validation are pre-validation failures,
+            // so the focused repair role owns them. Reviewer findings remain
+            // Writer work below.
+            role = 'bug-fixer';
+            continue;
+        }
         const review = await hooks.review(code);
         hooks.checkCancelled();
         // Unavailable/malformed review is explicitly unknown, never a fabricated approval.
@@ -68,7 +88,7 @@ export async function validateTestCandidate(
                 ...execution.qualityGaps,
                 ...(!review ? ['Reviewer 審查未完成；工具執行通過不代表模型審查通過。'] : []),
                 ...(review?.issues.filter(issue => issue.severity === 'quality').map(issue =>
-                    `${issue.id}: ${issue.reason}; ${issue.action}`) || [])
+                    `${issue.id}: ${issue.action}`) || [])
             ] };
         }
         lastFailure = execution.out;

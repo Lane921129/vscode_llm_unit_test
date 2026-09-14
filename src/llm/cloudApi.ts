@@ -62,7 +62,7 @@ export function getGoogleGeneratedText(payload: unknown): string | undefined {
 
 /** Accept both API resource names (models/name) and UI-friendly model names. */
 export function normalizeGoogleModelName(modelName: string): string {
-    return modelName.trim().replace(/^models\//, '');
+    return modelName.trim().replace(/^models\//i, '');
 }
 
 /**
@@ -94,7 +94,7 @@ export function buildGoogleGenerateContentRequest(
         },
         body: {
             contents: [{ parts: [{ text: prompt }] }],
-            ...(options?.responseMimeType || options?.temperature !== undefined ? {
+            ...(options?.responseMimeType || options?.responseSchema || options?.temperature !== undefined ? {
                 generationConfig: {
                     ...(options?.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
                     ...(options?.responseSchema ? { responseSchema: options.responseSchema } : {}),

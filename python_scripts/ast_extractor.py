@@ -514,7 +514,7 @@ def is_generator_function(func_node):
 
 
 def branch_condition_facts(func_node, parameter_names):
-    """Return only direct, source-verifiable branch comparisons.
+    """Return only direct, source-verifiable branch conditions.
 
     These facts deliberately describe *conditions*, not expected results.  A
     test planner can use them to choose inputs on both sides of a condition,
@@ -617,6 +617,33 @@ def branch_condition_facts(func_node, parameter_names):
                 }
                 identity = tuple(sorted((key, tuple(value) if isinstance(value, list) else value)
                                         for key, value in fact.items()))
+                if identity not in seen:
+                    facts.append(fact)
+                    seen.add(identity)
+        # A bare parameter in a branch is meaningful only when it is the
+        # complete condition (or the direct operand of ``not``).  Recording
+        # more complex expressions such as ``validate(enabled)`` would turn
+        # an unknown dependency into a false source fact.
+        if isinstance(node, (ast.If, ast.While, ast.IfExp)):
+            parameter = None
+            polarity = None
+            if isinstance(node.test, ast.Name) and node.test.id in parameter_names:
+                parameter = node.test.id
+                polarity = 'truthy'
+            elif (
+                isinstance(node.test, ast.UnaryOp)
+                and isinstance(node.test.op, ast.Not)
+                and isinstance(node.test.operand, ast.Name)
+                and node.test.operand.id in parameter_names
+            ):
+                parameter = node.test.operand.id
+                polarity = 'falsy'
+            if parameter:
+                fact = {
+                    'kind': 'truthiness', 'parameter': parameter,
+                    'subject': 'value', 'polarity': polarity, 'line': node.lineno,
+                }
+                identity = tuple(sorted(fact.items()))
                 if identity not in seen:
                     facts.append(fact)
                     seen.add(identity)
@@ -761,5 +788,8 @@ def extract_info(filepath, func_name):
         print(json.dumps({'error': str(error)}, ensure_ascii=False))
 
 
-if __name__ == '__main__' and len(sys.argv) == 3:
+if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        sys.stderr.write(f"Usage: {sys.argv[0]} <file_path> <func_name>\n")
+        sys.exit(1)
     extract_info(sys.argv[1], sys.argv[2])

@@ -36,6 +36,16 @@ test('buildGoogleGenerateContentRequest supports a JSON output contract without 
     });
 });
 
+test('buildGoogleGenerateContentRequest supports responseSchema without responseMimeType', () => {
+    const request = buildGoogleGenerateContentRequest('gemini-test', 'test-key', 'hello', {
+        responseSchema: { type: 'object' }
+    });
+
+    assert.deepStrictEqual(request.body.generationConfig, {
+        responseSchema: { type: 'object' }
+    });
+});
+
 test('buildGoogleGenerateContentRequest supports a deterministic connection-probe temperature', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'probe', { temperature: 0 });
 

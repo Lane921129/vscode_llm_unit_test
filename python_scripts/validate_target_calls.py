@@ -18,7 +18,7 @@ def exception_name(node):
 
 
 def has_type_error_guard(ancestors):
-    """Return True when a call is enclosed by assertRaises(TypeError)."""
+    """Return True when a call is enclosed by assertRaises(TypeError) or assertRaisesRegex(TypeError, ...)."""
     for ancestor in reversed(ancestors):
         if not isinstance(ancestor, (ast.With, ast.AsyncWith)):
             continue
@@ -26,8 +26,12 @@ def has_type_error_guard(ancestors):
             context = item.context_expr
             if not isinstance(context, ast.Call) or not context.args:
                 continue
-            if isinstance(context.func, ast.Attribute) and context.func.attr == 'assertRaises':
-                if exception_name(context.args[0]) == 'TypeError':
+            if isinstance(context.func, ast.Attribute) and context.func.attr in ('assertRaises', 'assertRaisesRegex'):
+                first_arg = context.args[0]
+                if isinstance(first_arg, (ast.Tuple, ast.List)):
+                    if any(exception_name(elt) == 'TypeError' for elt in first_arg.elts):
+                        return True
+                elif exception_name(first_arg) == 'TypeError':
                     return True
     return False
 
@@ -36,20 +40,27 @@ def imported_target_names(tree, target_name):
     """Return direct names that are proven aliases of the selected target."""
     names = {target_name}
     for node in tree.body:
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        for alias in node.names:
-            if alias.name == target_name:
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == target_name:
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
                 names.add(alias.asname or alias.name)
     return names
 
 
 def target_call(node, target_names, target_name):
-    return (
-        isinstance(node.func, ast.Name) and node.func.id in target_names
-    ) or (
-        isinstance(node.func, ast.Attribute) and node.func.attr == target_name
-    )
+    if isinstance(node.func, ast.Name):
+        return node.func.id in target_names
+    if isinstance(node.func, ast.Attribute) and node.func.attr == target_name:
+        val = node.func.value
+        if isinstance(val, ast.Name):
+            return val.id in target_names or val.id in ('self', 'cls', 'instance', 'target')
+        if isinstance(val, ast.Attribute) and isinstance(val.value, ast.Name) and val.value.id in ('self', 'cls'):
+            return True
+        return False
+    return False
 
 
 def validate_target_calls(code, target_name, signature):

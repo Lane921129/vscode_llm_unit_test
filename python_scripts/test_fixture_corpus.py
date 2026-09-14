@@ -80,6 +80,13 @@ class FixtureCorpusTests(unittest.TestCase):
                         data['class_context'].get('effective_init', {}).get('required_params'),
                         inherited_required
                     )
+                truthiness_parameters = fixture['expected'].get('truthiness_parameters')
+                if truthiness_parameters is not None:
+                    observed_truthiness = list(dict.fromkeys(
+                        fact.get('parameter') for fact in data.get('condition_facts', [])
+                        if fact.get('kind') == 'truthiness'
+                    ))
+                    self.assertEqual(observed_truthiness, truthiness_parameters)
                 self.assertGreater(fixture['acceptance']['min_line_coverage'], 0)
                 self.assertGreater(fixture['acceptance']['min_mutation_score'], 0)
                 self.assertTrue(fixture['acceptance']['forbidden'])

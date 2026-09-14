@@ -20,19 +20,21 @@ test('structured output contracts are generic and describe the expected envelope
     assert.strictEqual(addOutputContract('base', 'text'), 'base');
 });
 
-test('provides minimal schema contracts for semantic analysis and mutant triage', () => {
+test('provides minimal schema contracts for semantic analysis, review, and mutant triage', () => {
     const semantic = responseSchemaForOutputFormat('semantic-json');
+    const review = responseSchemaForOutputFormat('review-json');
     const triage = responseSchemaForOutputFormat('mutant-triage-json');
 
     assert.deepStrictEqual((semantic as { required: string[] }).required, [
-        'dependency_behaviors', 'unreachable_paths', 'equivalent_mutant_candidates',
-        'mock_required_for', 'test_strategy'
+        'dependency_behaviors', 'unreachable_paths', 'mock_required_for', 'test_strategy'
     ]);
+    assert.deepStrictEqual((review as { required: string[] }).required, ['blocking', 'quality']);
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'
     ]);
     assert.strictEqual(responseSchemaForOutputFormat('json'), undefined);
     assert.ok(isStructuredResponseUsable('{"verdicts":[]}', 'mutant-triage-json'));
+    assert.ok(isStructuredResponseUsable('{"blocking":[],"quality":[]}', 'review-json'));
 });
 
 test('detects malformed successful structured responses before they reach a Tier', () => {
@@ -41,7 +43,10 @@ test('detects malformed successful structured responses before they reach a Tier
     assert.ok(!isStructuredResponseUsable('{}', 'test-code-json'));
     assert.ok(isStructuredResponseUsable('{"required_skills": []}', 'json'));
     assert.ok(isStructuredResponseUsable('{"code":"import unittest"}', 'test-code-json'));
+    assert.ok(isStructuredResponseUsable('```json\n{"code":"import unittest"}\n```', 'test-code-json'));
+    assert.ok(!isStructuredResponseUsable('```json\n{"invalid":true}\n```', 'test-code-json'));
     assert.ok(isStructuredResponseUsable('import unittest', 'test-code-json'));
+    assert.ok(!isStructuredResponseUsable('I cannot fulfill this request.', 'test-code-json'));
 });
 
 test('retries known structured-output rejections as plain text without hiding account failures', () => {

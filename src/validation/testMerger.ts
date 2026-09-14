@@ -67,11 +67,20 @@ export function mergeTestSnippets(snippets: string[], className: string = 'TestM
 
     for (let index = 0; index < snippets.length; index++) {
         const snippet = snippets[index];
-        for (const line of snippet.split(/\r?\n/)) {
-            const trimmed = line.trim();
+        const snippetLines = snippet.split(/\r?\n/);
+        for (let i = 0; i < snippetLines.length; i++) {
+            const trimmed = snippetLines[i].trim();
             if ((trimmed.startsWith('import ') || trimmed.startsWith('from ')) &&
                 !trimmed.includes('module_name') && !trimmed.includes('MODULE_NAME')) {
-                imports.add(trimmed);
+                let importStmt = trimmed;
+                let openParens = (importStmt.match(/\(/g) || []).length - (importStmt.match(/\)/g) || []).length;
+                while (openParens > 0 && i + 1 < snippetLines.length) {
+                    i++;
+                    const nextLine = snippetLines[i];
+                    importStmt += '\n' + nextLine;
+                    openParens += (nextLine.match(/\(/g) || []).length - (nextLine.match(/\)/g) || []).length;
+                }
+                imports.add(importStmt);
             }
         }
 
@@ -84,14 +93,11 @@ export function mergeTestSnippets(snippets: string[], className: string = 'TestM
         totalMethodsCount += extracted.testMethodCount;
     }
 
-    const mergedCode = [
-        ...imports,
-        '',
-        ...(classes.length > 0 ? classes : [`class ${safeClassStem}(unittest.TestCase):\n    pass`]),
-        '',
-        `if __name__ == '__main__':`,
-        `    unittest.main()`
-    ].join('\n\n');
+    const importsBlock = Array.from(imports).join('\n');
+    const classesBlock = (classes.length > 0 ? classes : [`class ${safeClassStem}(unittest.TestCase):\n    pass`]).join('\n\n');
+    const mainBlock = `if __name__ == '__main__':\n    unittest.main()`;
+
+    const mergedCode = `${importsBlock}\n\n${classesBlock}\n\n${mainBlock}\n`;
 
     return { mergedCode, totalMethodsCount };
 }

@@ -22,6 +22,8 @@ test('continues to use model size and complexity for automatic routing', () => {
     assert.strictEqual(resolveTier(3, 10, 'auto', true), 1);
     assert.strictEqual(resolveTier(30, 80, 'auto', true), 3);
     assert.strictEqual(resolveTier(Number.NaN, 80, 'auto', true), 4);
+    assert.strictEqual(resolveTier(Number.NaN, 20, 'auto', true), 2);
+    assert.strictEqual(resolveTier(Number.NaN, 50, 'auto', true), 3);
 });
 
 test('requires verified examples or errors before an unqualified model may use Tier 1', () => {
@@ -40,6 +42,9 @@ test('requires verified examples or errors before an unqualified model may use T
     }), false);
     assert.strictEqual(canUseDeterministicTierOne({
         examples: [], errors: [{ call_assertable: false, exception: 'ValueError' }]
+    }), false);
+    assert.strictEqual(canUseDeterministicTierOne({
+        examples: [null], errors: []
     }), false);
 });
 

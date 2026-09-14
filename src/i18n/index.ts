@@ -37,7 +37,7 @@ export function t(keyPath: string, ...args: any[]): string {
     if (typeof value === 'string') {
         let result = value;
         for (let i = 0; i < args.length; i++) {
-            result = result.replace(`{${i}}`, String(args[i]));
+            result = result.replaceAll(`{${i}}`, String(args[i]));
         }
         return result;
     }

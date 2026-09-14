@@ -340,6 +340,38 @@ def process(values, functions):
             },
         ])
 
+    def test_extractor_reports_direct_annotated_boolean_truthiness_without_guessing_complex_conditions(self):
+        source = '''def choose(enabled: bool, value: str):
+    if enabled:
+        return "enabled"
+    if not enabled:
+        return "disabled"
+    if validate(enabled):
+        return "external"
+    if value:
+        return "value-present"
+    return "other"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'choose.py'
+            target.write_text(source, encoding='utf-8')
+            data = self.run_script('ast_extractor.py', target, 'choose')
+
+        self.assertEqual(data['condition_facts'], [
+            {
+                'kind': 'truthiness', 'parameter': 'enabled', 'subject': 'value',
+                'polarity': 'truthy', 'line': 2,
+            },
+            {
+                'kind': 'truthiness', 'parameter': 'enabled', 'subject': 'value',
+                'polarity': 'falsy', 'line': 4,
+            },
+            {
+                'kind': 'truthiness', 'parameter': 'value', 'subject': 'value',
+                'polarity': 'truthy', 'line': 8,
+            },
+        ])
+
     def test_extractor_normalizes_reverse_and_literal_membership_conditions(self):
         source = '''def classify(value, text, mode):
     if 3 < value:
@@ -1315,6 +1347,22 @@ def render(stage: Literal["draft", "published"]):
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
 
+    def test_dynamic_tracer_explores_both_direct_bool_truthiness_paths_even_with_caller_input(self):
+        source = '''def choose(enabled: bool) -> str:
+    if enabled:
+        return "enabled"
+    return "disabled"
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = pathlib.Path(temp_dir) / 'choose.py'
+            target.write_text(source, encoding='utf-8')
+            result = trace_function(str(target), 'choose', [{'args': [True], 'kwargs': {}}])
+
+        observed = {(item['args'][0], item['result']) for item in result['examples']}
+        self.assertIsNone(result['load_error'])
+        self.assertIn(('True', "'enabled'"), observed)
+        self.assertIn(('False', "'disabled'"), observed)
+
     def test_dynamic_tracer_reaches_multi_parameter_conjunctions_from_source_conditions(self):
         source = '''def route(state: str, mode: str):
     if state == "enabled" and mode == "strict":
@@ -1831,6 +1879,45 @@ class TestChoose(unittest.TestCase):
         predicates = [mutant for mutant in result['mutants'] if mutant['kind'] == 'conditional_negation']
         self.assertEqual(len(predicates), 1)
         self.assertEqual(predicates[0]['status'], 'KILLED')
+
+    def test_builtin_mutation_runner_isolates_bytecode_between_mutants(self):
+        source = '''def checkout_order(valid):
+    if valid:
+        return True
+    return False
+'''
+        test_source = '''import unittest
+from src.service_order import checkout_order
+
+class TestCheckoutOrder(unittest.TestCase):
+    def test_valid(self):
+        self.assertIs(checkout_order(True), True)
+
+    def test_invalid(self):
+        self.assertIs(checkout_order(False), False)
+'''
+        observed = []
+        for _ in range(3):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = pathlib.Path(temp_dir)
+                package = root / 'src'
+                package.mkdir()
+                source_path = package / 'service_order.py'
+                test_path = root / 'test_service_order.py'
+                source_path.write_text(source, encoding='utf-8')
+                test_path.write_text(test_source, encoding='utf-8')
+                result = run_mutation_trials(
+                    source_path,
+                    test_path,
+                    target_function='checkout_order'
+                )
+            booleans = [
+                mutant['status'] for mutant in result['mutants']
+                if mutant['kind'] == 'boolean'
+            ]
+            observed.append(booleans)
+
+        self.assertEqual(observed, [['KILLED', 'KILLED']] * 3)
 
 
 if __name__ == '__main__':

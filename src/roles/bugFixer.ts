@@ -8,37 +8,28 @@ import { summarizeRepairOutput } from '../validation/repairFeedback';
 
 export function getBugFixerSystemPrompt(): string {
     return `You are a Python unittest Bug Fixer.
-Your job is to fix errors and assertion failures in the provided test file by comparing it against the ACTUAL TARGET SOURCE CODE and ERROR TRACEBACK.
+Fix only the concrete Python unittest failure named in BUG_FIX_REQUEST_V2.
 
-CORE RULES:
-1. PRESERVE PASSING TESTS: Do NOT delete or modify test methods that are already passing without errors.
-   - Import and setUp changes also affect passing tests. Keep real Trace tests in a separate TestCase with no shared mocks. Reserved TestVerifiedTrace_* classes are restored by the runner.
-   - Use the LATEST failure, fix only its cause, and do not repeat a previously rejected candidate. A return_value does not raise: use side_effect for an exception path.
-2. EVIDENCE BOUNDARIES:
-   - Target source, AST context, skill guidance, and error output identify candidate paths and setup. They do NOT prove an exact return value.
-   - An exact assertion must match a VERIFIED REAL EXECUTION TRACE for the same target call. Do not invent outputs, exceptions, constructor arguments, or dependency behaviour.
-   - An exception assertion requires an explicit target-source raise, a verified trace error, or a mock side_effect in the same test.
-3. FUNCTION SIGNATURE & CALLS:
-   - Call the target function ONLY with its valid declared parameters.
-   - Do NOT pass undeclared keyword arguments; derive the exact call signature from the target function.
-4. CLASS, IMPORT, AND DEPENDENCY CONTEXT:
-   - Reuse a verified constructor literal for instance methods. Do not move constructor arguments into the method call.
-   - Use the supplied module import path; do not use filesystem paths.
-   - Do not call a dependency merely to calculate an expected value or create unused setup. Patch the target module use point when dependency behavior must be controlled.
-5. IMPORTS — CRITICAL:
-   - The MODULE NAME is provided in "=== TARGET FUNCTION INFO ===" below. Use EXACTLY that module name.
-   - Correct: \`from utility_module import transform_value\`
-   - WRONG: \`from transform_value import transform_value\` ← NEVER name import after the function!
-   - WRONG: \`from c:\\Users\\... import ...\` ← NEVER use filesystem paths.
-6. assertRaises SYNTAX — CRITICAL:
-   - ONLY valid form: \`with self.assertRaises(ValueError):\` followed by the call on the next line.
-   - NEVER pass a message string: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError, FORBIDDEN!
-7. COVERAGE COMPLETENESS:
-   - If the pre-verification log identifies uncovered target-source lines, add focused tests only when their assertion evidence is available.
-   - Do not treat a passing test suite or a high mutation score as sufficient while target-source lines remain uncovered.
-8. OUTPUT FORMAT:
-   - Output the COMPLETE, corrected, runnable test file in a single \`\`\`python ... \`\`\` code block.
+CONTRACT:
+- Preserve every existing test name. Never add, delete, rename, or rewrite a passing or unrelated test.
+- Change only methods listed in ALLOWED CHANGES. If no method is identified, change at most one test method related to the reported validation error.
+- Imports may be added. Replace an existing import only for ImportError or ModuleNotFoundError. Do not change setUp, tearDown, helpers, or reserved TestVerifiedTrace_* methods.
+- Use the exact target import and allowed mock use-point paths supplied by the runner. A return_value does not raise; use side_effect inside the failing test for a mocked exception.
+- Source and AST context identify structure and setup. They do NOT prove an exact return value. Exact assertions and exceptions require the supplied verified trace, explicit source raise, or same-test mock behavior.
+- Return the complete runnable test file only. The runner enforces this repair scope before execution.
 `;
+}
+
+export function failedTestNamesFromOutput(output: string): string[] {
+    const found = new Set<string>();
+    for (const pattern of [
+        /^(test_[A-Za-z0-9_]+)\s+\([^\n]+\)\s+\.\.\.\s+(?:FAIL|ERROR)\s*$/gm,
+        /^(?:FAIL|ERROR):\s+(test_[A-Za-z0-9_]+)\b/gm,
+        /\bin\s+(test_[A-Za-z0-9_]+)\b/g
+    ]) {
+        for (const match of output.matchAll(pattern)) { found.add(match[1]); }
+    }
+    return [...found].sort();
 }
 
 export function getBugFixerUserPrompt(
@@ -49,19 +40,29 @@ export function getBugFixerUserPrompt(
     sourceCode?: string,
     astContext?: any,
     moduleName: string = 'module_name',
-    semanticGuidance?: string
+    semanticGuidance?: string,
+    allowedMockTargets: string[] = []
 ): string {
     const sigLine = funcArgs.length > 0
         ? `${funcName}(${funcArgs.join(', ')})`
         : `${funcName}()  ← Takes ZERO arguments`;
 
-    let prompt = `=== BROKEN TEST CODE ===\n\`\`\`python\n${brokenCode}\n\`\`\`\n\n`;
-    prompt += `=== PRE-VERIFICATION ERROR LOG (LATEST ATTEMPT) ===\n\`\`\`text\n${summarizeRepairOutput(errorOutput)}\n\`\`\`\n\n`;
+    const failedTests = failedTestNamesFromOutput(errorOutput);
+    let prompt = `BUG_FIX_REQUEST_V2\n`;
+    prompt += `=== ALLOWED CHANGES ===\n`;
+    prompt += failedTests.length > 0
+        ? `Only these failing test methods may change: ${failedTests.join(', ')}\n`
+        : 'No failing test method was identified. You may change at most one relevant test method, add a missing import, or repair syntax.\n';
+    prompt += 'Do not add, remove, or rename tests. Replace imports only when the latest failure is ImportError or ModuleNotFoundError.\n\n';
     prompt += `=== TARGET FUNCTION INFO ===\n`;
     prompt += `- Module Name: ${moduleName}\n`;
     prompt += `- Import Statement: from ${moduleName} import ${funcName}\n`;
-    prompt += `- Every target import and mock patch must use this same module identity. Do not mix bare-file and package imports. Check mock.assert_called_once_with(...) using the actual source call arguments.\n`;
+    prompt += `- Allowed dependency mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied; preserve existing verified patches'}\n`;
+    prompt += `- Every target import and mock patch must use this module identity. Do not mix bare-file and package imports.\n`;
     prompt += `- Exact Signature: ${sigLine}\n\n`;
+
+    prompt += `=== LATEST FAILURE ===\n\`\`\`text\n${summarizeRepairOutput(errorOutput)}\n\`\`\`\n\n`;
+    prompt += `=== CURRENT TEST FILE ===\n\`\`\`python\n${brokenCode}\n\`\`\`\n\n`;
 
     if (sourceCode) {
         prompt += `=== TARGET SOURCE CODE (path and setup context; not an output oracle) ===\n\`\`\`python\n${sourceCode.trim()}\n\`\`\`\n\n`;
@@ -139,11 +140,11 @@ export function getBugFixerUserPrompt(
         prompt += 'Model-authored candidates are suggestions only; source structure and verified execution facts take precedence.\n\n';
     }
 
-    prompt += `INSTRUCTION:\nCarefully read the error log and all supplied evidence. Fix failures without weakening passing tests, preserve exact verified Trace facts, and output the complete corrected test file in a \`\`\`python code block.`;
+    prompt += `RESPONSE:\nReturn the complete corrected test file. Make the smallest edit allowed by ALLOWED CHANGES.`;
     return prompt;
 }
 
 export function getReviewEvidence(...args: Parameters<typeof getBugFixerUserPrompt>): string {
     const context = getBugFixerUserPrompt(...args);
-    return context.slice(context.indexOf('=== TARGET FUNCTION INFO ==='), context.lastIndexOf('INSTRUCTION:'));
+    return context.slice(context.indexOf('=== TARGET FUNCTION INFO ==='), context.lastIndexOf('RESPONSE:'));
 }

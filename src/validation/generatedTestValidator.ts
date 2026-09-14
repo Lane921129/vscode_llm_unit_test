@@ -107,7 +107,7 @@ interface TargetCallReference {
 }
 
 function targetCallReference(code: string, callableName: string, targetModule?: string,
-                             targetClassName?: string): TargetCallReference {
+                             targetClassName?: string | null): TargetCallReference {
     const importedAliases = new Set<string>();
     const callableNames = new Set<string>([callableName]);
     const moduleExpressions = new Set<string>();
@@ -421,7 +421,7 @@ const UNSAFE_TEST_OPERATIONS: Array<{ pattern: RegExp; label: string }> = [
     { pattern: /\b(?:eval|exec|compile|__import__)\s*\(/, label: '動態執行程式碼' },
     { pattern: /\bopen\s*\(/, label: '直接檔案存取' },
     { pattern: /\b(?:pathlib\s*\.\s*)?Path\s*\([^\n]*\)\s*\.\s*(?:open|read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace)\s*\(/, label: '直接檔案存取' },
-    { pattern: /\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace|unlink|rmdir)\s*\(/, label: '直接檔案存取' },
+    { pattern: /\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|unlink|rmdir)\s*\(/, label: '直接檔案存取' },
     { pattern: /\b(?:shutil\s*\.\s*rmtree|os\s*\.\s*(?:remove|unlink|rmdir|replace)|pathlib\s*\.\s*Path\s*\([^\n]*\)\s*\.\s*(?:unlink|rmdir))\s*\(/, label: '破壞性檔案操作' },
     { pattern: /\bsqlite3\s*\.\s*connect\s*\(\s*(?!['\"]:memory:['\"]\s*\))/, label: '非隔離 SQLite 資料庫連線' },
 ];
@@ -557,7 +557,7 @@ export function validateUnittestStructure(
     targetModule?: string,
     targetUsage: TargetUsage = 'call',
     allowedExceptionNames?: string[],
-    targetClassName?: string
+    targetClassName?: string | null
 ): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {

@@ -101,25 +101,27 @@ def assess_complexity(file_path: str, func_name: str) -> dict:
     # --- 5. 外部模組 import 依賴 ---
     imports_in_file = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            # 相對 import 或同專案 import
+        if isinstance(node, ast.ImportFrom):
             if node.module and not node.module.startswith('__'):
                 for alias in node.names:
-                    imports_in_file.add(alias.name)
+                    imports_in_file.add(alias.asname or alias.name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                imports_in_file.add(alias.name)
+                imports_in_file.add(alias.asname or alias.name.split('.')[0])
 
-    # 收集函式內實際呼叫的名稱
-    calls_in_func = set()
+    # 收集函式內實際呼叫的外部依賴
+    external_deps = set()
     for node in ast.walk(target_func):
         if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                calls_in_func.add(node.func.id)
+            if isinstance(node.func, ast.Name) and node.func.id in imports_in_file:
+                external_deps.add(node.func.id)
             elif isinstance(node.func, ast.Attribute):
-                calls_in_func.add(node.func.attr)
+                root = node.func
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if isinstance(root, ast.Name) and root.id in imports_in_file:
+                    external_deps.add(root.id)
 
-    external_deps = calls_in_func & imports_in_file
     if external_deps:
         pts = len(external_deps) * 10
         score += pts

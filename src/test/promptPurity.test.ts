@@ -24,15 +24,21 @@ test('shared prompts and active base examples contain no project-domain vocabula
 
     assert.ok(!forbiddenDomainTerms.test(sharedPromptText));
 });
+const resolveWriterSource = () => {
+    const rolePath = path.join(__dirname, '../../src/roles/unittestWriter.ts');
+    return fs.existsSync(rolePath)
+        ? fs.readFileSync(rolePath, 'utf8')
+        : fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
+};
 
 test('writer prompt source does not retain legacy application-specific examples', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
+    const writerSource = resolveWriterSource();
 
     assert.ok(!/payment_token|login_user|validate_and_format_token/i.test(writerSource));
 });
 
 test('writer output contract does not branch on a provider or model name', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
+    const writerSource = resolveWriterSource();
 
     assert.ok(!/useThinkingTag|noThinkingModels|qwen|tinyllama|gemma|mistral/i.test(writerSource));
     assert.match(writerSource, /const thinking = false;/);
@@ -141,7 +147,7 @@ test('semantic prompt restricts re-traced candidates to safe scalar literals', (
 });
 
 test('writer prompt calls static methods through the class without inventing an instance', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
+    const writerSource = resolveWriterSource();
 
     assert.match(writerSource, /method_kind === 'static'.*method_kind === 'class'/s);
     assert.match(writerSource, /Do NOT instantiate the class/);
@@ -197,7 +203,7 @@ test('Tier 3 scaffold prompt receives source and evidence-bound skill guidance',
 });
 
 test('Tier 4 repair prompt does not require habitual None or empty-input tests', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
+    const writerSource = resolveWriterSource();
 
     assert.match(writerSource, /Do not add None or empty-input tests merely by habit/);
     assert.doesNotMatch(writerSource, /Cover all edge cases: None, empty, boundary values, all exception paths/);
@@ -221,7 +227,7 @@ test('Tier 4 self-repair receives the same source, AST, Trace, and skill evidenc
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {
-    const writerSource = fs.readFileSync(path.join(__dirname, '../../src/roles/unittestWriter.ts'), 'utf8');
+    const writerSource = resolveWriterSource();
 
     assert.match(writerSource, /astContext\?\.target_import_module/);
     assert.match(writerSource, /from \$\{moduleName\} import \$\{funcName\}/);
@@ -293,7 +299,6 @@ test('semantic context omits unverified dependency return claims while retaining
             can_raise: []
         }],
         unreachable_paths: [],
-        equivalent_mutant_candidates: [],
         required_skills: [],
         test_strategy: {
             approach: 'unit', input_hints: [], assertion_style: 'mixed', mock_needed: false, key_rules: []
@@ -333,6 +338,7 @@ test('writer prompt presents AST branch conditions as input coverage facts, neve
             { kind: 'comparison', parameter: 'text', subject: 'length', operator: 'Gt', literal: '4', line: 4 },
             { kind: 'membership', parameter: 'mode', subject: 'value', operator: 'In', literals: ["'fast'", "'safe'"], line: 6 },
             { kind: 'match', parameter: 'variant', subject: 'value', literals: ["'left'", "'right'"], line: 8 },
+            { kind: 'truthiness', parameter: 'enabled', subject: 'value', polarity: 'truthy', line: 10 },
         ],
     });
 
@@ -341,6 +347,7 @@ test('writer prompt presents AST branch conditions as input coverage facts, neve
     assert.match(prompt, /Source line 4: len\(text\) > 4/);
     assert.match(prompt, /Source line 6: mode in \('fast', 'safe'\)/);
     assert.match(prompt, /Source line 8: match variant includes cases \('left', 'right'\)/);
+    assert.match(prompt, /Source line 10: enabled is used as a truthy branch condition/);
     assert.match(prompt, /do NOT prove a return value or exception/);
     assert.doesNotMatch(prompt, /value <= 3.*Returns|len\(text\) > 4.*Raises/s);
 });
@@ -436,7 +443,6 @@ test('semantic strategy labels model-proposed inputs as candidates rather than f
     const context = formatSemanticContextForPrompt({
         dependency_behaviors: [],
         unreachable_paths: [],
-        equivalent_mutant_candidates: [],
         required_skills: [],
         test_strategy: {
             approach: 'exercise source branches',
@@ -451,4 +457,11 @@ test('semantic strategy labels model-proposed inputs as candidates rather than f
     assert.match(context, /Candidate normal inputs/);
     assert.match(context, /assertRaises requires an explicit source raise or verified error/);
     assert.doesNotMatch(context, /use these exact values in test cases/);
+});
+
+test('getTier1UserPrompt correctly formats empty string return value without syntax error', () => {
+    const { getTier1UserPrompt } = require('../roles/unittestWriter');
+    const prompt = getTier1UserPrompt('test_func()', '');
+    assert.ok(prompt.includes('self.assertEqual(result, "")'));
+    assert.ok(!prompt.includes('self.assertEqual(result, )'));
 });

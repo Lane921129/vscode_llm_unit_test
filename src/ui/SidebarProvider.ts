@@ -5,7 +5,7 @@ import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from '../i18n';
 import { extractFunctionsWithAst } from '../utils/utils';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from '../llm/cloudApi';
-import { normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
+import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
 import { buildOllamaPlainTestGenerationProbe } from '../llm/ollamaCapability';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
@@ -27,6 +27,26 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    private async getStoredCloudCredentials(): Promise<Record<string, CloudCredential>> {
+        try {
+            const rawKeys = await this.secretStorage.get('llm_api_keys');
+            return normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+        } catch (error) {
+            console.error('無法解析 llm_api_keys：', error);
+            return {};
+        }
+    }
+
+    private async getStoredCustomKeys(): Promise<Record<string, any>> {
+        try {
+            const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
+            return rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
+        } catch (error) {
+            console.error('無法解析 llm_custom_keys：', error);
+            return {};
+        }
+    }
+
     public resolveWebviewView(webviewView: vscode.WebviewView) {
         initI18n();
         this.webview = webviewView.webview;
@@ -43,12 +63,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
             switch (message.command) {
                 case 'getInitialData': {
-                    const rawKeys = await this.secretStorage.get('llm_api_keys');
-                    const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                    const keys = await this.getStoredCloudCredentials();
                     this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(keys) });
 
-                    const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
-                    const customKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
+                    const customKeys = await this.getStoredCustomKeys();
                     this.webview?.postMessage({ command: 'setCustomKeys', keys: customKeys });
 
                     const savedProjPath = config.get<string>('projectPath', '');
@@ -75,7 +93,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     initI18n();
                     if (this.webview) {
                         const strategy = config.get<string>('promptStrategy', 'auto');
-                        this.webview.html = getWebviewContent(t, message.lang, strategy);
+                        const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
+                        this.webview.html = getWebviewContent(t, message.lang, strategy, ollamaUrl);
                     }
                     break;
                 }
@@ -192,8 +211,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'updateApiKey': {
-                    const rawKeys = await this.secretStorage.get('llm_api_keys');
-                    const currentKeys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                    const currentKeys = await this.getStoredCloudCredentials();
                     if (message.oldName && message.oldName !== message.newName) {
                         delete currentKeys[message.oldName];
                     }
@@ -206,8 +224,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'deleteApiKey': {
-                    const rawKeys = await this.secretStorage.get('llm_api_keys');
-                    const currentKeys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                    const currentKeys = await this.getStoredCloudCredentials();
                     if (currentKeys[message.name]) {
                         delete currentKeys[message.name];
                         await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
@@ -218,8 +235,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'updateCustomKey': {
-                    const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
-                    const currentKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
+                    const currentKeys = await this.getStoredCustomKeys();
                     if (message.oldName && message.oldName !== message.newName) {
                         delete currentKeys[message.oldName];
                     }
@@ -231,8 +247,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'deleteCustomKey': {
-                    const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
-                    const currentKeys: Record<string, any> = rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
+                    const currentKeys = await this.getStoredCustomKeys();
                     if (currentKeys[message.name]) {
                         delete currentKeys[message.name];
                         await this.secretStorage.store('llm_custom_keys', JSON.stringify(currentKeys));
@@ -245,8 +260,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 case 'startAnalysis': {
                     const params = { ...message };
                     if (params.envType === 'cloud') {
-                        const rawKeys = await this.secretStorage.get('llm_api_keys');
-                        const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                        const keys = await this.getStoredCloudCredentials();
                         const credential = keys[params.cloudKeyName];
                         if (!credential) {
                             vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
@@ -263,8 +277,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 case 'startBatchAnalysis': {
                     const params = { ...message };
                     if (params.envType === 'cloud') {
-                        const rawKeys = await this.secretStorage.get('llm_api_keys');
-                        const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                        const keys = await this.getStoredCloudCredentials();
                         const credential = keys[params.cloudKeyName];
                         if (!credential) {
                             vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
@@ -390,16 +403,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         } else {
                                             vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
                                         }
-                                    } catch {
-                                        // 探針失敗不影響主流程
+                                    } catch (probeError) {
+                                        console.warn('[SidebarProvider] Local probe failed:', probeError);
                                         vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
                                     }
                                 } else {
                                     vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
                                 }
                             } else if (message.envType === 'cloud') {
-                                const rawKeys = await this.secretStorage.get('llm_api_keys');
-                                const keys = normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
+                                const keys = await this.getStoredCloudCredentials();
                                 const credential = keys[message.cloudKeyName];
                                 if (!credential) {
                                     throw new Error("找不到對應的 API Key");
@@ -542,36 +554,45 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
         const files: { name: string; path: string }[] = [];
         const ignoredDirs = new Set(['node_modules', 'venv', 'env', '.env', '.venv', '.git', '__pycache__', '.pytest_cache']);
-
-        const walkAsync = async (dir: string) => {
-            let list: fs.Dirent[];
-            try {
-                list = await fs.promises.readdir(dir, { withFileTypes: true });
-            } catch (e) {
-                return;
-            }
-            
-            const tasks = list.map(async (dirent) => {
-                const file = dirent.name;
-                if (file.startsWith('.') && file !== '.py' && file.length > 1) {return;} // skip hidden folders
-                if (ignoredDirs.has(file)) {return;}
-                
-                const fullPath = path.join(dir, file);
-                try {
-                    if (dirent.isDirectory()) {
-                        await walkAsync(fullPath);
-                    } else if (file.endsWith('.py')) {
-                        files.push({ name: file, path: fullPath });
-                    }
-                } catch (e) {
-                    // ignore
-                }
-            });
-            await Promise.all(tasks);
-        };
+        const dirQueue: string[] = [rootPath];
+        let activeCount = 0;
+        const MAX_CONCURRENCY = 8;
 
         try {
-            await walkAsync(rootPath);
+            await new Promise<void>((resolve) => {
+                const checkNext = () => {
+                    if (dirQueue.length === 0 && activeCount === 0) {
+                        resolve();
+                        return;
+                    }
+                    while (activeCount < MAX_CONCURRENCY && dirQueue.length > 0) {
+                        const currentDir = dirQueue.shift()!;
+                        activeCount++;
+                        fs.promises.readdir(currentDir, { withFileTypes: true })
+                            .then((entries) => {
+                                for (const dirent of entries) {
+                                    const file = dirent.name;
+                                    if (file.startsWith('.') && file !== '.py' && file.length > 1) { continue; }
+                                    if (ignoredDirs.has(file)) { continue; }
+                                    const fullPath = path.join(currentDir, file);
+                                    if (dirent.isDirectory()) {
+                                        dirQueue.push(fullPath);
+                                    } else if (file.endsWith('.py')) {
+                                        files.push({ name: file, path: fullPath });
+                                    }
+                                }
+                            })
+                            .catch((readError) => {
+                                console.warn(`[SidebarProvider] 無法讀取目錄 ${currentDir}:`, readError);
+                            })
+                            .finally(() => {
+                                activeCount--;
+                                checkNext();
+                            });
+                    }
+                };
+                checkNext();
+            });
         } catch (e) {
             console.error('掃描專案檔案失敗', e);
         }
@@ -602,7 +623,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
             }
         } catch (e) {
-            // Ollama not running or unreachable
+            console.warn('[SidebarProvider] Ollama not running or unreachable:', e);
         }
         return [];
     }

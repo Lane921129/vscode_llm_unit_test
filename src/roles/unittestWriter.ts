@@ -31,9 +31,11 @@ export function getTier1UserPrompt(
 Complete: with self.assertRaises(${errorType}):
               ${funcCall}`;
     }
-    const valRepr = (returnVal.startsWith('"') || returnVal.startsWith("'") || returnVal.startsWith("{") || returnVal.startsWith("[") || returnVal === 'True' || returnVal === 'False' || returnVal === 'None' || !isNaN(Number(returnVal)))
-        ? returnVal
-        : JSON.stringify(returnVal);
+    const valRepr = returnVal === ''
+        ? '""'
+        : ((returnVal.startsWith('"') || returnVal.startsWith("'") || returnVal.startsWith("{") || returnVal.startsWith("[") || returnVal === 'True' || returnVal === 'False' || returnVal === 'None' || !isNaN(Number(returnVal)))
+            ? returnVal
+            : JSON.stringify(returnVal));
     return `Target call: \`result = ${funcCall}\`
 Exact Return Value: ${valRepr}
 Complete ONE line: self.assertEqual(result, ${valRepr})`;
@@ -84,7 +86,7 @@ export function getTier3UserPrompt(
     funcName: string,
     scaffold: string,
     moduleName: string,
-    traceExamples: Array<{args: string[], result: string}> = [],
+    traceExamples: Array<{args: string[], result?: string}> = [],
     verifiedConstructorCall?: string | null,
     targetSource?: string,
     semanticGuidance?: string
@@ -163,10 +165,11 @@ export function getSystemPrompt(
     survivedMutants?: string,
     modelName: string = ''
 ): string {
+    const thinking = false;
+    void thinking;
     // A single code-fence contract is portable across providers. Model names
     // are not a reliable capability signal and thinking tags often leak prose
     // into generated Python, so every model receives the same output shape.
-    const thinking = false;
 
     if (strategy === 'small') {
         const formatBlock = `Output format:\n\`\`\`python\n(your unittest code)\n\`\`\``;
@@ -336,6 +339,10 @@ export function getUserPrompt(
             }
             return `${line}match ${subject} includes cases (${fact.literals.join(', ')})`;
         }
+        if (fact.kind === 'truthiness') {
+            const state = fact.polarity === 'falsy' ? 'falsy' : 'truthy';
+            return `${line}${subject} is used as a ${state} branch condition`;
+        }
         if (typeof fact.operator !== 'string') {return null;}
         const operator = comparisonOperators[fact.operator] || fact.operator;
         if (fact.kind === 'membership') {
@@ -381,7 +388,7 @@ export function getUserPrompt(
             prompt += `  - Import: from ${moduleName} import ${astContext.class_name}\n`;
             if (astContext.method_kind === 'property') {
                 prompt += `  - Binding: property getter. Instantiate the class, then read it as: self._obj.${funcName} (NO parentheses).\n`;
-                const property = (astContext as any).property_context;
+                const property = astContext.property_context;
                 if (property?.setter) {
                     prompt += `  - A setter exists. Test assignment only when the source behavior and constructor context make it safe; do not call the property like a function.\n`;
                 }
@@ -467,10 +474,9 @@ export function getUserPrompt(
         }
 
         // Void/None 函式提示：當所有 trace 都回傳 None 且無 error 時
-        const trace2 = astContext.traceResult;
-        if (trace2 && !trace2.load_error) {
-            const allNone = trace2.examples.length > 0 && trace2.examples.every((e: any) => e.result === 'None' || e.result === 'null');
-            const noErrors = trace2.errors.length === 0;
+        if (trace && !trace.load_error) {
+            const allNone = trace.examples.length > 0 && trace.examples.every((e: any) => e.result === 'None' || e.result === 'null');
+            const noErrors = trace.errors.length === 0;
             if (allNone && noErrors) {
                 prompt += `\nOBSERVED NONE RESULTS:\n`;
                 prompt += `- All successful calls observed by Dynamic Trace returned None. For those exact calls, use self.assertIsNone(result).\n`;

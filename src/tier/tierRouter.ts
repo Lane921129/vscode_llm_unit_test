@@ -25,7 +25,10 @@ export function resolveTier(
         return 1;
     }
     if (isNaN(modelParamBillion)) {
-        return 4;
+        if (complexity <= 35) {
+            return 2;
+        }
+        return complexity <= 65 ? 3 : 4;
     }
     if (modelParamBillion <= 4) {
         return 1;
@@ -47,7 +50,7 @@ export interface DeterministicTraceAvailability {
 
 function isDeterministicTraceItem(item: unknown, needsResult: boolean): boolean {
     if (!item || typeof item !== 'object') {
-        return true;
+        return false;
     }
     const record = item as { call_assertable?: unknown; result_assertable?: unknown };
     return record.call_assertable !== false && (!needsResult || record.result_assertable !== false);

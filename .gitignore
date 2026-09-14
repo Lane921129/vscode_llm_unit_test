@@ -4,14 +4,18 @@ node_modules
 .vscode-test/
 *.vsix
 *.zip
+*.tsbuildinfo
 .DS_Store
 package-lock.json
 .venv
 .coverage
 htmlcov/
+output/
 mutants/
 .mutmut-cache/
+.pytest_cache/
 __pycache__/
+*.py[cod]
 
 # Local credentials and certificates must never enter the repository.
 .env

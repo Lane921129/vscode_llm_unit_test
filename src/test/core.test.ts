@@ -104,7 +104,7 @@ function parseMutatestSurvived(mutatestResult: string): string {
             i++; continue;
         }
         if (isSurvivedSection) {
-            if (line === '' || line.startsWith('2026-') || line.match(/^\d{4}-\d{2}-\d{2}/)) {break;}
+            if (line === '' || /^\d{4}-\d{2}-\d{2}/.test(line)) {break;}
             if (line.startsWith('- ')) {survivedList.push(line);}
         }
     }

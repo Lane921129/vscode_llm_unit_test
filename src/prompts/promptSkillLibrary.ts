@@ -1,4 +1,4 @@
-﻿/**
+/**
  * prompt_skill_library.ts
  * 技能卡庫 - Unittest Writer 可用的專項提示規則集合
  *
@@ -47,6 +47,17 @@ export const SKILL_LIBRARY: SkillCard[] = [
             'BRANCH THRESHOLD COVERAGE: the function has multiple if/elif numeric thresholds.',
             '  - Cover each reachable source branch, including a final else/default branch when present.',
             '  - Use values on the appropriate side of every source threshold; derive expected results from the matching source branch or exact trace, not from this card.',
+        ]
+    },
+    {
+        id: 'boolean_truthiness_coverage',
+        title: 'Boolean Truthiness Branch Coverage',
+        trigger_hint: 'Use when AST confirms an annotated boolean parameter is itself a branch condition',
+        rules: [
+            'BOOLEAN TRUTHINESS BRANCH COVERAGE:',
+            '  - Cover both True and False for the annotated boolean parameter when the AST branch fact identifies it directly.',
+            '  - A truthiness condition identifies inputs to explore, not the expected result or exception; derive assertions from source paths or exact Dynamic Trace evidence.',
+            '  - Do not apply this card to a complex condition or to an untyped parameter merely because it appears in an if statement.',
         ]
     },
     {
@@ -309,13 +320,14 @@ export function getSkillCards(skillIds: string[]): SkillCard[] {
 export function inferSkillIdsFromCode(
     sourceCode: string,
     context?: {
-        class_name?: string;
+        class_name?: string | null;
         class_context?: unknown;
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
         is_generator?: boolean;
         calls?: string[];
         dependencies?: unknown[];
         file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
+        condition_facts?: Array<{ kind?: string; parameter?: string; subject?: string; polarity?: string }>;
     }
 ): string[] {
     const ids = new Set<string>(['import_module_name']);
@@ -324,6 +336,7 @@ export function inferSkillIdsFromCode(
     if (/\blen\s*\([^)]*\)\s*[<>]=?\s*\d+/.test(source)) { ids.add('string_length_boundary'); }
     if (/\w+\s*\[\s*-?\d*\s*:\s*-?\d*\s*\]/.test(source)) { ids.add('python_slicing'); }
     if (/\b(?:if|elif)\b[^\n]*[<>]=?\s*\d+/.test(source)) { ids.add('branch_threshold_coverage'); }
+    if ((context?.condition_facts || []).some(fact => fact?.kind === 'truthiness')) { ids.add('boolean_truthiness_coverage'); }
     if (/^\s*match\s+[^\n]+\s*:/m.test(source)) { ids.add('pattern_matching'); }
     if (/\bround\s*\(|\bfloat\s*\(|\bmath\./.test(source)) { ids.add('float_precision'); }
     if (/\breturn\s*\{/.test(source)) { ids.add('dict_return'); }
@@ -385,13 +398,14 @@ export function mergeEvidenceBoundSkillIds(
     sourceCode: string,
     semanticSkillIds: unknown,
     context?: {
-        class_name?: string;
+        class_name?: string | null;
         class_context?: unknown;
         method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
         is_generator?: boolean;
         calls?: string[];
         dependencies?: unknown[];
         file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
+        condition_facts?: Array<{ kind?: string; parameter?: string; subject?: string; polarity?: string }>;
     }
 ): string[] {
     const baseline = inferSkillIdsFromCode(sourceCode, context);

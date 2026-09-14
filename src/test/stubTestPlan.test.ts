@@ -35,3 +35,11 @@ test('reads a property stub without calling the descriptor as a method', () => {
     const plan = buildStubTestPlan('sample', 'enabled', [], 'Feature', 'property');
     assert.strictEqual(plan?.callLine, 'result = self._instance.enabled');
 });
+
+test('filters out self and cls parameter when building placeholder argument list', () => {
+    const instancePlan = buildStubTestPlan('sample', 'do_action', ['self', 'arg1', 'arg2'], 'Worker', 'instance');
+    assert.strictEqual(instancePlan?.callLine, 'result = self._instance.do_action(None, None)');
+
+    const classPlan = buildStubTestPlan('sample', 'create_instance', ['cls', 'config'], 'Worker', 'class');
+    assert.strictEqual(classPlan?.callLine, 'result = Worker.create_instance(None)');
+});

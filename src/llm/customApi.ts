@@ -1,4 +1,4 @@
-export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'semantic-json' | 'mutant-triage-json';
+export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'semantic-json' | 'review-json' | 'mutant-triage-json';
 
 // These client-error statuses are commonly used by compatible providers when
 // a response-format / JSON-schema option is unsupported.  Authentication,
@@ -59,7 +59,7 @@ export function addOutputContract(systemPrompt: string, outputFormat: CustomOutp
     if (outputFormat === 'test-code-json') {
         return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one JSON object with one string field named "code". The code value must contain the complete runnable Python unittest file. Do not use Markdown fences or add other fields.`;
     }
-    if (outputFormat === 'json' || outputFormat === 'semantic-json' || outputFormat === 'mutant-triage-json') {
+    if (outputFormat === 'json' || outputFormat === 'semantic-json' || outputFormat === 'review-json' || outputFormat === 'mutant-triage-json') {
         return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one valid JSON object. Do not use Markdown fences or explanatory prose.`;
     }
     return systemPrompt;
@@ -85,14 +85,31 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
             properties: {
                 dependency_behaviors: { type: 'array' },
                 unreachable_paths: { type: 'array' },
-                equivalent_mutant_candidates: { type: 'array' },
                 mock_required_for: { type: 'array' },
                 test_strategy: { type: 'object' }
             },
             required: [
-                'dependency_behaviors', 'unreachable_paths', 'equivalent_mutant_candidates',
+                'dependency_behaviors', 'unreachable_paths',
                 'mock_required_for', 'test_strategy'
             ]
+        };
+    }
+    if (outputFormat === 'review-json') {
+        const finding = {
+            type: 'object',
+            properties: {
+                evidence: { type: 'string' },
+                action: { type: 'string' }
+            },
+            required: ['evidence', 'action']
+        };
+        return {
+            type: 'object',
+            properties: {
+                blocking: { type: 'array', items: finding },
+                quality: { type: 'array', items: finding }
+            },
+            required: ['blocking', 'quality']
         };
     }
     if (outputFormat === 'mutant-triage-json') {
@@ -121,17 +138,25 @@ export function isStructuredResponseUsable(response: string, outputFormat: Custo
     if (!trimmed) {
         return false;
     }
-    if (outputFormat === 'test-code-json' && !trimmed.startsWith('{')) {
-        return true;
+    if (outputFormat === 'test-code-json') {
+        const jsonMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```$/);
+        const candidateJson = jsonMatch ? jsonMatch[1].trim() : trimmed;
+        if (candidateJson.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(candidateJson);
+                return Boolean(parsed && typeof parsed === 'object' && typeof (parsed as { code?: unknown }).code === 'string');
+            } catch {
+                return false;
+            }
+        }
+        return /^(?:import\s+|from\s+|class\s+|def\s+|```(?:python|py)\b)/m.test(trimmed);
     }
     try {
         const parsed = JSON.parse(trimmed);
         if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
             return false;
         }
-        return outputFormat === 'json' || outputFormat === 'semantic-json' || outputFormat === 'mutant-triage-json'
-            ? Object.keys(parsed as Record<string, unknown>).length > 0
-            : typeof (parsed as { code?: unknown }).code === 'string';
+        return Object.keys(parsed as Record<string, unknown>).length > 0;
     } catch {
         return false;
     }

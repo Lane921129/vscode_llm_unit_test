@@ -55,6 +55,9 @@ export function selectTestGenerationResponseFormat(
     return 'text';
 }
 
+export const TEST_GEN_MODE_PYTHON = '純 Python unittest';
+export const TEST_GEN_MODE_JSON = '結構化 JSON unittest';
+
 /**
  * Analyzer and mutant-triage prompts still demand JSON text, but they do not
  * need a provider-level JSON mode.  A model that passed only the plain-Python
@@ -65,7 +68,10 @@ export function selectTestGenerationResponseFormat(
 export function selectAnalysisResponseFormat(
     profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
 ): AnalysisResponseFormat {
-    return profile.testGenerationReady === true && profile.testGenerationMode === '純 Python unittest'
+    const isPythonOnly = profile.testGenerationMode === TEST_GEN_MODE_PYTHON
+        || profile.testGenerationMode === 'plain-python'
+        || profile.testGenerationMode === 'python';
+    return profile.testGenerationReady === true && isPythonOnly
         ? 'text'
         : 'json';
 }
