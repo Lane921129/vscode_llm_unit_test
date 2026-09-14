@@ -22,15 +22,28 @@ export interface CandidatePipelineHooks {
 export async function validateTestCandidate(
     initialCode: string, hooks: CandidatePipelineHooks, maxRevisions = 2,
     baseline?: { code: string; output: string }
-): Promise<{ code: string; execution: CandidateExecution; qualityIssues: string[] }> {
+): Promise<{
+    code: string;
+    execution: CandidateExecution;
+    qualityIssues: string[];
+    reviewWarnings: string[];
+}> {
     let code = initialCode;
     const feedback = new RepairFeedback(baseline?.code || initialCode, baseline?.output || '');
     let retainedCode = baseline?.code || initialCode;
     let lastFailure = '';
     let role: 'writer' | 'bug-fixer' = 'writer';
+    const attemptedBugFixFailures = new Set<string>();
     for (let attempt = 0; attempt <= maxRevisions; attempt++) {
         hooks.checkCancelled();
         if (attempt > 0) {
+            if (role === 'bug-fixer') {
+                const failureKey = lastFailure.trim();
+                if (attemptedBugFixFailures.has(failureKey)) {
+                    throw new Error(`Bug Fixer 已處理過相同失敗，停止重複修復：${lastFailure}`);
+                }
+                attemptedBugFixFailures.add(failureKey);
+            }
             const previousCode = code;
             const candidate = await hooks.revise(code, lastFailure, role);
             hooks.checkCancelled();
@@ -38,6 +51,9 @@ export async function validateTestCandidate(
             if (!feedback.consider(candidate)) {
                 lastFailure = feedback.output;
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure });
+                if (role === 'bug-fixer') {
+                    throw new Error(`Bug Fixer 未產生有效變更，停止重複修復：${lastFailure}`);
+                }
                 continue;
             }
             const revisionViolation = await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
@@ -84,12 +100,18 @@ export async function validateTestCandidate(
         }
         retainedCode = code;
         if (execution.ok) {
-            return { code, execution, qualityIssues: [
-                ...execution.qualityGaps,
+            return {
+                code,
+                execution,
+                // 只有可量測的執行缺口可以啟動下一輪品質補測。
+                // Only measured execution gaps may trigger another quality loop.
+                qualityIssues: [...execution.qualityGaps],
+                reviewWarnings: [
                 ...(!review ? ['Reviewer 審查未完成；工具執行通過不代表模型審查通過。'] : []),
                 ...(review?.issues.filter(issue => issue.severity === 'quality').map(issue =>
                     `${issue.id}: ${issue.action}`) || [])
-            ] };
+                ]
+            };
         }
         lastFailure = execution.out;
         role = 'bug-fixer';

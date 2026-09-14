@@ -1,23 +1,34 @@
 /**
- * Bug Fixer 專用提示詞模組
- * 只處理實際驗證失敗；審查與品質補測使用獨立契約。
- * 角色定位：依據目標語境、已驗證執行事實與錯誤日誌，修復可證明的測試問題；不得把來源碼或策略候選誤當 assertion oracle。
+ * Bug Fixer 專用提示詞與局部修復合併器。
+ * Bug Fixer prompt and deterministic focused-repair merger.
  */
 
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 
+interface TestMethodFragment {
+    name: string;
+    start: number;
+    end: number;
+    indent: string;
+    code: string;
+}
+
+export interface BugFixReplacement {
+    method: string;
+    replacement: string;
+    imports: string[];
+}
+
 export function getBugFixerSystemPrompt(): string {
-    return `You are a Python unittest Bug Fixer.
-Fix only the concrete Python unittest failure named in BUG_FIX_REQUEST_V2.
+    return `You are a Python unittest Bug Fixer. Repair one failing test method only.
 
 CONTRACT:
-- Preserve every existing test name. Never add, delete, rename, or rewrite a passing or unrelated test.
-- Change only methods listed in ALLOWED CHANGES. If no method is identified, change at most one test method related to the reported validation error.
-- Imports may be added. Replace an existing import only for ImportError or ModuleNotFoundError. Do not change setUp, tearDown, helpers, or reserved TestVerifiedTrace_* methods.
-- Use the exact target import and allowed mock use-point paths supplied by the runner. A return_value does not raise; use side_effect inside the failing test for a mocked exception.
-- Source and AST context identify structure and setup. They do NOT prove an exact return value. Exact assertions and exceptions require the supplied verified trace, explicit source raise, or same-test mock behavior.
-- Return the complete runnable test file only. The runner enforces this repair scope before execution.
-`;
+- Use only the failure, target signature, permitted mock paths, focused target source, imports, and failing method supplied in BUG_FIX_REQUEST_V3.
+- Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
+- A return_value does not raise; use side_effect inside the failing method for a mocked exception.
+- Source code describes the branch under test, but exact expected values still require an explicit return/raise or same-test mock behavior.
+- Return exactly one JSON object: {"method":"test_name","replacement":"complete def test_name(self): ... method","imports":["optional import line"]}.
+- replacement must contain one method only, without a class wrapper or Markdown. imports may contain at most 3 valid Python import lines.`;
 }
 
 export function failedTestNamesFromOutput(output: string): string[] {
@@ -32,6 +43,51 @@ export function failedTestNamesFromOutput(output: string): string[] {
     return [...found].sort();
 }
 
+/** Locate test methods without sending the whole generated file back to the model. */
+function testMethodFragments(code: string): TestMethodFragment[] {
+    const lines = code.replace(/\r\n/g, '\n').split('\n');
+    const fragments: TestMethodFragment[] = [];
+    for (let index = 0; index < lines.length; index++) {
+        const match = lines[index].match(/^(\s*)(?:async\s+)?def\s+(test_[A-Za-z0-9_]+)\s*\(/);
+        if (!match) { continue; }
+        const indent = match[1];
+        let end = index + 1;
+        while (end < lines.length) {
+            const text = lines[end];
+            if (text.trim()) {
+                const nextIndent = text.match(/^\s*/)?.[0].length || 0;
+                if (nextIndent <= indent.length) { break; }
+            }
+            end++;
+        }
+        fragments.push({
+            name: match[2], start: index, end, indent,
+            code: lines.slice(index, end).join('\n').trimEnd()
+        });
+        index = end - 1;
+    }
+    return fragments;
+}
+
+function selectedFailureMethod(code: string, output: string): TestMethodFragment | undefined {
+    const fragments = testMethodFragments(code);
+    const failed = failedTestNamesFromOutput(output);
+    return fragments.find(fragment => fragment.name === failed[0])
+        || fragments[0];
+}
+
+function importLines(code: string): string[] {
+    return code.replace(/\r\n/g, '\n').split('\n')
+        .map(line => line.trim())
+        .filter(line => /^(?:from\s+\S+\s+import\s+|import\s+)/.test(line));
+}
+
+function focusedSource(sourceCode?: string): string {
+    if (!sourceCode?.trim()) { return 'not available'; }
+    const source = sourceCode.trim();
+    return source.length <= 3000 ? source : `${source.slice(0, 3000)}\n# [runner truncated unrelated tail]`;
+}
+
 export function getBugFixerUserPrompt(
     brokenCode: string,
     errorOutput: string,
@@ -43,108 +99,112 @@ export function getBugFixerUserPrompt(
     semanticGuidance?: string,
     allowedMockTargets: string[] = []
 ): string {
-    const sigLine = funcArgs.length > 0
-        ? `${funcName}(${funcArgs.join(', ')})`
-        : `${funcName}()  ← Takes ZERO arguments`;
+    // These legacy parameters remain in the public signature for callers, but
+    // deliberately do not enter the small-model repair prompt.
+    void astContext;
+    void semanticGuidance;
+    const method = selectedFailureMethod(brokenCode, errorOutput);
+    const signature = funcArgs.length ? `${funcName}(${funcArgs.join(', ')})` : `${funcName}()`;
+    const imports = importLines(brokenCode);
+    return `BUG_FIX_REQUEST_V3
+=== REPAIR TARGET ===
+- Failing method: ${method?.name || 'not identified; stop without guessing'}
+- Target import: from ${moduleName} import ${funcName}
+- Target signature: ${signature}
+- Allowed mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied; preserve existing patch paths'}
 
-    const failedTests = failedTestNamesFromOutput(errorOutput);
-    let prompt = `BUG_FIX_REQUEST_V2\n`;
-    prompt += `=== ALLOWED CHANGES ===\n`;
-    prompt += failedTests.length > 0
-        ? `Only these failing test methods may change: ${failedTests.join(', ')}\n`
-        : 'No failing test method was identified. You may change at most one relevant test method, add a missing import, or repair syntax.\n';
-    prompt += 'Do not add, remove, or rename tests. Replace imports only when the latest failure is ImportError or ModuleNotFoundError.\n\n';
-    prompt += `=== TARGET FUNCTION INFO ===\n`;
-    prompt += `- Module Name: ${moduleName}\n`;
-    prompt += `- Import Statement: from ${moduleName} import ${funcName}\n`;
-    prompt += `- Allowed dependency mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied; preserve existing verified patches'}\n`;
-    prompt += `- Every target import and mock patch must use this module identity. Do not mix bare-file and package imports.\n`;
-    prompt += `- Exact Signature: ${sigLine}\n\n`;
+=== LATEST FAILURE ===
+${summarizeRepairOutput(errorOutput)}
 
-    prompt += `=== LATEST FAILURE ===\n\`\`\`text\n${summarizeRepairOutput(errorOutput)}\n\`\`\`\n\n`;
-    prompt += `=== CURRENT TEST FILE ===\n\`\`\`python\n${brokenCode}\n\`\`\`\n\n`;
+=== CURRENT IMPORTS ===
+${imports.length ? imports.join('\n') : 'none'}
 
-    if (sourceCode) {
-        prompt += `=== TARGET SOURCE CODE (path and setup context; not an output oracle) ===\n\`\`\`python\n${sourceCode.trim()}\n\`\`\`\n\n`;
-    }
+=== FAILING TEST METHOD ===
+${method?.code || 'No unambiguous failing test method was found.'}
 
-    if (astContext && !astContext.error) {
-        prompt += `=== AST CONTEXT (structure and setup evidence; not an output oracle) ===\n`;
-        const typedParameters = (astContext.signature || [])
-            .filter((param: any) => typeof param.annotation === 'string' && param.annotation.trim())
-            .map((param: any) => `${param.name}: ${param.annotation}`);
-        if (typedParameters.length > 0) {
-            prompt += `- Source parameter type hints (input shape only): ${typedParameters.join('; ')}\n`;
-        }
-        if (astContext.method_kind) {
-            prompt += `- Binding: ${astContext.method_kind}${astContext.class_name ? ` of ${astContext.class_name}` : ''}\n`;
-        }
-        const classInit = astContext.class_context?.init;
-        if (astContext.class_context) {
-            prompt += `- Class bases: ${(astContext.class_context.bases || []).join(', ') || 'none'}\n`;
-            prompt += `- Constructor required parameters: ${(classInit?.required_params || []).join(', ') || 'none'}; initialized attributes: ${(classInit?.assigns || []).map((item: any) => item.name).join(', ') || 'none'}\n`;
-            const typedConstructorParameters = (classInit?.signature || [])
-                .filter((param: any) => typeof param.annotation === 'string' && param.annotation.trim())
-                .map((param: any) => `${param.name}: ${param.annotation}`);
-            if (typedConstructorParameters.length > 0) {
-                prompt += `- Constructor type hints (input shape only): ${typedConstructorParameters.join('; ')}\n`;
-            }
-            const effectiveInit = astContext.class_context?.effective_init;
-            if (effectiveInit?.defined_on && effectiveInit.defined_on !== astContext.class_name) {
-                prompt += `- Inherited constructor source: ${effectiveInit.defined_on}; required parameters: ${(effectiveInit.required_params || []).join(', ') || 'none'}; initialized attributes: ${(effectiveInit.assigns || []).map((item: any) => item.name).join(', ') || 'none'}. This remains setup context, not an assertion oracle.\n`;
-            }
-        }
-        if (astContext.file_imports?.length > 0) {
-            const imports = astContext.file_imports.map((item: any) => item.kind === 'from'
-                ? `from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}`
-                : `import ${item.module}`);
-            prompt += `- Available module imports: ${imports.join('; ')}\n`;
-        }
-        if (astContext.referenced_globals?.length > 0) {
-            prompt += `- Referenced module constants:\n`;
-            for (const item of astContext.referenced_globals) {
-                prompt += `  - ${item.code}\n`;
-            }
-        }
-        prompt += '\n';
-    }
+=== NECESSARY TARGET BRANCH ===
+${focusedSource(sourceCode)}
 
-    if (astContext?.dependencyContexts && astContext.dependencyContexts.length > 0) {
-        prompt += `=== DEPENDENCY SOURCE CODE ===\n`;
-        for (const dep of astContext.dependencyContexts.slice(0, 3)) {
-            if (dep.code) {
-                prompt += `\`\`\`python\n# Dependency: ${dep.name}\n${dep.code.trim()}\n\`\`\`\n`;
-            }
-        }
-        prompt += `\n`;
-    }
-
-    const trace = astContext?.traceResult;
-    if (trace && !trace.load_error && (trace.examples?.length > 0 || trace.errors?.length > 0)) {
-        prompt += `=== VERIFIED REAL EXECUTION TRACE ===\n`;
-        for (const ex of (trace.examples || []).filter((example: any) =>
-            example.call_assertable !== false && example.result_assertable !== false
-        ).slice(0, 5)) {
-            const input = [...(ex.args || []), ...Object.entries(ex.kwargs || {}).map(([name, value]) => `${name}=${value}`)].join(', ');
-            prompt += `  - Input: (${input}) => Returned: ${ex.result}\n`;
-        }
-        for (const er of (trace.errors || []).filter((error: any) => error.call_assertable !== false).slice(0, 5)) {
-            const input = [...(er.args || []), ...Object.entries(er.kwargs || {}).map(([name, value]) => `${name}=${value}`)].join(', ');
-            prompt += `  - Input: (${input}) => Raised: ${er.exception}("${er.message}")\n`;
-        }
-        prompt += `\n`;
-    }
-
-    if (semanticGuidance) {
-        prompt += `=== EVIDENCE-BOUND SKILL AND STRATEGY GUIDANCE ===\n${semanticGuidance.trim()}\n`;
-        prompt += 'Model-authored candidates are suggestions only; source structure and verified execution facts take precedence.\n\n';
-    }
-
-    prompt += `RESPONSE:\nReturn the complete corrected test file. Make the smallest edit allowed by ALLOWED CHANGES.`;
-    return prompt;
+RESPONSE:
+Return the V3 JSON replacement object. Repair only the named method; request only truly missing imports.`;
 }
 
-export function getReviewEvidence(...args: Parameters<typeof getBugFixerUserPrompt>): string {
-    const context = getBugFixerUserPrompt(...args);
-    return context.slice(context.indexOf('=== TARGET FUNCTION INFO ==='), context.lastIndexOf('RESPONSE:'));
+/** Reviewer receives constraints only; source, AST, dependencies and traces stay outside its quoteable evidence. */
+export function getReviewEvidence(
+    _brokenCode: string,
+    _errorOutput: string,
+    funcName: string,
+    funcArgs: string[],
+    _sourceCode?: string,
+    _astContext?: any,
+    moduleName: string = 'module_name',
+    _semanticGuidance?: string,
+    allowedMockTargets: string[] = []
+): string {
+    const signature = funcArgs.length ? `${funcName}(${funcArgs.join(', ')})` : `${funcName}()`;
+    return [
+        `Target import: from ${moduleName} import ${funcName}`,
+        `Target signature: ${signature}`,
+        `Allowed mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied'}`,
+        'Every finding must quote TEST_FILE; these constraints cannot be quoted as evidence.'
+    ].join('\n');
+}
+
+function parseReplacement(raw: string): BugFixReplacement | undefined {
+    const fenced = raw.trim().match(/^```(?:json)?\s*([\s\S]*?)```$/i)?.[1]?.trim();
+    const text = fenced || raw.trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) { return undefined; }
+    try {
+        const value = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+        if (typeof value.method !== 'string' || typeof value.replacement !== 'string'
+            || !Array.isArray(value.imports) || !value.imports.every(item => typeof item === 'string')) {
+            return undefined;
+        }
+        return { method: value.method, replacement: value.replacement, imports: value.imports as string[] };
+    } catch {
+        return undefined;
+    }
+}
+
+function normalizedReplacementMethod(replacement: string, method: TestMethodFragment): string | undefined {
+    const clean = replacement.trim().replace(/^```(?:python|py)?\s*/i, '').replace(/```$/i, '').trim();
+    if (/^\s*class\s+/m.test(clean) || /unittest\.main\s*\(/.test(clean)) { return undefined; }
+    const lines = clean.replace(/\r\n/g, '\n').split('\n');
+    const definition = lines.findIndex(line => new RegExp(`^\\s*(?:async\\s+)?def\\s+${method.name}\\s*\\(`).test(line));
+    if (definition < 0 || lines.some((line, index) => index !== definition && /^\s*(?:async\s+)?def\s+test_/.test(line))) {
+        return undefined;
+    }
+    const body = lines.slice(definition);
+    const baseIndent = body[0].match(/^\s*/)?.[0].length || 0;
+    const dedented = body.map(line => line.trim()
+        ? line.slice(Math.min(baseIndent, line.match(/^\s*/)?.[0].length || 0))
+        : '');
+    return dedented.map(line => line ? method.indent + line : line).join('\n').trimEnd();
+}
+
+const SAFE_IMPORT = /^(?:import\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s+as\s+[A-Za-z_]\w*)?|from\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s+import\s+[A-Za-z_*][\w*]*(?:\s+as\s+[A-Za-z_]\w*)?(?:\s*,\s*[A-Za-z_*][\w*]*(?:\s+as\s+[A-Za-z_]\w*)?)*)$/;
+
+/** Merge a one-method model response into the runner-owned complete test file. */
+export function mergeBugFixReplacement(raw: string, originalCode: string, failure: string): string | undefined {
+    const parsed = parseReplacement(raw);
+    const selected = selectedFailureMethod(originalCode, failure);
+    if (!parsed || !selected || parsed.method !== selected.name || parsed.imports.length > 3) { return undefined; }
+    if (!parsed.imports.every(line => SAFE_IMPORT.test(line.trim()))) { return undefined; }
+    const replacement = normalizedReplacementMethod(parsed.replacement, selected);
+    if (!replacement) { return undefined; }
+
+    const lines = originalCode.replace(/\r\n/g, '\n').split('\n');
+    lines.splice(selected.start, selected.end - selected.start, ...replacement.split('\n'));
+    const missingImports = parsed.imports.map(line => line.trim())
+        .filter(line => !lines.some(existing => existing.trim() === line));
+    if (missingImports.length) {
+        let insertAt = 0;
+        for (let index = 0; index < lines.length; index++) {
+            if (/^(?:from\s+\S+\s+import\s+|import\s+)/.test(lines[index])) { insertAt = index + 1; }
+        }
+        lines.splice(insertAt, 0, ...missingImports);
+    }
+    return lines.join('\n').trimEnd();
 }

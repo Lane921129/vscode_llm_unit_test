@@ -55,10 +55,11 @@ test('Tier 1 LLM prompt binds assertions to execution evidence and keeps skill c
     assert.doesNotMatch(prompt, forbiddenDomainTerms);
 });
 
-test('reviewer prompt uses complete AST and skill context without treating source as an output oracle', () => {
+test('Bug Fixer prompt contains one failing method and omits broad AST, Trace, dependency, and skill context', () => {
     const systemPrompt = getBugFixerSystemPrompt();
     const prompt = getBugFixerUserPrompt(
-        'import unittest', 'coverage missed line 5', 'render', ['value'], 'def render(value):\n    return PREFIX + value', {
+        'import unittest\nclass Cases(unittest.TestCase):\n    def test_render(self):\n        self.assertEqual(render("x"), "bad")\n\n    def test_keep(self):\n        self.assertTrue(True)',
+        'FAIL: test_render (Cases.test_render)', 'render', ['value'], 'def render(value):\n    return PREFIX + value', {
             method_kind: 'instance', class_name: 'Renderer',
             class_context: {
                 bases: ['BaseRenderer'], init: { required_params: ['prefix'], assigns: [{ name: 'prefix' }] },
@@ -70,14 +71,13 @@ test('reviewer prompt uses complete AST and skill context without treating sourc
         }, 'renderer', '=== SKILL CART ===\nUse selected evidence only.'
     );
 
-    assert.match(systemPrompt, /They do NOT prove an exact return value/);
+    assert.match(systemPrompt, /Repair one failing test method only/);
     assert.doesNotMatch(systemPrompt, /If the code returns a string|value\[:N\]/);
-    assert.match(prompt, /AST CONTEXT/);
-    assert.match(prompt, /Constructor required parameters: prefix/);
-    assert.match(prompt, /Inherited constructor source: BaseRenderer/);
-    assert.match(prompt, /PREFIX = '>'/);
-    assert.match(prompt, /EVIDENCE-BOUND SKILL AND STRATEGY GUIDANCE/);
-    assert.match(prompt, /Input: \('x'\) => Returned: '>x'/);
+    assert.match(prompt, /Failing method: test_render/);
+    assert.match(prompt, /def test_render/);
+    assert.doesNotMatch(prompt, /def test_keep/);
+    assert.match(prompt, /NECESSARY TARGET BRANCH/);
+    assert.doesNotMatch(prompt, /AST CONTEXT|Constructor required parameters|DEPENDENCY SOURCE|VERIFIED REAL EXECUTION TRACE|SKILL AND STRATEGY/);
 });
 
 test('prompts retain AST type annotations as input-shape guidance only', () => {
@@ -119,8 +119,8 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
     assert.match(writerPrompt, /Constructor type hints \(input-shape guidance only\): label: str/);
     assert.match(writerPrompt, /Inherited constructor source: BaseWorker/);
     assert.match(writerPrompt, /never as a return-value or exception oracle/);
-    assert.match(reviewerPrompt, /Source parameter type hints \(input shape only\): values: list\[str\]/);
-    assert.match(reviewerPrompt, /Constructor type hints \(input shape only\): label: str/);
+    assert.match(reviewerPrompt, /Target signature: transform\(values, limit\)/);
+    assert.doesNotMatch(reviewerPrompt, /Source parameter type hints|Constructor type hints/);
     assert.match(semanticPrompt, /Constructor parameters: label: str \(required\)/);
     assert.match(semanticPrompt, /Target function parameters: values/);
 });
@@ -209,7 +209,7 @@ test('Tier 4 repair prompt does not require habitual None or empty-input tests',
     assert.doesNotMatch(writerSource, /Cover all edge cases: None, empty, boundary values, all exception paths/);
 });
 
-test('Tier 4 self-repair receives the same source, AST, Trace, and skill evidence as Reviewer', () => {
+test('Tier 4 self-repair uses the same focused one-method interface as Bug Fixer', () => {
     const prompt = getTier4SelfRepairPrompt(
         'assertion failed', 'import unittest', 'compute', ['value'], 'def compute(value):\n    return value', {
             file_imports: [{ kind: 'import', module: 'math' }],
@@ -218,12 +218,11 @@ test('Tier 4 self-repair receives the same source, AST, Trace, and skill evidenc
         }, 'calculator', '=== SKILL CART ===\n[Float Precision]'
     );
 
-    assert.match(prompt, /TARGET SOURCE CODE/);
-    assert.match(prompt, /Available module imports: import math/);
-    assert.match(prompt, /LIMIT = 3/);
-    assert.match(prompt, /Input: \(3\) => Returned: 6/);
-    assert.match(prompt, /Float Precision/);
+    assert.match(prompt, /BUG_FIX_REQUEST_V3/);
+    assert.match(prompt, /NECESSARY TARGET BRANCH/);
+    assert.doesNotMatch(prompt, /Available module imports|LIMIT = 3|VERIFIED REAL EXECUTION TRACE|Float Precision/);
     assert.match(prompt, /TIER 4 SELF-REPAIR INSTRUCTION/);
+    assert.match(prompt, /V3 JSON method-replacement interface/);
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {

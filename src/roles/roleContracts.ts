@@ -1,9 +1,9 @@
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 
 export const ROLE_CONTRACT_VERSIONS = {
-    reviewer: 'review-v2',
+    reviewer: 'review-v3',
     writerRevision: 'writer-revision-v2',
-    bugFix: 'bug-fix-v2'
+    bugFix: 'bug-fix-v3'
 } as const;
 
 /** Explicit Writer handoff used only for Reviewer/structure findings. */

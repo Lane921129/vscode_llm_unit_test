@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
 import {
     getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt,
-    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence,
+    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacement,
     fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
     getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints,
@@ -17,6 +17,7 @@ import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } f
 import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
+import { SerialRequestQueue } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
@@ -75,30 +76,25 @@ async function assessFunctionComplexity(
 }
 
 /**
- * 並行限速執行器：同時最多執行 limit 個 task，所有結果按原順序回傳。
- * 用於全檔案掃描 & 批次模式，控制 LLM API Rate Limit。
+ * 小模型一次只處理一個函式，避免多個角色請求互相搶占記憶體與注意力。
+ * Small models process one function at a time to avoid competing role requests.
  */
-async function runWithConcurrencyLimit<T>(
+async function runSequentially<T>(
     tasks: (() => Promise<T>)[],
-    limit: number,
     onError: (message: string) => void
 ): Promise<(T | undefined)[]> {
-    const results: (T | undefined)[] = new Array(tasks.length);
-    let idx = 0;
-    async function worker() {
-        while (idx < tasks.length) {
-            if (isExecutionCancelled()) {break;}
-            const i = idx++;
-            try {
-                results[i] = await tasks[i]();
-            } catch (err: any) {
-                // 任一 task 失敗不影響其他 worker 繼續執行
-                if (!isExecutionCancelled()) { onError(`[並行] 任務 ${i} 執行失敗: ${err?.message ?? err}`); }
+    const results: (T | undefined)[] = [];
+    for (let index = 0; index < tasks.length; index++) {
+        throwIfExecutionCancelled();
+        try {
+            results.push(await tasks[index]());
+        } catch (err: any) {
+            if (!isExecutionCancelled()) {
+                onError(`[順序執行] 任務 ${index + 1} 執行失敗: ${err?.message ?? err}`);
             }
+            results.push(undefined);
         }
     }
-    const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
-    await Promise.all(workers);
     return results;
 }
 
@@ -360,11 +356,11 @@ export function activate(context: vscode.ExtensionContext) {
                     log(`[系統] 檔案 ${path.basename(runParams.filePath)} 中無可測試函式。`);
                     return;
                 }
-                log(`[系統] 全檔案掃描：${funcs.length} 個函式，最多 3 個並行作業。`);
-                await runWithConcurrencyLimit(funcs.map(func => async () => {
+                log(`[系統] 全檔案掃描：${funcs.length} 個函式，將逐一分析與測試。`);
+                await runSequentially(funcs.map(func => async () => {
                     throwIfExecutionCancelled();
                     await executeSingleFileAnalysis({ ...runParams, funcName: func.fullName }, log, view);
-                }), 3, log);
+                }), log);
                 log('[系統] 全檔案掃描與測試執行完畢。');
             });
         }
@@ -400,8 +396,8 @@ export function activate(context: vscode.ExtensionContext) {
                         });
                     }
                 }
-                log(`[系統] 批次掃描完成：${tasks.length} 個函式，最多 3 個並行作業。`);
-                await runWithConcurrencyLimit(tasks, 3, log);
+                log(`[系統] 批次掃描完成：${tasks.length} 個函式，將逐一分析與測試。`);
+                await runSequentially(tasks, log);
                 log('[系統] 批次自動化測試執行完畢。');
             });
         }
@@ -608,7 +604,24 @@ function mergeDynamicTraceResults(
     };
 }
 
+// 所有角色共用同一條請求佇列；即使呼叫端誤觸並行，小模型仍只處理一個提示詞。
+// Every role shares one request queue so a small model receives one prompt at a time.
+const llmRequestQueue = new SerialRequestQueue();
+
 async function requestLlmApi(
+    params: AnalysisParams,
+    systemPrompt: string,
+    userPrompt: string,
+    log: (text: string) => void,
+    outputFormat: CustomOutputFormat = 'text'
+): Promise<string> {
+    return llmRequestQueue.run(() => requestLlmApiUnlocked(
+            params, systemPrompt, userPrompt, log, outputFormat,
+            deadlineAtFromTimeoutSeconds(params.timeoutSeconds)
+        ));
+}
+
+async function requestLlmApiUnlocked(
     params: AnalysisParams,
     systemPrompt: string,
     userPrompt: string,
@@ -627,6 +640,7 @@ async function requestLlmApi(
 
     const contractedSystemPrompt = addOutputContract(systemPrompt, outputFormat);
     const expectsJsonObject = outputFormat === 'json'
+        || outputFormat === 'test-method-json'
         || outputFormat === 'semantic-json'
         || outputFormat === 'review-json'
         || outputFormat === 'mutant-triage-json';
@@ -692,7 +706,7 @@ async function requestLlmApi(
             const errText = await response.text();
             if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
                 log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），改用一般文字輸出：${errText.substring(0, 180)}`);
-                return requestLlmApi(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
+                return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
             }
             throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
         }
@@ -724,7 +738,7 @@ async function requestLlmApi(
 
         if (!isStructuredResponseUsable(responseText, outputFormat)) {
             log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
-            return requestLlmApi(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
+            return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
         }
         throwIfExecutionCancelled();
         return responseText;
@@ -1045,8 +1059,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let measuredQualityGaps: string[] = [];
     let bestMeasuredGaps: string[] = [];
     let bestGaps: string[] = [];
+    let bestReviewWarnings: string[] = [];
     let bestCoverage: { coverageText: string; missingLines: string } | null = null;
     let qualityGaps: string[] = [];
+    let reviewWarnings: string[] = [];
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
@@ -1908,7 +1924,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     try {
                         const raw = await requestLlmApi(params, sys, prompt, log, 'review-json');
-                        const result = parseTestReview(raw, prompt);
+                        const result = parseTestReview(raw, code);
                         recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
                             contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result
                         });
@@ -1932,9 +1948,22 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             evidence: roleEvidence
                         });
                     if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
-                        throw new Error('修訂所需完整證據超過模型預算；未截斷來源碼或 Trace。');
+                        throw new Error(role === 'bug-fixer'
+                            ? 'Bug Fixer 的單方法修復內容仍超過模型預算，停止本次修復。'
+                            : 'Writer 修訂所需完整證據超過模型預算；未截斷待保留的測試。');
                     }
-                    return preserveTrace(sanitizeLlmResponse(await requestLlmApi(params, sys, prompt, log, testGenerationResponseFormat)));
+                    const raw = await requestLlmApi(
+                        params, sys, prompt, log,
+                        role === 'bug-fixer' ? 'test-method-json' : testGenerationResponseFormat
+                    );
+                    if (role === 'bug-fixer') {
+                        const merged = mergeBugFixReplacement(raw, code, failure);
+                        if (!merged) {
+                            throw new Error('Bug Fixer 回傳的局部修復介面無效，未修改測試檔。');
+                        }
+                        return preserveTrace(merged);
+                    }
+                    return preserveTrace(sanitizeLlmResponse(raw));
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
                     if (role !== 'bug-fixer') { return undefined; }
@@ -1996,11 +2025,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             loopExecution = accepted.execution.out;
             loopCoverage = extractCoverage(loopExecution, params.filePath);
             qualityGaps = accepted.qualityIssues;
+            reviewWarnings = accepted.reviewWarnings;
             measuredQualityGaps = accepted.execution.qualityGaps;
-            recordRole('validation', 'accepted', { codeHash: evidenceHash(finalCode), qualityGaps });
+            recordRole('validation', 'accepted', {
+                codeHash: evidenceHash(finalCode), qualityGaps, reviewWarnings
+            });
             finalReportMarkdown += `\n### 執行驗證\n\n\`\`\`text\n${loopExecution}\n\`\`\`\n`;
             if (qualityGaps.length) {
                 finalReportMarkdown += `\n### 品質待補強（交分析師與 Writer）\n\n${qualityGaps.map(gap => '- ' + gap).join('\n')}\n`;
+            }
+            if (reviewWarnings.length) {
+                finalReportMarkdown += `\n### Reviewer 警告（不啟動額外修復輪）\n\n${reviewWarnings.map(warning => '- ' + warning).join('\n')}\n`;
             }
 
             tierSuccess = true;
@@ -2235,6 +2270,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 bestScenarios = acceptedScenarios;
                 bestMeasuredGaps = [...measuredQualityGaps];
                 bestGaps = [...qualityGaps];
+                bestReviewWarnings = [...reviewWarnings];
                 bestCoverage = loopCoverage;
                 recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
                     survivors: survivorIds, qualityGaps });
@@ -2248,6 +2284,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 loopExecution = bestExecution;
                 loopCoverage = bestCoverage;
                 qualityGaps = [...bestGaps];
+                reviewWarnings = [...bestReviewWarnings];
                 measuredQualityGaps = [...bestMeasuredGaps];
                 acceptedScenarios = bestScenarios;
                 finalReportMarkdown += `> 已還原歷史基線，測試、分數（${bestScore}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n`;
@@ -2259,7 +2296,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })),
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
                 survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
+                reviewWarnings,
                 nextTasks: qualityStrategyHints(survivedMutants), taskStatus: 'hypotheses-require-execution' });
+            // 每次接受可執行基準後立刻保存報告，後續角色或品質步驟失敗也不會遺失成果。
+            // Checkpoint every accepted executable baseline before any later quality work.
+            fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+            recordRole('report', 'checkpointed', {
+                score: noMutationCandidates ? null : mutationScore,
+                targetCoverageComplete: measuredQualityGaps.length === 0,
+                path: existingReport
+            });
             if (qualityGaps.length) { reasonStr = '執行通過；品質仍有待補強項目'; }
             let finalReason = reasonStr;
             if (!finalReason) {
@@ -2306,8 +2352,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 journal.knowledge({ terminalStatus: 'no-mutation-candidates' });
                 break;
             }
-            if (mutationScore >= 100 && qualityGaps.length === 0) {
-                log(`[優化] 突變分數已達到 100%，且沒有未解決品質項目。`);
+            if (mutationScore >= 100 && measuredQualityGaps.length === 0) {
+                log(`[優化] 突變分數已達到 100%，且目標 Coverage 完整；已保存成功基準。`);
                 journal.knowledge({ terminalStatus: 'passed' });
                 break;
             }
@@ -2320,12 +2366,29 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error && error.stack ? error.stack : '';
-            recordRole('pipeline', 'failed', { reason: message });
-            journal.knowledge({ terminalStatus: 'failed', failure: message });
-            if (bestCode) { fs.writeFileSync(testPath, bestCode, 'utf8'); }
+            const retainedBaseline = Boolean(bestCode);
+            recordRole('pipeline', retainedBaseline ? 'retained-baseline' : 'failed', {
+                reason: message, retainedScore: retainedBaseline ? bestScore : undefined
+            });
+            journal.knowledge({
+                terminalStatus: retainedBaseline ? 'retained-after-failure' : 'failed',
+                failure: message,
+                retainedScore: retainedBaseline ? bestScore : undefined
+            });
+            if (bestCode) {
+                fs.writeFileSync(testPath, bestCode, 'utf8');
+                mutationScore = bestScore;
+                loopExecution = bestExecution;
+                loopCoverage = bestCoverage;
+                survivedMutants = bestSurvivors;
+                qualityGaps = [...bestGaps];
+                reviewWarnings = [...bestReviewWarnings];
+            }
             const failureCategory = classifyExecutionFailure(message);
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
-            finalReportMarkdown += `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
+            finalReportMarkdown += retainedBaseline
+                ? `\n### 後續步驟中斷；已保留成功基準（第 ${currentLoop} 輪）\n\n`
+                : `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
             finalReportMarkdown += `- **失敗分類**: ${failureCategory}\n\n`;
             finalReportMarkdown += `**錯誤訊息**: ${message}\n\n`;
             if (stack && stack !== message) {
@@ -2335,14 +2398,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             if (rawCode) {
                 finalReportMarkdown += `**AI 實際輸出內容（前 500 字元）**:\n\`\`\`\n${rawCode.substring(0, 500)}\n\`\`\`\n\n`;
             }
+            fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
                 file: path.basename(params.filePath),
                 func: params.funcName || '',
-                score: '失敗',
-                coverage: null,
-                reason: message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
+                score: retainedBaseline ? `${bestScore}%` : '失敗',
+                coverage: retainedBaseline ? bestCoverage?.coverageText ?? null : null,
+                reason: retainedBaseline
+                    ? `已保留 ${bestScore}% 基準；後續步驟失敗`
+                    : message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
             });
             break;
         }
@@ -2369,7 +2435,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                 }
             } catch (error: any) {
-                throwIfExecutionCancelled();
+                if (isExecutionCancelled()) {
+                    recordRole('analyst-quality', 'cancelled', {});
+                    break;
+                }
                 recordRole('analyst-quality', 'failed', { reason: error.message });
             }
         }
@@ -2380,7 +2449,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
 
     const finalReportPath = path.join(sessionDir, `final_report.md`);
-    throwIfExecutionCancelled();
     fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');
     sidebarProvider.webview?.postMessage({
         command: 'attachResultReport',

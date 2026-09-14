@@ -1,4 +1,4 @@
-export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'semantic-json' | 'review-json' | 'mutant-triage-json';
+export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'test-method-json' | 'semantic-json' | 'review-json' | 'mutant-triage-json';
 
 // These client-error statuses are commonly used by compatible providers when
 // a response-format / JSON-schema option is unsupported.  Authentication,
@@ -59,6 +59,9 @@ export function addOutputContract(systemPrompt: string, outputFormat: CustomOutp
     if (outputFormat === 'test-code-json') {
         return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one JSON object with one string field named "code". The code value must contain the complete runnable Python unittest file. Do not use Markdown fences or add other fields.`;
     }
+    if (outputFormat === 'test-method-json') {
+        return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one JSON object with method, replacement, and imports fields. replacement contains one Python test method; imports is an array of import lines. Do not use Markdown fences or add other fields.`;
+    }
     if (outputFormat === 'json' || outputFormat === 'semantic-json' || outputFormat === 'review-json' || outputFormat === 'mutant-triage-json') {
         return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one valid JSON object. Do not use Markdown fences or explanatory prose.`;
     }
@@ -94,14 +97,25 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
             ]
         };
     }
+    if (outputFormat === 'test-method-json') {
+        return {
+            type: 'object',
+            properties: {
+                method: { type: 'string' },
+                replacement: { type: 'string', description: 'One complete Python test method.' },
+                imports: { type: 'array', items: { type: 'string' } }
+            },
+            required: ['method', 'replacement', 'imports']
+        };
+    }
     if (outputFormat === 'review-json') {
         const finding = {
             type: 'object',
             properties: {
-                evidence: { type: 'string' },
+                test_excerpt: { type: 'string' },
                 action: { type: 'string' }
             },
-            required: ['evidence', 'action']
+            required: ['test_excerpt', 'action']
         };
         return {
             type: 'object',
@@ -150,6 +164,17 @@ export function isStructuredResponseUsable(response: string, outputFormat: Custo
             }
         }
         return /^(?:import\s+|from\s+|class\s+|def\s+|```(?:python|py)\b)/m.test(trimmed);
+    }
+    if (outputFormat === 'test-method-json') {
+        const jsonMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)```$/);
+        const candidateJson = jsonMatch ? jsonMatch[1].trim() : trimmed;
+        try {
+            const parsed = JSON.parse(candidateJson) as Record<string, unknown>;
+            return typeof parsed.method === 'string' && typeof parsed.replacement === 'string'
+                && Array.isArray(parsed.imports);
+        } catch {
+            return false;
+        }
     }
     try {
         const parsed = JSON.parse(trimmed);

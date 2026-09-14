@@ -28,3 +28,10 @@ test('startAnalysis and startBatchAnalysis include cloudKeyName in payload', () 
     assert.ok(html.includes("command: 'startAnalysis',\n                envType, modelName, cloudKeyName, filePath,"));
     assert.ok(html.includes("command: 'startBatchAnalysis',\n                envType, modelName, cloudKeyName, batchPath,"));
 });
+
+test('test settings do not expose an unsupported concurrency control', () => {
+    const html = getWebviewContent(key => key);
+
+    assert.ok(!html.includes('concurrency-select'));
+    assert.ok(!html.includes('Concurrency Workers'));
+});

@@ -23,18 +23,32 @@ test('structured output contracts are generic and describe the expected envelope
 test('provides minimal schema contracts for semantic analysis, review, and mutant triage', () => {
     const semantic = responseSchemaForOutputFormat('semantic-json');
     const review = responseSchemaForOutputFormat('review-json');
+    const repair = responseSchemaForOutputFormat('test-method-json');
     const triage = responseSchemaForOutputFormat('mutant-triage-json');
 
     assert.deepStrictEqual((semantic as { required: string[] }).required, [
         'dependency_behaviors', 'unreachable_paths', 'mock_required_for', 'test_strategy'
     ]);
     assert.deepStrictEqual((review as { required: string[] }).required, ['blocking', 'quality']);
+    assert.deepStrictEqual((repair as { required: string[] }).required, ['method', 'replacement', 'imports']);
+    assert.deepStrictEqual(
+        ((review as any).properties.blocking.items as { required: string[] }).required,
+        ['test_excerpt', 'action']
+    );
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'
     ]);
     assert.strictEqual(responseSchemaForOutputFormat('json'), undefined);
     assert.ok(isStructuredResponseUsable('{"verdicts":[]}', 'mutant-triage-json'));
     assert.ok(isStructuredResponseUsable('{"blocking":[],"quality":[]}', 'review-json'));
+    assert.ok(isStructuredResponseUsable(
+        '{"method":"test_x","replacement":"def test_x(self): pass","imports":[]}',
+        'test-method-json'
+    ));
+    assert.ok(isStructuredResponseUsable(
+        '```json\n{"method":"test_x","replacement":"def test_x(self): pass","imports":[]}\n```',
+        'test-method-json'
+    ));
 });
 
 test('detects malformed successful structured responses before they reach a Tier', () => {

@@ -154,7 +154,7 @@ export function getTier4SelfRepairPrompt(
     return `${evidenceContext}
 
 TIER 4 SELF-REPAIR INSTRUCTION:
-Fix only failing methods unless a change is required to preserve verified behavior. Keep passing tests and exact Trace facts. Output the complete corrected test file in one \`\`\`python code block.`;
+Repair only the identified failing method. Return the same V3 JSON method-replacement interface; the runner preserves and merges all unrelated tests.`;
 }
 
 

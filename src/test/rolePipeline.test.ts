@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { CandidatePipelineHooks, validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { AnalysisJournal, QualityProgress } from '../pipeline/analysisJournal';
 import { fitReviewPrompt, parseTestReview } from '../roles/testReviewer';
+import { getBugFixerUserPrompt, mergeBugFixReplacement } from '../roles/bugFixer';
 import { parseQualityTasks, qualityStrategyHints } from '../roles/qualityAnalyst';
 import { normalizeScenarioOutput, reconcileScenarios } from '../validation/scenarioIdentity';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -57,9 +58,20 @@ test('structural pre-validation failures are repaired by Bug Fixer, not Writer',
     assert.deepEqual(roles, ['bug-fixer']);
 });
 
-test('malformed/unavailable review remains unresolved even if execution passes', async () => {
+test('malformed/unavailable review becomes a warning and does not create another quality loop', async () => {
     const result = await validateTestCandidate('draft', hooks({ review: async () => undefined }));
-    assert.match(result.qualityIssues.join(), /審查未完成/);
+    assert.deepEqual(result.qualityIssues, []);
+    assert.match(result.reviewWarnings.join(), /審查未完成/);
+});
+
+test('nonblocking Reviewer advice is reported without overriding measured quality gates', async () => {
+    const result = await validateTestCandidate('draft', hooks({
+        review: async () => ({ issues: [{
+            id: 'Q1', severity: 'quality', evidence: 'draft', reason: 'consider clarity', action: 'use a clearer assertion'
+        }] })
+    }));
+    assert.deepEqual(result.qualityIssues, []);
+    assert.deepEqual(result.reviewWarnings, ['Q1: use a clearer assertion']);
 });
 
 test('dropping previously passing tests cannot be accepted, and next repair uses retained code', async () => {
@@ -71,13 +83,24 @@ test('dropping previously passing tests cannot be accepted, and next repair uses
     assert.equal(repairedFrom, 'baseline');
 });
 
-test('repeated failed candidates consume bounded attempts without duplicate execution', async () => {
+test('an unchanged Bug Fixer result stops immediately without duplicate execution', async () => {
     let executions = 0;
+    let revisions = 0;
     await assert.rejects(validateTestCandidate('draft', hooks({
         execute: async () => { executions++; return { ok: false, out: 'failure', qualityGaps: [] }; },
-        revise: async () => 'draft'
-    })), /修訂上限/);
+        revise: async () => { revisions++; return 'draft'; }
+    })), /Bug Fixer 未產生有效變更/);
     assert.equal(executions, 1);
+    assert.equal(revisions, 1);
+});
+
+test('the same execution failure is offered to Bug Fixer at most once', async () => {
+    let revisions = 0;
+    await assert.rejects(validateTestCandidate('draft', hooks({
+        execute: async () => ({ ok: false, out: 'same failure', qualityGaps: [] }),
+        revise: async () => `changed-${++revisions}`
+    }), 3), /已處理過相同失敗/);
+    assert.equal(revisions, 1);
 });
 
 test('cancellation after review prevents executing or accepting a candidate', async () => {
@@ -98,8 +121,42 @@ test('review parser rejects invented evidence, malformed envelopes and placehold
     assert.equal(parseTestReview(JSON.stringify({ issues: [issue] }), issue.evidence)?.issues.length, 1);
     assert.deepEqual(parseTestReview('```json\n{"issues":[]}\n```', ''), { issues: [] });
     assert.deepEqual(parseTestReview('{"blocking":[],"quality":[]}', ''), { issues: [] });
-    const compact = '{"blocking":[{"evidence":"assertFalse(value)","action":"use exact identity"}],"quality":[]}';
+    const compact = '{"blocking":[{"test_excerpt":"assertFalse(value)","action":"use exact identity"}],"quality":[]}';
     assert.equal(parseTestReview(`trace text before JSON\n${compact}\ntrailing text`, issue.evidence)?.issues[0].severity, 'blocking');
+    assert.equal(parseTestReview(
+        '{"blocking":[{"test_excerpt":"raise ValueError","action":"change source"}],"quality":[]}',
+        'self.assertRaises(ValueError)'
+    ), undefined);
+});
+
+test('Bug Fixer receives one failing method and its replacement preserves unrelated tests', () => {
+    const original = `import unittest
+class Cases(unittest.TestCase):
+    def test_keep(self):
+        self.assertTrue(True)
+
+    def test_fix(self):
+        self.assertEqual(render('x'), 'wrong')
+`;
+    const failure = 'FAIL: test_fix (Cases.test_fix)';
+    const prompt = getBugFixerUserPrompt(
+        original, failure, 'render', ['value'], "def render(value):\n    return value", undefined,
+        'sample', undefined, ['sample.normalize']
+    );
+    assert.match(prompt, /def test_fix/);
+    assert.doesNotMatch(prompt, /def test_keep/);
+    assert.doesNotMatch(prompt, /AST CONTEXT|DEPENDENCY SOURCE|VERIFIED REAL EXECUTION TRACE/);
+
+    const response = JSON.stringify({
+        method: 'test_fix',
+        replacement: "def test_fix(self):\n    self.assertEqual(render('x'), 'x')",
+        imports: ['from unittest.mock import patch']
+    });
+    const merged = mergeBugFixReplacement(response, original, failure) || '';
+    assert.match(merged, /def test_keep/);
+    assert.match(merged, /self\.assertTrue\(True\)/);
+    assert.match(merged, /self\.assertEqual\(render\('x'\), 'x'\)/);
+    assert.match(merged, /from unittest\.mock import patch/);
 });
 
 test('Bug Fixer revision contract rejects broad rewrites and permits one failing method', () => {
