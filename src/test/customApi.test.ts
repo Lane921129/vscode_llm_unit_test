@@ -55,7 +55,7 @@ test('detects malformed successful structured responses before they reach a Tier
     assert.ok(!isStructuredResponseUsable('{', 'json'));
     assert.ok(!isStructuredResponseUsable('{}', 'json'));
     assert.ok(!isStructuredResponseUsable('{}', 'test-code-json'));
-    assert.ok(isStructuredResponseUsable('{"required_skills": []}', 'json'));
+    assert.ok(isStructuredResponseUsable('{"test_strategy": {}}', 'json'));
     assert.ok(isStructuredResponseUsable('{"code":"import unittest"}', 'test-code-json'));
     assert.ok(isStructuredResponseUsable('```json\n{"code":"import unittest"}\n```', 'test-code-json'));
     assert.ok(!isStructuredResponseUsable('```json\n{"invalid":true}\n```', 'test-code-json'));

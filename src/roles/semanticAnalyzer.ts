@@ -4,13 +4,13 @@
  *
  * Triggered for ALL functions (not just cross-file dependencies).
  * Runs BEFORE test generation to:
- *   1. Compute fixed dependency behaviors and candidate unreachable paths
- *   2. Decide the optimal test data strategy for this specific function (AI-derived, not hardcoded)
+ *   1. Integrate selected-function source, AST facts and bounded execution observations
+ *   2. Propose dependency and input scenarios for deterministic verification
  *
- * The test_strategy output replaces all hardcoded boundary rules in the unittest writer prompt.
+ * The deterministic dispatcher owns test-rule selection after this role returns.
  */
 
-
+import { BehaviorObservations } from '../pipeline/evidenceContracts';
 
 // === Type Definitions ===
 
@@ -46,17 +46,29 @@ export interface SemanticAnalysis {
     dependency_behaviors: DependencyBehavior[];
     unreachable_paths: UnreachablePath[];
     mock_required_for?: { path: string; mock_target: string; example: string }[];
-    required_skills: string[];       // 僅讀取舊回應；不再參與技能分配
     test_strategy: TestStrategy;     // AI-derived test data strategy for this specific function
 }
 
-export interface DependencyTraceForPrompt {
+export interface DependencyEvidenceForPrompt {
     name: string;
-    traceResult?: {
-        examples?: Array<{ args?: string[]; kwargs?: Record<string, string>; result?: string; result_assertable?: boolean; call_assertable?: boolean }>;
-        errors?: Array<{ args?: string[]; kwargs?: Record<string, string>; exception?: string; message?: string; call_assertable?: boolean }>;
-        load_error?: string | null;
+    code: string;
+    sourceHash?: string;
+    observations?: BehaviorObservations;
+}
+
+/** Static and executed evidence supplied to the Semantic Analyzer. */
+export interface AnalysisEvidenceV2 {
+    schemaVersion: 'analysis-evidence-v2';
+    target: {
+        moduleName: string;
+        functionName: string;
+        source: string;
+        sourceHash: string;
     };
+    astFacts?: SemanticAstSetupContext;
+    callSites: Array<{ caller_func: string; call_expr: string }>;
+    dependencies: DependencyEvidenceForPrompt[];
+    initialTargetObservations?: BehaviorObservations;
 }
 
 /** A bounded AST setup view.  These are source facts, not execution oracles. */
@@ -90,9 +102,44 @@ export interface SemanticAstSetupContext {
     } | null;
 }
 
-function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[]): string {
+function oneLine(value: unknown, limit = 240): string {
+    return String(value ?? '').replace(/[\r\n]+/g, ' ').slice(0, limit);
+}
+
+function formatCall(args: string[] | undefined, kwargs: Record<string, string> | undefined): string {
+    const keywords = Object.entries(kwargs || {}).map(([name, value]) => `${name}=${oneLine(value)}`);
+    return [...(args || []).map(value => oneLine(value)), ...keywords].join(', ');
+}
+
+export function formatVerifiedTargetObservations(
+    targetName: string,
+    observations?: BehaviorObservations
+): string {
+    if (!observations) {return '';}
+    let out = '=== VERIFIED TARGET EXECUTION OBSERVATIONS ===\n';
+    out += 'Python executed these exact calls under the controlled probe. They are evidence for the same call conditions, but are not exhaustive.\n';
+    if (observations.load_error) {
+        out += `  - Observation unavailable: ${oneLine(observations.load_error)}\n`;
+    } else {
+        for (const example of observations.examples.filter(example =>
+            example.call_assertable !== false && example.result_assertable !== false
+        ).slice(0, 4)) {
+            out += `  - ${targetName}(${formatCall(example.args, example.kwargs)}) => ${oneLine(example.result)}${example.result_type ? ` [${oneLine(example.result_type, 60)}]` : ''}\n`;
+        }
+        for (const error of observations.errors.filter(error => error.call_assertable !== false).slice(0, 4)) {
+            out += `  - ${targetName}(${formatCall(error.args, error.kwargs)}) raises ${oneLine(error.exception, 80)}${error.message ? `: ${oneLine(error.message)}` : ''}\n`;
+        }
+    }
+    for (const blocked of (observations.blocked_operations || []).slice(0, 2)) {
+        out += `  - Diagnostic only, blocked by safety policy: ${oneLine(blocked)}\n`;
+    }
+    out += 'Blocked operations and load errors are diagnostics only. Never turn them into target exceptions or assertions.\n\n';
+    return out;
+}
+
+function formatVerifiedDependencyFacts(dependencies: DependencyEvidenceForPrompt[]): string {
     const traced = dependencies.filter(dependency => {
-        const trace = dependency.traceResult;
+        const trace = dependency.observations;
         return trace && !trace.load_error && ((trace.examples?.length || 0) > 0 || (trace.errors?.length || 0) > 0);
     });
     if (traced.length === 0) {
@@ -102,18 +149,14 @@ function formatVerifiedDependencyFacts(dependencies: DependencyTraceForPrompt[])
     let out = '=== VERIFIED DEPENDENCY EXECUTION FACTS ===\n';
     out += 'These observations were executed by Python. They take precedence over model inference and are not exhaustive.\n';
     for (const dependency of traced.slice(0, 4)) {
-        const trace = dependency.traceResult!;
+        const trace = dependency.observations!;
         for (const example of (trace.examples || []).filter(example =>
             example.call_assertable !== false && example.result_assertable !== false
         ).slice(0, 3)) {
-            const keywords = Object.entries(example.kwargs || {}).map(([name, value]) => `${name}=${value}`);
-            const input = [...(example.args || []), ...keywords].join(', ');
-            out += `  - ${dependency.name}(${input}) => ${example.result}\n`;
+            out += `  - ${dependency.name}(${formatCall(example.args, example.kwargs)}) => ${oneLine(example.result)}\n`;
         }
         for (const error of (trace.errors || []).filter(error => error.call_assertable !== false).slice(0, 3)) {
-            const keywords = Object.entries(error.kwargs || {}).map(([name, value]) => `${name}=${value}`);
-            const input = [...(error.args || []), ...keywords].join(', ');
-            out += `  - ${dependency.name}(${input}) raises ${error.exception}${error.message ? `: ${error.message}` : ''}\n`;
+            out += `  - ${dependency.name}(${formatCall(error.args, error.kwargs)}) raises ${oneLine(error.exception, 80)}${error.message ? `: ${oneLine(error.message)}` : ''}\n`;
         }
     }
     return out + '\n';
@@ -191,10 +234,10 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
 
 // === System Prompt ===
 
-export function getSemanticAnalyzerSystemPrompt(_legacySkillSummary?: string): string {
+export function getSemanticAnalyzerSystemPrompt(_legacyRuleSummary?: string): string {
     return `You are a Python code analyst with two responsibilities:
 1. Analyze cross-function dependency behavior in a specific calling context
-2. Propose evidence-bound input scenarios for the Unittest Writer; skill selection is handled by the runner
+2. Propose evidence-bound input scenarios for the Unittest Writer; test-rule selection is handled by the runner
 
 Your output must be a single valid JSON object with this exact schema:
 {
@@ -242,11 +285,12 @@ ANALYSIS RULES:
 - MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.
 - When TARGET FUNCTION PARAMETERS are supplied, every test_strategy.input_hints[].param_name must be exactly one of those target parameters. Dependency parameters and dependency return keys are never target inputs.
 - TARGET CALL SITES show how other project code invokes the selected target. They are input candidates only: they do not prove target output, dependency behavior, or an exception.
+- VERIFIED TARGET EXECUTION OBSERVATIONS are exact input/output samples produced by controlled Python execution. Use them to correct target-behavior hypotheses, but do not generalize them to unobserved inputs.
 - When VERIFIED DEPENDENCY EXECUTION FACTS are provided, reproduce their Python repr values exactly. Never replace a Python dict/list/tuple with a JavaScript-style description such as "[object Object]".
 - Without verified dependency execution facts, do not claim a dependency "always returns" a concrete value; leave dependency_behaviors empty and let the Writer rely on source code or mock.patch.
 - For unreachable_paths: if dependency always returns X, which if-conditions are always True/False?
 - For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)
-- For test_strategy.input_hints: emit only scalar Python literals: None, True, False, a finite number, or a plain quoted string. Do not emit expressions, calls, collections, comprehensions, attributes, or variable names. Safe scalar candidates may be re-executed by Dynamic Trace; they are never an output oracle by themselves.
+- For test_strategy.input_hints: emit only scalar Python literals: None, True, False, a finite number, or a plain quoted string. Do not emit expressions, calls, collections, comprehensions, attributes, or variable names. Safe scalar candidates may be executed by the controlled behavior probe; they are never an output oracle by themselves.
 - For test_strategy.key_rules: include only concise observations tied to this target; do not repeat generic unittest advice
 - If no dependencies, return empty arrays for dependency_behaviors, unreachable_paths, and mock_required_for
 - Do not predict, classify, or mention equivalent mutants. Equivalence is evaluated only after mutation execution from measured survivor evidence.
@@ -256,14 +300,20 @@ ANALYSIS RULES:
 // === User Prompt ===
 
 export function getSemanticAnalyzerUserPrompt(
-    targetSource: string,
-    dependencies: Array<{ name: string; code: string; traceResult?: DependencyTraceForPrompt['traceResult'] }>,
-    callSites?: Array<{ caller_func: string; call_expr: string }>,
-    astSetupContext?: SemanticAstSetupContext
+    evidence: AnalysisEvidenceV2
 ): string {
-    let prompt = '=== TARGET FUNCTION SOURCE CODE ===\n```python\n' + targetSource.trim() + '\n```\n\n';
+    const dependencies = evidence.dependencies || [];
+    const callSites = evidence.callSites || [];
+    let prompt = '=== ANALYSIS EVIDENCE V2 ===\n';
+    prompt += `Target: ${evidence.target.moduleName}.${evidence.target.functionName}\n`;
+    prompt += `Source hash: ${evidence.target.sourceHash}\n\n`;
+    prompt += '=== TARGET FUNCTION SOURCE CODE ===\n```python\n' + evidence.target.source.trim() + '\n```\n\n';
 
-    prompt += formatAstSetupContext(astSetupContext);
+    prompt += formatAstSetupContext(evidence.astFacts);
+    prompt += formatVerifiedTargetObservations(
+        evidence.target.functionName,
+        evidence.initialTargetObservations
+    );
 
     if (dependencies.length > 0) {
         prompt += '=== DEPENDENCY SOURCE CODE ===\n';
@@ -275,7 +325,7 @@ export function getSemanticAnalyzerUserPrompt(
 
     prompt += formatVerifiedDependencyFacts(dependencies);
 
-    if (callSites && callSites.length > 0) {
+    if (callSites.length > 0) {
         prompt += '=== TARGET CALL SITES (INPUT CANDIDATES ONLY) ===\n';
         for (const cs of callSites.slice(0, 6)) {
             prompt += '  In ' + cs.caller_func + ': ' + cs.call_expr + '\n';
@@ -305,13 +355,12 @@ const semanticTopLevelFields = new Set([
     'dependency_behaviors',
     'unreachable_paths',
     'mock_required_for',
-    'required_skills',
     'test_strategy'
 ]);
 
 /**
  * A syntactically valid but unrelated JSON object is not an Analyzer result.
- * Reject it so orchestration retains its syntax-derived skill baseline instead
+ * Reject it so orchestration retains its syntax-derived rule baseline instead
  * of treating a provider error envelope or chat metadata as empty guidance.
  */
 function hasSemanticAnalysisShape(value: unknown): value is Record<string, unknown> {
@@ -378,7 +427,6 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
         dependency_behaviors,
         unreachable_paths,
         mock_required_for,
-        required_skills: meaningfulTextList(value.required_skills),
         test_strategy: {
             approach: meaningfulText(rawStrategy.approach) || '',
             input_hints,
@@ -442,7 +490,7 @@ export function restrictSemanticInputHintsToTargetParameters(
 
 export function formatSemanticContextForPrompt(
     analysis: SemanticAnalysis,
-    dependencies: DependencyTraceForPrompt[] = []
+    dependencies: DependencyEvidenceForPrompt[] = []
 ): string {
     let out = '=== SEMANTIC GUIDANCE ===\n';
     out += 'Use verified execution facts and source code as evidence. Model-generated strategies are guidance, not proof.\n';
@@ -454,7 +502,7 @@ export function formatSemanticContextForPrompt(
 
     out += '\n=== CANDIDATE PATH GUIDANCE ===\n';
     if (analysis.unreachable_paths.length > 0) {
-        out += '\nCandidate unreachable paths (verify against source or trace; do not omit a test solely because of this suggestion):\n';
+        out += '\nCandidate unreachable paths (verify against source or executed observations; do not omit a test solely because of this suggestion):\n';
         for (const up of analysis.unreachable_paths) {
             out += '  X "' + up.condition + '" -- ' + up.reason + '\n';
         }
@@ -468,9 +516,6 @@ export function formatSemanticContextForPrompt(
             out += '         Example: ' + mrf.example + '\n';
         }
     }
-
-    // === 技能購物車：注入選取的技能卡 ===
-
 
     // === AI 推導的測資策略 ===
     const ts = analysis.test_strategy;
@@ -515,7 +560,7 @@ export function formatSemanticContextForPrompt(
 
 /**
  * 建立只負責函式分析與測試情境的提示詞
- * 技能由 pipeline/skillDispatcher 決定，不向模型提供技能目錄
+ * 測試生成規則由 pipeline/testRuleDispatcher 決定，不向模型提供規則目錄
  */
 export function buildSemanticAnalyzerSystemPrompt(): string {
     return getSemanticAnalyzerSystemPrompt();

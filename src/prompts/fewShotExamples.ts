@@ -1,7 +1,7 @@
 /**
  * Domain-neutral few-shot examples used only to demonstrate output format.
  * Business-specific examples must not be added here: specialization belongs in
- * the skill-card pipeline selected from the target source code.
+ * the test-rule pipeline selected from the target source code.
  */
 export interface FewShotExample {
     label: string;

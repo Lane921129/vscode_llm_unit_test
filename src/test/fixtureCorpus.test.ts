@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { test } from 'node:test';
-import { inferSkillIdsFromCode } from '../prompts/promptSkillLibrary';
+import { inferTestRuleIdsFromCode } from '../prompts/testRuleLibrary';
 
 interface FixtureContext {
     calls?: string[];
@@ -23,7 +23,7 @@ interface FixtureSpec {
     expected: {
         method_kind: string;
         is_async: boolean;
-        skills: string[];
+        rules: string[];
         trace: string;
         inherited_constructor_required?: string[];
     };
@@ -41,7 +41,7 @@ const manifest = JSON.parse(readFileSync(join(fixtureRoot, 'manifest.json'), 'ut
 };
 
 test('public fixture corpus has three neutral acceptance inputs for every Tier', () => {
-    assert.strictEqual(manifest.schema_version, 1);
+    assert.strictEqual(manifest.schema_version, 2);
     assert.ok(manifest.fixtures.length >= 12);
 
     for (const tier of [1, 2, 3, 4]) {
@@ -56,15 +56,15 @@ test('public fixture corpus has three neutral acceptance inputs for every Tier',
     }
 });
 
-test('fixture corpus skill expectations stay tied to syntax and AST binding evidence', () => {
+test('fixture corpus rule expectations stay tied to syntax and AST binding evidence', () => {
     for (const fixture of manifest.fixtures) {
         const source = readFileSync(join(fixtureRoot, fixture.source), 'utf8');
-        const skills = inferSkillIdsFromCode(source, fixture.context);
+        const rules = inferTestRuleIdsFromCode(source, fixture.context);
 
-        for (const expectedSkill of fixture.expected.skills) {
+        for (const expectedRule of fixture.expected.rules) {
             assert.ok(
-                skills.includes(expectedSkill),
-                `${fixture.id} should select ${expectedSkill}; actual: ${skills.join(', ')}`
+                rules.includes(expectedRule),
+                `${fixture.id} should select ${expectedRule}; actual: ${rules.join(', ')}`
             );
         }
     }

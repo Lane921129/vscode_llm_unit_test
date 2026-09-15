@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
+import { EVIDENCE_CONTRACT_VERSIONS } from './evidenceContracts';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -14,8 +15,9 @@ export class AnalysisJournal {
         this.sourceHash = evidenceHash(source);
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
-            schemaVersion: 1, runId: this.runId, startedAt: new Date().toISOString(),
-            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v1'
+            schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(),
+            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v3',
+            evidenceContracts: EVIDENCE_CONTRACT_VERSIONS
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
     }
     record(loop: number, stage: string, status: string, detail: unknown): void {
@@ -25,7 +27,7 @@ export class AnalysisJournal {
     }
     knowledge(value: Record<string, unknown>): void {
         this.knowledgeState = { ...this.knowledgeState, ...value };
-        const output = JSON.stringify({ schemaVersion: 1, runId: this.runId, sourceHash: this.sourceHash,
+        const output = JSON.stringify({ schemaVersion: 2, runId: this.runId, sourceHash: this.sourceHash,
             ...this.knowledgeState }, null, 2);
         const temporary = path.join(this.directory, 'function_knowledge.pending.json');
         fs.writeFileSync(temporary, output, 'utf8');

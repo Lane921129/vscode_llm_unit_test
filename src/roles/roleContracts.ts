@@ -1,6 +1,8 @@
 import { summarizeRepairOutput } from '../validation/repairFeedback';
+import { EVIDENCE_CONTRACT_VERSIONS } from '../pipeline/evidenceContracts';
 
 export const ROLE_CONTRACT_VERSIONS = {
+    ...EVIDENCE_CONTRACT_VERSIONS,
     reviewer: 'review-v3',
     writerRevision: 'writer-revision-v2',
     bugFix: 'bug-fix-v3'

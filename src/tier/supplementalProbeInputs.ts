@@ -1,13 +1,13 @@
 import type { SemanticAnalysis } from '../roles/semanticAnalyzer';
 
-export interface SemanticTraceParameter {
+export interface SupplementalProbeParameter {
     name: string;
     kind: 'positional_only' | 'positional_or_keyword' | 'keyword_only' | 'var_positional' | 'var_keyword';
     required: boolean;
     default?: string | null;
 }
 
-export interface SemanticTraceInput {
+export interface SupplementalProbeInput {
     args: unknown[];
     kwargs: Record<string, unknown>;
 }
@@ -15,14 +15,14 @@ export interface SemanticTraceInput {
 type SafeScalar = string | number | boolean | null;
 
 const MAX_VALUES_PER_PARAMETER = 4;
-const MAX_CANDIDATE_CALLS = 12;
+const MAX_PROBE_CALLS = 12;
 
 /**
  * Parse only a tiny, JSON-compatible subset of Python literal repr syntax.
  * Model text is never evaluated: composite literals, expressions, calls, and
- * escape-heavy strings stay suggestions for the Writer instead of Trace input.
+ * escape-heavy strings stay suggestions for the Writer instead of probe input.
  */
-export function parseSafeSemanticScalar(value: string): SafeScalar | undefined {
+export function parseSafeProbeScalar(value: string): SafeScalar | undefined {
     const source = value.trim();
     if (!source || source.length > 200) {return undefined;}
     if (source === 'None') {return null;}
@@ -59,20 +59,20 @@ function uniqueScalars(values: SafeScalar[]): SafeScalar[] {
     });
 }
 
-function inputKey(input: SemanticTraceInput): string {
+function inputKey(input: SupplementalProbeInput): string {
     return JSON.stringify({ args: input.args, kwargs: input.kwargs });
 }
 
 /**
  * Turn analyzer-proposed scalar boundaries into bounded, complete calls. A
  * call is emitted only when every required non-variadic parameter has either a
- * safely parsed suggestion or a source default. Dynamic Trace still executes
+ * safely parsed suggestion or a source default. The controlled probe still executes
  * every call and is the sole source of result/exception assertions.
  */
-export function buildSemanticTraceCandidates(
+export function buildSupplementalProbeInputs(
     analysis: Pick<SemanticAnalysis, 'test_strategy'>,
-    signature: readonly SemanticTraceParameter[] | undefined
-): SemanticTraceInput[] {
+    signature: readonly SupplementalProbeParameter[] | undefined
+): SupplementalProbeInput[] {
     if (!signature || signature.length === 0) {return [];}
     const fixedParameters = signature.filter(parameter =>
         parameter.kind === 'positional_only'
@@ -91,7 +91,7 @@ export function buildSemanticTraceCandidates(
         if (!parameter) {continue;}
         const parsed = uniqueScalars(
             [...hint.boundary_inputs, ...hint.invalid_inputs]
-                .map(parseSafeSemanticScalar)
+                .map(parseSafeProbeScalar)
                 .filter((value): value is SafeScalar => value !== undefined)
         ).slice(0, MAX_VALUES_PER_PARAMETER);
         if (parsed.length > 0) {
@@ -107,7 +107,7 @@ export function buildSemanticTraceCandidates(
             continue;
         }
         const defaultValue = typeof parameter.default === 'string'
-            ? parseSafeSemanticScalar(parameter.default)
+            ? parseSafeProbeScalar(parameter.default)
             : undefined;
         if (defaultValue !== undefined) {
             baseline.set(parameter.name, defaultValue);
@@ -118,7 +118,7 @@ export function buildSemanticTraceCandidates(
         }
     }
 
-    const materialize = (values: ReadonlyMap<string, SafeScalar>): SemanticTraceInput => {
+    const materialize = (values: ReadonlyMap<string, SafeScalar>): SupplementalProbeInput => {
         const args = fixedParameters
             .filter(parameter => parameter.kind === 'positional_only')
             .map(parameter => values.get(parameter.name));
@@ -145,5 +145,5 @@ export function buildSemanticTraceCandidates(
         if (seen.has(key)) {return false;}
         seen.add(key);
         return true;
-    }).slice(0, MAX_CANDIDATE_CALLS);
+    }).slice(0, MAX_PROBE_CALLS);
 }

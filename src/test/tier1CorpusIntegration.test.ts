@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { test } from 'node:test';
 import { buildTier1TestFile } from '../tier/tier1TestFileBuilder';
-import { buildSemanticTraceCandidates } from '../tier/semanticTraceCandidates';
+import { buildSupplementalProbeInputs } from '../tier/supplementalProbeInputs';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 interface Fixture {
@@ -85,9 +85,9 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
             if (inputs.length > 0) {
                 traceArgs.push(JSON.stringify(inputs));
             }
-            const trace = pythonJson(traceArgs, `${fixture.id} Dynamic Trace`);
+            const trace = pythonJson(traceArgs, `${fixture.id} initial behavior probe`);
             if (fixture.expected.semantic_trace_inputs?.length) {
-                const semanticInputs = buildSemanticTraceCandidates({
+                const supplementalInputs = buildSupplementalProbeInputs({
                     test_strategy: {
                         approach: 'neutral corpus semantic candidate',
                         input_hints: [{
@@ -102,8 +102,8 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                         key_rules: []
                     }
                 }, ast.signature);
-                const semanticTraceArgs = [join(scriptsRoot, 'dynamic_tracer.py'), sourcePath, fixture.target, JSON.stringify([...inputs, ...semanticInputs])];
-                const semanticTrace = pythonJson(semanticTraceArgs, `${fixture.id} semantic Dynamic Trace`);
+                const semanticTraceArgs = [join(scriptsRoot, 'dynamic_tracer.py'), sourcePath, fixture.target, JSON.stringify([...inputs, ...supplementalInputs])];
+                const semanticTrace = pythonJson(semanticTraceArgs, `${fixture.id} supplemental behavior probe`);
                 const appendUnique = (left: any[], right: any[]) => {
                     const seen = new Set<string>();
                     return [...left, ...right].filter(item => {
@@ -122,7 +122,7 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                     trace.examples.some((example: { args?: unknown[] }) =>
                         JSON.stringify(example.args || []) === JSON.stringify([expectedInput])
                     ),
-                    `${fixture.id}: Dynamic Trace omitted declared input ${expectedInput}`
+                    `${fixture.id}: behavior probe omitted declared input ${expectedInput}`
                 );
             }
             for (const semanticInput of fixture.expected.semantic_trace_inputs || []) {
@@ -131,7 +131,7 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                         JSON.stringify(example.args || []) === JSON.stringify([])
                         && Object.values(example.kwargs || {}).includes(semanticInput)
                     ),
-                    `${fixture.id}: semantic candidate ${semanticInput} was not executed by Dynamic Trace`
+                    `${fixture.id}: analyst-proposed input ${semanticInput} was not executed by the behavior probe`
                 );
             }
 

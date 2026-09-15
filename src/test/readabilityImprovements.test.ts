@@ -2,7 +2,7 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { dispatchSkills } from '../pipeline/skillDispatcher';
+import { dispatchTestRules } from '../pipeline/testRuleDispatcher';
 import { PYTHON_TOOLS, pythonToolPath } from '../pipeline/pythonTools';
 import { buildSemanticAnalyzerSystemPrompt } from '../roles/semanticAnalyzer';
 import { QUALIFICATION_VERSION, qualificationEndpointKey, qualificationForRequest } from '../llm/modelQualification';
@@ -17,13 +17,23 @@ test('all workflow Python tools exist and runtime tools are not packaged as test
     }
 });
 
-test('analyst no longer selects skills; deterministic dispatch still supplies relevant guidance', () => {
+test('analyst no longer selects rules; deterministic dispatch still supplies relevant guidance', () => {
     const prompt = buildSemanticAnalyzerSystemPrompt();
     assert.doesNotMatch(prompt, /required_skills|AVAILABLE SKILL IDs|skill_id_1/);
-    const selection = dispatchSkills('def target(value):\n    if len(value) < 4: raise ValueError()\n    return value');
+    const selection = dispatchTestRules('def target(value):\n    if len(value) < 4: raise ValueError()\n    return value');
     assert.ok(selection.ids.includes('string_length_boundary'));
     assert.ok(selection.ids.includes('assert_raises_syntax'));
-    assert.equal(selection.provenance, 'source-derived');
+    assert.equal(selection.provenance, 'deterministic');
+    assert.equal(selection.schemaVersion, 'rule-selection-v2');
+    assert.ok(selection.selectedRules.every(rule => rule.triggerFacts.length > 0));
+    assert.ok(selection.selectedRules.every(rule =>
+        rule.triggerFacts.every(fact => !fact.startsWith('analyst-'))
+        && rule.triggerFacts.every(fact => !fact.startsWith('deterministic-selector:'))
+    ));
+    assert.ok(selection.selectedRules.some(rule =>
+        rule.ruleId === 'string_length_boundary'
+        && rule.triggerFacts.some(fact => /source-line-2:.*len\(value\)/.test(fact))
+    ));
 });
 
 test('old probe metadata expires without converting historical JSON success into Python success', () => {

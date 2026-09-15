@@ -594,7 +594,7 @@ export function validateUnittestStructure(
         if (unsupportedException) {
             return {
                 valid: false,
-                reason: `assertRaises(${unsupportedException}) 沒有目標原始碼、Dynamic Trace 或 mock side_effect 的例外事實依據。`
+                reason: `assertRaises(${unsupportedException}) 沒有目標原始碼、已驗證行為觀測或 mock side_effect 的例外事實依據。`
             };
         }
         const callReference = targetCallReference(executable, targetCallable, targetModule, targetClassName);

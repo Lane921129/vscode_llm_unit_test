@@ -10,8 +10,15 @@ import {
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
+import {
+    BehaviorObservation,
+    BehaviorObservations,
+    SemanticPlanV2,
+    summarizeObservationPhase,
+    WriterEvidenceBundleV3
+} from './pipeline/evidenceContracts';
 import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from './validation/scenarioIdentity';
-import { dispatchSkills } from './pipeline/skillDispatcher';
+import { dispatchTestRules } from './pipeline/testRuleDispatcher';
 import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
@@ -40,7 +47,7 @@ import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { classifyExecutionFailure } from './utils/executionFailureCategory';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
-import { buildSemanticTraceCandidates, SemanticTraceInput } from './tier/semanticTraceCandidates';
+import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -296,7 +303,7 @@ interface AstContext {
     executable_lines?: number[];
     raised_exceptions?: string[];
     condition_facts?: Array<{ kind: 'comparison' | 'membership' | 'match'; parameter: string; subject: 'value' | 'length'; operator?: string; literal?: string | null; literals?: string[]; line: number }>;
-    traceResult?: DynamicTraceResult;
+    traceResult?: BehaviorProbeResult;
     dependencyContexts?: AstContext[];
     sourceVersions?: Array<{ file: string; hash: string }>;
     callerContexts?: CallerContext[];
@@ -496,39 +503,20 @@ async function findCallerContexts(
     }
 }
 
-interface TraceExample {
-    args: string[];
-    kwargs?: Record<string, string>;
-    constructor_args?: string[];
-    constructor_kwargs?: Record<string, string>;
-    result?: string;
-    result_type?: string;
-    result_assertable?: boolean;
-    call_assertable?: boolean;
-    exception?: string;
-    message?: string;
-}
-
-interface DynamicTraceResult {
-    func_name: string;
-    args: string[];
-    examples: TraceExample[];
-    errors: TraceExample[];
-    load_error: string | null;
-    input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry' | 'semantic_guided';
-}
+type ObservationExample = BehaviorObservation;
+type BehaviorProbeResult = BehaviorObservations;
 
 /**
- * 執行動態追蹤：呼叫 dynamic_tracer.py 取得真實的 input→output 範例
+ * 執行受控行為探測：呼叫既有 Python 探測器取得有界的 input→output 觀測
  * callerArgs: 從呼叫站語境中提取的已知真實參數（可選）
  */
-async function runDynamicTrace(
+async function runBehaviorProbe(
     filePath: string,
     funcName: string,
     callerArgs?: CallerContext[],
     pythonExecutable: string = 'python',
-    semanticInputs: SemanticTraceInput[] = []
-): Promise<DynamicTraceResult | null> {
+    supplementalInputs: SupplementalProbeInput[] = []
+): Promise<BehaviorProbeResult | null> {
     const pythonScript = pythonToolPath('trace');
     const baseArgs = [pythonScript, filePath, funcName];
     let literalInputs: Array<{
@@ -547,47 +535,47 @@ async function runDynamicTrace(
                 constructor_kwargs: ctx.trace_constructor_kwargs || {}
             }));
     }
-    const suppliedInputs = [...literalInputs, ...semanticInputs].filter(input =>
+    const suppliedInputs = [...literalInputs, ...supplementalInputs].filter(input =>
         Array.isArray(input.args) && input.kwargs !== null && typeof input.kwargs === 'object'
     );
     const uniqueInputs = suppliedInputs.filter((input, index) =>
         suppliedInputs.findIndex(candidate => JSON.stringify(candidate) === JSON.stringify(input)) === index
     );
     try {
-        const runTrace = async (inputs?: typeof literalInputs): Promise<DynamicTraceResult> => {
+        const runProbe = async (inputs?: typeof literalInputs): Promise<BehaviorProbeResult> => {
             const args = [...baseArgs];
             if (inputs && inputs.length > 0) {args.push(JSON.stringify(inputs));}
             const { stdout } = await runSpawn(pythonExecutable, args, {
                 env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
                 timeout: 15000
             });
-            return JSON.parse(stdout.trim()) as DynamicTraceResult;
+            return JSON.parse(stdout.trim()) as BehaviorProbeResult;
         };
-        const initial = await runTrace(uniqueInputs);
+        const initial = await runProbe(uniqueInputs);
         if (shouldRetryTraceWithoutCallerInputs(initial, uniqueInputs.length)) {
-            const retry = await runTrace();
+            const retry = await runProbe();
             return { ...retry, input_source: 'source_guided_retry' };
         }
         return {
             ...initial,
-            input_source: semanticInputs.length > 0
+            input_source: supplementalInputs.length > 0
                 ? 'semantic_guided'
                 : literalInputs.length > 0 ? 'caller_literals' : 'source_guided'
         };
     } catch (e: any) {
-        console.error(`[Trace ERROR] ${e.message || e}`);
-        return { func_name: funcName, args: [], examples: [], errors: [], load_error: `spawn failed: ${e.message || 'unknown'}` } as DynamicTraceResult;
+        console.error(`[Behavior Probe ERROR] ${e.message || e}`);
+        return { func_name: funcName, args: [], examples: [], errors: [], load_error: `spawn failed: ${e.message || 'unknown'}` } as BehaviorProbeResult;
     }
 }
 
-/** Retain the initial Trace facts when semantic candidates add more executions. */
-function mergeDynamicTraceResults(
-    initial: DynamicTraceResult | undefined,
-    additional: DynamicTraceResult
-): DynamicTraceResult {
+/** Retain initial observations when analyst-proposed inputs add more executions. */
+function mergeBehaviorProbeResults(
+    initial: BehaviorProbeResult | undefined,
+    additional: BehaviorProbeResult
+): BehaviorProbeResult {
     if (!initial || initial.load_error) {return additional;}
     if (additional.load_error) {return initial;}
-    const mergeItems = (left: TraceExample[], right: TraceExample[]) => {
+    const mergeItems = (left: ObservationExample[], right: ObservationExample[]) => {
         const seen = new Set<string>();
         return [...left, ...right].filter(item => {
             const key = JSON.stringify(item);
@@ -1005,12 +993,12 @@ async function resolveAstAndDependencies(
                         depAst.callerContexts = callers;
                         log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
                     }
-                    const dependencyTrace = await runDynamicTrace(depFilePath, dep.name, callers, pythonExecutable);
+                    const dependencyTrace = await runBehaviorProbe(depFilePath, dep.name, callers, pythonExecutable);
                     if (dependencyTrace && !dependencyTrace.load_error) {
                         depAst.traceResult = dependencyTrace;
-                        log(`[Trace] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
+                        log(`[行為探測] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
                     } else if (dependencyTrace?.load_error) {
-                        log(`[Trace] 相依 ${dep.name} 無法安全取得事實：${dependencyTrace.load_error}（保留原始碼語境，不中止分析）。`);
+                        log(`[行為探測] 相依 ${dep.name} 無法安全取得事實：${dependencyTrace.load_error}（保留原始碼語境，不中止分析）。`);
                     }
                     astContext.dependencyContexts.push(depAst);
                     log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
@@ -1025,8 +1013,8 @@ async function resolveAstAndDependencies(
         log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
     }
 
-    log(`[Trace] 正在動態執行函式以取得真實輸入輸出範例...`);
-    const traceResult = await runDynamicTrace(filePath, funcName, astContext.callerContexts, pythonExecutable);
+    log(`[行為探測] 正在受控執行函式以取得輸入輸出觀測...`);
+    const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable);
     if (traceResult && !traceResult.load_error) {
         astContext.traceResult = traceResult;
         const exCount = traceResult.examples.length;
@@ -1034,9 +1022,9 @@ async function resolveAstAndDependencies(
         const sourceLabel = traceResult.input_source === 'source_guided_retry'
             ? '（caller 字面值無效，已改用原始碼導向輸入）'
             : traceResult.input_source === 'caller_literals' ? '（含 caller 字面值）' : '';
-        log(`[Trace] 完成！取得 ${exCount} 個成功範例、${errCount} 個預期例外範例。${sourceLabel}`);
+        log(`[行為探測] 完成！取得 ${exCount} 個成功範例、${errCount} 個例外觀測。${sourceLabel}`);
     } else if (traceResult?.load_error) {
-        log(`[Trace] 動態追蹤失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
+        log(`[行為探測] 受控執行失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
     }
 
     return astContext;
@@ -1207,7 +1195,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
     if (dummyNameMarked) {
         finalReportMarkdown += `## 🚀 Dummy 標記快速通道\n\n`;
-        finalReportMarkdown += `> [!NOTE]\n> 函式名稱包含明確 \`dummy\` token，已依使用者標記略過 AST、Dynamic Trace、LLM 與突變測試。\n\n`;
+        finalReportMarkdown += `> [!NOTE]\n> 函式名稱包含明確 \`dummy\` token，已依使用者標記略過 AST、受控行為探測、LLM 與突變測試。\n\n`;
         finalReportMarkdown += `- **測試狀態**: 已略過（Dummy／雜訊函式）\n`;
         finalReportMarkdown += `- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n`;
         throwIfExecutionCancelled();
@@ -1353,89 +1341,194 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
     };
     finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
-    let semanticContext: string | undefined;
-    const skillSelection = dispatchSkills(astContext?.code || '', astContext || undefined);
-    const deterministicSkillIds = skillSelection.ids;
-    recordRole('skill-dispatcher', 'source-derived', { ids: deterministicSkillIds });
+    const targetSourceHash = evidenceHash(astContext?.code || initialSource);
+    let semanticPlan: SemanticAnalysis | undefined;
+    let semanticPlanContract: SemanticPlanV2 | undefined;
+    let supplementalTargetObservations: BehaviorProbeResult | undefined;
+    const initialTargetObservations = astContext?.traceResult;
+    const semDeps = ((astContext?.dependencyContexts || []) as any[])
+        .filter((dependency: any) => dependency.code)
+        .map((dependency: any) => ({
+            name: dependency.name as string,
+            code: dependency.code as string,
+            sourceHash: evidenceHash(dependency.code as string),
+            observations: dependency.traceResult as BehaviorProbeResult | undefined
+        }));
+    const semCallSites = ((astContext?.callerContexts) as any[] | undefined)
+        ?.map((caller: any) => ({
+            caller_func: caller.caller_func as string || '',
+            call_expr: caller.call_expr as string || ''
+        })) || [];
+    recordRole('evidence-collection', 'static-ready', {
+        contractVersion: ROLE_CONTRACT_VERSIONS.analystEvidence,
+        targetSourceHash,
+        targetParameters: astContext?.args || [],
+        callSiteCount: semCallSites.length,
+        dependencyCount: semDeps.length
+    });
+    recordRole('behavior-probe', initialTargetObservations && !initialTargetObservations.load_error
+        ? 'initial-ready' : 'initial-unavailable', {
+        phase: 'initial',
+        summary: summarizeObservationPhase(initialTargetObservations),
+        observations: initialTargetObservations || null
+    });
     if (astContext && !astContext.error && mayUseModelAuthoredTests) {
         log(`[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）...`);
         try {
             const semSys = buildSemanticAnalyzerSystemPrompt();
-            const semDeps = ((astContext.dependencyContexts || []) as any[])
-                .filter((d: any) => d.code)
-                .map((d: any) => ({
-                    name: d.name as string,
-                    code: d.code as string,
-                    traceResult: d.traceResult
-                }));
-            // 從 AST 的 callerContexts 擷取呼叫表達式
-            const semCallSites = ((astContext.callerContexts) as any[] | undefined)
-                ?.map((c: any) => ({
-                    caller_func: c.caller_func as string || '',
-                    call_expr: c.call_expr as string || ''
-                })) || [];
             const semUsr = getSemanticAnalyzerUserPrompt(
-                astContext.code || '',
-                semDeps,
-                semCallSites,
-                astContext
+                {
+                    schemaVersion: 'analysis-evidence-v2',
+                    target: {
+                        moduleName: targetImportModule,
+                        functionName: targetFuncName,
+                        source: astContext.code || '',
+                        sourceHash: targetSourceHash
+                    },
+                    astFacts: astContext,
+                    callSites: semCallSites,
+                    dependencies: semDeps,
+                    initialTargetObservations
+                }
             );
             const semRaw = await requestLlmApi(
                 params, semSys, semUsr, log,
                 analysisResponseFormat === 'text' ? 'text' : 'semantic-json'
             );
             const parsedSemResult = parseSemanticAnalysis(semRaw);
-            recordRole('analyst-planning', parsedSemResult ? 'parsed-hypotheses' : 'invalid-response', { raw: semRaw, result: parsedSemResult });
             if (parsedSemResult) {
                 const semResult = restrictSemanticInputHintsToTargetParameters(
                     parsedSemResult,
                     Array.isArray(astContext.args) ? astContext.args : undefined
                 );
-                semanticContext = skillSelection.guidance + formatSemanticContextForPrompt(semResult, semDeps);
-                const semanticTraceInputs = buildSemanticTraceCandidates(
-                    semResult,
-                    astContext.signature
-                );
-                if (semanticTraceInputs.length > 0) {
-                    log(`[語意 Trace] 正在以 ${semanticTraceInputs.length} 組安全 scalar 候選取得真實 I/O...`);
-                    const semanticTrace = await runDynamicTrace(
-                        params.filePath,
-                        params.funcName,
-                        astContext.callerContexts,
-                        pythonExecutable,
-                        semanticTraceInputs
-                    );
-                    if (semanticTrace && !semanticTrace.load_error) {
-                        const mergedTrace = mergeDynamicTraceResults(
-                            astContext.traceResult,
-                            semanticTrace
-                        );
-                        astContext.traceResult = mergedTrace;
-                        log(`[語意 Trace] 完成！新增候選已實測；目前共 ${mergedTrace.examples.length} 個成功範例、${mergedTrace.errors.length} 個例外範例。`);
-                    } else if (semanticTrace?.load_error) {
-                        log(`[語意 Trace] 候選無法安全執行：${semanticTrace.load_error}（保留原有 Trace 事實）。`);
-                    }
-                }
+                semanticPlan = semResult;
+                semanticPlanContract = {
+                    schemaVersion: 'semantic-plan-v2',
+                    sourceHash: targetSourceHash,
+                    hypotheses: semResult,
+                    provenance: 'model-hypothesis'
+                };
+                recordRole('analyst-planning', 'parsed-hypotheses', {
+                    inputContractVersion: ROLE_CONTRACT_VERSIONS.analystEvidence,
+                    outputContractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan,
+                    raw: semRaw,
+                    result: semanticPlanContract
+                });
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
-                journal.knowledge({ planningHypotheses: semResult, verifiedTrace: astContext.traceResult, dependencies: astContext.dependencyContexts });
                 log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、候選不可達路徑: ${semResult.unreachable_paths.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
-                finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${semanticContext}\n\`\`\`\n\n`;
             } else {
-                log(`[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵技能基線（不影響主流程）。`);
+                recordRole('analyst-planning', 'invalid-response', {
+                    inputContractVersion: ROLE_CONTRACT_VERSIONS.analystEvidence,
+                    outputContractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan,
+                    raw: semRaw,
+                    result: null
+                });
+                log(`[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵規則基線（不影響主流程）。`);
             }
         } catch (semErr: any) {
             recordRole('analyst-planning', 'failed', { reason: semErr.message });
             log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
         }
+    } else {
+        recordRole('analyst-planning', 'skipped', {
+            reason: astContext?.error ? 'AST unavailable' : 'model-authored tests unavailable'
+        });
     }
 
-    if (!semanticContext && deterministicSkillIds.length > 0) {
-        semanticContext = '=== DETERMINISTIC SKILL BASELINE (Derived from source syntax) ===\n\n'
-            + skillSelection.guidance;
-        log(mayUseModelAuthoredTests
-            ? `[技能卡] 使用程式碼特徵的保守技能組合：${deterministicSkillIds.join(', ')}。`
-            : `[技能卡] 模型尚未驗證；略過 LLM 語意分析，使用程式碼特徵的確定性技能組合：${deterministicSkillIds.join(', ')}。`);
+    // The Analyst plans scenarios first. The deterministic dispatcher then
+    // selects only source/AST-supported rules for Writer.
+    const ruleSelection = dispatchTestRules(
+        astContext?.code || '',
+        astContext || undefined,
+        semanticPlan
+    );
+    const deterministicRuleIds = ruleSelection.ids;
+    recordRole('rule-dispatcher', 'deterministic', ruleSelection);
+
+    if (semanticPlan && astContext && !astContext.error) {
+        const supplementalInputs = buildSupplementalProbeInputs(
+            semanticPlan,
+            astContext.signature
+        );
+        if (supplementalInputs.length > 0) {
+            log(`[補充行為探測] 正在以 ${supplementalInputs.length} 組安全純量輸入取得真實 I/O...`);
+            const supplementalObservations = await runBehaviorProbe(
+                params.filePath,
+                params.funcName,
+                astContext.callerContexts,
+                pythonExecutable,
+                supplementalInputs
+            );
+            if (supplementalObservations) {
+                supplementalTargetObservations = supplementalObservations;
+                if (!supplementalObservations.load_error) {
+                    const mergedObservations = mergeBehaviorProbeResults(
+                        astContext.traceResult,
+                        supplementalObservations
+                    );
+                    astContext.traceResult = mergedObservations;
+                    log(`[補充行為探測] 完成！新增輸入已實測；目前共 ${mergedObservations.examples.length} 個成功範例、${mergedObservations.errors.length} 個例外範例。`);
+                } else {
+                    log(`[補充行為探測] 無法安全執行：${supplementalObservations.load_error}（保留原有行為觀測）。`);
+                }
+            }
+            recordRole('behavior-probe', supplementalTargetObservations && !supplementalTargetObservations.load_error
+                ? 'supplemental-ready' : 'supplemental-unavailable', {
+                phase: 'supplemental',
+                inputCount: supplementalInputs.length,
+                summary: summarizeObservationPhase(supplementalTargetObservations),
+                observations: supplementalTargetObservations || null
+            });
+        } else {
+            recordRole('behavior-probe', 'supplemental-skipped', {
+                phase: 'supplemental',
+                reason: '分析師未提出可安全解析且能滿足函式簽章的純量輸入。'
+            });
+        }
     }
+    const analystGuidance = semanticPlan
+        ? formatSemanticContextForPrompt(semanticPlan, semDeps)
+        : '=== ANALYST PLAN UNAVAILABLE ===\nUse only source, AST, and verified controlled-execution observations.\n';
+    const semanticContext = `${analystGuidance}\n${ruleSelection.guidance}`;
+    const writerEvidenceBundle: WriterEvidenceBundleV3 = {
+        schemaVersion: 'writer-evidence-v3',
+        sourceHash: targetSourceHash,
+        semanticGuidance: semanticContext,
+        semanticPlan: semanticPlanContract,
+        ruleSelection,
+        initialTargetObservations,
+        supplementalTargetObservations,
+        mergedTargetObservations: astContext?.traceResult,
+        evidencePriority: [
+            'executed-observations',
+            'explicit-source-paths',
+            'ast-structure',
+            'analyst-hypotheses-and-rule-guidance'
+        ]
+    };
+    recordRole('writer-handoff', 'ready', {
+        contractVersion: ROLE_CONTRACT_VERSIONS.writerEvidence,
+        sourceHash: writerEvidenceBundle.sourceHash,
+        initialObservationSummary: summarizeObservationPhase(initialTargetObservations),
+        supplementalObservationSummary: summarizeObservationPhase(supplementalTargetObservations),
+        mergedObservationSummary: summarizeObservationPhase(astContext?.traceResult),
+        selectedRuleIds: deterministicRuleIds
+    });
+    journal.knowledge({
+        planningHypotheses: semanticPlanContract || null,
+        initialTargetObservations: initialTargetObservations || null,
+        supplementalTargetObservations: supplementalTargetObservations || null,
+        verifiedObservations: astContext?.traceResult || null,
+        dependencies: astContext?.dependencyContexts,
+        selectedRules: ruleSelection
+    });
+    if (semanticPlan) {
+        finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${analystGuidance}\n\`\`\`\n\n`;
+    }
+    finalReportMarkdown += `\n### 測試生成規則\n\n${deterministicRuleIds.map(id => `- ${id}`).join('\n') || '- 無'}\n\n`;
+    log(mayUseModelAuthoredTests
+        ? `[測試生成規則] 分析完成後選取：${deterministicRuleIds.join(', ') || '無'}。`
+        : `[測試生成規則] 模型尚未驗證；使用 AST 確定性規則：${deterministicRuleIds.join(', ') || '無'}。`);
 
     while (currentLoop <= params.maxLoops && (mutationScore < 100 || qualityGaps.length > 0)) {
 
@@ -1452,7 +1545,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         try {
             targetCode = fs.readFileSync(params.filePath, 'utf-8');
             if (!evidenceStillCurrent()) {
-                recordRole('source', 'changed', { reason: '來源版本已改變；停止沿用舊 Trace 與品質證據。' });
+                recordRole('source', 'changed', { reason: '來源版本已改變；停止沿用舊行為觀測與品質證據。' });
                 journal.knowledge({ terminalStatus: 'source-changed', evidenceValid: false });
                 break;
             }
@@ -1493,7 +1586,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             focusContext,
             activeModelProfile.budgetTokens,
             params.modelName,
-            semanticContext
+            writerEvidenceBundle
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
         log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${activeModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${activeModelProfile.paramSize}, Context: ${activeModelProfile.contextLength.toLocaleString()})`);
@@ -1521,7 +1614,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const traceResult = astContext?.traceResult;
                 if (!tier1GenerationModeRecorded) {
                     const modeLabel = tier1GenerationMode === 'llm-evidence-bound'
-                        ? 'LLM 證據導向生成（來源碼 + AST + Dynamic Trace + 技能卡）'
+                        ? 'LLM 證據導向生成（來源碼 + AST + 已驗證行為觀測 + 測試生成規則）'
                         : '確定性備援（模型尚未通過 Auto 的 unittest 資格探測）';
                     finalReportMarkdown += `- **Tier 1 實際產生模式**: ${modeLabel}\n\n`;
                     // Stable, machine-readable provenance for fixture scorecards.
@@ -1531,15 +1624,15 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 }
                 if (tier1GenerationMode === 'llm-evidence-bound') {
                     systemPrompt = getTier1EvidenceBoundSystemPrompt();
-                    log('[Tier 1] 以 LLM 證據導向生成：模型將根據來源碼、AST、Dynamic Trace 與技能卡選擇測試行為；後續閘門驗證產物。');
+                    log('[Tier 1] 以 LLM 證據導向生成：模型將根據來源碼、AST、已驗證行為觀測與測試生成規則撰寫測試；後續閘門驗證產物。');
                 } else {
                     if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
                         throw new Error(
-                            'Tier 1 確定性備援無法取得可驗證的動態 Trace；Auto 模式下選定模型尚未通過 unittest 生成探測，'
+                            'Tier 1 確定性備援無法取得可驗證的行為觀測；Auto 模式下選定模型尚未通過 unittest 生成探測，'
                             + '因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 1–4 後以既有驗證閘門使用 LLM 生成。'
                         );
                     }
-                    log(`[Tier 1 備援] 模型未驗證，使用已驗證 Dynamic Trace 機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
+                    log(`[Tier 1 備援] 模型未驗證，使用已驗證行為觀測機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
                     const className = astContext?.class_name as string | null | undefined;
                     const constructorParams = (astContext?.class_context?.effective_init?.required_params
                         || astContext?.class_context?.effective_init?.params
@@ -1563,10 +1656,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         );
                     } else if (tier1File.code) {
                         sanitizedCode = tier1File.code;
-                        rawCode = `[Tier 1 deterministic fallback] Generated ${tier1File.methodCount} trace-derived test methods`;
-                        log(`[Tier 1 備援] 完成！共產出 ${tier1File.methodCount} 個 Trace 衍生測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
+                        rawCode = `[Tier 1 deterministic fallback] Generated ${tier1File.methodCount} observation-derived test methods`;
+                        log(`[Tier 1 備援] 完成！共產出 ${tier1File.methodCount} 個行為觀測衍生測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
                     } else {
-                        throw new Error('Tier 1 確定性備援未能從已驗證 Trace 產生測試。');
+                        throw new Error('Tier 1 確定性備援未能從已驗證行為觀測產生測試。');
                     }
                 }
             }
@@ -1638,7 +1731,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const ctx = astContext.callerContexts[cIdx];
                     log(`[分治合流] 正在生成第 ${cIdx + 1}/${callerContextsCount} 個呼叫點測試: \`${ctx.caller_file}\` -> \`${ctx.caller_func}()\``);
 
-                    // 打造微型 AST／Trace context：子任務只能看到本 caller
+                    // 打造微型 AST／行為觀測 context：子任務只能看到本 caller
                     // 可精確對應的實測 I/O，不能借用其他 caller 的 oracle。
                     const subTraceResult = traceSubsetForCaller(
                         astContext.traceResult,
@@ -1658,7 +1751,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         focusContext,
                         activeModelProfile.budgetTokens,
                         params.modelName,
-                        semanticContext
+                        writerEvidenceBundle
                     );
 
                     let subRaw = "";
@@ -1690,10 +1783,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 }
                                 const subReason = subGate.reason || '不明驗證錯誤';
                                 if (retry === 0) {
-                                    log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆未通過格式／Trace 證據驗證：${subReason}；將重試此子任務。`);
-                                    subGenerationPrompt = `${subUserPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${subReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Preserve exact verified Trace facts.`;
+                                    log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆未通過格式／行為觀測證據驗證：${subReason}；將重試此子任務。`);
+                                    subGenerationPrompt = `${subUserPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${subReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Preserve exact verified behavior observations.`;
                                 } else {
-                                    log(`[警告] 呼叫點 ${cIdx + 1} 子回覆連續未通過格式／Trace 證據驗證：${subReason}`);
+                                    log(`[警告] 呼叫點 ${cIdx + 1} 子回覆連續未通過格式／行為觀測證據驗證：${subReason}`);
                                 }
                             } else if (retry === 0) {
                                 log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆為空或不可擷取，將重試此子任務。`);
@@ -1787,7 +1880,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
                         if (llmRetry === 0) {
                             log(`[警告] 模型輸出未通過證據／Python unittest 驗證：${validationReason}；將以嚴格格式要求重試。`);
-                            generationPrompt = `${userPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${validationReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block. Keep every assertion for an exact verified Trace call equal to that Trace result.`;
+                            generationPrompt = `${userPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${validationReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block. Keep every assertion for an exact verified call equal to its behavior observation.`;
                             sanitizedCode = '';
                             continue;
                         }
@@ -1803,7 +1896,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 ? '### 🧩 Tier 1 確定性備援產物'
                 : '### 🤖 LLM 原始輸出與思考過程';
             const generatedOutputSummary = isDeterministicTier1Output
-                ? '點擊展開由已驗證 Dynamic Trace 組裝的產物（非 LLM）'
+                ? '點擊展開由已驗證行為觀測組裝的產物（非 LLM）'
                 : '點擊展開 AI 完整回應';
             finalReportMarkdown += `${generatedOutputTitle}\n\n`;
             finalReportMarkdown += `<details>\n<summary>${generatedOutputSummary}</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
@@ -1866,7 +1959,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 : candidate;
             finalCode = preserveTrace(finalCode);
             if (verifiedTrace?.code) {
-                log(`[Trace 保底] 已保留 ${verifiedTrace.methodCount} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。`);
+                log(`[行為觀測保底] 已保留 ${verifiedTrace.methodCount} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。`);
             }
 
             recordRole('writer', 'candidate', { tier: currentTier, raw: rawCode, code: finalCode });
@@ -2289,9 +2382,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 acceptedScenarios = bestScenarios;
                 finalReportMarkdown += `> 已還原歷史基線，測試、分數（${bestScore}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n`;
             }
-            journal.knowledge({ target: targetFuncName, verifiedTrace: astContext?.traceResult,
+            journal.knowledge({ target: targetFuncName,
+                initialTargetObservations: initialTargetObservations || null,
+                supplementalTargetObservations: supplementalTargetObservations || null,
+                verifiedObservations: astContext?.traceResult || null,
                 sourceStructure: astContext?.code, dependencies: astContext?.dependencyContexts,
-                planningHypotheses: semanticContext, acceptedTest: path.basename(bestTestPath || testPath),
+                planningHypotheses: semanticPlanContract || null,
+                selectedRules: ruleSelection,
+                acceptedTest: path.basename(bestTestPath || testPath),
                 acceptedCodeHash: evidenceHash(fs.readFileSync(testPath, 'utf8')),
                 dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })),
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,

@@ -4,15 +4,37 @@ import * as path from 'path';
 import { test } from 'node:test';
 import { getBugFixerSystemPrompt, getBugFixerUserPrompt } from '../roles/bugFixer';
 import { getBaseFewShotExamples } from '../prompts/fewShotExamples';
+import { WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
+import { dispatchTestRules } from '../pipeline/testRuleDispatcher';
 import {
     buildSemanticAnalyzerSystemPrompt,
     formatSemanticContextForPrompt,
     getSemanticAnalyzerUserPrompt,
+    AnalysisEvidenceV2,
     SemanticAnalysis
 } from '../roles/semanticAnalyzer';
 import { compactSemanticGuidanceForBudget, getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../roles/unittestWriter';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
+
+function analysisEvidence(
+    source: string,
+    overrides: Partial<AnalysisEvidenceV2> = {}
+): AnalysisEvidenceV2 {
+    return {
+        schemaVersion: 'analysis-evidence-v2',
+        target: {
+            moduleName: 'sample',
+            functionName: 'target',
+            source,
+            sourceHash: 'source-hash'
+        },
+        astFacts: undefined,
+        callSites: [],
+        dependencies: [],
+        ...overrides
+    };
+}
 
 test('shared prompts and active base examples contain no project-domain vocabulary', () => {
     const sharedPromptText = [
@@ -46,16 +68,16 @@ test('writer output contract does not branch on a provider or model name', () =>
     assert.doesNotMatch(writerSource, /<thinking>|<\/thinking>/);
 });
 
-test('Tier 1 LLM prompt binds assertions to execution evidence and keeps skill cards scoped', () => {
+test('Tier 1 LLM prompt binds assertions to execution evidence and keeps test-generation rules scoped', () => {
     const prompt = getTier1EvidenceBoundSystemPrompt();
 
     assert.match(prompt, /Verified Real Execution Result/);
-    assert.match(prompt, /Selected skill cards are scoped guidance/);
+    assert.match(prompt, /Selected test-generation rules are scoped guidance/);
     assert.match(prompt, /structural, isolated execution, coverage, and mutation checks/);
     assert.doesNotMatch(prompt, forbiddenDomainTerms);
 });
 
-test('Bug Fixer prompt contains one failing method and omits broad AST, Trace, dependency, and skill context', () => {
+test('Bug Fixer prompt contains one failing method and omits broad AST, observation, dependency, and rule context', () => {
     const systemPrompt = getBugFixerSystemPrompt();
     const prompt = getBugFixerUserPrompt(
         'import unittest\nclass Cases(unittest.TestCase):\n    def test_render(self):\n        self.assertEqual(render("x"), "bad")\n\n    def test_keep(self):\n        self.assertTrue(True)',
@@ -68,7 +90,7 @@ test('Bug Fixer prompt contains one failing method and omits broad AST, Trace, d
             file_imports: [{ kind: 'from', module: 'settings', name: 'PREFIX', level: 0 }],
             referenced_globals: [{ name: 'PREFIX', code: "PREFIX = '>'" }],
             traceResult: { examples: [{ args: ["'x'"], kwargs: {}, result: "'>x'" }] }
-        }, 'renderer', '=== SKILL CART ===\nUse selected evidence only.'
+        }, 'renderer', '=== TEST RULES ===\nUse selected evidence only.'
     );
 
     assert.match(systemPrompt, /Repair one failing test method only/);
@@ -107,13 +129,13 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
             class_context: { init: { required_params: [], assigns: [], signature: [{ name: 'label', annotation: 'str' }] } }
         }, 'sample'
     );
-    const semanticPrompt = getSemanticAnalyzerUserPrompt(
-        'def transform(values): return values', [], [], {
+    const semanticPrompt = getSemanticAnalyzerUserPrompt(analysisEvidence(
+        'def transform(values): return values', { astFacts: {
             args: ['values'],
             class_name: 'Worker', method_kind: 'instance',
             class_context: { name: 'Worker', init: { signature: [{ name: 'label', annotation: 'str', required: true, default: null }] } }
-        }
-    );
+        }}
+    ));
 
     assert.match(writerPrompt, /Source parameter type hints: values: list\[str\]; limit: int = 1/);
     assert.match(writerPrompt, /Constructor type hints \(input-shape guidance only\): label: str/);
@@ -126,16 +148,70 @@ test('prompts retain AST type annotations as input-shape guidance only', () => {
 });
 
 test('semantic prompt distinguishes target caller inputs from dependency calls', () => {
-    const prompt = getSemanticAnalyzerUserPrompt(
-        'def render(value):\n    return normalize(value)', [],
-        [{ caller_func: 'entrypoint', call_expr: "render('draft')" }],
-        { args: ['value'] }
-    );
+    const prompt = getSemanticAnalyzerUserPrompt(analysisEvidence(
+        'def render(value):\n    return normalize(value)', {
+            callSites: [{ caller_func: 'entrypoint', call_expr: "render('draft')" }],
+            astFacts: { args: ['value'] }
+        }
+    ));
 
     assert.match(prompt, /TARGET CALL SITES \(INPUT CANDIDATES ONLY\)/);
     assert.match(prompt, /render\('draft'\)/);
     assert.match(prompt, /never name dependency parameters or dependency return keys/);
     assert.doesNotMatch(prompt, /HOW TARGET CALLS DEPENDENCIES/);
+});
+
+test('semantic prompt receives exact initial observations and keeps blocked operations diagnostic-only', () => {
+    const prompt = getSemanticAnalyzerUserPrompt(analysisEvidence(
+        'def target(value):\n    return value.upper()', {
+            initialTargetObservations: {
+                func_name: 'target', args: ['value'], load_error: null,
+                examples: [{ args: ["'ok'"], result: "'OK'", result_type: 'str' }],
+                errors: [{ args: ['None'], exception: 'AttributeError', message: 'no upper' }],
+                blocked_operations: ['network access to example.invalid']
+            }
+        }
+    ));
+
+    assert.match(prompt, /VERIFIED TARGET EXECUTION OBSERVATIONS/);
+    assert.match(prompt, /target\('ok'\) => 'OK' \[str\]/);
+    assert.match(prompt, /target\(None\) raises AttributeError: no upper/);
+    assert.match(prompt, /Diagnostic only, blocked by safety policy/);
+    assert.match(prompt, /Never turn them into target exceptions or assertions/);
+});
+
+test('Writer evidence bundle records rule selection and both observation phases', () => {
+    const source = 'def target(value):\n    if len(value) < 3: raise ValueError()\n    return value';
+    const ruleSelection = dispatchTestRules(source);
+    const initial = {
+        func_name: 'target', args: ['value'], load_error: null,
+        examples: [{ args: ["'abc'"], result: "'abc'" }], errors: []
+    };
+    const supplemental = {
+        func_name: 'target', args: ['value'], load_error: null,
+        examples: [], errors: [{ args: ["'x'"], exception: 'ValueError' }]
+    };
+    const bundle: WriterEvidenceBundleV3 = {
+        schemaVersion: 'writer-evidence-v3', sourceHash: ruleSelection.sourceHash,
+        semanticGuidance: ruleSelection.guidance, ruleSelection,
+        initialTargetObservations: initial,
+        supplementalTargetObservations: supplemental,
+        mergedTargetObservations: { ...initial, errors: supplemental.errors },
+        evidencePriority: [
+            'executed-observations', 'explicit-source-paths', 'ast-structure',
+            'analyst-hypotheses-and-rule-guidance'
+        ]
+    };
+    const prompt = getUserPrompt('sample.py', 'target', source, 'small', {
+        name: 'target', args: ['value'], code: source,
+        traceResult: bundle.mergedTargetObservations
+    }, undefined, 20_000, '', bundle);
+
+    assert.match(prompt, /WRITER EVIDENCE BUNDLE V3/);
+    assert.match(prompt, /Initial controlled observations: 1 successful, 0 exceptional/);
+    assert.match(prompt, /Supplemental controlled observations: 0 successful, 1 exceptional/);
+    assert.match(prompt, /Deterministically selected test rules: .*string_length_boundary/);
+    assert.match(prompt, /rules constrain test construction.*not evidence of a return value or exception/i);
 });
 
 test('semantic prompt restricts re-traced candidates to safe scalar literals', () => {
@@ -188,7 +264,7 @@ test('Tier 3 scaffold prompt distinguishes verified constructor setup from metho
     assert.match(prompt, /Do NOT pass them to render\(\.\.\.\)/);
 });
 
-test('Tier 3 scaffold prompt receives source and evidence-bound skill guidance', () => {
+test('Tier 3 scaffold prompt receives source and evidence-bound test-rule guidance', () => {
     const prompt = getTier3UserPrompt(
         'read_first_line',
         'def test_read_first_line(self, mock_open):\n    pass',
@@ -215,7 +291,7 @@ test('Tier 4 self-repair uses the same focused one-method interface as Bug Fixer
             file_imports: [{ kind: 'import', module: 'math' }],
             referenced_globals: [{ name: 'LIMIT', code: 'LIMIT = 3' }],
             traceResult: { examples: [{ args: ['3'], result: '6' }] }
-        }, 'calculator', '=== SKILL CART ===\n[Float Precision]'
+        }, 'calculator', '=== TEST RULES ===\n[Float Precision]'
     );
 
     assert.match(prompt, /BUG_FIX_REQUEST_V3/);
@@ -233,17 +309,18 @@ test('writer prompt preserves the canonical package import path from AST context
 });
 
 test('semantic prompt supplies verified dependency repr facts instead of JavaScript object descriptions', () => {
-    const prompt = getSemanticAnalyzerUserPrompt(
-        'def render(value):\n    return normalize(value)',
-        [{
+    const prompt = getSemanticAnalyzerUserPrompt(analysisEvidence(
+        'def render(value):\n    return normalize(value)', {
+        dependencies: [{
             name: 'normalize',
             code: 'def normalize(value):\n    return {"value": value}',
-            traceResult: {
+            observations: {
+                func_name: 'normalize', args: ['value'], load_error: null,
                 examples: [{ args: ["'x'"], result: "{'value': 'x'}" }],
                 errors: []
             }
-        }]
-    );
+        }]}
+    ));
 
     assert.match(prompt, /VERIFIED DEPENDENCY EXECUTION FACTS/);
     assert.match(prompt, /normalize\('x'\) => \{'value': 'x'\}/);
@@ -251,11 +328,9 @@ test('semantic prompt supplies verified dependency repr facts instead of JavaScr
 });
 
 test('semantic analyzer receives bounded AST setup context without treating it as an output oracle', () => {
-    const prompt = getSemanticAnalyzerUserPrompt(
+    const prompt = getSemanticAnalyzerUserPrompt(analysisEvidence(
         'def process(value):\n    return PREFIX + self.client.send(value)',
-        [],
-        [],
-        {
+        { astFacts: {
             file_imports: [
                 { kind: 'from', module: 'settings', name: 'PREFIX', bound_name: 'PREFIX' },
                 { kind: 'import', module: 'transport', alias: 'transport', bound_name: 'transport' }
@@ -274,8 +349,8 @@ test('semantic analyzer receives bounded AST setup context without treating it a
                     assigns: [{ name: 'client', code: 'self.client = client' }]
                 }
             }
-        }
-    );
+        }}
+    ));
 
     assert.match(prompt, /MODULE AND CLASS SETUP CONTEXT/);
     assert.match(prompt, /from settings import PREFIX/);
@@ -298,14 +373,16 @@ test('semantic context omits unverified dependency return claims while retaining
             can_raise: []
         }],
         unreachable_paths: [],
-        required_skills: [],
         test_strategy: {
             approach: 'unit', input_hints: [], assertion_style: 'mixed', mock_needed: false, key_rules: []
         }
     };
     const context = formatSemanticContextForPrompt(analysis, [{
-        name: 'normalize',
-        traceResult: { examples: [{ args: ["'x'"], result: "{'value': 'x'}" }] }
+        name: 'normalize', code: 'def normalize(value): return {"value": value}',
+        observations: {
+            func_name: 'normalize', args: ['value'], load_error: null,
+            examples: [{ args: ["'x'"], result: "{'value': 'x'}" }], errors: []
+        }
     }]);
 
     assert.match(context, /normalize\('x'\) => \{'value': 'x'\}/);
@@ -313,7 +390,7 @@ test('semantic context omits unverified dependency return claims while retaining
     assert.match(context, /Unverified dependency-return claims were omitted/);
 });
 
-test('writer prompt keeps Dynamic Trace facts exact instead of inventing universal boundaries', () => {
+test('writer prompt keeps executed observations exact instead of inventing universal boundaries', () => {
     const prompt = getUserPrompt('sample.py', 'validate', 'def validate(value):\n    return value', 'small', {
         name: 'validate',
         args: ['value'],
@@ -368,7 +445,7 @@ test('writer prompt receives evidence-bound semantic guidance within its token b
     assert.doesNotMatch(constrained, /EVIDENCE-BOUND SEMANTIC GUIDANCE/);
 });
 
-test('semantic guidance budget keeps complete evidence and skill sections before candidate suggestions', () => {
+test('semantic guidance budget keeps complete evidence and rule sections before candidate suggestions', () => {
     const guidance = [
         '=== SEMANTIC GUIDANCE ===',
         'Use verified execution facts and source code as evidence.',
@@ -442,7 +519,6 @@ test('semantic strategy labels model-proposed inputs as candidates rather than f
     const context = formatSemanticContextForPrompt({
         dependency_behaviors: [],
         unreachable_paths: [],
-        required_skills: [],
         test_strategy: {
             approach: 'exercise source branches',
             input_hints: [{

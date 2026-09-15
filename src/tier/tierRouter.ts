@@ -70,7 +70,7 @@ export function canUseDeterministicTierOne(trace: DeterministicTraceAvailability
 
 /**
  * A model-authored Tier 1 test is evidence-bound by the source, AST context,
- * dynamic trace, and selected skill cards. Auto enables it only after the
+ * controlled behavior observations, and selected test-generation rules. Auto enables it only after the
  * exact provider/model has passed the executable unittest probe. A manual
  * Tier choice opts into best-effort generation, still subject to the normal
  * structural, execution, coverage, and mutation gates.

@@ -32,7 +32,7 @@ export function classifyExecutionFailure(message: string): ExecutionFailureCateg
     if (normalized.includes('mutation') || normalized.includes('突變') || normalized.includes('mutatest') || normalized.includes('mutmut')) {
         return 'mutation';
     }
-    if (normalized.includes('dynamic trace') || normalized.includes('動態 trace') || /\bast\b/.test(normalized) || normalized.includes('caller literal')) {
+    if (normalized.includes('dynamic trace') || normalized.includes('動態 trace') || normalized.includes('行為觀測') || /\bast\b/.test(normalized) || normalized.includes('caller literal')) {
         return 'ast-trace';
     }
     if (normalized.includes('模型輸出') || normalized.includes('unittest 格式') || normalized.includes('程式碼內容為空') || normalized.includes('原始碼而非測試碼')) {

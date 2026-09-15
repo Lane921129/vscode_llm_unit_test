@@ -134,7 +134,7 @@ export function appendVerifiedTraceTestFile(
     const mainLine = lines.findIndex(line => /^if __name__ == ['"]__main__['"]:/.test(line));
     const insertAt = mainLine >= 0 ? mainLine : lines.length;
     const separator = insertAt > 0 && lines[insertAt - 1].trim() ? ['', ''] : [''];
-    lines.splice(insertAt, 0, ...separator, '# Verified Dynamic Trace tests (not model-authored)', ...classBlock, '');
+    lines.splice(insertAt, 0, ...separator, '# Verified behavior-observation tests (not model-authored)', ...classBlock, '');
     return { code: lines.join('\n'), addedMethodCount: methodCount, addedClassName: className };
 }
 
@@ -150,7 +150,7 @@ export function restoreVerifiedTraceTestFile(
         while (end < lines.length && (!lines[end].trim() || /^\s/.test(lines[end]) || /^#/.test(lines[end]))) { end++; }
         let start = index;
         while (start > 0 && /^@/.test(lines[start - 1])) { start--; }
-        if (start > 0 && lines[start - 1] === '# Verified Dynamic Trace tests (not model-authored)') { start--; }
+        if (start > 0 && lines[start - 1] === '# Verified behavior-observation tests (not model-authored)') { start--; }
         while (start > 0 && !lines[start - 1].trim()) { start--; }
         lines.splice(start, end - start);
     }

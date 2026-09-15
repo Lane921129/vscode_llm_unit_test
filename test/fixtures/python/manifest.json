@@ -1,12 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "fixtures": [
     {
       "id": "tier1-boundary",
       "tier": 1,
       "source": "tier1_boundary.py",
       "target": "clamp",
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["branch_threshold_coverage"], "trace": "assertable"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["branch_threshold_coverage"], "trace": "assertable"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["missing either numeric boundary"]}
     },
     {
@@ -14,7 +14,7 @@
       "tier": 1,
       "source": "tier1_exception.py",
       "target": "require_value",
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["assert_raises_syntax", "none_input_handling"], "trace": "assertable"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["assert_raises_syntax", "none_input_handling"], "trace": "assertable"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["assertRaises without a target call"]}
     },
     {
@@ -23,7 +23,7 @@
       "source": "tier1_class.py",
       "target": "Labeler.render",
       "context": {"class_name": "Labeler", "method_kind": "instance"},
-      "expected": {"method_kind": "instance", "is_async": false, "skills": ["class_method_testing"], "trace": "assertable"},
+      "expected": {"method_kind": "instance", "is_async": false, "rules": ["class_method_testing"], "trace": "assertable"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["constructing Labeler without its required prefix"]}
     },
     {
@@ -32,7 +32,7 @@
       "source": "tier1_inherited_class.py",
       "target": "InheritedLabeler.render",
       "context": {"class_name": "InheritedLabeler", "method_kind": "instance"},
-      "expected": {"method_kind": "instance", "is_async": false, "skills": ["class_method_testing"], "trace": "assertable", "inherited_constructor_required": ["prefix"]},
+      "expected": {"method_kind": "instance", "is_async": false, "rules": ["class_method_testing"], "trace": "assertable", "inherited_constructor_required": ["prefix"]},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["constructing InheritedLabeler without a verified inherited constructor literal"]}
     },
     {
@@ -41,7 +41,7 @@
       "source": "tier1_property.py",
       "target": "Temperature.value",
       "context": {"class_name": "Temperature", "method_kind": "property"},
-      "expected": {"method_kind": "property", "is_async": false, "skills": ["class_method_testing"], "trace": "assertable"},
+      "expected": {"method_kind": "property", "is_async": false, "rules": ["class_method_testing"], "trace": "assertable"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["calling the property with parentheses"]}
     },
     {
@@ -49,7 +49,7 @@
       "tier": 1,
       "source": "tier1_literal.py",
       "target": "decorate",
-      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable", "trace_inputs": ["'draft'", "'published'"]},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "trace_inputs": ["'draft'", "'published'"]},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["using generic values instead of declared Literal inputs"]}
     },
     {
@@ -57,7 +57,7 @@
       "tier": 1,
       "source": "tier1_semantic_trace.py",
       "target": "mark_multiple",
-      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable", "semantic_trace_inputs": ["37"]},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "semantic_trace_inputs": ["37"]},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["using an unexecuted semantic candidate as an assertion oracle"]}
     },
     {
@@ -66,7 +66,7 @@
       "source": "tier1_bool_truthiness.py",
       "target": "choose",
       "context": {"condition_facts": [{"kind": "truthiness", "parameter": "enabled", "subject": "value", "polarity": "truthy"}]},
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["boolean_truthiness_coverage"], "trace": "assertable", "trace_inputs": ["True", "False"], "truthiness_parameters": ["enabled"]},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["boolean_truthiness_coverage"], "trace": "assertable", "trace_inputs": ["True", "False"], "truthiness_parameters": ["enabled"]},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["covering only one direct boolean branch"]}
     },
     {
@@ -74,7 +74,7 @@
       "tier": 2,
       "source": "tier2_pattern.py",
       "target": "classify",
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["pattern_matching"], "trace": "assertable"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["pattern_matching"], "trace": "assertable"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["omitting the unmatched case"]}
     },
     {
@@ -83,7 +83,7 @@
       "source": "tier2_package/consumer.py",
       "target": "format_label",
       "context": {"calls": ["normalize"], "dependencies": [{"name": "normalize"}]},
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["mock_external_dependency"], "trace": "assertable", "caller_inputs": ["  Alpha  ", "Beta", "Gamma"], "trace_inputs": ["'  Alpha  '", "'Beta'", "'Gamma'"]},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["mock_external_dependency"], "trace": "assertable", "caller_inputs": ["  Alpha  ", "Beta", "Gamma"], "trace_inputs": ["'  Alpha  '", "'Beta'", "'Gamma'"]},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["importing the target by a filesystem path"]}
     },
     {
@@ -92,7 +92,7 @@
       "source": "tier2_generator.py",
       "target": "every_second",
       "context": {"is_generator": true},
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["generator_result_testing"], "trace": "assertable_generator"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["generator_result_testing"], "trace": "assertable_generator"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["asserting a generator repr"]}
     },
     {
@@ -100,7 +100,7 @@
       "tier": 3,
       "source": "tier3_file_context.py",
       "target": "read_first_line",
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["file_io_mocking", "context_manager_testing"], "trace": "mock_required"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["file_io_mocking", "context_manager_testing"], "trace": "mock_required"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["real file system access"]}
     },
     {
@@ -109,7 +109,7 @@
       "source": "tier3_http.py",
       "target": "fetch_status",
       "context": {"calls": ["transport.get"], "file_imports": [{"module": "httpx", "name": null, "bound_name": "transport"}]},
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["http_client_mocking"], "trace": "mock_required"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["http_client_mocking"], "trace": "mock_required"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["real network access"]}
     },
     {
@@ -118,7 +118,7 @@
       "source": "tier3_database.py",
       "target": "insert_value",
       "context": {"file_imports": [{"module": "sqlite3", "name": null, "bound_name": "sqlite3"}]},
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["database_state_isolation", "context_manager_testing"], "trace": "isolated_resource_required"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["database_state_isolation", "context_manager_testing"], "trace": "isolated_resource_required"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["shared or configured database connection"]}
     },
     {
@@ -126,7 +126,7 @@
       "tier": 4,
       "source": "tier4_time.py",
       "target": "day_stamp",
-      "expected": {"method_kind": "module", "is_async": false, "skills": ["datetime_freezing"], "trace": "mock_required"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": ["datetime_freezing"], "trace": "mock_required"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 80, "forbidden": ["asserting the real clock"]}
     },
     {
@@ -135,7 +135,7 @@
       "source": "tier4_async_context.py",
       "target": "read_payload",
       "context": {"calls": ["session.get", "response.text"], "file_imports": [{"module": "aiohttp", "name": null, "bound_name": "aiohttp"}]},
-      "expected": {"method_kind": "module", "is_async": true, "skills": ["async_coroutine_testing", "context_manager_testing", "async_context_manager_testing"], "trace": "mock_required"},
+      "expected": {"method_kind": "module", "is_async": true, "rules": ["async_coroutine_testing", "context_manager_testing", "async_context_manager_testing"], "trace": "mock_required"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 80, "forbidden": ["real async network access"]}
     },
     {
@@ -143,7 +143,7 @@
       "tier": 4,
       "source": "tier4_dataclass_enum.py",
       "target": "describe",
-      "expected": {"method_kind": "module", "is_async": false, "skills": [], "trace": "assertable"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable"},
       "acceptance": {"min_line_coverage": 100, "min_mutation_score": 85, "forbidden": ["inventing enum values absent from source"]}
     }
   ]

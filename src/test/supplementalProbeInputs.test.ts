@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildSemanticTraceCandidates, parseSafeSemanticScalar } from '../tier/semanticTraceCandidates';
+import { buildSupplementalProbeInputs, parseSafeProbeScalar } from '../tier/supplementalProbeInputs';
 
 const strategy = (input_hints: Array<{ param_name: string; boundary_inputs: string[]; invalid_inputs: string[] }>) => ({
     test_strategy: {
@@ -13,17 +13,17 @@ const strategy = (input_hints: Array<{ param_name: string; boundary_inputs: stri
 });
 
 test('accepts only bounded non-executable scalar suggestions', () => {
-    assert.strictEqual(parseSafeSemanticScalar('None'), null);
-    assert.strictEqual(parseSafeSemanticScalar('-1.5'), -1.5);
-    assert.strictEqual(parseSafeSemanticScalar('"ready"'), 'ready');
-    assert.strictEqual(parseSafeSemanticScalar("'ready'"), 'ready');
-    assert.strictEqual(parseSafeSemanticScalar('[1, 2]'), undefined);
-    assert.strictEqual(parseSafeSemanticScalar('factory()'), undefined);
-    assert.strictEqual(parseSafeSemanticScalar("'a\\nb'"), undefined);
+    assert.strictEqual(parseSafeProbeScalar('None'), null);
+    assert.strictEqual(parseSafeProbeScalar('-1.5'), -1.5);
+    assert.strictEqual(parseSafeProbeScalar('"ready"'), 'ready');
+    assert.strictEqual(parseSafeProbeScalar("'ready'"), 'ready');
+    assert.strictEqual(parseSafeProbeScalar('[1, 2]'), undefined);
+    assert.strictEqual(parseSafeProbeScalar('factory()'), undefined);
+    assert.strictEqual(parseSafeProbeScalar("'a\\nb'"), undefined);
 });
 
 test('builds complete, bounded calls from semantic candidates and AST defaults', () => {
-    const candidates = buildSemanticTraceCandidates(strategy([
+    const candidates = buildSupplementalProbeInputs(strategy([
         { param_name: 'value', boundary_inputs: ['0', '10', '10'], invalid_inputs: ['None'] }
     ]), [
         { name: 'value', kind: 'positional_or_keyword', required: true, default: null },
@@ -38,7 +38,7 @@ test('builds complete, bounded calls from semantic candidates and AST defaults',
 });
 
 test('does not invent a value when a required AST parameter lacks a safe candidate', () => {
-    assert.deepStrictEqual(buildSemanticTraceCandidates(strategy([
+    assert.deepStrictEqual(buildSupplementalProbeInputs(strategy([
         { param_name: 'known', boundary_inputs: ['1'], invalid_inputs: [] }
     ]), [
         { name: 'known', kind: 'positional_only', required: true, default: null },

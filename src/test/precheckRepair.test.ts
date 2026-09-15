@@ -9,7 +9,7 @@ import { restoreVerifiedTraceTestFile } from '../tier/traceTestAugmenter';
 import { generatedUnittestArguments, resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { classifyExecutionFailure } from '../utils/executionFailureCategory';
 import { getBugFixerUserPrompt } from '../roles/bugFixer';
-import { getSkillCards, inferSkillIdsFromCode } from '../prompts/promptSkillLibrary';
+import { getTestRuleCards, inferTestRuleIdsFromCode } from '../prompts/testRuleLibrary';
 import { formatEquivalentMutantsReport, getMutantTriageSystemPrompt } from '../roles/legacy/mutantTriage';
 
 const root = resolve(__dirname, '../..');
@@ -138,15 +138,15 @@ test('complete legacy wrappers are extracted and incomplete wrappers fail before
     assert.strictEqual(validateUnittestStructure(modelCode + '\n# [pytest]\n').valid, true);
 });
 
-test('dependency skills include mock isolation, caller constraints, and mixed boolean cases', () => {
-    const ids = inferSkillIdsFromCode('def render(value):\n    return read(value)', { dependencies: ['helper.read'] });
-    assert.ok(ids.includes('trace_mock_isolation'));
+test('dependency rules include mock isolation, caller constraints, and mixed boolean cases', () => {
+    const ids = inferTestRuleIdsFromCode('def render(value):\n    return read(value)', { dependencies: ['helper.read'] });
+    assert.ok(ids.includes('observation_mock_isolation'));
     assert.ok(ids.includes('caller_dependency_contract'));
-    const rules = getSkillCards(ids).flatMap(card => card.rules).join('\n');
+    const rules = getTestRuleCards(ids).flatMap(card => card.rules).join('\n');
     assert.match(rules, /assert_called_once_with/);
     assert.match(rules, /mixed truth values/);
-    const ordinary = inferSkillIdsFromCode('def render(value):\n    return value');
-    assert.ok(!ordinary.includes('trace_mock_isolation'));
+    const ordinary = inferTestRuleIdsFromCode('def render(value):\n    return value');
+    assert.ok(!ordinary.includes('observation_mock_isolation'));
 });
 
 test('mixed mocked condition distinguishes And from Or; equivalence remains a hypothesis', () => {

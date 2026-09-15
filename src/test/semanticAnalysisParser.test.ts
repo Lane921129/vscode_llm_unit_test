@@ -7,7 +7,6 @@ test('drops unfinished semantic placeholders before they reach a Writer prompt',
         dependency_behaviors: [],
         unreachable_paths: [{ condition: '<to be determined>', reason: '<to be determined>' }],
         mock_required_for: [],
-        required_skills: ['import_module_name', '<to be determined>'],
         test_strategy: {
             approach: '<to be determined>',
             input_hints: [
@@ -19,7 +18,6 @@ test('drops unfinished semantic placeholders before they reach a Writer prompt',
     }));
 
     assert.ok(parsed);
-    assert.deepStrictEqual(parsed!.required_skills, ['import_module_name']);
     assert.strictEqual(parsed!.unreachable_paths.length, 0);
     assert.strictEqual(parsed!.test_strategy.approach, '');
     assert.strictEqual(parsed!.test_strategy.input_hints.length, 1);
@@ -30,20 +28,17 @@ test('drops unfinished semantic placeholders before they reach a Writer prompt',
     assert.doesNotMatch(promptContext, /to be determined/i);
     assert.match(promptContext, /candidate branch input/);
 });
-test('rejects unrelated JSON so orchestration keeps the AST skill baseline', () => {
+test('rejects unrelated or legacy rule-selection JSON so orchestration keeps the AST rule baseline', () => {
     assert.strictEqual(parseSemanticAnalysis(JSON.stringify({
         message: 'temporary gateway metadata',
         request_id: 'safe-non-secret-id'
     })), null);
 
-    const minimalAnalysis = parseSemanticAnalysis(JSON.stringify({ required_skills: [] }));
-    assert.ok(minimalAnalysis);
-    assert.deepStrictEqual(minimalAnalysis!.required_skills, []);
+    assert.strictEqual(parseSemanticAnalysis(JSON.stringify({ required_skills: [] })), null);
 });
 
 test('keeps semantic input candidates scoped to the selected target signature', () => {
     const parsed = parseSemanticAnalysis(JSON.stringify({
-        required_skills: [],
         test_strategy: {
             approach: 'exercise candidates',
             input_hints: [
@@ -62,8 +57,8 @@ test('keeps semantic input candidates scoped to the selected target signature', 
 });
 
 test('parses JSON when followed by trailing commentary', () => {
-    const raw = '{"required_skills": ["boundary"]}\n\nHope this helps!';
+    const raw = '{"test_strategy": {"approach": "boundary candidates"}}\n\nHope this helps!';
     const parsed = parseSemanticAnalysis(raw);
     assert.ok(parsed);
-    assert.deepStrictEqual(parsed!.required_skills, ['boundary']);
+    assert.strictEqual(parsed!.test_strategy.approach, 'boundary candidates');
 });

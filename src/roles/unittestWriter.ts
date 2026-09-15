@@ -1,4 +1,5 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from '../prompts/fewShotExamples';
+import { formatWriterEvidenceBundleForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { getBugFixerUserPrompt } from './bugFixer';
 
 // ─────────────────────────────────────────────────────────────
@@ -55,9 +56,9 @@ Evidence rules:
 1. Use the target source and AST facts only to choose relevant paths and candidate inputs. They never prove an output or exception by themselves.
 2. An exact assertion or assertRaises type must be supported by a Verified Real Execution Result. Do not invent return values, exceptions, constructor arguments, imports, or external behaviour.
 3. Use the supplied class context and verified constructor setup exactly when testing an instance method. Do not pass constructor arguments to the method.
-4. Selected skill cards are scoped guidance for this function, not facts that override source or trace evidence.
+4. Selected test-generation rules are scoped guidance for this function, not facts that override source or executed-observation evidence.
 5. Include import unittest, a unittest.TestCase, and test_ methods. Do not copy or redefine the production source. No pytest or top-level assert.
-6. If trace evidence is absent for a candidate path, omit that assertion rather than guessing.
+6. If executed-observation evidence is absent for a proposed path, omit that assertion rather than guessing.
 7. Do not call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.
 
 The generated file will be rejected unless it passes structural, isolated execution, coverage, and mutation checks.`;
@@ -108,7 +109,7 @@ export function getTier3UserPrompt(
         prompt += `Target source (evidence; do not copy it into the test):\n\`\`\`python\n${targetSource.trim()}\n\`\`\`\n\n`;
     }
     if (semanticGuidance) {
-        prompt += `Evidence-bound skill guidance (source and verified execution facts take precedence over model suggestions):\n${semanticGuidance.trim()}\n\n`;
+        prompt += `Evidence-bound test-rule guidance (source and verified execution facts take precedence over model suggestions):\n${semanticGuidance.trim()}\n\n`;
     }
     prompt += `Test scaffold (fill in the TODO sections):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nFill in the TODO sections now:`;
     return prompt;
@@ -131,7 +132,7 @@ Output only that single Python code fence. Do not include analysis, reasoning, h
 Guidelines:
 - Use absolute imports (e.g. from module_name import target_function).
 - Use unittest.mock (patch, MagicMock) for all external dependencies.
-- Cover branches, boundaries, and exception paths only when source code, selected skill cards, or verified execution facts support them. Do not add None or empty-input tests merely by habit.
+- Cover branches, boundaries, and exception paths only when source code, selected test-generation rule cards, or verified execution facts support them. Do not add None or empty-input tests merely by habit.
 - Every test method name must start with test_.
 - Do NOT copy the source code.`;
 }
@@ -209,7 +210,7 @@ Output only that single Python code fence. Do not include analysis, reasoning, h
 Guidelines:
 - Use absolute import (e.g. from module_name import target_function).
 - Use unittest.mock (patch, MagicMock) for external dependencies.
-- Cover branches, boundaries, and exception paths that are supported by the source code, selected skill cards, or verified execution facts. Do not add None or empty-input tests merely by habit.
+- Cover branches, boundaries, and exception paths that are supported by the source code, selected test-generation rule cards, or verified execution facts. Do not add None or empty-input tests merely by habit.
 - Do NOT copy the source code into your output.
 - assertRaises syntax: ONLY \`with self.assertRaises(ValueError):\` — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!
 - ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values.
@@ -233,7 +234,7 @@ function estimateTokens(text: string): number {
 /**
  * Keep semantic guidance useful for small-context models without cutting a
  * rule or code fence mid-sentence.  The formatter emits complete `=== ... ===`
- * sections, so selection can prefer execution facts and evidence-bound skill
+ * sections, so selection can prefer execution facts and evidence-bound test-rule
  * cards before lower-confidence candidate suggestions.
  */
 export function compactSemanticGuidanceForBudget(guidance: string, maxTokens: number): string | undefined {
@@ -253,7 +254,7 @@ export function compactSemanticGuidanceForBudget(guidance: string, maxTokens: nu
         const end = headings[index + 1]?.index ?? guidance.length;
         const text = guidance.slice(start, end).trim();
         const title = heading[0].trim();
-        const priority = title.includes('FUNCTION-SPECIFIC RULES') || title.includes('DETERMINISTIC SKILL BASELINE')
+        const priority = title.includes('FUNCTION-SPECIFIC RULES') || title.includes('DETERMINISTIC TEST RULE BASELINE')
             ? 1
             : title.includes('SEMANTIC GUIDANCE') || title.includes('VERIFIED DEPENDENCY FACTS')
                 ? 0
@@ -316,8 +317,11 @@ export function getUserPrompt(
     focusContexts?: string,
     budgetTokens: number = 20000,
     modelName: string = '',
-    semanticGuidance?: string
+    semanticEvidence?: string | WriterEvidenceBundleV3
 ): string {
+    const semanticGuidance = typeof semanticEvidence === 'string'
+        ? semanticEvidence
+        : semanticEvidence ? formatWriterEvidenceBundleForPrompt(semanticEvidence) : undefined;
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
 
@@ -408,7 +412,7 @@ export function getUserPrompt(
                         .map(([name, value]) => `${name}=${value}`);
                     const constructorArgs = [...constructorCaller.constructor_args, ...kwargs].join(', ');
                     prompt += `  - Verified constructor setup from an actual call site: self._obj = ${astContext.class_name}(${constructorArgs})\n`;
-                    prompt += `  - Use that setup for trace-derived assertions; do NOT pass these constructor values to ${funcName}().\n`;
+                    prompt += `  - Use that setup for observation-derived assertions; do NOT pass these constructor values to ${funcName}().\n`;
                 } else {
                     prompt += `  - Instantiate in setUp using source-supported constructor values; do not guess required dependencies.\n`;
                 }
@@ -452,7 +456,7 @@ export function getUserPrompt(
             for (const fact of conditionFacts) {
                 prompt += `  - ${fact}\n`;
             }
-            prompt += `  - Choose independent inputs that exercise both sides where feasible. These facts do NOT prove a return value or exception; derive assertions from source or exact trace evidence.\n`;
+            prompt += `  - Choose independent inputs that exercise both sides where feasible. These facts do NOT prove a return value or exception; derive assertions from source or exact behavior observations.\n`;
         }
 
         // 動態執行追蹤結果（真實 input→output 範例，讓 LLM 不用猜 assert 值）
@@ -470,7 +474,7 @@ export function getUserPrompt(
 
             prompt += `\nTRACE EVIDENCE LIMIT:\n`;
             prompt += `  - Every result above proves only that exact call. Do NOT generalize a threshold, return value, or exception to unobserved inputs.\n`;
-            prompt += `  - Derive additional boundary cases only from source conditions and selected skill cards. Use assertRaises only for an explicit source raise or one of the exact verified error calls.\n\n`;
+            prompt += `  - Derive additional boundary cases only from source conditions and selected test-generation rule cards. Use assertRaises only for an explicit source raise or one of the exact verified error calls.\n\n`;
         }
 
         // Void/None 函式提示：當所有 trace 都回傳 None 且無 error 時
@@ -479,7 +483,7 @@ export function getUserPrompt(
             const noErrors = trace.errors.length === 0;
             if (allNone && noErrors) {
                 prompt += `\nOBSERVED NONE RESULTS:\n`;
-                prompt += `- All successful calls observed by Dynamic Trace returned None. For those exact calls, use self.assertIsNone(result).\n`;
+                prompt += `- All successful calls observed by controlled behavior probe returned None. For those exact calls, use self.assertIsNone(result).\n`;
                 prompt += `- This does not prove unobserved inputs return None or cannot raise; use source evidence before adding another path.\n\n`;
             }
         }
@@ -532,7 +536,7 @@ export function getUserPrompt(
                 if (dep.code && /^\s*raise\s+/m.test(dep.code) && !targetHasTry) {
                     prompt += `\n⚠️ UNCAUGHT DEPENDENCY EXCEPTION WARNING:\n`;
                     prompt += `  - Dependency \`${dep.name}()\` raises exceptions for inputs that violate its own validation rule.\n`;
-                    prompt += `  - This exception may propagate when the target reaches that dependency call; verify the exact source path or Dynamic Trace before writing an exception test.\n`;
+                    prompt += `  - This exception may propagate when the target reaches that dependency call; verify the exact source path or controlled behavior probe before writing an exception test.\n`;
                     prompt += `  - Do not infer a return value or exception contract solely from this dependency warning.\n`;
                 }
             }
@@ -646,14 +650,14 @@ export function getUserPrompt(
                 const m = rl.trim().match(/^raise\s+(\w+)\s*\(([^)]*)\)/);
                 if (m) {
                     prompt += `  - This function can raise ${m[1]}("${m[2].trim().replace(/["']/g,'')}")\n`;
-                    prompt += `    → Use assertRaises(${m[1]}) only after choosing an input that reaches this explicit source path or an exact verified trace error.\n`;
-                    prompt += `    → Do NOT assert a normal result for an input that source or trace proves reaches this raise.\n`;
+                    prompt += `    → Use assertRaises(${m[1]}) only after choosing an input that reaches this explicit source path or an exact verified behavior observation.\n`;
+                    prompt += `    → Do NOT assert a normal result for an input that source or an executed observation proves reaches this raise.\n`;
                 }
             }
         } else if (exceptLines.length > 0) {
             prompt += `\n\n⚠️ EXCEPTION HANDLING CAUTION (from static analysis):\n`;
             prompt += `  - ${funcName}() contains try/except, but that alone does not prove every path or every exception is caught.\n`;
-            prompt += `  - Inspect the protected statements and exception handlers. Use assertRaises only for an explicit source raise or exact verified trace error.\n`;
+            prompt += `  - Inspect the protected statements and exception handlers. Use assertRaises only for an explicit source raise or exact verified behavior observation.\n`;
         }
 
         // Return expressions are setup/shape hints, never a substitute for an
@@ -666,7 +670,7 @@ export function getUserPrompt(
                 const cleaned = rl.trim().replace(/^return\s+/, '');
                 prompt += `  - Possible expression shape: ${cleaned}\n`;
             }
-            prompt += `  → Do NOT use these expressions as an exact expected value by themselves. Exact assertions require a verified Dynamic Trace, an explicit literal return reached by the selected input, or a mock side effect controlled in this test.\n`;
+            prompt += `  → Do NOT use these expressions as an exact expected value by themselves. Exact assertions require a verified controlled behavior probe, an explicit literal return reached by the selected input, or a mock side effect controlled in this test.\n`;
         }
 
         // Trace 重申：Loop 2+ 強制再次列出 Verified Real Execution Results，防止 AI 使用假輸入
@@ -714,7 +718,7 @@ export function getUserPrompt(
                 for (const er of ((traceRemind.errors || []) as any[]).filter(error => error.call_assertable !== false).slice(0, 5)) {
                     prompt += `  - Input: (${er.args.join(', ')}) => Raises: ${er.exception}  ← use assertRaises\n`;
                 }
-                prompt += `  ← Preserve these exact facts for trace-derived assertions. Additional inputs may cover source-derived conditions, but their assertions still need source or trace evidence.\n`;
+                prompt += `  ← Preserve these exact facts for observation-derived assertions. Additional inputs may cover source-derived conditions, but their assertions still need source or executed-observation evidence.\n`;
             }
         }
     }

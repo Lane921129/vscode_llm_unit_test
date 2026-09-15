@@ -1,20 +1,20 @@
 /**
- * prompt_skill_library.ts
- * 技能卡庫 - Unittest Writer 可用的專項提示規則集合
+ * test_rule_library.ts
+ * 測試生成規則庫 - Unittest Writer 可用的專項提示規則集合
  *
  * 運作原理：
- *   SkillDispatcher 依原始碼與 AST 情境確定性選取技能。
- *   格式化函式只注入選中的卡片，分析師負責情境規劃而不選技能 ID。
+ *   TestRuleDispatcher 在語意分析完成後，依原始碼與 AST 情境確定性選取規則。
+ *   格式化函式只注入選中的規則卡，分析師負責情境規劃而不選規則 ID。
  */
 
-export interface SkillCard {
+export interface TestGenerationRuleCard {
     id: string;
     title: string;
     trigger_hint: string;
     rules: string[];
 }
 
-export const SKILL_LIBRARY: SkillCard[] = [
+export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
     {
         id: 'string_length_boundary',
         title: 'String Length Boundary',
@@ -22,7 +22,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'STRING LENGTH BOUNDARY: use the exact comparison and threshold from source (including <, <=, >, or >=).',
             '  - Choose inputs on each reachable side of that condition; N-1, N, and N+1 are candidates only when they fit the source comparison and input type.',
-            '  - Do NOT infer that either side raises, returns normally, or returns a specific value. Assertions require an explicit source path or exact Dynamic Trace evidence.',
+            '  - Do NOT infer that either side raises, returns normally, or returns a specific value. Assertions require an explicit source path or exact verified behavior observation.',
             '  - Build strings with a deliberately known length; do not use a slice unless its resulting length is independently clear.',
             '  - Make a case table: exact predicate, threshold, concrete input length, prerequisite guards, and verified observation. A lower bound never implies an upper bound.',
         ]
@@ -46,7 +46,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'BRANCH THRESHOLD COVERAGE: the function has multiple if/elif numeric thresholds.',
             '  - Cover each reachable source branch, including a final else/default branch when present.',
-            '  - Use values on the appropriate side of every source threshold; derive expected results from the matching source branch or exact trace, not from this card.',
+            '  - Use values on the appropriate side of every source threshold; derive expected results from the matching source branch or exact behavior observation, not from this rule.',
         ]
     },
     {
@@ -56,7 +56,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'BOOLEAN TRUTHINESS BRANCH COVERAGE:',
             '  - Cover both True and False for the annotated boolean parameter when the AST branch fact identifies it directly.',
-            '  - A truthiness condition identifies inputs to explore, not the expected result or exception; derive assertions from source paths or exact Dynamic Trace evidence.',
+            '  - A truthiness condition identifies inputs to explore, not the expected result or exception; derive assertions from source paths or exact verified behavior observation evidence.',
             '  - Do not apply this card to a complex condition or to an untyped parameter merely because it appears in an if statement.',
         ]
     },
@@ -124,7 +124,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
             '  - CORRECT:   with self.assertRaises(ValueError): followed by the call',
             '  - WRONG:     self.assertRaises(ValueError, "message") — TypeError!',
             '  - WRONG:     result = func(...) then assertRaises — exception already propagated!',
-            '  - Only use assertRaises for an explicit source raise, an exact verified Trace exception, or a configured mock side_effect that propagates out of the target.',
+            '  - Only use assertRaises for an explicit source raise, an exact verified behavior observation, or a configured mock side_effect that propagates out of the target.',
         ]
     },
     {
@@ -158,7 +158,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'ZERO DIVISION:',
             '  - Treat zero as a boundary candidate only for the operand used as a denominator in the source.',
-            '  - Use assertRaises only for an explicit source raise or exact verified trace error; a division expression alone is not permission to invent an exception contract.',
+            '  - Use assertRaises only for an explicit source raise or exact verified behavior observation; a division expression alone is not permission to invent an exception contract.',
             '  - If the source guards zero, assert the observable guarded behavior from that branch.',
         ]
     },
@@ -188,13 +188,13 @@ export const SKILL_LIBRARY: SkillCard[] = [
         ]
     },
     {
-        id: 'trace_mock_isolation',
-        title: 'Real Trace and Mock Isolation',
-        trigger_hint: 'Use when dependencies may be mocked alongside real execution Trace tests',
+        id: 'observation_mock_isolation',
+        title: 'Executed Observation and Mock Isolation',
+        trigger_hint: 'Use when dependencies may be mocked alongside executed-observation tests',
         rules: [
-            'TRACE / MOCK ISOLATION:',
-            '  - Real Trace assertions belong to a separate TestCase without the model test class setUp, decorators, or mock state.',
-            '  - Prefer a per-test patch context and explicit return_value or side_effect. Never apply a module-wide patch to real Trace tests.',
+            'EXECUTED OBSERVATION / MOCK ISOLATION:',
+            '  - Executed-observation assertions belong to a separate TestCase without the model test class setUp, decorators, or mock state.',
+            '  - Prefer a per-test patch context and explicit return_value or side_effect. Never apply a module-wide patch to executed-observation tests.',
             '  - Do not copy or change runner-owned TestVerifiedTrace_* classes; the runner restores them after repair.',
         ]
     },
@@ -205,7 +205,7 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'CALLER / DEPENDENCY CONTRACT:',
             '  - Bind the actual positional and keyword arguments at the target call site before selecting dependency observations.',
-            '  - A dependency Trace under different fixed arguments is not an observation of this target call.',
+            '  - A dependency observation under different fixed arguments is not an observation of this target call.',
             '  - If a target branch requires a controlled dependency result, patch its use point and execute the target under that exact mock before trusting the assertion.',
             '  - For and/or conditions, explore mixed truth values as well as all-true/all-false when inputs or mocks can reach them. Short-circuiting and accessed keys still apply.',
         ]
@@ -218,9 +218,8 @@ export const SKILL_LIBRARY: SkillCard[] = [
             'DATABASE STATE ISOLATION:',
             '  - Never connect to the application default, configured, or shared database from a generated test.',
             '  - Patch the connection boundary at the module-under-test point of use; use a fresh in-memory database, temporary database, or MagicMock per test.',
-            '  - Do not call a private helper by bare name (for example `_connect()`) unless it was explicitly imported. Prefer `import module_under_test` and patch `module_under_test._connect`.',
             '  - Keep setup and teardown independent so one test cannot leave rows, locks, or configuration that change another test.',
-            '  - Only use assertRaises for an explicit source `raise` or a verified Dynamic Trace exception. Never infer validation exceptions from parameter names.',
+            '  - Only use assertRaises for an explicit source `raise` or a verified behavior observation. Never infer validation exceptions from parameter names.',
         ]
     },
     {
@@ -300,16 +299,16 @@ export const SKILL_LIBRARY: SkillCard[] = [
         rules: [
             'GENERATOR RESULT TESTING:',
             '  - A generator call is lazy. Materialize a finite result with list(target(...)) before comparing values; never assert a generator repr.',
-            '  - Use finite, source-supported inputs and assert the emitted sequence only when source logic or exact Dynamic Trace supports it.',
+            '  - Use finite, source-supported inputs and assert the emitted sequence only when source logic or exact verified behavior observation supports it.',
             '  - Include an empty or boundary input only when it exercises a reachable source path; do not invent iteration behavior.',
         ]
     },
 ];
 
-export function getSkillCards(skillIds: string[]): SkillCard[] {
-    return skillIds
-        .map(id => SKILL_LIBRARY.find(s => s.id === id))
-        .filter((s): s is SkillCard => s !== undefined);
+export function getTestRuleCards(ruleIds: string[]): TestGenerationRuleCard[] {
+    return ruleIds
+        .map(id => TEST_RULE_LIBRARY.find(rule => rule.id === id))
+        .filter((rule): rule is TestGenerationRuleCard => rule !== undefined);
 }
 
 /**
@@ -317,7 +316,7 @@ export function getSkillCards(skillIds: string[]): SkillCard[] {
  * unavailable or omits an obvious language construct.  It only reacts to
  * Python syntax and standard-library usage, never names from an application.
  */
-export function inferSkillIdsFromCode(
+export function inferTestRuleIdsFromCode(
     sourceCode: string,
     context?: {
         class_name?: string | null;
@@ -350,7 +349,7 @@ export function inferSkillIdsFromCode(
     if (needsInstance || bindingUnknown) { ids.add('class_method_testing'); }
     if ((context?.dependencies?.length || 0) > 0) {
         ids.add('mock_external_dependency');
-        ids.add('trace_mock_isolation');
+        ids.add('observation_mock_isolation');
         ids.add('caller_dependency_contract');
     }
     const importedModuleText = (context?.file_imports || [])
@@ -389,14 +388,14 @@ export function inferSkillIdsFromCode(
 }
 
 /**
- * Keep the semantic-model shopping cart evidence-bound. A model may prioritize
- * applicable cards, but it cannot inject unrelated cards which AST evidence
+ * Keep the semantic-plan rule selection evidence-bound. A model may prioritize
+ * applicable rules, but it cannot inject unrelated rules which AST evidence
  * does not support. This prevents malformed or over-broad JSON from polluting
  * prompts across unrelated projects.
  */
-export function mergeEvidenceBoundSkillIds(
+export function mergeEvidenceBoundTestRuleIds(
     sourceCode: string,
-    semanticSkillIds: unknown,
+    semanticRuleIds: unknown,
     context?: {
         class_name?: string | null;
         class_context?: unknown;
@@ -408,15 +407,15 @@ export function mergeEvidenceBoundSkillIds(
         condition_facts?: Array<{ kind?: string; parameter?: string; subject?: string; polarity?: string }>;
     }
 ): string[] {
-    const baseline = inferSkillIdsFromCode(sourceCode, context);
+    const baseline = inferTestRuleIdsFromCode(sourceCode, context);
     const allowed = new Set(baseline);
-    const semantic = Array.isArray(semanticSkillIds)
-        ? semanticSkillIds.filter((id): id is string => typeof id === 'string')
+    const semantic = Array.isArray(semanticRuleIds)
+        ? semanticRuleIds.filter((id): id is string => typeof id === 'string')
         : [];
     return [...new Set([...baseline, ...semantic.filter(id => allowed.has(id))])];
 }
 
-export function formatSkillCardsForPrompt(cards: SkillCard[]): string {
+export function formatTestRuleCardsForPrompt(cards: TestGenerationRuleCard[]): string {
     if (cards.length === 0) {return '';}
     let out = '=== FUNCTION-SPECIFIC RULES (Selected for this function) ===\n';
     out += '(Derived from actual source code analysis — follow them precisely)\n\n';
@@ -430,8 +429,8 @@ export function formatSkillCardsForPrompt(cards: SkillCard[]): string {
     return out;
 }
 
-export function getSkillLibrarySummaryForPrompt(): string {
-    return SKILL_LIBRARY.map(s =>
-        `  - "${s.id}": ${s.trigger_hint}`
+export function getTestRuleLibrarySummaryForPrompt(): string {
+    return TEST_RULE_LIBRARY.map(rule =>
+        `  - "${rule.id}": ${rule.trigger_hint}`
     ).join('\n');
 }

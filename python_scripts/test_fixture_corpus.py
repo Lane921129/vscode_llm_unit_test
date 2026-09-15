@@ -57,7 +57,7 @@ class FixtureCorpusTests(unittest.TestCase):
         return json.loads(completed.stdout)
 
     def test_manifest_has_three_fixtures_for_each_tier(self):
-        self.assertEqual(self.manifest['schema_version'], 1)
+        self.assertEqual(self.manifest['schema_version'], 2)
         self.assertGreaterEqual(len(self.manifest['fixtures']), 12)
         for tier in range(1, 5):
             fixtures = [fixture for fixture in self.manifest['fixtures'] if fixture['tier'] == tier]
