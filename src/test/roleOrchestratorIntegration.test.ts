@@ -18,6 +18,7 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const logs: string[] = [];
     const roles: string[] = [];
     let writers = 0;
+    let reviewerAvailable = true;
     const code = `import unittest
 from unittest.mock import patch
 from sample import target
@@ -58,7 +59,7 @@ class Cases(unittest.TestCase):
         const request = JSON.parse(String(options?.body));
         let response: string;
         if (request.system.includes('You are the test Reviewer')) {
-            roles.push('reviewer'); response = '{"issues":[]}';
+            roles.push('reviewer'); response = reviewerAvailable ? '{"blocking":[],"quality":[]}' : 'invalid review';
         } else if (request.system.includes('Analyst after successful')) {
             roles.push('analyst-quality'); response = '{"tasks":[]}';
         } else if (request.system.includes('dependency_behaviors')) {
@@ -112,6 +113,23 @@ class Cases(unittest.TestCase):
         assert.equal(knowledge.mutationScore, 100);
         assert.deepEqual(knowledge.survivors, []);
         assert.ok(knowledge.scenarios.length >= 3);
+        assert.equal(knowledge.reviewStatus, 'completed');
+        assert.equal(knowledge.terminalStatus, 'passed');
+        assert.match(report, /Reviewer status\*\*: completed/);
+
+        reviewerAvailable = false;
+        writers = 0;
+        roles.length = 0;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'incomplete-results') });
+        const incompleteRoot = path.join(directory, 'incomplete-results');
+        const incompleteOutput = path.join(incompleteRoot, fs.readdirSync(incompleteRoot)[0], 'target');
+        const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(incomplete.mutationScore, 100);
+        assert.equal(incomplete.reviewStatus, 'incomplete');
+        assert.equal(incomplete.terminalStatus, 'execution-passed-review-incomplete');
+        assert.equal(roles.filter(role => role === 'reviewer').length, 2);
     } finally {
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;

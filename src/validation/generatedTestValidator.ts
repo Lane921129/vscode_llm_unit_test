@@ -1,6 +1,7 @@
 export interface GeneratedTestValidation {
     valid: boolean;
     reason?: string;
+    requiresMockBehaviorEvidence?: boolean;
 }
 
 export type TargetUsage = 'call' | 'property';
@@ -557,7 +558,8 @@ export function validateUnittestStructure(
     targetModule?: string,
     targetUsage: TargetUsage = 'call',
     allowedExceptionNames?: string[],
-    targetClassName?: string | null
+    targetClassName?: string | null,
+    deferMockBehaviorToAst = false
 ): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -578,7 +580,9 @@ export function validateUnittestStructure(
     if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
         return { valid: false, reason: '缺少 test_ 測試方法' };
     }
-    if (!hasAssertion(trimmed)) {
+    const mockCandidate = deferMockBehaviorToAst && /\.(?:assert_called(?:_once)?(?:_with)?|assert_any_call|assert_has_calls|assert_not_called|assert_awaited(?:_once)?(?:_with)?|assert_any_await|assert_has_awaits|assert_not_awaited)\s*\(/.test(executablePythonText(trimmed));
+    let requiresMockBehaviorEvidence = !hasAssertion(trimmed) && mockCandidate;
+    if (!hasAssertion(trimmed) && !mockCandidate) {
         return { valid: false, reason: '缺少可驗證行為的 assertion 或 assertRaises' };
     }
     const unsafeOperation = unsafeTestOperation(trimmed);
@@ -624,11 +628,12 @@ export function validateUnittestStructure(
                 ? '測試沒有讀取被測 property ' + targetCallable
                 : '測試沒有呼叫被測函式 ' + targetCallable };
         }
-        if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference)) {
+        if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && !mockCandidate) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
                 : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
         }
+        requiresMockBehaviorEvidence ||= !hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && mockCandidate;
         if (targetUsage === 'call' && testMethodBlocks(executable).some(block =>
             hasIneffectiveLocalDependencyMutation(block, targetCallable, callReference)
         )) {
@@ -652,5 +657,5 @@ export function validateUnittestStructure(
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
         return { valid: false, reason: '測試檔嘗試以動態模組替換被測模組 ' + targetModule };
     }
-    return { valid: true };
+    return requiresMockBehaviorEvidence ? { valid: true, requiresMockBehaviorEvidence: true } : { valid: true };
 }

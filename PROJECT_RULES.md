@@ -22,6 +22,7 @@
 - 多重繼承只要含有任何無法解析的 base，就不得跳過它採用後方本地 base 的 `__init__` 當作有效簽名；Python MRO 可能先解析未知 base，系統必須保守視為未知。
 - 生成、Mock Scaffold、Reviewer 與救援程式必須使用同一個可匯入的目標模組路徑；不得以檔名匯入而建立與 package 模組不同的第二個模組實例。
 - 一般函式在任何模型角色請求前必須以相同 Python／匯入環境預檢正規目標模組與 coverage；核對來源實體，載入副作用仍受阻擋。環境不成立時保存具體原因並停止，不以 Tier 降階或模型修復處理。
+- 模組預檢位於所選目標 AST 之後、相依／呼叫點探索與深度 Trace 之前。失敗快取限定同一分析／批次；新分析必須重新檢查已修復的相依，暫時工具失敗與取消不得當作可重用環境診斷。
 - 呼叫站搜尋必須以目標模組／匯入關係確認，不得只依同名函式全域比對。
 - 直接匯入的函式別名也必須在該呼叫行仍解析到目標 binding；函式參數、local／closure／`nonlocal` binding、同 scope import 與模組層後續重綁定都必須排除，不得把同名 callable 的參數注入 Trace。
 - 對 `import package.module` 的呼叫站，只有與該 import 完整 binding path 相同的 `package.module.target(...)` 或 `package.module.Class(...).method(...)` 可補充 Trace 事實；相同 root 下的其他 attribute chain、動態 import 與不明 re-export 一律不可視為目標。
@@ -43,6 +44,9 @@
 - `unittest.TestCase`／`IsolatedAsyncioTestCase` 類別可使用明確由標準庫 `unittest` 匯入的直接名稱或別名；驗證器必須追溯該 import，不可因模型選擇慣用拼寫而誤拒，也不可接受未證實來源的同名類別。
 - 結構驗證必須確認 assertion 直接驗證目標呼叫、目標的回傳值，或 `assertRaises` 區塊中的目標例外；不得將無關 assertion 視為行為測試。
 - 行為驗證只能採用可執行的 Python 語句；註解、docstring、字串或 Markdown 中出現的目標函式與 assertion 文字不得視為測試證據。
+- 標準 mock 呼叫／await 斷言可作為行為測試，但 AST 必須證明 Mock 的標準庫來源、目標使用點 patch 或參數傳入，以及同測試內 target 執行與斷言順序。僅有同名 assert 方法、未使用 mock、重綁定或未 await 的目標不得通過。
+- Trace 的 SQLite 僅可使用受保護的獨立 `:memory:` 連線；檔案、共享 URI、ATTACH／VACUUM INTO 與 extension loading 均不得提供 oracle，安全例外被目標吞掉也不例外。
+- Reviewer 的相同測試／完整證據可在同一目標分析內重用；連續兩次契約失敗後停止額外審查，必須保留未完成狀態。完整工具通過與 Reviewer 完成分開保存，rollback 必須同步保留候選的審查狀態。scorecard 不得拼接跨輪次的最高分。
 - 生成測試不得直接啟動 shell／子程序、直接連網、直接檔案 I/O、動態執行程式碼或做破壞性檔案操作；外部行為必須使用 `unittest.mock.patch`／`mock_open` 模擬。
 - 生成、Reviewer 與 Self-repair 的目標函式呼叫必須符合 AST 擷取的簽名；未知 keyword 或過多 positional 引數只允許用於明確的 `assertRaises(TypeError)` 行為測試。
 - 上述簽名規則同樣適用於被測函式的合法匯入別名，不得因 alias 而略過驗證。

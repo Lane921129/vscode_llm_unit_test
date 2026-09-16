@@ -2,6 +2,7 @@
 import ast
 import json
 import sys
+from mock_behavior import has_mock_behavior
 
 
 def dotted(node):
@@ -84,8 +85,15 @@ def validate_bindings(code, context):
                 expected = f'{module}.{binding}'
                 if patch_path != expected:
                     return {'valid': False, 'reason': f'Patch the dependency at its target use point: {expected}, not {patch_path}. Verify the mock was called.'}
+    if context.get('requireMockBehavior') and not has_mock_behavior(tree, context):
+        return {'valid': False, 'reason': 'Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.'}
     return {'valid': True}
 
 
 if __name__ == '__main__':
-    print(json.dumps(validate_bindings(sys.stdin.read(), json.loads(sys.argv[1]))))
+    if sys.argv[1] == '--payload':
+        payload = json.load(sys.stdin)
+        result = validate_bindings(payload['code'], payload['context'])
+    else:
+        result = validate_bindings(sys.stdin.read(), json.loads(sys.argv[1]))
+    print(json.dumps(result))

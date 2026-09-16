@@ -60,8 +60,16 @@ test('structural pre-validation failures go to Writer without guessing a failing
 
 test('malformed/unavailable review becomes a warning and does not create another quality loop', async () => {
     const result = await validateTestCandidate('draft', hooks({ review: async () => undefined }));
+    assert.equal(result.reviewStatus, 'incomplete');
     assert.deepEqual(result.qualityIssues, []);
     assert.match(result.reviewWarnings.join(), /審查未完成/);
+});
+
+test('deterministic fallback records review not-required without a fabricated empty review', async () => {
+    const result = await validateTestCandidate('draft', hooks({ reviewRequired: false,
+        review: async () => { throw new Error('must not request review'); } }));
+    assert.equal(result.reviewStatus, 'not-required');
+    assert.deepEqual(result.reviewWarnings, []);
 });
 
 test('module import failures return to Writer without invoking method repair', async () => {

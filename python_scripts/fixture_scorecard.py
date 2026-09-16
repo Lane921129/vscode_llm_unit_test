@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -49,6 +50,37 @@ def report_fields(report_path):
     failure_category_match = re.search(r'^- \*\*失敗分類\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     coverage = percentage_values(text, '覆蓋率')
     mutation = percentage_values(text, '突變分數')
+    review_states = re.findall(r'^- \*\*Reviewer status\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
+    review_status = review_states[-1] if review_states else None
+    if review_status is None and 'Reviewer 審查未完成' in text:
+        review_status = 'incomplete'
+    terminal_status, quality_gaps, invalid_journal = None, [], False
+    journal_path = Path(report_path).with_name('function_knowledge.json')
+    if journal_path.exists():
+        try:
+            knowledge = json.loads(journal_path.read_text(encoding='utf-8'))
+            terminal_status = knowledge.get('terminalStatus')
+            review_status = knowledge.get('reviewStatus', review_status)
+            if not knowledge.get('reviewStatus') and any('審查未完成' in warning for warning in knowledge.get('reviewWarnings', [])):
+                review_status = 'incomplete'
+            quality_gaps = knowledge.get('qualityGaps', [])
+            # Scores and review must describe the retained file from this run,
+            # never independently selected maxima from different repair loops.
+            manifest = json.loads(journal_path.with_name('run_manifest.json').read_text(encoding='utf-8'))
+            accepted = knowledge.get('acceptedTest', '')
+            if not accepted or Path(accepted).name != accepted or '/' in accepted or '\\' in accepted:
+                raise ValueError('missing retained test')
+            digest = hashlib.sha256(journal_path.with_name(accepted).read_bytes()).hexdigest()
+            if (not knowledge.get('runId') or manifest.get('runId') != knowledge['runId']
+                    or manifest.get('sourceHash') != knowledge.get('sourceHash')
+                    or digest != knowledge.get('acceptedCodeHash')):
+                raise ValueError('mismatched evidence')
+            coverage_text = (knowledge.get('coverage') or {}).get('coverageText', '')
+            coverage = [float(value) for value in re.findall(r'^(\d+(?:\.\d+)?)%$', coverage_text)]
+            score = knowledge.get('mutationScore')
+            mutation = [score] if isinstance(score, (int, float)) and not isinstance(score, bool) and 0 <= score <= 100 else []
+        except (OSError, ValueError, TypeError, AttributeError):
+            invalid_journal = True
     return {
         'target_file': target_match.group(1).strip() if target_match else None,
         'target_function': function_match.group(1).strip() if function_match else None,
@@ -57,12 +89,13 @@ def report_fields(report_path):
         'model_identity': model_identity_match.group(1).strip() if model_identity_match else None,
         'tier1_generation_mode': generation_mode_match.group(1) if generation_mode_match else None,
         'failure_category': failure_category_match.group(1) if failure_category_match else None,
-        # A report can contain several repair loops. The rollback implementation
-        # retains the best verified test file, so the highest reported value is
-        # the conservative comparable fact for that session.
-        'coverage': max(coverage) if coverage else None,
-        'mutation_score': max(mutation) if mutation else None,
-        'execution_error': '### ❌ 執行中斷' in text,
+        'coverage': coverage[-1] if coverage else None,
+        'mutation_score': mutation[-1] if mutation else None,
+        'review_status': review_status,
+        'terminal_status': terminal_status,
+        'quality_gaps': quality_gaps,
+        'invalid_journal': invalid_journal,
+        'execution_error': '### ❌ 執行中斷' in text or '### 執行停止' in text,
     }
 
 
@@ -102,6 +135,8 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_ide
         'model_identity': None,
         'available_model_identities': [],
         'failure_category': None,
+        'review_status': None,
+        'terminal_status': None,
         'reason': '找不到對應的 final_report.md。',
     }
     if not matches:
@@ -160,6 +195,8 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_ide
         'model_identity': fields['model_identity'],
         'tier1_generation_mode': fields['tier1_generation_mode'],
         'failure_category': fields['failure_category'],
+        'review_status': fields['review_status'],
+        'terminal_status': fields['terminal_status'],
     })
     if fixture['tier'] == 1 and fields['tier1_generation_mode'] not in TIER1_GENERATION_MODES:
         result.update(status='incomplete_provenance', reason='Tier 1 報告缺少可機讀的 generation mode；不與 LLM 或 deterministic fallback 成績混算。')
@@ -170,6 +207,17 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_ide
         )
     elif fields['execution_error']:
         result.update(status='execution_error', reason='報告記錄了執行中斷；不採計既有分數。')
+    elif fields['terminal_status'] and fields['terminal_status'] not in {'passed', 'execution-passed-review-incomplete'}:
+        result.update(status='incomplete_run', reason=f"執行尚未完整通過（{fields['terminal_status']}）；stub、running 或失敗不採計為通過。")
+    elif fields['review_status'] == 'incomplete' or fields['terminal_status'] == 'execution-passed-review-incomplete':
+        result.update(status='review_incomplete', reason='Reviewer 審查未完成；工具分數不能代替完整品質驗收。')
+    elif fields['review_status'] != 'completed' and not (
+            fields['review_status'] == 'not-required' and fields['tier1_generation_mode'] == 'deterministic-fallback'):
+        result.update(status='incomplete_provenance', reason='缺少可確認的 Reviewer 完成狀態。')
+    elif fields['invalid_journal']:
+        result.update(status='incomplete_provenance', reason='執行 journal 不完整，或保留測試與執行證據的身分不一致。')
+    elif fields['quality_gaps']:
+        result.update(status='quality_incomplete', reason='已測量的品質缺口仍未解決，不能以數值分數宣稱通過。')
     elif fields['coverage'] is None or fields['mutation_score'] is None:
         result.update(status='unscored', reason='報告缺少可解析的 coverage 或突變分數。')
     elif fields['coverage'] < result['min_line_coverage'] or fields['mutation_score'] < result['min_mutation_score']:

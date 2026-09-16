@@ -4,6 +4,19 @@
 
 ## 2026-09-16
 
+### 改善部分批次的預檢效率、Trace／Mock 產物及審查完成判定
+
+- 先依未完成實驗批次的四份執行證據建立 `docs/批次改進計畫_2026_09_16.md`；保留原實驗結果，不重跑或改寫私有應用。原 snapshot 六筆 passed 均帶審查未完成警告，不能宣稱完整驗收通過。
+- 所選目標 AST 後立即預檢環境，環境失敗時不做深度 Trace／呼叫點探索。快取縮至單次分析／批次，同批次去重，新分析可看到修復後相依；暫時工具錯誤不快取，並行成功目標保持各自匯入根。
+- Trace 基線改明確 import，支援底線目標與 `__all__`；例外必須有已執行且可解析的型別身分，未知型別不退成 Exception。SQLite audit 阻擋檔案、共享 URI 與繞過保護的連線別名；獨立 in-memory 連線阻擋 ATTACH／VACUUM INTO，包含 thread 與吞掉例外的回歸。
+- 新增 AST Mock 行為 gate，接受可證明標準庫來源、target 使用點 patch／傳入 target 的 mock 呼叫斷言；拒絕無關、偽裝、重綁定、未執行分支與未 await 的 async target。保留所有原有危險操作與隔離執行 gate。
+- 相同完整審查 prompt 在單次目標分析內重用；連續兩次審查契約失敗後停止額外請求，Reviewer 不合格內容不再另以文字模式重問。Auto Reviewer／Bug Fixer 不繼承舊 Writer 資格，Writer 修訂使用 Writer 自身資格。
+- 候選與 rollback 同步記錄 `reviewStatus`；工具滿分但 Reviewer 未完成改為 `execution-passed-review-incomplete`。scorecard 查核 journal／manifest 與保留測試身分、採同版本分數，拒絕未完成審查、stub／running／失敗、缺證據或未解決品質缺口。
+- 驗證與量測：中性 fixture 證明同批次兩次相同環境失敗只啟動一次預檢、新批次重新檢查；四次不合格審查需求只發出兩次角色請求。完整驗證結果記於本機結報，沒有以模型名稱推測性能。
+- 驗證器改由標準輸入接收完整 source／test 語境，避免 Windows 命令列長度限制；新增超過 60 KB 語境的回歸。
+- 完整驗證：Node 300、Python 113 全部通過；TypeScript、lint、建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。
+- 限制：原批次仍屬部分結果；原環境五類樣本、原模型成功率與端到端耗時改善仍待實驗室 pull 後量測。複雜 mock fixture／未知控制流程保守拒絕；受控 Trace 不能視為任意不可信程式的安全沙箱。
+
 ### 提交後自動推送供實驗室驗收
 
 - 依使用者授權，將專案流程改為每次完成驗證與本機 commit 後，接著 push 至目前分支既有 upstream，供實驗室 pull 測試。

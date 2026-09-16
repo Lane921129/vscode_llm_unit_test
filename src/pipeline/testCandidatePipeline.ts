@@ -1,5 +1,6 @@
 import { RepairFeedback } from '../validation/repairFeedback';
 import { TestReview } from '../roles/testReviewer';
+import { ReviewStatus } from '../roles/reviewSession';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -8,6 +9,7 @@ export interface CandidateExecution {
 }
 
 export interface CandidatePipelineHooks {
+    reviewRequired?: boolean;
     validate(code: string): Promise<string | undefined>;
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer'): Promise<string>;
@@ -28,6 +30,7 @@ export async function validateTestCandidate(
     execution: CandidateExecution;
     qualityIssues: string[];
     reviewWarnings: string[];
+    reviewStatus: ReviewStatus;
 }> {
     let code = initialCode;
     const feedback = new RepairFeedback(baseline?.code || initialCode, baseline?.output || '');
@@ -78,10 +81,11 @@ export async function validateTestCandidate(
             role = 'writer';
             continue;
         }
-        const review = await hooks.review(code);
+        const review = hooks.reviewRequired === false ? undefined : await hooks.review(code);
+        const reviewStatus: ReviewStatus = hooks.reviewRequired === false ? 'not-required' : review ? 'completed' : 'incomplete';
         hooks.checkCancelled();
         // Unavailable/malformed review is explicitly unknown, never a fabricated approval.
-        hooks.event('reviewer', review ? 'assessed' : 'unavailable', { attempt, review });
+        hooks.event('reviewer', reviewStatus === 'not-required' ? 'not-required' : review ? 'assessed' : 'unavailable', { attempt, review });
         const blocking = review?.issues.filter(issue => issue.severity === 'blocking') || [];
         if (blocking.length) {
             lastFailure = JSON.stringify(blocking);
@@ -103,11 +107,12 @@ export async function validateTestCandidate(
             return {
                 code,
                 execution,
+                reviewStatus,
                 // 只有可量測的執行缺口可以啟動下一輪品質補測。
                 // Only measured execution gaps may trigger another quality loop.
                 qualityIssues: [...execution.qualityGaps],
                 reviewWarnings: [
-                ...(!review ? ['Reviewer 審查未完成；工具執行通過不代表模型審查通過。'] : []),
+                ...(reviewStatus === 'incomplete' ? ['Reviewer 審查未完成；工具執行通過不代表模型審查通過。'] : []),
                 ...(review?.issues.filter(issue => issue.severity === 'quality').map(issue =>
                     `${issue.id}: ${issue.action}`) || [])
                 ]

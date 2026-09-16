@@ -25,10 +25,51 @@ import traceback
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+import sqlite3
 
 
 class TraceSafetyError(RuntimeError):
     """Raised when tracing would perform an external side effect."""
+
+
+_sqlite_trace_blocks = {}
+
+
+def _blocked_sqlite(message):
+    for blocked in tuple(_sqlite_trace_blocks.values()):
+        blocked.append(message)
+    raise TraceSafetyError(message)
+
+
+class _TraceConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        def authorize(action, _first, _second, _database, _trigger):
+            if action == sqlite3.SQLITE_ATTACH:
+                for blocked in tuple(_sqlite_trace_blocks.values()):
+                    blocked.append('Dynamic trace safety gate blocked SQLite ATTACH / VACUUM INTO')
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        super().set_authorizer(authorize)
+
+    def set_authorizer(self, *args, **kwargs):
+        _blocked_sqlite('Dynamic trace safety gate blocked replacing SQLite isolation guard')
+
+
+def _guard_sqlite_connection(event, arguments):
+    if not _sqlite_trace_blocks:
+        return
+    if event == 'sqlite3.connect' and not (type(arguments[0]) is str and arguments[0] == ':memory:'):
+        _blocked_sqlite('Dynamic trace safety gate blocked non-isolated SQLite connection')
+    if event == 'sqlite3.connect/handle' and not isinstance(arguments[0], _TraceConnection):
+        _blocked_sqlite('Dynamic trace safety gate blocked unguarded SQLite connection alias')
+    if event == 'sqlite3.load_extension':
+        _blocked_sqlite('Dynamic trace safety gate blocked SQLite extension loading')
+
+
+# The audit event also covers pre-imported aliases and sqlite3.Connection,
+# which replacing sqlite3.connect alone cannot guard. Outside a probe it is inert.
+sys.addaudithook(_guard_sqlite_connection)
 
 
 def import_diagnostic(error):
@@ -55,6 +96,12 @@ def block_trace_side_effects():
     """
     original_open = builtins.open
     original_socket = socket.socket
+    original_connect = sqlite3.connect
+
+    def isolated_connect(*args, **kwargs):
+        if len(args) > 5 or 'factory' in kwargs:
+            _blocked_sqlite('Dynamic trace safety gate blocked custom SQLite connection factory')
+        return original_connect(*args, **kwargs, factory=_TraceConnection)
 
     def read_only_open(file, mode='r', *args, **kwargs):
         if any(flag in str(mode) for flag in ('w', 'a', 'x', '+')):
@@ -79,6 +126,13 @@ def block_trace_side_effects():
             raise TraceSafetyError('Dynamic trace safety gate blocked network connection')
 
     with ExitStack() as stack:
+        blocked = []
+        token = object()
+        _sqlite_trace_blocks[token] = blocked
+        stack.callback(_sqlite_trace_blocks.pop, token)
+        for database_module in (sqlite3, sqlite3.dbapi2):
+            stack.enter_context(patch.object(database_module, 'connect', isolated_connect))
+            stack.enter_context(patch.object(database_module, 'Connection', _TraceConnection))
         stack.enter_context(patch('builtins.open', read_only_open))
         stack.enter_context(patch('io.open', read_only_open))
         for method in ('open', 'write_text', 'write_bytes', 'touch', 'mkdir', 'rename', 'replace', 'unlink', 'rmdir', 'chmod', 'symlink_to', 'hardlink_to'):
@@ -90,7 +144,16 @@ def block_trace_side_effects():
             stack.enter_context(patch.object(subprocess, name, _blocked_trace_operation(f'subprocess.{name}')))
         stack.enter_context(patch.object(socket, 'socket', TraceSocket))
         stack.enter_context(patch.object(socket, 'create_connection', _blocked_trace_operation('network connection')))
-        yield
+        try:
+            yield
+        except BaseException:
+            if blocked:
+                raise TraceSafetyError(blocked[0]) from None
+            raise
+        if blocked:
+            # A target catching the guard exception cannot turn the blocked
+            # operation into an apparently verified return value.
+            raise TraceSafetyError(blocked[0])
 
 
 def _literal_value(node):
@@ -1033,6 +1096,17 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     "exception": exc_type,
                     "message": exc_msg
                 }
+                exception_type = type(e)
+                exception_module = exception_type.__module__
+                exception_qualname = exception_type.__qualname__
+                owner = sys.modules.get(exception_module)
+                for part in exception_qualname.split('.'):
+                    owner = vars(owner).get(part) if hasattr(owner, '__dict__') else None
+                if owner is exception_type and all(part.isidentifier() for part in exception_qualname.split('.')):
+                    error_record['exception_module'] = exception_module
+                    error_record['exception_qualname'] = exception_qualname
+                else:
+                    error_record['call_assertable'] = False
                 if not all(assertable for _, assertable in formatted_args) or not all(
                     assertable for _, assertable in formatted_kwargs.values()
                 ):

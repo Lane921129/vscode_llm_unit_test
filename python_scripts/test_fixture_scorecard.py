@@ -1,4 +1,5 @@
 import json
+import hashlib
 import pathlib
 import sys
 import tempfile
@@ -20,6 +21,7 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 - **測試函式**: {target_function}
 
 - **模型識別**: `{model_identity}`
+- **Reviewer status**: completed
 - **策略**: 請求 tier{resolved_tier}，實際 Tier {resolved_tier}
 {mode_line}{failure_line}- **覆蓋率**: {coverage}% (未覆蓋行號: 無)
 - **突變分數**: {mutation}%
@@ -27,6 +29,64 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 
 
 class FixtureScorecardTests(unittest.TestCase):
+    def test_incomplete_reviews_missing_review_provenance_and_unexecuted_runs_never_pass(self):
+        for review_status, terminal, expected in [
+                ('incomplete', 'passed', 'review_incomplete'),
+                ('completed', 'execution-passed-review-incomplete', 'review_incomplete'),
+                ('completed', 'stub-smoke-generated', 'incomplete_run'),
+                ('completed', 'running', 'incomplete_run'),
+                ('completed', 'retained-after-failure', 'incomplete_run'),
+                (None, None, 'incomplete_provenance'),
+                ('not-required', None, 'incomplete_provenance')]:
+            with self.subTest(review_status=review_status, terminal=terminal), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                content = report('/portable/tier1_boundary.py', 'clamp', 100, 100)
+                content = content.replace('- **Reviewer status**: completed\n',
+                                          f'- **Reviewer status**: {review_status}\n' if review_status else '')
+                path = self.write_report(root, 'case', content)
+                if terminal:
+                    path.with_name('function_knowledge.json').write_text(json.dumps({
+                        'terminalStatus': terminal, 'reviewStatus': review_status}), encoding='utf-8')
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-boundary')
+                self.assertEqual(result['status'], expected)
+
+    def test_scorecard_binds_scores_to_retained_file_and_rejects_stale_or_incomplete_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path = self.write_report(root, 'case', report('/portable/tier1_boundary.py', 'clamp', 100, 100))
+            code = b'# neutral retained test\n'
+            path.with_name('loop1_test.py').write_bytes(code)
+            identity = {'runId': 'neutral-run', 'sourceHash': 'neutral-source'}
+            path.with_name('run_manifest.json').write_text(json.dumps(identity), encoding='utf-8')
+            knowledge = {**identity, 'terminalStatus': 'passed', 'reviewStatus': 'completed',
+                         'acceptedTest': 'loop1_test.py', 'acceptedCodeHash': hashlib.sha256(code).hexdigest(),
+                         'coverage': {'coverageText': '80%'}, 'mutationScore': 70, 'qualityGaps': []}
+            def evaluate():
+                path.with_name('function_knowledge.json').write_text(json.dumps(knowledge), encoding='utf-8')
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-boundary')
+            result = evaluate()
+            self.assertEqual((result['coverage'], result['mutation_score']), (80, 70))
+            self.assertEqual(result['status'], 'threshold_failed')
+            knowledge.update(coverage={'coverageText': '100%'}, mutationScore=100, qualityGaps=['missing branch'])
+            self.assertEqual(evaluate()['status'], 'quality_incomplete')
+            knowledge['qualityGaps'] = []
+            self.assertEqual(evaluate()['status'], 'passed')
+            path.with_name('loop1_test.py').write_bytes(b'# changed\n')
+            self.assertEqual(evaluate()['status'], 'incomplete_provenance')
+
+    def test_legacy_review_warning_and_last_loop_scores_cannot_be_hidden_by_earlier_high_scores(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            content = report('/portable/tier1_boundary.py', 'clamp', 100, 100)
+            content = content.replace('- **Reviewer status**: completed\n', '') + '\nReviewer 審查未完成\n'
+            path = self.write_report(root, 'case', content)
+            def evaluate():
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-boundary')
+            self.assertEqual(evaluate()['status'], 'review_incomplete')
+            path.write_text(report('/portable/tier1_boundary.py', 'clamp', 100, 70) +
+                            '\n- **覆蓋率**: 70%\n- **突變分數**: 100%\n', encoding='utf-8')
+            self.assertEqual(evaluate()['status'], 'threshold_failed')
+
     def write_report(self, root, directory, content):
         path = root / directory / 'final_report.md'
         path.parent.mkdir(parents=True)

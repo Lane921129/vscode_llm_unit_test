@@ -3,7 +3,8 @@ import {
     buildTier1PropertyTestMethods,
     buildTier1TestMethods,
     Tier1ConstructorContext,
-    Tier1TraceExample
+    Tier1TraceExample,
+    traceExceptionReference
 } from './tier1TestBuilder';
 
 export type Tier1MethodKind = 'module' | 'instance' | 'static' | 'class' | 'property';
@@ -32,6 +33,8 @@ export interface Tier1TestFileResult {
  * test exercises the same class/property binding rules users receive.
  */
 export function buildTier1TestFile(input: Tier1TestFileInput): Tier1TestFileResult {
+    const exceptionImports = [...new Set(input.errors.filter(error => error.call_assertable !== false)
+        .map(error => traceExceptionReference(error)?.importLine).filter((line): line is string => Boolean(line)))];
     const isProperty = input.methodKind === 'property';
     const methods = isProperty
         ? buildTier1PropertyTestMethods(input.functionName, input.examples, input.errors, 'self._instance', input.isAsync)
@@ -55,7 +58,8 @@ export function buildTier1TestFile(input: Tier1TestFileInput): Tier1TestFileResu
             methodCount: methods.length,
             code: [
                 'import unittest',
-                `from ${input.moduleName} import *`,
+                `from ${input.moduleName} import ${input.functionName}`,
+                ...exceptionImports,
                 '',
                 `class TestTier1${input.functionName || 'Auto'}(unittest.TestCase):`,
                 methods.join('\n\n'),
@@ -81,6 +85,7 @@ export function buildTier1TestFile(input: Tier1TestFileInput): Tier1TestFileResu
         code: [
             'import unittest',
             `from ${input.moduleName} import ${className}`,
+            ...exceptionImports,
             '',
             `class TestTier1${input.functionName || 'Auto'}(unittest.TestCase):`,
             setupBlock,

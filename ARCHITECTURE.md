@@ -15,11 +15,11 @@
 ```mermaid
 flowchart TD
     UI[使用者選取函式] --> Journal[先建立執行紀錄與進度報告]
-    Journal --> Static[AST 與呼叫點靜態事實]
-    Static --> InitialProbe[初始受控行為探測]
-    InitialProbe --> Preflight[正規模組匯入與 coverage 環境預檢]
+    Journal --> Static[所選目標 AST 靜態事實]
+    Static --> Preflight[正規模組匯入與 coverage 環境預檢]
     Preflight -->|失敗| Report[保存基線、證據與報告]
-    Preflight -->|通過| Analyst[分析師整合靜態與已執行證據]
+    Preflight -->|通過| InitialProbe[相依與呼叫點探索及初始受控探測]
+    InitialProbe --> Analyst[分析師整合靜態與已執行證據]
     Analyst --> Rules[程式依 AST 分派測試生成規則]
     Rules --> SupplementalProbe[執行分析師提出的安全純量輸入]
     SupplementalProbe --> Bundle[合併 Writer 證據包]
@@ -40,9 +40,15 @@ flowchart TD
 
 Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執行，但不因此宣稱品質達標。所有模型建議都是待驗證假設。
 
+`src/roles/reviewSession.ts` 以完整審查 prompt 的雜湊重用同候選／同證據評估；連續兩次無法取得合格審查後，停止該目標分析的額外審查請求。Reviewer 格式不合格不再另以文字模式重問；供應商傳輸層錯誤仍遵循既有有限重試。新目標分析重新開始，未知結果絕不改成空問題通過。
+
 Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走快速通道，未執行的 smoke test 明確記為 `executionVerified: false`。上述圖示描述一般函式。
 
 模組預檢使用與生成測試相同的 Python／匯入路徑，確認正規模組實際指向選取的來源；載入時沿用 Trace 副作用阻擋。缺相依、非法模組名稱、同名模組遮蔽或載入副作用會在模型請求前停止，不降 Tier 重試。初始 Trace 載入錯誤保留診斷，但不能成為例外斷言事實。
+
+預檢失敗快取屬於一次 `ExecutionContext`；同批次相同來源／模組／Python／有序匯入根共用確定性失敗，新分析重新檢查相依。逾時、取消及工具暫時錯誤不快取；並行成功目標各自保留輸出目錄的匯入環境。
+
+`python_scripts/mock_behavior.py` 在結構檢查發現標準 mock 呼叫斷言時，靜態追溯標準庫 Mock、目標使用點 patch 或傳入目標的 mock，以及同一測試內先執行 target 再驗證行為的順序。未知控制流程、重綁定、無關 mock 與未 await 的 async 呼叫不提供證據；此檢查不執行候選，也不替代隔離執行與品質 gate。
 
 ## 生成前的四個交接契約
 
@@ -96,3 +102,7 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 在實驗室替換成原始目標，但不可混用不同來源的報告。
 
 模型候選合併已驗證 Trace 前，管線會先把 runner-owned Trace 測試寫成 `loop*_trace_test.py`，在乾淨 Python 程序獨立執行；只有該基線通過才放入候選。這讓 Trace 匯入／constructor 問題不會與模型候選錯誤混成同一個測試結果。
+
+Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例外使用執行觀測確認的 module／qualname；不可解析的例外不產生 assertion。SQLite 檔案／共享 URI 連線會被 audit gate 阻擋；獨立 `:memory:` 連線另設 authorizer，禁止 ATTACH／VACUUM INTO，遭吞掉的安全例外也不能成為 oracle。
+
+保留候選的 `reviewStatus` 為 `completed`、`incomplete` 或 deterministic 專用 `not-required`，會隨 rollback 同步還原。工具滿分但審查未完成的終態為 `execution-passed-review-incomplete`。scorecard 查核 journal／manifest 的 runId、來源 hash 與保留測試 hash，採該版本的分數，拒絕未完成審查、stub、running、失敗與未解決品質缺口；不拼接不同輪次最高分。

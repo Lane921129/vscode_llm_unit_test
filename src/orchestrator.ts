@@ -32,8 +32,9 @@ import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { restoreVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
-import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey } from './llm/modelQualification';
-import { RoleQualificationProfile } from './llm/roleQualification';
+import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, QUALIFICATION_VERSION } from './llm/modelQualification';
+import { RoleQualificationProfile, qualifiedRole } from './llm/roleQualification';
+import { ReviewSession, ReviewStatus } from './roles/reviewSession';
 import { canUseDeterministicTierOne, canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
@@ -733,7 +734,9 @@ async function requestLlmApiUnlocked(
             }
         }
 
-        if (!isStructuredResponseUsable(responseText, outputFormat)) {
+        // Reviewer contract failures belong to the bounded review session.
+        // Repeating the same invalid assessment in text mode doubles its cost.
+        if (outputFormat !== 'review-json' && !isStructuredResponseUsable(responseText, outputFormat)) {
             log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
             return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
         }
@@ -800,10 +803,10 @@ async function validateGeneratedTestCode(
     allowedExceptionNames?: string[],
     targetClassName?: string | null,
     pythonExecutable: string = 'python',
-    bindingContext?: { module: string; target: string; className?: string | null; dependencies: Record<string, string> }
+    bindingContext?: { module: string; target: string; className?: string | null; source?: string; dependencies: Record<string, string> }
 ): Promise<{ valid: boolean; reason?: string }> {
     const structure = validateUnittestStructure(
-        code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName
+        code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName, Boolean(bindingContext)
     );
     if (!structure.valid) {
         return structure;
@@ -813,9 +816,12 @@ async function validateGeneratedTestCode(
         const parsed = await runSpawn(
             pythonExecutable,
             bindingContext
-                ? [pythonToolPath('bindings'), JSON.stringify(bindingContext)]
+                ? [pythonToolPath('bindings'), '--payload']
                 : ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
-            { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
+            { env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+                input: bindingContext ? JSON.stringify({ code, context: {
+                    ...bindingContext, requireMockBehavior: structure.requiresMockBehaviorEvidence
+                } }) : code, timeout: 5000 }
         );
         if (parsed.code !== 0) {
             return { valid: false, reason: `Python AST 無法解析：${(parsed.stderr || parsed.stdout).trim().slice(0, 300)}` };
@@ -983,7 +989,8 @@ async function resolveAstAndDependencies(
     funcName: string,
     projectRoot: string,
     pythonExecutable: string,
-    log: (text: string) => void
+    log: (text: string) => void,
+    beforeBehavior: (context: AstContext) => Promise<void>
 ): Promise<AstContext | null> {
     log(`[AST] 正在解析函式 \`${funcName}\` 的結構與依賴...`);
     const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
@@ -991,6 +998,7 @@ async function resolveAstAndDependencies(
         return astContext;
     }
     log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+    await beforeBehavior(astContext);
 
     if (astContext.dependencies && astContext.dependencies.length > 0) {
         log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
@@ -1065,9 +1073,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let bestMeasuredGaps: string[] = [];
     let bestGaps: string[] = [];
     let bestReviewWarnings: string[] = [];
+    let bestReviewStatus: ReviewStatus = 'incomplete';
     let bestCoverage: { coverageText: string; missingLines: string } | null = null;
     let qualityGaps: string[] = [];
     let reviewWarnings: string[] = [];
+    let reviewStatus: ReviewStatus = 'incomplete';
+    const reviewSession = new ReviewSession();
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
@@ -1108,16 +1119,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         modelSnapshot.current.testGenerationReady !== undefined
     );
     const roleQualification = activeModelProfile.roleQualification;
-    const roleReady = (role: keyof RoleQualificationProfile, legacyReady: boolean | undefined): boolean | undefined => {
-        if (roleQualification) {
-            return roleQualification[role].state === 'verified'
-                || (userTierSetting !== 'auto' ? undefined : false);
-        }
-        return legacyReady;
-    };
-    const writerReady = roleReady('writer', qualifiedForSelectedModel === true);
-    const reviewerReady = roleReady('reviewer', qualifiedForSelectedModel === true);
-    const fixerReady = roleReady('bugFixer', qualifiedForSelectedModel === true);
+    const currentQualification = activeModelProfile.qualificationVersion === QUALIFICATION_VERSION;
+    const writerReady = qualifiedRole('writer', roleQualification, currentQualification, qualifiedForSelectedModel);
+    const reviewerReady = qualifiedRole('reviewer', roleQualification, currentQualification);
+    const fixerReady = qualifiedRole('bugFixer', roleQualification, currentQualification);
     const tier1GenerationMode = resolveTier1GenerationMode(writerReady, userTierSetting);
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
     const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
@@ -1210,6 +1215,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     recordRole('pipeline', 'running', { target: params.funcName });
     try {
     let astContext: AstContext | null = null;
+    const targetDir = path.dirname(params.filePath);
+    let preflight: Awaited<ReturnType<typeof preflightTargetModule>> | undefined;
+    const checkEnvironment = async (context: AstContext | null) => {
+        const module = inferTargetImportModule(params.filePath, context?.file_imports || []);
+        journal.knowledge({ sourceStructure: context?.code || null, sourceContext: context,
+            initialTargetObservations: null, roleQualification: roleQualification || null });
+        preflight = await preflightTargetModule(pythonExecutable, params.filePath, module,
+            [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir);
+        recordRole('environment', 'passed', { module: preflight.module });
+    };
     if (params.funcName) {
         const projectRoot = (params as any).batchPath
             ? (params as any).batchPath
@@ -1219,7 +1234,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             params.funcName,
             projectRoot,
             pythonExecutable,
-            log
+            log,
+            checkEnvironment
         );
         if (astContext && !astContext.error) {
             targetFuncName = astContext.name || targetFuncName;
@@ -1233,6 +1249,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         module: targetImportModule,
         target: targetFuncName,
         className: astContext?.class_name,
+        source: astContext?.code,
         dependencies: Object.fromEntries((astContext?.file_imports || [])
             .filter((item: any) => item.kind === 'from' && item.name && item.name !== '*'
                 && (astContext?.calls || []).includes(item.alias || item.bound_name || item.name))
@@ -1244,11 +1261,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     journal.knowledge({ sourceStructure: astContext?.code || null, sourceContext: astContext,
         initialTargetObservations: astContext?.traceResult || null, importContract: testBindingContext,
         roleQualification: roleQualification || null });
-    const targetDir = path.dirname(params.filePath);
-    const preflight = await preflightTargetModule(pythonExecutable, params.filePath, targetImportModule,
-        [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir);
-    const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight.importPaths);
-    recordRole('environment', 'passed', { module: preflight.module });
+    if (!preflight) { await checkEnvironment(astContext); }
+    const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
 
     // ─── 優化一：Stub/Dummy 函式快速通道 ───
     // 若函式為純 Stub（pass/return None/return <literal>），跳過 LLM + 突變測試
@@ -2008,6 +2022,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             };
             let baselineScenarios = bestScenarios.length ? bestScenarios : bestCode ? await inventory(bestCode) : [];
             const accepted = await validateTestCandidate(finalCode, {
+                reviewRequired: mayUseModelAuthoredTests,
                 checkCancelled: throwIfExecutionCancelled,
                 event: recordRole,
                 validate: async (code) => {
@@ -2020,8 +2035,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 },
                 review: async (code) => {
                     if (!mayUseModelAuthoredReview) {
-                        recordRole('reviewer', 'skipped-deterministic', {});
-                        return { issues: [] };
+                        recordRole('reviewer', 'unqualified', {});
+                        return undefined;
                     }
                     const sys = getTestReviewerSystemPrompt();
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence },
@@ -2030,22 +2045,26 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         recordRole('reviewer', 'budget-exceeded', { reason: '完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。' });
                         return undefined;
                     }
-                    try {
-                        const raw = await requestLlmApi(params, sys, prompt, log, 'review-json');
-                        const result = parseTestReview(raw, code);
-                        recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
-                            contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result
-                        });
-                        return result;
-                    } catch (error: any) {
-                        throwIfExecutionCancelled();
-                        recordRole('reviewer', 'failed', { reason: error.message });
-                        return undefined;
-                    }
+                    return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
+                        try {
+                            const raw = await requestLlmApi(params, sys, prompt, log, 'review-json');
+                            const result = parseTestReview(raw, code);
+                            recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
+                                contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result
+                            });
+                            return result;
+                        } catch (error: any) {
+                            throwIfExecutionCancelled();
+                            recordRole('reviewer', 'failed', { reason: error.message });
+                            return undefined;
+                        }
+                    }, (status, detail) => recordRole('reviewer', status, detail));
                 },
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
                 revise: async (code, failure, role) => {
-                    if (!mayUseModelAuthoredRepair) { throw new Error('Auto 未驗證模型不可呼叫模型修復。'); }
+                    if (role === 'writer' ? !mayUseModelAuthoredTests : !mayUseModelAuthoredRepair) {
+                        throw new Error(`Auto 未驗證 ${role} 角色不可呼叫該角色修訂。`);
+                    }
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
                     const prompt = role === 'bug-fixer' ? repairContext(code, failure)
@@ -2135,9 +2154,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             loopCoverage = extractCoverage(loopExecution, params.filePath);
             qualityGaps = accepted.qualityIssues;
             reviewWarnings = accepted.reviewWarnings;
+            reviewStatus = accepted.reviewStatus;
             measuredQualityGaps = accepted.execution.qualityGaps;
             recordRole('validation', 'accepted', {
-                codeHash: evidenceHash(finalCode), qualityGaps, reviewWarnings
+                codeHash: evidenceHash(finalCode), qualityGaps, reviewWarnings, reviewStatus
             });
             finalReportMarkdown += `\n### 執行驗證\n\n\`\`\`text\n${loopExecution}\n\`\`\`\n`;
             if (qualityGaps.length) {
@@ -2381,6 +2401,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 bestMeasuredGaps = [...measuredQualityGaps];
                 bestGaps = [...qualityGaps];
                 bestReviewWarnings = [...reviewWarnings];
+                bestReviewStatus = reviewStatus;
                 bestCoverage = loopCoverage;
                 recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
                     survivors: survivorIds, qualityGaps });
@@ -2395,6 +2416,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 loopCoverage = bestCoverage;
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
+                reviewStatus = bestReviewStatus;
                 measuredQualityGaps = [...bestMeasuredGaps];
                 acceptedScenarios = bestScenarios;
                 finalReportMarkdown += `> 已還原歷史基線，測試、分數（${bestScore}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n`;
@@ -2411,9 +2433,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })),
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
                 survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
-                reviewWarnings,
+                reviewWarnings, reviewStatus,
                 nextTasks: qualityStrategyHints(survivedMutants), taskStatus: 'hypotheses-require-execution' });
             // 每次接受可執行基準後立刻保存報告，後續角色或品質步驟失敗也不會遺失成果。
+            finalReportMarkdown += `\n- **Reviewer status**: ${reviewStatus}\n`;
             // Checkpoint every accepted executable baseline before any later quality work.
             fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
             recordRole('report', 'checkpointed', {
@@ -2469,7 +2492,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             if (mutationScore >= 100 && measuredQualityGaps.length === 0) {
                 log(`[優化] 突變分數已達到 100%，且目標 Coverage 完整；已保存成功基準。`);
-                journal.knowledge({ terminalStatus: 'passed' });
+                journal.knowledge({ terminalStatus: reviewStatus === 'incomplete' ? 'execution-passed-review-incomplete' : 'passed' });
                 break;
             }
             if ((survivedMutants || qualityGaps.length) && !mayUseModelAuthoredTests) {
@@ -2502,6 +2525,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 survivedMutants = bestSurvivors;
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
+                reviewStatus = bestReviewStatus;
             }
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
             finalReportMarkdown += retainedBaseline

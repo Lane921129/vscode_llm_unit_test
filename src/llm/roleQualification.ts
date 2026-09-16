@@ -14,6 +14,13 @@ export interface RoleQualificationProfile {
     bugFixer: RoleQualificationStatus;
 }
 
+/** Old Writer probes never certify Reviewer or Bug Fixer contracts. */
+export function qualifiedRole(role: keyof RoleQualificationProfile, profile: RoleQualificationProfile | undefined,
+    currentVersion: boolean, legacyWriterReady?: boolean): boolean {
+    if (!currentVersion) { return false; }
+    return profile ? profile[role]?.state === 'verified' : role === 'writer' && legacyWriterReady === true;
+}
+
 export type RoleQualificationRequester = (prompt: string) => Promise<string | undefined>;
 
 export const ROLE_QUALIFICATION_TEST_FILE = `import unittest

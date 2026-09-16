@@ -11,7 +11,7 @@ test('Tier 1 file builder creates a portable module unittest from verified trace
     });
 
     assert.strictEqual(result.methodCount, 1);
-    assert.match(result.code || '', /from sample import \*/);
+    assert.match(result.code || '', /from sample import double/);
     assert.match(result.code || '', /result = double\(2\)/);
     assert.match(result.code || '', /self\.assertEqual\(result, 4\)/);
 });

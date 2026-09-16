@@ -43,7 +43,7 @@ test('missing target dependency stops before all model roles and preserves diagn
         await handlers.get('llm-unit-test.runCaptureAndTest')!(params);
         await handlers.get('llm-unit-test.runCaptureAndTest')!(params);
         assert.equal(modelCalls, 0);
-        assert.equal(preflightFailureCacheSize(), 1);
+        assert.equal(preflightFailureCacheSize(), 0);
         const runs = fs.readdirSync(params.outputPath).flatMap(root =>
             fs.readdirSync(path.join(params.outputPath, root)).map(name => path.join(params.outputPath, root, name)));
         assert.equal(runs.length, 2);
@@ -53,11 +53,12 @@ test('missing target dependency stops before all model roles and preserves diagn
             assert.equal(knowledge.failureCategory, 'environment');
             assert.equal(knowledge.failureStage, 'module-import');
             assert.equal(knowledge.diagnostic.missing_module, 'fixture_dependency_not_installed');
-            assert.equal(knowledge.initialTargetObservations.load_diagnostic.missing_module, 'fixture_dependency_not_installed');
+            assert.equal(knowledge.initialTargetObservations, null);
             assert.match(knowledge.sourceStructure, /return value \+ 1/);
             assert.match(fs.readFileSync(path.join(run, 'final_report.md'), 'utf8'), /fixture_dependency_not_installed/);
             const events = fs.readFileSync(path.join(run, 'role_events.jsonl'), 'utf8');
             assert.doesNotMatch(events, /"stage":"(?:writer|reviewer|bug-fixer|analyst-planning)"/);
+            assert.doesNotMatch(events, /"stage":"behavior-probe"/);
         }
         assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), source);
     } finally {

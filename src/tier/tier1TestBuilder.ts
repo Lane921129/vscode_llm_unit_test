@@ -10,6 +10,31 @@ export interface Tier1TraceExample {
     result_truncated?: boolean;
     result_collection_limit?: number;
     exception?: string;
+    exception_module?: string;
+    exception_qualname?: string;
+}
+
+const builtinExceptions = new Set(('BaseException Exception ArithmeticError AssertionError AttributeError '
+    + 'BufferError EOFError ImportError ModuleNotFoundError LookupError IndexError KeyError MemoryError '
+    + 'NameError UnboundLocalError OSError BlockingIOError ChildProcessError ConnectionError BrokenPipeError '
+    + 'ConnectionAbortedError ConnectionRefusedError ConnectionResetError FileExistsError FileNotFoundError '
+    + 'InterruptedError IsADirectoryError NotADirectoryError PermissionError ProcessLookupError TimeoutError '
+    + 'ReferenceError RuntimeError NotImplementedError RecursionError StopIteration StopAsyncIteration '
+    + 'SyntaxError IndentationError TabError SystemError TypeError ValueError UnicodeError UnicodeDecodeError '
+    + 'UnicodeEncodeError UnicodeTranslateError ZeroDivisionError OverflowError FloatingPointError').split(' '));
+
+/** Never guess an unknown exception name or broaden it to Exception. */
+export function traceExceptionReference(error: Tier1TraceExample): { expression: string; importLine?: string } | undefined {
+    const module = error.exception_module;
+    const name = error.exception_qualname || error.exception;
+    if ((!module || module === 'builtins') && name && builtinExceptions.has(name)) {
+        return { expression: name };
+    }
+    const dottedName = /^[\p{L}_][\p{L}\p{N}\p{M}_]*(?:\.[\p{L}_][\p{L}\p{N}\p{M}_]*)*$/u;
+    if (module && name && dottedName.test(module) && dottedName.test(name)) {
+        return { expression: `${module}.${name}`, importLine: `import ${module}` };
+    }
+    return undefined;
 }
 
 /**
@@ -115,11 +140,9 @@ export function buildTier1TestMethods(
             ...buildTraceResultAssignment(funcCall, example, isAsync)
         ].join('\n'));
     });
-    errors.filter(error => error.call_assertable !== false).forEach((error, index) => {
+    errors.filter(error => error.call_assertable !== false && traceExceptionReference(error)).forEach((error, index) => {
         const funcCall = buildTraceCall(funcName, error);
-        const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
-            ? error.exception
-            : 'Exception';
+        const exception = traceExceptionReference(error)!.expression;
         methods.push([
             `    def test_case_${assertableExamples.length + index + 1}(self):`,
             `        with self.assertRaises(${exception}):`,
@@ -152,10 +175,8 @@ export function buildTier1PropertyTestMethods(
             `        ${assertion}`
         ].join('\n'));
     });
-    errors.filter(error => error.call_assertable !== false).forEach((error, index) => {
-        const exception = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(error.exception || '')
-            ? error.exception
-            : 'Exception';
+    errors.filter(error => error.call_assertable !== false && traceExceptionReference(error)).forEach((error, index) => {
+        const exception = traceExceptionReference(error)!.expression;
         methods.push([
             `    def test_case_${assertableExamples.length + index + 1}(self):`,
             `        with self.assertRaises(${exception}):`,
