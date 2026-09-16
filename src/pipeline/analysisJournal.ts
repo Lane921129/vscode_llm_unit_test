@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { EVIDENCE_CONTRACT_VERSIONS } from './evidenceContracts';
+import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -16,14 +17,23 @@ export class AnalysisJournal {
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
             schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(),
-            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v3',
-            evidenceContracts: EVIDENCE_CONTRACT_VERSIONS
+            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v4',
+            evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
+        this.knowledge({ target, terminalStatus: 'running', stage: 'starting' });
     }
     record(loop: number, stage: string, status: string, detail: unknown): void {
         const event = { sequence: ++this.sequence, runId: this.runId, sourceHash: this.sourceHash,
             time: new Date().toISOString(), loop, stage, status, detail };
         fs.appendFileSync(path.join(this.directory, 'role_events.jsonl'), JSON.stringify(event) + '\n', 'utf8');
+        const progress: Record<string, unknown> = { stage, lastEvent: { sequence: this.sequence, status, time: event.time } };
+        if (/(?:failed|rejected)$/.test(status)) {
+            const value = detail as { reason?: string; out?: string } | null;
+            const failure = { sequence: this.sequence, stage, status, reason: value?.reason || value?.out || '' };
+            if (!this.knowledgeState.firstFailure) { progress.firstFailure = failure; }
+            progress.lastFailure = failure;
+        }
+        this.knowledge(progress);
     }
     knowledge(value: Record<string, unknown>): void {
         this.knowledgeState = { ...this.knowledgeState, ...value };

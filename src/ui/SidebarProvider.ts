@@ -10,6 +10,7 @@ import { formatModelQualificationLog, ModelQualificationProfile, QUALIFICATION_V
 import { buildOllamaPlainTestGenerationProbe } from '../llm/ollamaCapability';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
+import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -25,6 +26,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             command: 'appendLog',
             text: formatModelQualificationLog(profile, responsePreview)
         });
+    }
+
+    private appendRoleQualificationLog(profile: ModelQualificationProfile): void {
+        if (!profile.roleQualification) { return; }
+        void this.webview?.postMessage({ command: 'appendLog', text: formatRoleQualificationLog(profile.roleQualification) });
     }
 
     private async getStoredCloudCredentials(): Promise<Record<string, CloudCredential>> {
@@ -366,16 +372,29 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     plainResponse.ok ? await plainResponse.json() : undefined,
                                                     isolatedProbeExecutor
                                                 );
+                                                const roleQualification = await runRoleQualificationProbes(
+                                                    { state: capability.capability, reason: capability.reason },
+                                                    async prompt => {
+                                                        const roleResponse = await timedFetch(`${baseUrl}/api/generate`, {
+                                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                            body: JSON.stringify({ model: message.modelName, prompt, stream: false, format: 'json', options: { temperature: 0 } })
+                                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                                        if (!roleResponse.ok) { return undefined; }
+                                                        return (await roleResponse.json() as { response?: string }).response;
+                                                    }
+                                                );
                                                 const qualificationProfile = {
                                                     ...profile,
                                                     testGenerationReady: capability.capability === 'verified',
                                                     testGenerationReason: capability.reason,
                                                     qualificationVersion: QUALIFICATION_VERSION,
-                                    testGenerationMode: '純 Python unittest'
+                                                    testGenerationMode: '純 Python unittest',
+                                                    roleQualification
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
                                                 this.appendModelQualificationLog(qualificationProfile, capability.responsePreview);
+                                                this.appendRoleQualificationLog(qualificationProfile);
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
                                                         `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過純 Python unittest 驗證。`
@@ -391,11 +410,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     qualificationVersion: QUALIFICATION_VERSION,
                                                     testGenerationReady: false,
                                                     testGenerationReason: '測試連線逾時或無法完成 unittest 生成探針。',
-                                                    testGenerationMode: '未完成'
+                                                    testGenerationMode: '未完成',
+                                                    roleQualification: buildRoleQualificationProfile(
+                                                        { state: 'unverified', reason: 'Writer 探針未完成，角色探針未執行。' }
+                                                    )
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
                                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
                                                 this.appendModelQualificationLog(qualificationProfile);
+                                                this.appendRoleQualificationLog(qualificationProfile);
                                                 vscode.window.showWarningMessage(
                                                     '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
                                                 );
@@ -455,6 +478,19 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     response.ok ? { response: getGoogleGeneratedText(await response.json()) } : undefined,
                                     isolatedProbeExecutor
                                 );
+                                const roleQualification = await runRoleQualificationProbes(
+                                    { state: capability.capability, reason: capability.reason },
+                                    async prompt => {
+                                        const roleRequest = buildGoogleGenerateContentRequest(
+                                            credential.model, credential.key, prompt,
+                                            { responseMimeType: 'application/json', temperature: 0 }
+                                        );
+                                        const roleResponse = await fetchWithServerRetry<Response>(fetch, roleRequest.url, {
+                                            method: 'POST', headers: roleRequest.headers, body: JSON.stringify(roleRequest.body)
+                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                        return roleResponse.ok ? getGoogleGeneratedText(await roleResponse.json()) : undefined;
+                                    }
+                                );
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,
                                     contextLength: connectionMetadata.contextLength,
@@ -464,11 +500,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
                                     qualificationVersion: QUALIFICATION_VERSION,
-                                    testGenerationMode: '純 Python unittest'
+                                    testGenerationMode: '純 Python unittest',
+                                    roleQualification
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                 this.appendModelQualificationLog(profile, capability.responsePreview);
+                                this.appendRoleQualificationLog(profile);
                                 if (capability.capability === 'verified') {
                                     const contextMessage = connectionMetadata.contextLengthKnown
                                         ? `最大輸入 Context：${connectionMetadata.contextLength.toLocaleString()} tokens`
@@ -499,6 +537,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     response.ok ? { response: getCustomChatCompletionText(await response.json()) } : undefined,
                                     isolatedProbeExecutor
                                 );
+                                const roleQualification = await runRoleQualificationProbes(
+                                    { state: capability.capability, reason: capability.reason },
+                                    async prompt => {
+                                        const roleResponse = await timedFetch(message.customUrl, {
+                                            method: 'POST', headers,
+                                            body: JSON.stringify(buildCustomChatCompletionBody(
+                                                message.modelName, 'Return only the requested JSON object.', prompt, 'json'
+                                            ))
+                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                        return roleResponse.ok ? getCustomChatCompletionText(await roleResponse.json()) : undefined;
+                                    }
+                                );
                                 const profile = {
                                     paramSize: 'Custom API',
                                     contextLength: 8192,
@@ -508,11 +558,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
                                     qualificationVersion: QUALIFICATION_VERSION,
-                                    testGenerationMode: '純 Python unittest'
+                                    testGenerationMode: '純 Python unittest',
+                                    roleQualification
                                 } as const;
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                 vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                 this.appendModelQualificationLog(profile, capability.responsePreview);
+                                this.appendRoleQualificationLog(profile);
                                 if (capability.capability === 'verified') {
                                     vscode.window.showInformationMessage(
                                         `✅ Custom API 連線成功！已通過純 Python unittest 驗證。`

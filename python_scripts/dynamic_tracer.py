@@ -21,6 +21,7 @@ import itertools
 import io
 import math
 import typing
+import traceback
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -28,6 +29,13 @@ from unittest.mock import patch
 
 class TraceSafetyError(RuntimeError):
     """Raised when tracing would perform an external side effect."""
+
+
+def import_diagnostic(error):
+    return {'stage': 'module-import', 'exception_type': type(error).__name__,
+            'message': str(error)[:1500],
+            'missing_module': getattr(error, 'name', None) if isinstance(error, ModuleNotFoundError) else None,
+            'traceback': ''.join(traceback.format_exception(type(error), error, error.__traceback__))[-5000:]}
 
 
 def _blocked_trace_operation(operation):
@@ -521,7 +529,8 @@ def package_module_context(file_path: str):
         package_parts.append(current.name)
         current = current.parent
     package_parts.reverse()
-    module_name = '.'.join(package_parts + [target.stem]) if package_parts else target.stem
+    module_parts = package_parts if package_parts and target.stem == '__init__' else package_parts + [target.stem]
+    module_name = '.'.join(module_parts)
     return module_name, str(current), package_parts[0] if package_parts else None
 
 
@@ -554,9 +563,9 @@ def load_module_from_file(file_path: str):
     except TraceSafetyError:
         sys.modules.pop(module_name, None)
         raise
-    except Exception:
+    except (Exception, SystemExit):
         sys.modules.pop(module_name, None)
-        return None
+        raise
     return module
 
 def infer_boundary_inputs(positional_args: list, annotations: dict = None, keyword_only_args: list = None) -> list:
@@ -750,7 +759,12 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             module = load_module_from_file(file_path)
     except TraceSafetyError as error:
         result["load_error"] = str(error)
+        result['load_diagnostic'] = import_diagnostic(error)
         result["blocked_operations"].append(str(error))
+        return result
+    except (Exception, SystemExit) as error:
+        result['load_diagnostic'] = import_diagnostic(error)
+        result['load_error'] = f'{type(error).__name__}: {error}'
         return result
     if module is None:
         result["load_error"] = f"Failed to load module from {file_path}"

@@ -6,8 +6,8 @@
 |---|---|---|---|
 | 語意分析師 | 整合 AST、呼叫點與初始受控行為觀測，提出待測情境；不選規則 | [semanticAnalyzer.ts](semanticAnalyzer.ts) | 情境與證據假設 JSON |
 | Writer | 根據合併證據包與程式選出的測試生成規則寫測試，或依 Reviewer 意見修改 | [unittestWriter.ts](unittestWriter.ts) | 完整 Python unittest |
-| Reviewer | 只檢查測試，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v3` 的問題清單 JSON |
-| Bug Fixer | 根據結構或實際執行失敗做單一方法修復 | [bugFixer.ts](bugFixer.ts) | `bug-fix-v3` 的方法替換 JSON，由管線合併回完整 unittest |
+| Reviewer | 只檢查測試，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v4` 的問題清單 JSON，每項含原文引述、原因與具體動作 |
+| Bug Fixer | 根據可明確定位的實際測試失敗做單一方法修復 | [bugFixer.ts](bugFixer.ts) | `bug-fix-v3` 的方法替換 JSON，由管線合併回完整 unittest |
 | 品質分析師 | 執行通過後，根據覆蓋／突變結果規劃下一輪 | [qualityAnalyst.ts](qualityAnalyst.ts) | 最多三個待驗證任務 |
 
 這是五個任務入口，可以共用同一個模型；語意分析與品質分析分別在生成前後工作。Validation 是工具階段，不是另一個模型角色。
@@ -17,6 +17,10 @@
 - 改「回應如何被接受」：找該角色的 parser，以及 [候選流程](../pipeline/testCandidatePipeline.ts)。Writer／Bug Fixer 的 Python 回應由共用結構與執行驗證處理。
 - 改「測試生成規則選什麼」：找 [testRuleDispatcher.ts](../pipeline/testRuleDispatcher.ts)，共用規則在 [testRuleLibrary.ts](../prompts/testRuleLibrary.ts)。
 
-角色交接版本集中在 [roleContracts.ts](roleContracts.ts)。Reviewer 的阻擋問題只交給 Writer；結構、證據或執行失敗只交給 Bug Fixer。Bug Fixer 的輸出在執行前會由 `validate_repair_scope.py` 檢查，避免改動通過或無關的測試。
+角色交接版本集中在 [roleContracts.ts](roleContracts.ts)。Reviewer 的阻擋問題、結構／證據錯誤、測試檔匯入與 fixture 失敗交給 Writer；可唯一定位的實際方法失敗才交給 Bug Fixer。模組載入失敗沒有測試方法時，禁止猜選第一個方法。Bug Fixer 的輸出在執行前會由 `validate_repair_scope.py` 檢查，避免改動通過或無關的測試。
+
+三個角色共用 [targetContract.ts](../pipeline/targetContract.ts)，保留 class／static／property／instance 與 async 綁定。修復與審查包含完整目標來源、建構子、imports、globals、相依與真實觀測；預算不足時明示未完成，不截斷來源。Bug Fixer 另附該測試類別的 setup／teardown，仍只能替換失敗方法。
+
+Reviewer 只有原文引述而缺少具體原因／動作時屬無效回覆；`focused correction` 等空泛指令不能形成 blocking。這個 parser 保證格式與引述來源，不代表模型意見已證明正確；執行、回歸、coverage 與 mutation gate 仍是驗證依據。
 
 `legacy/mutantTriage.ts` 只保留舊格式處理，不在正式流程中啟動，也不是第六個角色。

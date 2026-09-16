@@ -11,22 +11,39 @@ export type ExecutionFailureCategory =
     | 'environment'
     | 'unknown';
 
+/** A stage-owned diagnostic survives wrapping and must not trigger Tier fallback. */
+export class AnalysisStageError extends Error {
+    constructor(readonly category: ExecutionFailureCategory, readonly stage: string,
+        message: string, readonly diagnostic: unknown = undefined) {
+        super(message);
+        this.name = 'AnalysisStageError';
+    }
+}
+
 /**
  * Classify an already-safe, user-visible error message. This is diagnostic
  * metadata only: it never changes routing, retries, or the quality gates.
  */
 export function classifyExecutionFailure(message: string): ExecutionFailureCategory {
-    const normalized = message.toLowerCase();
+    // Paths, Python line numbers and test names are evidence, not error kinds.
+    const normalized = message.split(/\r?\n/)
+        .filter(line => !/^\s*(?:File ["']|at |test_\w+.*\.\.\.)/.test(line))
+        .join('\n').toLowerCase();
     if (normalized.includes('使用者強制中止') || normalized.includes('cancelled')) {
         return 'cancelled';
     }
-    if (normalized.includes('超時') || normalized.includes('timeout') || normalized.includes('abort')) {
+    if (/超時|逾時|\btimeout\b|timed out/.test(normalized)) {
         return 'timeout';
     }
+    if (/this operation was aborted|^aborterror\b/m.test(normalized)) { return 'unknown'; }
     if (normalized.includes('no module named') || normalized.includes('python executable') || normalized.includes('找不到目標檔案')) {
         return 'environment';
     }
-    if (normalized.includes('coverage') || normalized.includes('覆蓋率')) {
+    if (/syntaxerror:|indentationerror:|taberror:|python syntax:/.test(normalized)) { return 'model-format'; }
+    if (/assertionerror:|(?:type|name|attribute|value|key|zero.?division)error:|^failed \((?:errors|failures)=/m.test(normalized)) {
+        return 'validation';
+    }
+    if (/coverage (?:is required|品質|failed)|覆蓋率/.test(normalized)) {
         return 'coverage';
     }
     if (normalized.includes('mutation') || normalized.includes('突變') || normalized.includes('mutatest') || normalized.includes('mutmut')) {
@@ -38,7 +55,7 @@ export function classifyExecutionFailure(message: string): ExecutionFailureCateg
     if (normalized.includes('模型輸出') || normalized.includes('unittest 格式') || normalized.includes('程式碼內容為空') || normalized.includes('原始碼而非測試碼')) {
         return 'model-format';
     }
-    if (normalized.includes('http ') || normalized.includes('api 請求') || normalized.includes('llm') || /\b(?:401|403|404|429|5\d\d)\b/.test(normalized)) {
+    if (/\bhttp(?: error| status)?\s*[:=]?\s*[45]\d\d\b|api 請求|\b(?:econnrefused|econnreset)\b|fetch failed|socket hang up/.test(normalized)) {
         return 'model-api';
     }
     if (normalized.includes('驗證') || normalized.includes('預先驗證') || normalized.includes('測試檔')) {

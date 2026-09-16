@@ -113,9 +113,10 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
             type: 'object',
             properties: {
                 test_excerpt: { type: 'string' },
+                reason: { type: 'string' },
                 action: { type: 'string' }
             },
-            required: ['test_excerpt', 'action']
+            required: ['test_excerpt', 'reason', 'action']
         };
         return {
             type: 'object',

@@ -11,6 +11,7 @@ export interface CandidatePipelineHooks {
     validate(code: string): Promise<string | undefined>;
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer'): Promise<string>;
+    repairRole?(code: string, failure: string): 'writer' | 'bug-fixer';
     validateRevision?(previousCode: string, candidateCode: string, failure: string,
         role: 'writer' | 'bug-fixer'): Promise<string | undefined>;
     execute(code: string): Promise<CandidateExecution>;
@@ -37,6 +38,7 @@ export async function validateTestCandidate(
     for (let attempt = 0; attempt <= maxRevisions; attempt++) {
         hooks.checkCancelled();
         if (attempt > 0) {
+            if (role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
             if (role === 'bug-fixer') {
                 const failureKey = lastFailure.trim();
                 if (attemptedBugFixFailures.has(failureKey)) {
@@ -72,10 +74,8 @@ export async function validateTestCandidate(
         if (invalid) {
             lastFailure = invalid;
             code = retainedCode;
-            // Structural and evidence validation are pre-validation failures,
-            // so the focused repair role owns them. Reviewer findings remain
-            // Writer work below.
-            role = 'bug-fixer';
+            // A malformed file has no proven failing method to replace.
+            role = 'writer';
             continue;
         }
         const review = await hooks.review(code);
@@ -114,7 +114,9 @@ export async function validateTestCandidate(
             };
         }
         lastFailure = execution.out;
-        role = 'bug-fixer';
+        // A module/fixture failure is not a failed test-method replacement.
+        role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
+            ? 'writer' : 'bug-fixer';
     }
     throw new Error(`測試候選未通過驗證（修訂上限 ${maxRevisions}）：${lastFailure}`);
 }

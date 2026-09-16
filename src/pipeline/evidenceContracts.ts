@@ -29,6 +29,7 @@ export interface BehaviorObservations {
     examples: BehaviorObservation[];
     errors: BehaviorObservation[];
     load_error: string | null;
+    load_diagnostic?: { stage: string; exception_type: string; message: string; missing_module: string | null; traceback: string };
     blocked_operations?: string[];
     input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry' | 'semantic_guided';
 }

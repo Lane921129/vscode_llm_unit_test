@@ -19,6 +19,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from lab_batch_plan import DEFAULT_BATCH_MANIFEST, resolve_lab_batch
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MANIFEST = ROOT / 'test' / 'fixtures' / 'python' / 'manifest.json'
@@ -210,9 +212,14 @@ def tier1_llm_release_summary(results, tier1_generation_mode, model_identity):
     }
 
 
-def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generation_mode=None, model_identity=None):
+def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generation_mode=None,
+                    model_identity=None, batch_manifest_path=None):
     report_root = Path(report_root).resolve()
-    manifest = load_manifest(manifest_path)
+    manifest = (
+        resolve_lab_batch(manifest_path, batch_manifest_path)
+        if batch_manifest_path
+        else load_manifest(manifest_path)
+    )
     if tier1_generation_mode and tier1_generation_mode not in TIER1_GENERATION_MODES:
         raise ValueError(f'unsupported Tier 1 generation mode: {tier1_generation_mode}')
     results = [
@@ -231,6 +238,9 @@ def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generatio
     return {
         'schema_version': 3,
         'manifest_schema_version': manifest['schema_version'],
+        'batch_manifest_schema_version': manifest.get('batch_schema_version'),
+        'batch_name': manifest.get('batch_name'),
+        'batch_categories': manifest.get('categories', []),
         'tier1_generation_mode_filter': tier1_generation_mode,
         'model_identity_filter': model_identity,
         'fixture_count': len(results),
@@ -248,6 +258,7 @@ def format_markdown(scorecard):
         '> 此報表僅彙整 extension 已產生的 final_report.md；未產生或未計分的項目不會被視為通過。',
         '',
         f"- Fixture 總數：{scorecard['fixture_count']}",
+        f"- 批次：{scorecard['batch_name'] or '完整 fixture corpus'}",
         f"- 通過：{scorecard['status_counts'].get('passed', 0)}",
         f"- 已計分但未達門檻：{scorecard['status_counts'].get('threshold_failed', 0)}",
         f"- 未計分／缺報告／執行中斷：{scorecard['fixture_count'] - scorecard['status_counts'].get('passed', 0) - scorecard['status_counts'].get('threshold_failed', 0)}",
@@ -293,6 +304,7 @@ def main(argv=None):
     parser.add_argument('--require-complete', action='store_true', help='Return non-zero unless every fixture passes its thresholds.')
     parser.add_argument('--tier1-generation-mode', choices=sorted(TIER1_GENERATION_MODES), help='Score LLM and deterministic Tier 1 reports separately.')
     parser.add_argument('--model-identity', help='Exact provider/model identity recorded by the extension, for example cloud/gemma-4-31b-it.')
+    parser.add_argument('--batch-manifest', help='Optional five-category lab batch manifest; score only the fixtures it selects.')
     parser.add_argument('--require-tier1-llm-release', action='store_true', help='Return non-zero unless every Tier 1 fixture has a passing llm-evidence-bound report.')
     args = parser.parse_args(argv)
 
@@ -304,13 +316,19 @@ def main(argv=None):
     if args.require_tier1_llm_release and not args.model_identity:
         parser.error('--require-tier1-llm-release requires one --model-identity.')
     generation_mode = 'llm-evidence-bound' if args.require_tier1_llm_release else args.tier1_generation_mode
-    scorecard = build_scorecard(root, tier1_generation_mode=generation_mode, model_identity=args.model_identity)
+    scorecard = build_scorecard(
+        root,
+        tier1_generation_mode=generation_mode,
+        model_identity=args.model_identity,
+        batch_manifest_path=args.batch_manifest,
+    )
     output_dir = Path(args.output_dir) if args.output_dir else root / 'fixture_scorecard'
     json_path, markdown_path = write_scorecard(scorecard, output_dir)
     print(json.dumps({
         'fixture_count': scorecard['fixture_count'],
         'status_counts': scorecard['status_counts'],
         'model_identity_filter': scorecard['model_identity_filter'],
+        'batch_name': scorecard['batch_name'],
         'tier1_llm_release': scorecard['tier1_llm_release'],
         'json': str(json_path),
         'markdown': str(markdown_path),

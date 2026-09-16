@@ -14,7 +14,9 @@ if (!fs.existsSync(pythonExecutable)) {
     const unittestFiles = [
         'python_scripts/test_rescue_unittest.py',
         'python_scripts/test_ast_pipeline.py',
+        'python_scripts/test_pipeline_reliability.py',
         'python_scripts/test_fixture_corpus.py',
+        'python_scripts/test_lab_batch_plan.py',
         'python_scripts/test_fixture_scorecard.py',
         'python_scripts/test_secret_scan.py'
     ];

@@ -11,6 +11,11 @@ export interface ReportProvenance {
     qualified: boolean | undefined;
     qualificationReason?: string;
     qualificationMode?: string;
+    roleQualification?: {
+        writer: { state: string; reason: string };
+        reviewer: { state: string; reason: string };
+        bugFixer: { state: string; reason: string };
+    };
 }
 
 /** Render portable execution facts without disclosing a user's local paths. */
@@ -34,6 +39,9 @@ export function formatReportProvenance(provenance: ReportProvenance): string {
         `- **策略**: 請求 ${provenance.requestedTier}，實際 Tier ${provenance.resolvedTier}`, 
         `- **模型 unittest 生成能力（測試連線驗證）**: ${qualification}`,
         ...qualificationDetails,
+        ...(provenance.roleQualification ? [
+            `- **角色資格**: Writer=${provenance.roleQualification.writer.state}；Reviewer=${provenance.roleQualification.reviewer.state}；Bug Fixer=${provenance.roleQualification.bugFixer.state}`
+        ] : []),
         ''
     ].join('\n');
 }

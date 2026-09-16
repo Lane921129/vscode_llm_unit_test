@@ -4,6 +4,7 @@
  */
 
 import { summarizeRepairOutput } from '../validation/repairFeedback';
+import { formatTargetContract } from '../pipeline/targetContract';
 
 interface TestMethodFragment {
     name: string;
@@ -23,7 +24,7 @@ export function getBugFixerSystemPrompt(): string {
     return `You are a Python unittest Bug Fixer. Repair one failing test method only.
 
 CONTRACT:
-- Use only the failure, target signature, permitted mock paths, focused target source, imports, and failing method supplied in BUG_FIX_REQUEST_V3.
+- Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V3.
 - Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
 - Source code describes the branch under test, but exact expected values still require an explicit return/raise or same-test mock behavior.
@@ -72,8 +73,12 @@ function testMethodFragments(code: string): TestMethodFragment[] {
 function selectedFailureMethod(code: string, output: string): TestMethodFragment | undefined {
     const fragments = testMethodFragments(code);
     const failed = failedTestNamesFromOutput(output);
-    return fragments.find(fragment => fragment.name === failed[0])
-        || fragments[0];
+    const matches = fragments.filter(fragment => fragment.name === failed[0]);
+    return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function canRepairTestMethod(code: string, output: string): boolean {
+    return Boolean(selectedFailureMethod(code, output));
 }
 
 function importLines(code: string): string[] {
@@ -85,7 +90,7 @@ function importLines(code: string): string[] {
 function focusedSource(sourceCode?: string): string {
     if (!sourceCode?.trim()) { return 'not available'; }
     const source = sourceCode.trim();
-    return source.length <= 3000 ? source : `${source.slice(0, 3000)}\n# [runner truncated unrelated tail]`;
+    return source;
 }
 
 export function getBugFixerUserPrompt(
@@ -99,18 +104,14 @@ export function getBugFixerUserPrompt(
     semanticGuidance?: string,
     allowedMockTargets: string[] = []
 ): string {
-    // These legacy parameters remain in the public signature for callers, but
-    // deliberately do not enter the small-model repair prompt.
-    void astContext;
+    // Analyst hypotheses are not a repair oracle. Preserve the verified setup.
     void semanticGuidance;
     const method = selectedFailureMethod(brokenCode, errorOutput);
-    const signature = funcArgs.length ? `${funcName}(${funcArgs.join(', ')})` : `${funcName}()`;
     const imports = importLines(brokenCode);
     return `BUG_FIX_REQUEST_V3
 === REPAIR TARGET ===
 - Failing method: ${method?.name || 'not identified; stop without guessing'}
-- Target import: from ${moduleName} import ${funcName}
-- Target signature: ${signature}
+${formatTargetContract(moduleName, funcName, funcArgs, astContext)}
 - Allowed mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied; preserve existing patch paths'}
 
 === LATEST FAILURE ===
@@ -122,6 +123,9 @@ ${imports.length ? imports.join('\n') : 'none'}
 === FAILING TEST METHOD ===
 ${method?.code || 'No unambiguous failing test method was found.'}
 
+=== TEST SETUP AND VERIFIED OBSERVATIONS ===
+${formatRepairSetup(brokenCode, astContext, method)}
+
 === NECESSARY TARGET BRANCH ===
 ${focusedSource(sourceCode)}
 
@@ -129,7 +133,7 @@ RESPONSE:
 Return the V3 JSON replacement object. Repair only the named method; request only truly missing imports.`;
 }
 
-/** Reviewer receives constraints only; source, AST, dependencies and traces stay outside its quoteable evidence. */
+/** Target context is read-only; every finding still quotes the test file. */
 export function getReviewEvidence(
     _brokenCode: string,
     _errorOutput: string,
@@ -141,13 +145,39 @@ export function getReviewEvidence(
     _semanticGuidance?: string,
     allowedMockTargets: string[] = []
 ): string {
-    const signature = funcArgs.length ? `${funcName}(${funcArgs.join(', ')})` : `${funcName}()`;
     return [
-        `Target import: from ${moduleName} import ${funcName}`,
-        `Target signature: ${signature}`,
+        formatTargetContract(moduleName, funcName, funcArgs, _astContext),
         `Allowed mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied'}`,
+        `Target source (read-only):\n${focusedSource(_sourceCode)}`,
+        `Source setup and verified observations (read-only; same setup only):\n${JSON.stringify({
+            constructor: _astContext?.class_context || null, imports: _astContext?.file_imports || [],
+            globals: _astContext?.referenced_globals || [], dependencies: _astContext?.dependencyContexts || [],
+            observations: _astContext?.traceResult || null
+        })}`,
         'Every finding must quote TEST_FILE; these constraints cannot be quoted as evidence.'
     ].join('\n');
+}
+
+function formatRepairSetup(code: string, astContext?: any, method?: TestMethodFragment): string {
+    const allLines = code.split(/\r?\n/);
+    let classStart = -1;
+    for (let index = 0; method && index < method.start; index++) {
+        if (/^class\s+/.test(allLines[index])) { classStart = index; }
+    }
+    let classEnd = method?.end || 0;
+    while (classEnd < allLines.length && !/^class\s+/.test(allLines[classEnd])) { classEnd++; }
+    const lines = classStart >= 0 ? allLines.slice(classStart, classEnd) : [];
+    const fixtures: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+        const match = lines[i].match(/^(\s+)(?:async\s+)?def\s+(?:setUp|tearDown|asyncSetUp|asyncTearDown|setUpClass|tearDownClass)\s*\(/);
+        if (!match) { continue; }
+        const start = i;
+        while (i + 1 < lines.length && (!lines[i + 1].trim() || (lines[i + 1].match(/^\s*/)?.[0].length || 0) > match[1].length)) { i++; }
+        fixtures.push(lines.slice(start, i + 1).join('\n'));
+    }
+    return JSON.stringify({ testClass: lines[0] || null, fixtures, constructor: astContext?.class_context || null,
+        imports: astContext?.file_imports || [], globals: astContext?.referenced_globals || [],
+        dependencies: astContext?.dependencyContexts || [], observations: astContext?.traceResult || null });
 }
 
 function parseReplacement(raw: string): BugFixReplacement | undefined {

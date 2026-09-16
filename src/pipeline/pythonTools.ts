@@ -6,6 +6,7 @@ export const PYTHON_TOOLS = {
     ast: 'ast_extractor.py',
     callers: 'ast_caller_finder.py',
     trace: 'dynamic_tracer.py',
+    preflight: 'module_preflight.py',
     scaffold: 'mock_scaffold_generator.py',
     bindings: 'validate_test_bindings.py',
     calls: 'validate_target_calls.py',

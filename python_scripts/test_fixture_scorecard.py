@@ -7,7 +7,7 @@ import unittest
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
-from fixture_scorecard import build_scorecard, format_markdown, load_manifest, main, write_scorecard
+from fixture_scorecard import DEFAULT_BATCH_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard
 
 
 def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None, resolved_tier=1, model_identity='cloud/test-model'):
@@ -141,6 +141,24 @@ class FixtureScorecardTests(unittest.TestCase):
         result = next(item for item in mismatch['results'] if item['id'] == 'tier1-boundary')
         self.assertEqual(result['status'], 'tier_mismatch')
         self.assertFalse(mismatch['tier1_llm_release']['ready'])
+
+    def test_lab_batch_manifest_scores_only_the_five_selected_fixtures(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            card = build_scorecard(temp_dir, batch_manifest_path=DEFAULT_BATCH_MANIFEST)
+
+        self.assertEqual(card['batch_name'], 'five-category-lab-batch')
+        self.assertEqual(card['fixture_count'], 5)
+        self.assertEqual(
+            [item['id'] for item in card['results']],
+            [
+                'tier1-boundary',
+                'tier1-class-method',
+                'tier3-database-context',
+                'tier4-async-context',
+                'tier3-http-client',
+            ],
+        )
+        self.assertIn('five-category-lab-batch', format_markdown(card))
 
 
 if __name__ == '__main__':

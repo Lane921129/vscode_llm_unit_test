@@ -9,12 +9,26 @@
 - 這份 corpus 不含 API Key、網路端點、資料庫檔案或真實使用者資料。HTTP、檔案、時間與資料庫項目只能透過 mock 或隔離資源驗收。
 - 這是內部模型／Tier 評估的共同輸入；模型是否合格仍以產出的 unittest、coverage 與 mutation 結果為準。
 
+## 實驗室第一輪五類小批次
+
+`lab_batch_manifest.json` 固定第一輪的五個代表類別：純函式、class method、DB mock、async
+相依與外部邊界。最後一項以 HTTP boundary 作為可重現的 mock 代理；若實驗室要驗證原始 UI
+相依，保留同一個 category id，將 fixture 替換成對應原始目標並維持相同的報告欄位。
+每個 category 必須使用獨立結果目錄，最後以本頁的 `fixture_scorecard.py` 彙整，不能把
+缺報告或執行中斷算成通過。
+
 ## 彙整真實執行結果
 
 先用 extension 對這些 fixture 產生測試並保留其 `final_report.md`，再執行：
 
 ```text
 python python_scripts/fixture_scorecard.py <報告根目錄> --tier1-generation-mode llm-evidence-bound
+```
+
+實驗室第一輪只評分五個代表項目時，加上：
+
+```text
+python python_scripts/fixture_scorecard.py <報告根目錄> --batch-manifest test/fixtures/python/lab_batch_manifest.json
 ```
 
 工具會在報告根目錄產生 `fixture_scorecard/fixture_scorecard.json` 與

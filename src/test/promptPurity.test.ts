@@ -77,7 +77,7 @@ test('Tier 1 LLM prompt binds assertions to execution evidence and keeps test-ge
     assert.doesNotMatch(prompt, forbiddenDomainTerms);
 });
 
-test('Bug Fixer prompt contains one failing method and omits broad AST, observation, dependency, and rule context', () => {
+test('Bug Fixer prompt contains one failing method with verified setup and excludes analyst rule hypotheses', () => {
     const systemPrompt = getBugFixerSystemPrompt();
     const prompt = getBugFixerUserPrompt(
         'import unittest\nclass Cases(unittest.TestCase):\n    def test_render(self):\n        self.assertEqual(render("x"), "bad")\n\n    def test_keep(self):\n        self.assertTrue(True)',
@@ -296,7 +296,9 @@ test('Tier 4 self-repair uses the same focused one-method interface as Bug Fixer
 
     assert.match(prompt, /BUG_FIX_REQUEST_V3/);
     assert.match(prompt, /NECESSARY TARGET BRANCH/);
-    assert.doesNotMatch(prompt, /Available module imports|LIMIT = 3|VERIFIED REAL EXECUTION TRACE|Float Precision/);
+    assert.match(prompt, /LIMIT = 3/);
+    assert.match(prompt, /observations/);
+    assert.doesNotMatch(prompt, /Available module imports|VERIFIED REAL EXECUTION TRACE|Float Precision/);
     assert.match(prompt, /TIER 4 SELF-REPAIR INSTRUCTION/);
     assert.match(prompt, /V3 JSON method-replacement interface/);
 });

@@ -33,7 +33,7 @@ test('provides minimal schema contracts for semantic analysis, review, and mutan
     assert.deepStrictEqual((repair as { required: string[] }).required, ['method', 'replacement', 'imports']);
     assert.deepStrictEqual(
         ((review as any).properties.blocking.items as { required: string[] }).required,
-        ['test_excerpt', 'action']
+        ['test_excerpt', 'reason', 'action']
     );
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'

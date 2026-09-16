@@ -601,7 +601,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         score: msg.score,
                         coverage: msg.coverage,
                         reason: msg.reason,
-                        reportPath: resultsMap.get(fileName)?.reportPath || msg.reportPath || '',
+                        reportPath: msg.reportPath !== undefined ? msg.reportPath : resultsMap.get(fileName)?.reportPath || '',
                         checked: resultsMap.get(fileName)?.checked || false
                     });
                     renderDashboard();

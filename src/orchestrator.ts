@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
 import {
     getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt,
-    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacement,
+    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacement, canRepairTestMethod,
     fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
     getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints,
@@ -10,6 +10,8 @@ import {
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
+import { createAnalysisDirectory } from './pipeline/analysisOutput';
+import { preflightTargetModule } from './pipeline/modulePreflight';
 import {
     BehaviorObservation,
     BehaviorObservations,
@@ -31,7 +33,8 @@ import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
 import { restoreVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey } from './llm/modelQualification';
-import { canUseDeterministicTierOne, canUseModelAuthoredRepair, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
+import { RoleQualificationProfile } from './llm/roleQualification';
+import { canUseDeterministicTierOne, canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
@@ -45,7 +48,7 @@ import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
-import { classifyExecutionFailure } from './utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure } from './utils/executionFailureCategory';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
@@ -156,6 +159,7 @@ interface ModelProfile {
     testGenerationMode?: string;
     qualificationVersion?: string;
     endpointKey?: string;
+    roleQualification?: RoleQualificationProfile;
 }
 
 function defaultModelProfile(): ModelProfile {
@@ -425,8 +429,9 @@ export function activate(context: vscode.ExtensionContext) {
         testGenerationReady?: boolean;
         testGenerationReason?: string;
         testGenerationMode?: string;
-    qualificationVersion?: string;
-    endpointKey?: string;
+        qualificationVersion?: string;
+        endpointKey?: string;
+        roleQualification?: RoleQualificationProfile;
     }) => {
         const updatedProfile: ModelProfile = {
             paramSize: profile.paramSize,
@@ -438,7 +443,8 @@ export function activate(context: vscode.ExtensionContext) {
             testGenerationReason: profile.testGenerationReason,
             qualificationVersion: profile.qualificationVersion,
             endpointKey: profile.endpointKey,
-            testGenerationMode: profile.testGenerationMode
+            testGenerationMode: profile.testGenerationMode,
+            roleQualification: profile.roleQualification
         };
         currentModelProfile = updatedProfile;
         if (updatedProfile.envType && updatedProfile.modelName) {
@@ -451,7 +457,8 @@ export function activate(context: vscode.ExtensionContext) {
                 testGenerationReason: updatedProfile.testGenerationReason,
                 qualificationVersion: updatedProfile.qualificationVersion,
                 endpointKey: updatedProfile.endpointKey,
-                testGenerationMode: updatedProfile.testGenerationMode
+                testGenerationMode: updatedProfile.testGenerationMode,
+                roleQualification: updatedProfile.roleQualification
             });
             void context.globalState.update(MODEL_PROFILE_STORE_KEY, storedModelProfiles);
         }
@@ -668,8 +675,10 @@ async function requestLlmApiUnlocked(
 
     throwIfExecutionCancelled();
     const controller = new AbortController();
+    let deadlineExpired = false;
     const release = currentExecution()?.onCancel(() => controller.abort());
     const timeoutId = setTimeout(() => {
+        deadlineExpired = true;
         controller.abort();
         log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
     }, remainingTimeoutMs);
@@ -730,6 +739,13 @@ async function requestLlmApiUnlocked(
         }
         throwIfExecutionCancelled();
         return responseText;
+    } catch (error) {
+        throwIfExecutionCancelled();
+        if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) {
+            throw new AnalysisStageError('timeout', 'model-request', `API 請求超時 (超過 ${params.timeoutSeconds} 秒總時限)`,
+                { cause: 'deadline', outputFormat, deadlineAt });
+        }
+        throw error;
     } finally {
         clearTimeout(timeoutId);
         release?.();
@@ -808,7 +824,7 @@ async function validateGeneratedTestCode(
             const bindings = JSON.parse(parsed.stdout) as { valid: boolean; reason?: string };
             if (!bindings.valid) { return bindings; }
         }
-        if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature) && targetSignature.length > 0) {
+        if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature)) {
             const validatorScript = pythonToolPath('calls');
             const compatibility = await runSpawn(
                 pythonExecutable,
@@ -1015,6 +1031,7 @@ async function resolveAstAndDependencies(
 
     log(`[行為探測] 正在受控執行函式以取得輸入輸出觀測...`);
     const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable);
+    if (traceResult) { astContext.traceResult = traceResult; }
     if (traceResult && !traceResult.load_error) {
         astContext.traceResult = traceResult;
         const exCount = traceResult.examples.length;
@@ -1090,9 +1107,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         { envType: params.envType, modelName: params.modelName, endpointKey: selectedEndpointKey },
         modelSnapshot.current.testGenerationReady !== undefined
     );
-    const tier1GenerationMode = resolveTier1GenerationMode(qualifiedForSelectedModel, userTierSetting);
+    const roleQualification = activeModelProfile.roleQualification;
+    const roleReady = (role: keyof RoleQualificationProfile, legacyReady: boolean | undefined): boolean | undefined => {
+        if (roleQualification) {
+            return roleQualification[role].state === 'verified'
+                || (userTierSetting !== 'auto' ? undefined : false);
+        }
+        return legacyReady;
+    };
+    const writerReady = roleReady('writer', qualifiedForSelectedModel === true);
+    const reviewerReady = roleReady('reviewer', qualifiedForSelectedModel === true);
+    const fixerReady = roleReady('bugFixer', qualifiedForSelectedModel === true);
+    const tier1GenerationMode = resolveTier1GenerationMode(writerReady, userTierSetting);
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
-    const mayUseModelAuthoredRepair = canUseModelAuthoredRepair(qualifiedForSelectedModel, userTierSetting);
+    const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
+    const mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
@@ -1138,6 +1167,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         requestedTier: userTierSetting,
         resolvedTier,
         qualified: qualifiedForSelectedModel,
+        roleQualification,
         qualificationReason: activeModelProfile.testGenerationReason,
         qualificationMode: activeModelProfile.testGenerationMode,
     });
@@ -1148,48 +1178,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     // 建立本次測試的專屬資料夾
     const dateStr = params.sessionDate || formatSessionDate();
     const safeFuncName = params.funcName || 'file';
-    const baseName = path.basename(params.filePath, '.py');
-    const displayName = params.funcName ? `${path.basename(params.filePath)}:${params.funcName}` : path.basename(params.filePath);
-    
-    let sessionDir = "";
-    if (params.projectName) {
-        // 批次測試： baseDir / ProjectName_Date / FileName / FunctionName
-        sessionDir = path.join(baseDir, `${params.projectName}_${dateStr}`, baseName, safeFuncName);
-    } else {
-        // 單檔測試： baseDir / FileName_Date / FunctionName
-        sessionDir = path.join(baseDir, `${baseName}_${dateStr}`, safeFuncName);
-    }
-    
-    if (!fs.existsSync(sessionDir)) {
-        throwIfExecutionCancelled();
-        fs.mkdirSync(sessionDir, { recursive: true });
-    }
-
-    // ─── 優化三：斷點續跑 - 若 final_report.md 已存在，直接跳過 ───
+    const projectRoot = (params as any).batchPath
+        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
+    const displayFile = params.projectName ? path.relative(projectRoot, params.filePath) : path.basename(params.filePath);
+    const displayName = params.funcName ? `${displayFile}:${params.funcName}` : displayFile;
+    throwIfExecutionCancelled();
+    const sessionDir = createAnalysisDirectory(baseDir, dateStr, params.filePath, safeFuncName, params.projectName, projectRoot);
     const existingReport = path.join(sessionDir, 'final_report.md');
-    if (fs.existsSync(existingReport)) {
-        log(`[系統] ⏭️ 跳過 ${params.funcName}：已有完成的分析結果（${existingReport}）。`);
-        try {
-            const content = fs.readFileSync(existingReport, 'utf8');
-            // 若為 Stub/Dummy 函式，依需求不在 UI 列表中顯示
-            if (content.includes('此函式為 Stub/Dummy 函式') || content.includes('快速通道結果')) {
-                return;
-            }
-            const scoreMatch = content.match(/\*\*突變分數\*\*:\s*([^\n]+)/);
-            const covMatch = content.match(/\*\*覆蓋率\*\*:\s*([^\n]+)/);
-            sidebarProvider.webview?.postMessage({
-                command: 'updateCoverage',
-                fileName: displayName,
-                file: path.basename(params.filePath),
-                func: params.funcName || '',
-                score: scoreMatch ? scoreMatch[1].trim() : '已完成',
-                coverage: covMatch ? covMatch[1].trim() : null,
-                reason: '跳過 (已存在報告)',
-                reportPath: existingReport
-            });
-        } catch {}
-        return;
-    }
 
     // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
     // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
@@ -1204,6 +1199,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         return;
     }
 
+    const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName);
+    const recordRole = (stage: string, status: string, detail: unknown) => {
+        journal.record(currentLoop, stage, status, detail);
+        log(`[${stage}] ${status}`);
+        finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
+        fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+    };
+    finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
+    recordRole('pipeline', 'running', { target: params.funcName });
+    try {
     let astContext: AstContext | null = null;
     if (params.funcName) {
         const projectRoot = (params as any).batchPath
@@ -1220,7 +1225,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             targetFuncName = astContext.name || targetFuncName;
             finalReportMarkdown += buildAstMarkdownReport(astContext);
         } else {
-            log(`[AST] 解析遇到問題或找不到指定函式，將退回全域分析模式。`);
+            throw new AnalysisStageError('ast-trace', 'static-analysis', astContext?.error || '無法解析選取的目標函式；未退回其他目標。');
         }
     }
     const targetImportModule = inferTargetImportModule(params.filePath, astContext?.file_imports || []);
@@ -1236,6 +1241,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     if (astContext && !astContext.error) {
         astContext.target_import_module = targetImportModule;
     }
+    journal.knowledge({ sourceStructure: astContext?.code || null, sourceContext: astContext,
+        initialTargetObservations: astContext?.traceResult || null, importContract: testBindingContext,
+        roleQualification: roleQualification || null });
+    const targetDir = path.dirname(params.filePath);
+    const preflight = await preflightTargetModule(pythonExecutable, params.filePath, targetImportModule,
+        [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir);
+    const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight.importPaths);
+    recordRole('environment', 'passed', { module: preflight.module });
 
     // ─── 優化一：Stub/Dummy 函式快速通道 ───
     // 若函式為純 Stub（pass/return None/return <literal>），跳過 LLM + 突變測試
@@ -1264,6 +1277,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             throwIfExecutionCancelled();
             fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
             log(`[快速通道] ⏭️ ${reason} 已安全略過。`);
+            journal.knowledge({ terminalStatus: 'stub-skipped', reason });
             return;
         }
         const smokeAssertion = buildStubSmokeAssertion(astContext?.code || '');
@@ -1306,6 +1320,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         throwIfExecutionCancelled();
         fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
         log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
+        journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false });
         // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
         return;
     }
@@ -1314,33 +1329,25 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     sidebarProvider.webview?.postMessage({
         command: 'updateCoverage',
         fileName: displayName,
-        file: path.basename(params.filePath),
+        file: displayFile,
         func: params.funcName || '',
         score: '測試中',
         coverage: null,
-        reason: '分析中...'
+        reason: '分析中...',
+        reportPath: ''
     });
 
     // ─── 語意分析師（Semantic Analyzer）───────────────────────────
     // 對所有函式啟動（不限有跨檔案相依的函式）：
     //   1. 計算各相依函式在此呼叫情境的固定行為（原有功能）
     //   2. 推導此函式的最佳測資策略（新功能）—— AI 決定邊界值，不再硬編碼
-    const manifestPath = path.join(sessionDir, 'run_manifest.json');
-    if (fs.existsSync(manifestPath)) {
-        log('[系統] 同分鐘已有執行紀錄；保留現有候選與證據，請於下一分鐘建立新執行。');
-        return;
+    const coverageProbe = await runSpawn(pythonExecutable, ['-c', 'import coverage'], { env: testExecutionEnv, timeout: 5000 });
+    if (coverageProbe.code !== 0) {
+        throw new AnalysisStageError('environment', 'coverage-preflight', coverageRequiredMessage(pythonExecutable));
     }
-    const journal = new AnalysisJournal(sessionDir, initialSource,
-        params.funcName || 'file', params.modelName);
     const evidenceStillCurrent = () => evidenceHash(fs.readFileSync(params.filePath, 'utf8')) === journal.sourceHash
         && (astContext?.sourceVersions || []).every(version => fs.existsSync(version.file)
             && evidenceHash(fs.readFileSync(version.file, 'utf8')) === version.hash);
-    const recordRole = (stage: string, status: string, detail: unknown) => {
-        journal.record(currentLoop, stage, status, detail);
-        log(`[${stage}] ${status}`);
-        finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
-    };
-    finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
     const targetSourceHash = evidenceHash(astContext?.code || initialSource);
     let semanticPlan: SemanticAnalysis | undefined;
     let semanticPlanContract: SemanticPlanV2 | undefined;
@@ -1556,6 +1563,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         // 測試結果全部放入 sessionDir
         const testPath = path.join(sessionDir, `loop${currentLoop}_test.py`);
+        const testDir = path.dirname(testPath);
         const reportDir = path.join(sessionDir, `loop${currentLoop}_report`);
 
         let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
@@ -1772,10 +1780,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                     pythonExecutable,
                                     testBindingContext
                                 );
-                                const subTraceEvidence = await validateTraceEvidence(
+                                const subTraceEvidence = subValidation.valid ? await validateTraceEvidence(
                                     subClean,
                                     targetFuncName,
-                                    subTraceResult, targetImportModule, pythonExecutable, astContext?.class_name);
+                                    subTraceResult, targetImportModule, pythonExecutable, astContext?.class_name) : subValidation;
                                 const subGate = resolveTierTwoSubtaskGate(subValidation, subTraceEvidence);
                                 if (subGate.accepted) {
                                     subSnippets.push(subClean);
@@ -1872,10 +1880,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         pythonExecutable,
                         testBindingContext
                     );
-                    const traceEvidenceValidation = await validateTraceEvidence(
+                    const traceEvidenceValidation = candidateValidation.valid ? await validateTraceEvidence(
                         sanitizedCode,
                         targetFuncName,
-                        astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name);
+                        astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name) : candidateValidation;
                     if (!candidateValidation.valid || !traceEvidenceValidation.valid) {
                         const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
                         if (llmRetry === 0) {
@@ -1953,7 +1961,22 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         || astContext?.class_context?.init?.params,
                     callerContexts: astContext?.callerContexts,
                     isAsync: Boolean(astContext?.is_async),
-                }) : undefined;
+            }) : undefined;
+            if (verifiedTrace?.code) {
+                const traceTestPath = path.join(sessionDir, `loop${currentLoop}_trace_test.py`);
+                fs.writeFileSync(traceTestPath, verifiedTrace.code, 'utf8');
+                const traceRun = await runSpawn(pythonExecutable,
+                    generatedUnittestArguments(path.basename(traceTestPath, '.py'), targetDir, false, true),
+                    { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
+                recordRole('trace-baseline', traceRun.code === 0 ? 'passed' : 'failed', {
+                    testPath: traceTestPath, output: traceRun.stdout + traceRun.stderr
+                });
+                if (traceRun.code !== 0 || !/Ran ([1-9]\d*) tests?/.test(traceRun.stdout + traceRun.stderr)) {
+                    throw new AnalysisStageError('validation', 'trace-baseline',
+                        '已驗證行為觀測的獨立 unittest 基線未通過，停止合併 Trace 與模型測試。',
+                        { output: traceRun.stdout + traceRun.stderr, traceTestPath });
+                }
+            }
             const preserveTrace = (candidate: string): string => verifiedTrace?.code
                 ? restoreVerifiedTraceTestFile(candidate, verifiedTrace.code, verifiedTrace.methodCount, targetFuncName).code
                 : candidate;
@@ -1963,15 +1986,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
 
             recordRole('writer', 'candidate', { tier: currentTier, raw: rawCode, code: finalCode });
-            const testDir = path.dirname(testPath);
-            const targetDir = path.dirname(params.filePath);
-            const testExecutionEnv = buildGeneratedTestEnvironment(process.env, [
-                targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), testDir
-            ]);
-            const coverageProbe = await runSpawn(pythonExecutable, ['-c', 'import coverage'], {
-                env: testExecutionEnv, timeout: 5000
-            });
-            if (coverageProbe.code !== 0) { throw new Error(coverageRequiredMessage(pythonExecutable)); }
             const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
                 code, failure, targetFuncName, astContext?.args || [], astContext?.code || targetCode,
                 astContext, targetImportModule, undefined,
@@ -2000,11 +2014,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
                         exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
+                    if (!structural.valid) { return structural.reason || 'Structure validation failed'; }
                     const trace = await validateTraceEvidence(code, targetFuncName, astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name);
                     return !structural.valid || !trace.valid ? trace.reason || structural.reason || 'Validation failed' : undefined;
                 },
                 review: async (code) => {
-                    if (!mayUseModelAuthoredTests) {
+                    if (!mayUseModelAuthoredReview) {
                         recordRole('reviewer', 'skipped-deterministic', {});
                         return { issues: [] };
                     }
@@ -2028,6 +2043,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         return undefined;
                     }
                 },
+                repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
                 revise: async (code, failure, role) => {
                     if (!mayUseModelAuthoredRepair) { throw new Error('Auto 未驗證模型不可呼叫模型修復。'); }
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
@@ -2135,6 +2151,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             break; // 預先驗證成功，跳出 Tier 降階迴圈
         } catch (tierErr: any) {
             throwIfExecutionCancelled();
+            if (tierErr instanceof AnalysisStageError) { throw tierErr; }
             recordRole('writer', 'tier-failed', { tier: currentTier, reason: tierErr.message, raw: rawCode });
             if (currentTier > 1) {
                 const prevTier = currentTier;
@@ -2427,7 +2444,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
-                file: path.basename(params.filePath),
+                file: displayFile,
                 func: params.funcName || '',
                 score: noMutationCandidates ? 'N/A' : (typeof mutationScore === 'number' ? `${mutationScore}%` : 'N/A'),
                 coverage: (loopCoverage as { coverageText: string; missingLines: string } | null)?.coverageText ?? null,
@@ -2465,12 +2482,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const message = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error && error.stack ? error.stack : '';
             const retainedBaseline = Boolean(bestCode);
+            const failureCategory = isExecutionCancelled() ? 'cancelled'
+                : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
+            const failureStage = error instanceof AnalysisStageError ? error.stage : 'pipeline';
             recordRole('pipeline', retainedBaseline ? 'retained-baseline' : 'failed', {
-                reason: message, retainedScore: retainedBaseline ? bestScore : undefined
+                reason: message, category: failureCategory, retainedScore: retainedBaseline ? bestScore : undefined
             });
             journal.knowledge({
-                terminalStatus: retainedBaseline ? 'retained-after-failure' : 'failed',
-                failure: message,
+                terminalStatus: failureCategory === 'cancelled' ? 'cancelled' : retainedBaseline ? 'retained-after-failure' : 'failed',
+                failure: message, failureCategory, failureStage,
+                diagnostic: error instanceof AnalysisStageError ? error.diagnostic : undefined,
                 retainedScore: retainedBaseline ? bestScore : undefined
             });
             if (bestCode) {
@@ -2482,7 +2503,6 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
             }
-            const failureCategory = classifyExecutionFailure(message);
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
             finalReportMarkdown += retainedBaseline
                 ? `\n### 後續步驟中斷；已保留成功基準（第 ${currentLoop} 輪）\n\n`
@@ -2500,7 +2520,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
-                file: path.basename(params.filePath),
+                file: displayFile,
                 func: params.funcName || '',
                 score: retainedBaseline ? `${bestScore}%` : '失敗',
                 coverage: retainedBaseline ? bestCoverage?.coverageText ?? null : null,
@@ -2558,6 +2578,25 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const doc = await vscode.workspace.openTextDocument(finalReportPath);
     throwIfExecutionCancelled();
     await vscode.window.showTextDocument(doc, { preview: false });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const category = isExecutionCancelled() ? 'cancelled'
+            : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
+        const stage = error instanceof AnalysisStageError ? error.stage : 'pipeline';
+        journal.knowledge({ terminalStatus: category === 'cancelled' ? 'cancelled' : 'failed',
+            failure: message, failureCategory: category, failureStage: stage,
+            diagnostic: error instanceof AnalysisStageError ? error.diagnostic : undefined });
+        recordRole(stage, 'failed', { reason: message, category });
+        finalReportMarkdown += `\n### 執行停止\n\n- **失敗分類**: ${category}\n- **失敗階段**: ${stage}\n\n${message}\n`;
+        if (!isExecutionCancelled()) {
+            sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName,
+                file: displayFile, func: params.funcName || '', score: 'N/A',
+                coverage: null, reason: message, reportPath: existingReport });
+        }
+        log(`[${stage}] ${message}`);
+    } finally {
+        fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+    }
 }
 
 

@@ -1,6 +1,7 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from '../prompts/fewShotExamples';
 import { formatWriterEvidenceBundleForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { getBugFixerUserPrompt } from './bugFixer';
+import { formatTargetContract } from '../pipeline/targetContract';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 1：填空法 Prompt（2–3B 極小模型）
@@ -325,7 +326,7 @@ export function getUserPrompt(
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
 
-    let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n`;
+    let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n${formatTargetContract(moduleName, funcName, astContext?.args || [], astContext)}\n`;
 
     const comparisonOperators: Record<string, string> = {
         Eq: '==', NotEq: '!=', Lt: '<', LtE: '<=', Gt: '>', GtE: '>=',

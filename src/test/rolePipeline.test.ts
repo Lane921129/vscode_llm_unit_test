@@ -44,7 +44,7 @@ test('execution failure calls Bug Fixer with latest error; quality gaps never tr
     assert.deepEqual(result.qualityIssues, ['uncovered branch']);
 });
 
-test('structural pre-validation failures are repaired by Bug Fixer, not Writer', async () => {
+test('structural pre-validation failures go to Writer without guessing a failing method', async () => {
     const roles: string[] = [];
     const result = await validateTestCandidate('broken', hooks({
         validate: async code => code === 'broken' ? 'missing unittest import' : undefined,
@@ -55,13 +55,25 @@ test('structural pre-validation failures are repaired by Bug Fixer, not Writer',
         }
     }));
     assert.equal(result.code, 'fixed');
-    assert.deepEqual(roles, ['bug-fixer']);
+    assert.deepEqual(roles, ['writer']);
 });
 
 test('malformed/unavailable review becomes a warning and does not create another quality loop', async () => {
     const result = await validateTestCandidate('draft', hooks({ review: async () => undefined }));
     assert.deepEqual(result.qualityIssues, []);
     assert.match(result.reviewWarnings.join(), /審查未完成/);
+});
+
+test('module import failures return to Writer without invoking method repair', async () => {
+    const roles: string[] = [];
+    const result = await validateTestCandidate('draft', hooks({
+        execute: async code => code === 'draft'
+            ? { ok: false, out: 'ImportError: Failed to import test module: loop1_test', qualityGaps: [] }
+            : { ok: true, out: passed, qualityGaps: [] },
+        revise: async (_, __, role) => { roles.push(role); return 'fixed'; }
+    }));
+    assert.equal(result.code, 'fixed');
+    assert.deepEqual(roles, ['writer']);
 });
 
 test('nonblocking Reviewer advice is reported without overriding measured quality gates', async () => {
@@ -121,7 +133,7 @@ test('review parser rejects invented evidence, malformed envelopes and placehold
     assert.equal(parseTestReview(JSON.stringify({ issues: [issue] }), issue.evidence)?.issues.length, 1);
     assert.deepEqual(parseTestReview('```json\n{"issues":[]}\n```', ''), { issues: [] });
     assert.deepEqual(parseTestReview('{"blocking":[],"quality":[]}', ''), { issues: [] });
-    const compact = '{"blocking":[{"test_excerpt":"assertFalse(value)","action":"use exact identity"}],"quality":[]}';
+    const compact = '{"blocking":[{"test_excerpt":"assertFalse(value)","reason":"the verified contract requires boolean identity","action":"use exact identity"}],"quality":[]}';
     assert.equal(parseTestReview(`trace text before JSON\n${compact}\ntrailing text`, issue.evidence)?.issues[0].severity, 'blocking');
     assert.equal(parseTestReview(
         '{"blocking":[{"test_excerpt":"raise ValueError","action":"change source"}],"quality":[]}',

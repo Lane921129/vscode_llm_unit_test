@@ -14,9 +14,12 @@
 
 ```mermaid
 flowchart TD
-    UI[使用者選取函式] --> Static[AST 與呼叫點靜態事實]
+    UI[使用者選取函式] --> Journal[先建立執行紀錄與進度報告]
+    Journal --> Static[AST 與呼叫點靜態事實]
     Static --> InitialProbe[初始受控行為探測]
-    InitialProbe --> Analyst[分析師整合靜態與已執行證據]
+    InitialProbe --> Preflight[正規模組匯入與 coverage 環境預檢]
+    Preflight -->|失敗| Report[保存基線、證據與報告]
+    Preflight -->|通過| Analyst[分析師整合靜態與已執行證據]
     Analyst --> Rules[程式依 AST 分派測試生成規則]
     Rules --> SupplementalProbe[執行分析師提出的安全純量輸入]
     SupplementalProbe --> Bundle[合併 Writer 證據包]
@@ -26,15 +29,20 @@ flowchart TD
     Reviewer --> Validation[實際執行驗證]
     Reviewer -->|具體審查問題| Writer
     Structure -->|結構問題| Writer
-    Validation -->|執行失敗| Fixer[Bug Fixer 修復]
+    Validation -->|可定位的測試方法失敗| Fixer[Bug Fixer 修復]
+    Validation -->|測試檔匯入或 fixture 問題| Writer
     Fixer --> Structure
     Validation -->|執行通過| Quality[覆蓋與突變測量]
     Quality -->|仍有缺口| QualityAnalyst[品質分析師提出下一輪任務]
     QualityAnalyst --> Writer
-    Quality -->|達標或達停止條件| Report[保存基線、證據與報告]
+    Quality -->|達標或達停止條件| Report
 ```
 
 Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執行，但不因此宣稱品質達標。所有模型建議都是待驗證假設。
+
+Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走快速通道，未執行的 smoke test 明確記為 `executionVerified: false`。上述圖示描述一般函式。
+
+模組預檢使用與生成測試相同的 Python／匯入路徑，確認正規模組實際指向選取的來源；載入時沿用 Trace 副作用阻擋。缺相依、非法模組名稱、同名模組遮蔽或載入副作用會在模型請求前停止，不降 Tier 重試。初始 Trace 載入錯誤保留診斷，但不能成為例外斷言事實。
 
 ## 生成前的四個交接契約
 
@@ -52,6 +60,8 @@ Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執�
 | 需求 | 正式入口 | 下一個閱讀位置 |
 |---|---|---|
 | 看完整執行流程 | [orchestrator.ts](src/orchestrator.ts) 的 `executeSingleFileAnalysis` | [候選狀態機](src/pipeline/testCandidatePipeline.ts) |
+| 查生成前的環境阻擋 | [modulePreflight.ts](src/pipeline/modulePreflight.ts) | [module_preflight.py](python_scripts/module_preflight.py) |
+| 查類別、property 與 import 契約 | [targetContract.ts](src/pipeline/targetContract.ts) | Writer、Reviewer 與 Bug Fixer 的 User Prompt |
 | 看五個角色及其契約 | [roles/README.md](src/roles/README.md) | 各角色的提示詞與 parser |
 | 改測試生成規則如何選取 | [testRuleDispatcher.ts](src/pipeline/testRuleDispatcher.ts) | [測試生成規則庫](src/prompts/testRuleLibrary.ts) |
 | 找某階段使用哪個 Python 工具 | [pythonTools.ts](src/pipeline/pythonTools.ts) | [Python 工具對照](python_scripts/README.md) |
@@ -73,3 +83,16 @@ Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執�
 | `function_knowledge.json` | 當前接受的基線、分析假設、受控行為觀測、規則選擇與待驗證任務 |
 
 來源或已解析相依變更後，舊證據不能直接沿用。探針資格也綁定探針契約版本與不含憑證的端點識別；過期只代表需要重新驗證，不會自動升格成新的通過紀錄。
+
+一般函式從 AST 前建立 `running` 紀錄；每個角色事件立即更新進度報告，保存第一個與最近一次拒絕／失敗原因。環境預檢或取消也會保存終態；若程序被外部強制終止，最後的 `running`／stage 是未完成檢查點，不能視為成功。
+
+批次結果使用 `<project>_<日期時分>/<專案相對來源路徑去掉 .py>/<qualified target>/`。同分鐘重跑建立 `__run2` 等新目錄，保留舊候選與失敗報告；不再只因 `final_report.md` 存在就跳過。
+
+測試連線會先分別驗證 Writer 的可執行 Python、Reviewer 的 blocking／quality JSON，以及 Bug Fixer 的單一方法替換。三個狀態各自保存於 model profile 與 manifest；Auto 只使用已通過的角色。生成與修復的模型請求仍受完整本地結構、執行、coverage、mutation gate 約束。
+
+實驗室第一輪小批次由 `test/fixtures/python/lab_batch_manifest.json` 固定五個 category，並以
+`python_scripts/lab_batch_plan.py` 驗證每個 category 對應唯一 fixture。它只驗證批次契約，實際
+模型生成、coverage 與 mutation 仍由 extension 和 `fixture_scorecard.py` 完成；UI 相依類別可
+在實驗室替換成原始目標，但不可混用不同來源的報告。
+
+模型候選合併已驗證 Trace 前，管線會先把 runner-owned Trace 測試寫成 `loop*_trace_test.py`，在乾淨 Python 程序獨立執行；只有該基線通過才放入候選。這讓 Trace 匯入／constructor 問題不會與模型候選錯誤混成同一個測試結果。

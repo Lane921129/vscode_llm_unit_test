@@ -25,11 +25,22 @@ def validate_bindings(code, context):
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for item in node.names:
+                if item.name in ('target_module', 'module_under_test', 'your_module', 'module_name') and item.name != module:
+                    return {'valid': False, 'reason': f'Unresolved placeholder import {item.name}; use canonical target module {module}.'}
                 aliases[item.asname or item.name] = item.name
                 if module and item.name != module and item.name == module.rsplit('.', 1)[-1]:
                     return {'valid': False, 'reason': f'Use canonical target module {module}; do not import a second instance as {item.name}.'}
         elif isinstance(node, ast.ImportFrom):
             for item in node.names:
+                dependency_alias = (item.asname and item.asname not in (target, context.get('className'))
+                                    and dependencies.get(item.asname) == f'{node.module}.{item.name}')
+                if (module and node.module != module and item.name in (target, context.get('className'))
+                        and not dependency_alias):
+                    return {'valid': False, 'reason': f'Target binding {item.name} must be imported from {module}, not {node.module}.'}
+                if context.get('className') and node.module == module and item.name == target:
+                    return {'valid': False, 'reason': f'Import class {context["className"]} from {module}; {target} is a class member, not a module-level target.'}
+                if node.module in ('target_module', 'module_under_test', 'your_module', 'module_name') and node.module != module:
+                    return {'valid': False, 'reason': f'Unresolved placeholder import {node.module}; use canonical target module {module}.'}
                 aliases[item.asname or item.name] = f'{node.module}.{item.name}'
                 if (module and node.module != module and node.module == module.rsplit('.', 1)[-1]
                         and item.name in (target, context.get('className'), '*')):

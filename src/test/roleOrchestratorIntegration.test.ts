@@ -85,7 +85,8 @@ class Cases(unittest.TestCase):
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
-        assert.equal(manifest.promptVersion, 'role-contracts-v3');
+        assert.equal(manifest.promptVersion, 'role-contracts-v4');
+        assert.equal(manifest.roleContracts.reviewer, 'review-v4');
         assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');
         assert.equal(manifest.evidenceContracts.semanticPlan, 'semantic-plan-v2');
         assert.equal(manifest.evidenceContracts.ruleSelection, 'rule-selection-v2');

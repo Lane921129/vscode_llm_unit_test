@@ -2,6 +2,7 @@ import { QUALIFICATION_VERSION } from '../llm/modelQualification';
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { formatModelQualificationLog, qualificationForRequest } from '../llm/modelQualification';
+import { assessBugFixerQualification, assessReviewerQualification, BUG_FIXER_QUALIFICATION_PROMPT, REVIEWER_QUALIFICATION_PROMPT, ROLE_QUALIFICATION_FAILURE, ROLE_QUALIFICATION_TEST_FILE, runRoleQualificationProbes } from '../llm/roleQualification';
 
 test('uses a generation qualification only for the exact probed model', () => {
     const profile = {
@@ -84,4 +85,36 @@ test('selectAnalysisResponseFormat handles legacy and normalized python mode ide
     assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'plain-python' }), 'text');
     assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_JSON }), 'json');
     assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: false, testGenerationMode: TEST_GEN_MODE_PYTHON }), 'json');
+});
+
+test('qualifies Reviewer JSON and Bug Fixer method replacement independently', () => {
+    assert.strictEqual(assessReviewerQualification('{"blocking":[],"quality":[]}').state, 'verified');
+    assert.strictEqual(assessBugFixerQualification(JSON.stringify({
+        method: 'test_increment',
+        replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)',
+        imports: []
+    })).state, 'verified');
+    assert.match(REVIEWER_QUALIFICATION_PROMPT, /reason/);
+    assert.match(BUG_FIXER_QUALIFICATION_PROMPT, /test_increment/);
+    assert.match(ROLE_QUALIFICATION_TEST_FILE, /increment\(1\)/);
+    assert.match(ROLE_QUALIFICATION_FAILURE, /FAIL/);
+    assert.strictEqual(assessReviewerQualification('{"blocking":[{"test_excerpt":"x","action":"focused correction"}],"quality":[]}').state, 'unverified');
+});
+
+test('role qualification runs Reviewer and Bug Fixer probes independently', async () => {
+    const prompts: string[] = [];
+    const profile = await runRoleQualificationProbes(
+        { state: 'verified', reason: 'writer passed' },
+        async prompt => {
+            prompts.push(prompt);
+            return prompt.includes('blocking and quality')
+                ? '{"blocking":[],"quality":[]}'
+                : JSON.stringify({ method: 'test_increment', replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)', imports: [] });
+        }
+    );
+    assert.deepStrictEqual(prompts.map(prompt => prompt.includes('blocking and quality')), [true, false]);
+    assert.deepStrictEqual(
+        [profile.writer.state, profile.reviewer.state, profile.bugFixer.state],
+        ['verified', 'verified', 'verified']
+    );
 });

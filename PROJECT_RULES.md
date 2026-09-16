@@ -21,6 +21,7 @@
 - 當 selected class 沒有自己的 `__init__` 時，AST 只可從同一模組、無 decorator／class keyword 且以簡單名稱可解析的繼承鏈提供有效建構子語境；匯入 base、動態 base、metaclass、cycle 或無法證明的 MRO 不得猜測。繼承簽名與父類別 `self` 賦值僅是 setup 指引，仍須依真實 caller literal 或隔離執行驗證，不能直接建構測試 oracle。
 - 多重繼承只要含有任何無法解析的 base，就不得跳過它採用後方本地 base 的 `__init__` 當作有效簽名；Python MRO 可能先解析未知 base，系統必須保守視為未知。
 - 生成、Mock Scaffold、Reviewer 與救援程式必須使用同一個可匯入的目標模組路徑；不得以檔名匯入而建立與 package 模組不同的第二個模組實例。
+- 一般函式在任何模型角色請求前必須以相同 Python／匯入環境預檢正規目標模組與 coverage；核對來源實體，載入副作用仍受阻擋。環境不成立時保存具體原因並停止，不以 Tier 降階或模型修復處理。
 - 呼叫站搜尋必須以目標模組／匯入關係確認，不得只依同名函式全域比對。
 - 直接匯入的函式別名也必須在該呼叫行仍解析到目標 binding；函式參數、local／closure／`nonlocal` binding、同 scope import 與模組層後續重綁定都必須排除，不得把同名 callable 的參數注入 Trace。
 - 對 `import package.module` 的呼叫站，只有與該 import 完整 binding path 相同的 `package.module.target(...)` 或 `package.module.Class(...).method(...)` 可補充 Trace 事實；相同 root 下的其他 attribute chain、動態 import 與不明 re-export 一律不可視為目標。
@@ -76,6 +77,7 @@
 - `from . import module` 後的 `module.target(...)` 只能在該 relative alias 完整解析後精確匹配 selected target module 時視為 caller；不得把 package 的未知 attribute 或同名成員當作 module fact。
 - 已解析的 module alias 仍須在呼叫行通過 lexical scope／module binding 歷史檢查；函式參數、區域 assignment、`nonlocal`、或較晚的 module rebind 都使該 alias 失去 caller 證據資格。
 - 模型資格探測的 provider 請求與隔離 Python unittest 執行均不得低於 30 秒；同一 selected `.venv` 必須用於探測與正式執行，避免將慢速但可用模型誤判為不合格。
+- Writer、Reviewer 與 Bug Fixer 的模型資格必須分別探測與保存；Writer Python 可執行不代表 Reviewer JSON 或單方法替換合格。Auto 只能呼叫各自狀態為 verified 的角色，手動 Tier 仍保留既有 gate。
 - AST／Dynamic Trace 的分支探索可正規化純 literal 的反向比較（如 `3 < value`）與 parameter-first literal membership（如 `mode in ('a', 'b')`）；反向 membership、非 literal collection、helper call、複合 predicate 與巢狀 callable 一律不可產生輸入事實。
 - `match/case` 只可擷取直接目標參數、無 guard 的 scalar literal／literal-or pattern 作為輸入探索事實；guarded case、capture／mapping／class pattern 與可變匹配一律不可當作可保證到達的分支。
 - 模型若對完全相同、可 assertion 的 Dynamic Trace 呼叫直接寫出 `assertEqual` 或 `assertIsNone`，其 assertion value 必須與該 Trace 相同；`assertEqual` 的 actual／expected 兩種參數順序與可選訊息都必須檢查。`assertTrue`／`assertFalse` 只在 Trace 精確回傳 `True`／`False` 時判定矛盾，因為其他 Python 值的 truthiness 必須由隔離執行判定。初次 Writer、Tier 2 分治合流、Reviewer 與 Tier 4 Self-repair 的每個模型產物都必須套用此 gate；矛盾候選必須在寫檔／執行前拒絕並以事實原因重試。此 gate 不得拒絕未 Trace 的候選輸入或經額外轉換後的 assertion。
@@ -127,12 +129,16 @@
 
 - Reviewer 是審查者，只輸出附有原文證據的問題清單；不產生完整測試檔。先前提及 Reviewer 輸出 Python／修復的規則，改適用於 Writer 修訂與 Bug Fixer。
 - 結構或審查問題交 Writer 修訂；實際 unittest 失敗交 Bug Fixer。候選修改後重新審查與執行。測試通過但品質不足時交分析師與 Writer 補測，不啟動另一層 Self-repair。
+- Bug Fixer 必須可唯一定位失敗方法；模組匯入、fixture 或歧義方法名稱交 Writer，不得回退猜選第一個 test 方法。Reviewer 問題必須有測試原文、具體原因與可操作的測試修訂，不接受空泛佔位動作。
 - 分析師的品質分析包含存活變異體；只提出有測量依據的情境假設，不直接注入模型生成的 kill_test，也不能宣告等效或排除分母。
 - 完整歷史存於 role_events.jsonl；當次 Prompt 僅提供必要來源、測試與證據。證據超過預算時不可截斷成不完整程式；審查失敗或格式無效必須記錄為未完成，不能假裝通過。
+- 已知環境預檢失敗可依 interpreter、來源雜湊、模組與穩定匯入根快取；session output 目錄等暫時路徑不得使同一環境障礙重新啟動子程序。來源或匯入環境變更後必須產生新 cache key。
+- 合併已驗證 Trace 與模型測試前，Trace 產物必須在獨立 Python unittest 程序先通過；失敗時停止合併並保留診斷，不能讓同一份候選測試掩蓋 Trace 基線問題。
 - 每輪基線綁定同一版測試、案例識別、執行輸出、覆蓋與存活變異體；回滾時全部同步還原。原候選必須保留。
 - 跨輪案例識別不可依 loop 檔名；純更名只能在測試 AST 與設定指紋一致時對應，不得猜測任意重寫的語意等價。
 - 來源或已解析相依的版本變更後停止沿用舊證據。函式紀錄區分來源結構、已驗證執行與待驗證假設，禁止自動把舊執行資料當成新版本的事實。
 - 連續三輪沒有改善已測量的缺口時停止相同策略重試並明示品質未達標；最後一輪結束後不再呼叫無後續用途的品質分析。結果目錄維持時分命名，同分鐘既有紀錄不可默默覆寫。
+- 一般函式開始 AST 前建立執行與進度紀錄，每個事件即時落盤；保存第一個與最近失敗，區分完成、取消與仍在執行。批次結果以專案相對來源路徑與限定函式名區分，同分鐘重跑建立新 attempt，不能因失敗報告存在而略過。
 
 ## 閱讀入口、探針與斷言證據
 

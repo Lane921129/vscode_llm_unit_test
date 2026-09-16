@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as fs from 'fs';
 
 export interface PythonDependency {
     module: string;
@@ -22,6 +23,15 @@ export function inferTargetImportModule(
     fileImports: PythonImportContext[] = []
 ): string {
     const stem = path.basename(filePath, '.py');
+    const packages: string[] = [];
+    let directory = path.dirname(filePath);
+    while (fs.existsSync(path.join(directory, '__init__.py'))) {
+        packages.unshift(path.basename(directory));
+        const parent = path.dirname(directory);
+        if (parent === directory) { break; }
+        directory = parent;
+    }
+    if (packages.length) { return (stem === '__init__' ? packages : [...packages, stem]).join('.'); }
     const parentName = path.basename(path.dirname(filePath));
     for (const imported of fileImports) {
         const parts = (imported.module || '').split('.').filter(Boolean);
