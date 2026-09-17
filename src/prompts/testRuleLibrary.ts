@@ -276,6 +276,7 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
             'ASYNC CONTEXT MANAGER TESTING:',
             '  - Configure the value consumed by async with as an async context manager with __aenter__ and __aexit__.',
             '  - Distinguish `async with client.method(...)` from `await client.method(...)`: a bare AsyncMock call returns a coroutine and is not automatically an async context manager.',
+            '  - For the unawaited call in `async with client.method(...)`, use MagicMock for client/method, configure method.return_value.__aenter__.return_value as the resource, and use AsyncMock for awaited resource members. Setting __aenter__ on an AsyncMock return_value does not fix the coroutine returned by calling that AsyncMock.',
             '  - Use AsyncMock only for members the source actually awaits, and assert observable results rather than mock implementation details.',
             '  - Do not make real asynchronous network, file, or database calls.',
         ]
@@ -289,7 +290,7 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
             '  - Never make a real network request from a generated test.',
             '  - Patch the imported client at the module-under-test use point and provide a minimal response mock for only the members read by the source.',
             '  - Assert request arguments and observable return or error behavior from the source; do not invent HTTP status handling that is absent from it.',
-            '  - For async HTTP calls, use AsyncMock for the awaited call or async context-manager boundary.',
+            '  - Use AsyncMock for explicitly awaited calls and __aenter__/__aexit__; an unawaited call inside async with must return a context manager directly (for example from MagicMock).',
         ]
     },
     {

@@ -73,15 +73,16 @@ The generated file will be rejected unless it passes structural, isolated execut
 export function getTier3SystemPrompt(): string {
     return `You are an expert Python unit test engineer.
 You will receive a pre-built test scaffold with @patch mock decorators already configured.
-Your task: fill in the TODO sections only.
+Your task: use the scaffold as setup guidance and return a COMPLETE runnable unittest file, including imports and a TestCase class.
 - Set meaningful input values for the parameters.
 - Call the target function.
 - Write assertions using real return values provided.
-- Do NOT modify @patch decorators or mock.return_value lines.
-- Do NOT add new imports.
+- Check scaffold mock setup against the supplied target source and complete evidence; correct placeholders and mock shapes when needed.
+- Use only isolated mock or in-memory resources. Never perform real external I/O.
+- Preserve the exact target import, class binding, constructor requirements and verified assertions.
 Output format:
 \`\`\`python
-(completed test method body only, no class wrapper)
+(complete unittest file, with imports and class wrapper)
 \`\`\``;
 }
 
@@ -92,10 +93,11 @@ export function getTier3UserPrompt(
     traceExamples: Array<{args: string[], result?: string}> = [],
     verifiedConstructorCall?: string | null,
     targetSource?: string,
-    semanticGuidance?: string
+    semanticGuidance?: string,
+    writerEvidence?: string
 ): string {
     let prompt = `Target function: ${funcName} (from module: ${moduleName})\n\n`;
-    if (traceExamples.length > 0) {
+    if (traceExamples.length > 0 && !writerEvidence) {
         prompt += `Verified real return values to use in assertions:\n`;
         for (const ex of traceExamples.slice(0, 3)) {
             prompt += `  - Input(${ex.args.join(', ')}) => ${ex.result}\n`;
@@ -107,13 +109,14 @@ export function getTier3UserPrompt(
         prompt += `  - Use exactly: instance = ${verifiedConstructorCall}\n`;
         prompt += `  - These are constructor arguments only. Do NOT pass them to ${funcName}(...).\n\n`;
     }
-    if (targetSource) {
+    if (targetSource && !writerEvidence) {
         prompt += `Target source (evidence; do not copy it into the test):\n\`\`\`python\n${targetSource.trim()}\n\`\`\`\n\n`;
     }
-    if (semanticGuidance) {
+    if (semanticGuidance && !writerEvidence) {
         prompt += `Evidence-bound test-rule guidance (source and verified execution facts take precedence over model suggestions):\n${semanticGuidance.trim()}\n\n`;
     }
-    prompt += `Test scaffold (fill in the TODO sections):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nFill in the TODO sections now:`;
+    if (writerEvidence) { prompt += `Complete Writer evidence (retain the same source, binding and verified observations):\n${writerEvidence}\n\n`; }
+    prompt += `Test scaffold (setup guidance, not an assertion oracle):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nReturn the complete unittest file now:`;
     return prompt;
 }
 

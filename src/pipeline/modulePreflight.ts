@@ -7,10 +7,15 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-interface PreflightResult {
+export interface ResolvedDependency {
+    module: string; name: string; level?: number; file?: string; resolvedModule?: string; reason?: string;
+}
+
+export interface PreflightResult {
     ok: true;
     module: string;
     importPaths: string[];
+    dependencies?: ResolvedDependency[];
 }
 
 interface PreflightCache {
@@ -52,7 +57,8 @@ export function preflightFailureCacheSize(): number {
     return currentCache()?.failures.size || 0;
 }
 
-export async function preflightTargetModule(python: string, file: string, module: string, importPaths: string[], cwd: string) {
+export async function preflightTargetModule(python: string, file: string, module: string, importPaths: string[], cwd: string,
+    dependencies: Array<{ module: string; name: string; level?: number }> = [], sourceRoot?: string) {
     const key = preflightKey(python, file, module, importPaths, cwd);
     const cache = currentCache();
     const cached = cache?.failures.get(key);
@@ -66,20 +72,21 @@ export async function preflightTargetModule(python: string, file: string, module
         // output import roots rather than those of a concurrent target.
         await pending;
         throwIfExecutionCancelled();
-        return executePreflight(python, file, module, importPaths, cwd, key, cache);
+        return executePreflight(python, file, module, importPaths, cwd, key, cache, dependencies, sourceRoot);
     }
-    const operation = executePreflight(python, file, module, importPaths, cwd, key, cache);
+    const operation = executePreflight(python, file, module, importPaths, cwd, key, cache, dependencies, sourceRoot);
     cache?.pending.set(key, operation);
     try { return await operation; }
     finally { cache?.pending.delete(key); }
 }
 
 async function executePreflight(python: string, file: string, module: string, importPaths: string[], cwd: string,
-    key: string, cache?: PreflightCache): Promise<PreflightResult> {
+    key: string, cache?: PreflightCache, dependencies: Array<{ module: string; name: string; level?: number }> = [],
+    sourceRoot?: string): Promise<PreflightResult> {
     try {
         const result = await runSpawn(python, ['-B', pythonToolPath('preflight')], {
             cwd, env: buildGeneratedTestEnvironment(process.env, importPaths), timeout: 15000,
-            input: JSON.stringify({ file, module, importPaths })
+            input: JSON.stringify({ file, module, importPaths, dependencies, sourceRoot })
         });
         throwIfExecutionCancelled();
         if (result.code !== 0) {

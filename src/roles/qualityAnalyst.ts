@@ -1,3 +1,5 @@
+import { hasTemplatePlaceholder } from '../validation/templatePlaceholder';
+
 export interface QualityTask {
     evidence: string;
     hypothesis: string;
@@ -21,7 +23,7 @@ export function parseQualityTasks(raw: string, measured: string): QualityTask[] 
         for (const task of value.tasks) {
             if (!task || !['evidence', 'hypothesis', 'scenario', 'verification'].every(key =>
                 typeof task[key] === 'string' && task[key].trim() && task[key].length <= 800
-                && !/<[^>]+>/.test(task[key]))) { return undefined; }
+                && !hasTemplatePlaceholder(task[key]))) { return undefined; }
             if (!measured.includes(task.evidence)) { return undefined; }
         }
         return value.tasks.map((task: QualityTask) => ({ evidence: task.evidence,

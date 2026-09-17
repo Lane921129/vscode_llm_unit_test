@@ -94,6 +94,12 @@
           "default": "http://127.0.0.1:11434",
           "description": "Base URL for Ollama API"
         },
+        "llmUnitTest.cloudThinkingMode": {
+          "type": "string",
+          "enum": ["minimal", "provider-default"],
+          "default": "minimal",
+          "description": "Cloud 思考量：minimal 優先降低等待時間；供應商明確不支援時沿原時限回退。provider-default 使用服務預設。兩者均保留完整測試品質檢查。"
+        },
         "llmUnitTest.pythonPath": {
           "type": "string",
           "default": "",

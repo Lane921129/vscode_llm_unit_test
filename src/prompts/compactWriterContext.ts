@@ -57,7 +57,7 @@ export function buildCompactWriterContext(input: {
         if (!append(block)) { omitted.push(dep.name); }
     }
     if (omitted.length) { sections.push(`Dependency source omitted as whole units for budget: ${omitted.join(', ')}. Their behavior is unknown; do not infer it.`); }
-    for (const example of matchingWriterExamples(context)) {
+    for (const example of matchingWriterExamples({ ...context, selectedRuleIds: input.evidence.ruleSelection.ids })) {
         append(`VERIFIED PATTERN ${example.id} (unrelated neutral fixture; adapt setup only, never copy its target, inputs or expected values):\n`
             + `Example source:\n\`\`\`python\n${example.source}\n\`\`\`\nExample test:\n\`\`\`python\n${example.tests}\n\`\`\``);
     }

@@ -29,6 +29,43 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 
 
 class FixtureScorecardTests(unittest.TestCase):
+    def test_selected_target_coverage_is_bound_to_retained_test_and_keeps_module_coverage_separate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path = self.write_report(root, 'case', report('/portable/tier1_class.py', 'Labeler.render', 86, 100))
+            code = b'# retained neutral fixture\n'
+            path.with_name('loop1_test.py').write_bytes(code)
+            identity = {'runId': 'run', 'sourceHash': 'source', 'target': 'Labeler.render'}
+            path.with_name('run_manifest.json').write_text(json.dumps(identity), encoding='utf-8')
+            selected = {'qualifiedName': 'Labeler.render', 'executableLines': [6], 'missingLines': [], 'branchesCovered': True}
+            knowledge = {**identity, 'terminalStatus': 'passed', 'reviewStatus': 'completed', 'resolvedTier': 1,
+                         'acceptedTest': 'loop1_test.py', 'acceptedCodeHash': hashlib.sha256(code).hexdigest(),
+                         'coverage': {'coverageText': '86%', 'selectedTarget': selected}, 'mutationScore': 100, 'qualityGaps': []}
+            def evaluate():
+                path.with_name('function_knowledge.json').write_text(json.dumps(knowledge), encoding='utf-8')
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            result = evaluate()
+            self.assertEqual((result['coverage'], result['module_coverage'], result['coverage_scope']), (100, 86, 'selected-target'))
+            self.assertEqual(result['status'], 'passed')
+            knowledge['coverage']['coverageText'] = ''
+            self.assertIsNone(evaluate()['module_coverage'], 'a target measurement cannot invent missing module coverage')
+            knowledge['coverage']['coverageText'] = '86%'
+            selected['missingLines'] = [6]
+            self.assertEqual(evaluate()['status'], 'threshold_failed')
+            selected.update(missingLines=[], branchesCovered=False)
+            self.assertEqual(evaluate()['status'], 'quality_incomplete')
+            selected.update(branchesCovered=True, qualifiedName='render')
+            self.assertEqual(evaluate()['status'], 'incomplete_provenance')
+            selected['qualifiedName'] = 'Labeler.render'
+            selected['executableLines'] = []
+            self.assertEqual(evaluate()['status'], 'incomplete_provenance')
+            selected['executableLines'] = [6]
+            knowledge['resolvedTier'] = 2
+            self.assertEqual(evaluate()['status'], 'tier_mismatch', 'retained Tier supersedes stale report header')
+            knowledge['resolvedTier'] = 1
+            del knowledge['coverage']['selectedTarget']
+            self.assertEqual(evaluate()['status'], 'threshold_failed', 'legacy module scores are never silently upgraded')
+
     def test_incomplete_reviews_missing_review_provenance_and_unexecuted_runs_never_pass(self):
         for review_status, terminal, expected in [
                 ('incomplete', 'passed', 'review_incomplete'),

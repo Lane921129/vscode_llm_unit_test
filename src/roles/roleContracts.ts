@@ -3,12 +3,12 @@ import { EVIDENCE_CONTRACT_VERSIONS } from '../pipeline/evidenceContracts';
 
 export const ROLE_CONTRACT_VERSIONS = {
     ...EVIDENCE_CONTRACT_VERSIONS,
-    reviewer: 'review-v4',
+    reviewer: 'review-v5',
     writerRevision: 'writer-revision-v2',
     bugFix: 'bug-fix-v3'
 } as const;
 
-/** Explicit Writer handoff used only for Reviewer/structure findings. */
+/** Writer owns review, structure, fixture and multi-method execution failures. */
 export function buildWriterRevisionRequest(input: {
     code: string;
     findings: string;

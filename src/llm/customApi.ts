@@ -1,3 +1,5 @@
+import { REVIEW_CATEGORIES, REVIEW_FINDING_LIMIT } from '../roles/testReviewer';
+
 export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'test-method-json' | 'semantic-json' | 'review-json' | 'mutant-triage-json';
 
 // These client-error statuses are commonly used by compatible providers when
@@ -14,6 +16,8 @@ export function getCustomChatCompletionText(payload: unknown): string | undefine
     if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') {
         return undefined;
     }
+    const finishReason = (choices[0] as { finish_reason?: unknown }).finish_reason;
+    if (finishReason !== undefined && finishReason !== null && finishReason !== 'stop') { return undefined; }
     const content = (choices[0] as { message?: { content?: unknown } }).message?.content;
     if (typeof content === 'string') {
         return content.trim() ? content : undefined;
@@ -23,7 +27,9 @@ export function getCustomChatCompletionText(payload: unknown): string | undefine
     // image, reasoning, and malformed parts that are not executable output.
     if (Array.isArray(content)) {
         const text = content
-            .map(part => part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+            .map(part => part && typeof part === 'object'
+                && (!(part as { type?: unknown }).type || ['text', 'output_text'].includes(String((part as { type?: unknown }).type)))
+                && typeof (part as { text?: unknown }).text === 'string'
                 ? (part as { text: string }).text
                 : undefined)
             .filter((part): part is string => typeof part === 'string')
@@ -113,20 +119,20 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
             type: 'object',
             additionalProperties: false,
             properties: {
+                category: { type: 'string', enum: Object.keys(REVIEW_CATEGORIES) },
                 test_excerpt: { type: 'string', minLength: 1, maxLength: 600 },
                 reason: { type: 'string', minLength: 1, maxLength: 600 },
                 action: { type: 'string', minLength: 1, maxLength: 600 }
             },
-            required: ['test_excerpt', 'reason', 'action']
+            required: ['category', 'test_excerpt', 'reason', 'action']
         };
         return {
             type: 'object',
             additionalProperties: false,
             properties: {
-                blocking: { type: 'array', items: finding, maxItems: 5 },
-                quality: { type: 'array', items: finding, maxItems: 5 }
+                findings: { type: 'array', items: finding, maxItems: REVIEW_FINDING_LIMIT }
             },
-            required: ['blocking', 'quality']
+            required: ['findings']
         };
     }
     if (outputFormat === 'mutant-triage-json') {

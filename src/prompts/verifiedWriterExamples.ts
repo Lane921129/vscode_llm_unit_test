@@ -1,12 +1,34 @@
 /** Neutral patterns executed by regression tests; never target output oracles. */
 export interface WriterExample {
     id: string;
-    feature: 'database' | 'async' | 'class' | 'patch' | 'exception';
+    feature: 'database' | 'async' | 'async-context' | 'class' | 'patch' | 'exception';
     source: string;
     tests: string;
 }
 
 export const VERIFIED_WRITER_EXAMPLES: readonly WriterExample[] = [
+    {
+        id: 'async-context-boundary-v1', feature: 'async-context',
+        source: `async def load(client):
+    async with client.open('fixture') as resource:
+        return await resource.read()
+`,
+        tests: `import unittest
+from unittest.mock import AsyncMock, MagicMock
+from example_target import load
+class Cases(unittest.IsolatedAsyncioTestCase):
+    async def test_load(self):
+        client = MagicMock()
+        manager = client.open.return_value
+        resource = manager.__aenter__.return_value
+        resource.read = AsyncMock(return_value='controlled')
+        self.assertEqual(await load(client), 'controlled')
+        client.open.assert_called_once_with('fixture')
+        resource.read.assert_awaited_once_with()
+        manager.__aenter__.assert_awaited_once_with()
+        manager.__aexit__.assert_awaited_once_with(None, None, None)
+`
+    },
     {
         id: 'sqlite-context-v1', feature: 'database',
         source: `import sqlite3
@@ -104,13 +126,16 @@ export function matchingWriterExamples(context: {
     method_kind?: string;
     file_imports?: Array<{ module?: string; bound_name?: string; name?: string | null; alias?: string | null }>;
     raised_exceptions?: string[]; dependencyContexts?: unknown[];
+    selectedRuleIds?: readonly string[];
 }): readonly WriterExample[] {
     const features: WriterExample['feature'][] = [];
     const usedImports = (context.file_imports || []).filter(item => {
         const root = item.bound_name || item.alias || item.name || item.module?.split('.')[0];
         return root && context.calls?.some(call => call === root || call.startsWith(root + '.'));
     });
-    if (context.is_async) { features.push('async'); }
+    if (context.is_async) {
+        features.push(context.selectedRuleIds?.includes('async_context_manager_testing') ? 'async-context' : 'async');
+    }
     if (usedImports.some(item => item.module === 'sqlite3')) { features.push('database'); }
     if (context.class_name && (!context.method_kind || context.method_kind === 'instance')) { features.push('class'); }
     if (usedImports.length || context.dependencyContexts?.length) {

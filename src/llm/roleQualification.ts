@@ -1,5 +1,5 @@
 import { canRepairTestMethod, mergeBugFixReplacement } from '../roles/bugFixer';
-import { parseTestReview } from '../roles/testReviewer';
+import { getTestReviewerSystemPrompt, parseTestReview } from '../roles/testReviewer';
 
 export type RoleQualificationState = 'verified' | 'unverified' | 'not-run';
 
@@ -33,8 +33,8 @@ class Cases(unittest.TestCase):
 export const ROLE_QUALIFICATION_FAILURE =
     'FAIL: test_increment (Cases.test_increment)\nAssertionError: expected 3';
 
-export const REVIEWER_QUALIFICATION_PROMPT = `Return only one JSON object with blocking and quality arrays.
-Review this exact TEST_FILE for a concrete demonstrated test problem. It is valid to return empty arrays.
+export const REVIEWER_QUALIFICATION_PROMPT = `${getTestReviewerSystemPrompt()}
+Review this exact TEST_FILE for a concrete demonstrated test problem. It is valid to return an empty findings array.
 Every finding must contain test_excerpt, reason, and action. Do not write Python or modify the target implementation.
 TEST_FILE:
 ${ROLE_QUALIFICATION_TEST_FILE}`;
@@ -53,9 +53,9 @@ function status(state: RoleQualificationState, reason: string): RoleQualificatio
 
 export function assessReviewerQualification(response: string | undefined): RoleQualificationStatus {
     if (!response?.trim()) { return status('unverified', 'Reviewer 沒有回傳 JSON。'); }
-    const parsed = parseTestReview(response, ROLE_QUALIFICATION_TEST_FILE);
+    const parsed = parseTestReview(response, ROLE_QUALIFICATION_TEST_FILE, true);
     return parsed
-        ? status('verified', 'Reviewer 已通過 blocking／quality JSON、原文引述與欄位契約。')
+        ? status('verified', 'Reviewer 已通過 review-v5 分類、原文引述與欄位契約。')
         : status('unverified', 'Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。');
 }
 

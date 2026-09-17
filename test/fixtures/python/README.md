@@ -11,11 +11,20 @@
 
 ## 實驗室第一輪五類小批次
 
+先在專案 `.venv` 安裝 `test/fixtures/python/requirements.txt`（Windows：
+`.venv/Scripts/python.exe -m pip install -r test/fixtures/python/requirements.txt`）。
+HTTP／async fixture 需要 `httpx`、`aiohttp` 才能匯入；實際測試仍必須 mock 外部邊界，不能連網。
+
 `lab_batch_manifest.json` 固定第一輪的五個代表類別：純函式、class method、DB mock、async
 相依與外部邊界。最後一項以 HTTP boundary 作為可重現的 mock 代理；若實驗室要驗證原始 UI
 相依，保留同一個 category id，將 fixture 替換成對應原始目標並維持相同的報告欄位。
 每個 category 必須使用獨立結果目錄，最後以本頁的 `fixture_scorecard.py` 彙整，不能把
 缺報告或執行中斷算成通過。
+
+新結果以同一份保留測試的 `coverage.selectedTarget` 實測行集合評分所選目標，並另存
+`module_coverage`；未覆蓋分支仍會阻擋通過，100% 的門檻未改。身分、限定目標或行集合不符
+一律拒絕。舊報告缺少目標範圍證據時繼續採模組分數，不從文字或其他輪次推算新成績。
+實際 Tier 採同一保留候選的 `resolvedTier`，不使用降階前的報告標頭冒充原 Tier 通過。
 
 ## 彙整真實執行結果
 

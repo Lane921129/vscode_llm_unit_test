@@ -55,6 +55,7 @@ def report_fields(report_path):
     if review_status is None and 'Reviewer 審查未完成' in text:
         review_status = 'incomplete'
     terminal_status, quality_gaps, invalid_journal = None, [], False
+    coverage_scope, module_coverage, retained_tier = 'module', coverage[-1] if coverage else None, None
     journal_path = Path(report_path).with_name('function_knowledge.json')
     if journal_path.exists():
         try:
@@ -77,6 +78,27 @@ def report_fields(report_path):
                 raise ValueError('mismatched evidence')
             coverage_text = (knowledge.get('coverage') or {}).get('coverageText', '')
             coverage = [float(value) for value in re.findall(r'^(\d+(?:\.\d+)?)%$', coverage_text)]
+            module_coverage = coverage[-1] if coverage else None
+            selected = (knowledge.get('coverage') or {}).get('selectedTarget')
+            if selected is not None:
+                if (not isinstance(selected, dict) or not function_match
+                        or selected.get('qualifiedName') != function_match.group(1).strip()
+                        or selected.get('qualifiedName') != manifest.get('target')):
+                    raise ValueError('mismatched coverage target')
+                lines, missing = selected.get('executableLines'), selected.get('missingLines')
+                if (not isinstance(lines, list) or not lines or not isinstance(missing, list)
+                        or any(type(line) is not int or line <= 0 for line in lines + missing)
+                        or len(set(lines)) != len(lines) or len(set(missing)) != len(missing)
+                        or not set(missing).issubset(lines) or type(selected.get('branchesCovered')) is not bool):
+                    raise ValueError('invalid target coverage measurement')
+                coverage = [100 * (len(lines) - len(missing)) / len(lines)]
+                coverage_scope = 'selected-target'
+                if not selected['branchesCovered']:
+                    quality_gaps = [*quality_gaps, 'selected target has uncovered branches']
+            if 'resolvedTier' in knowledge:
+                retained_tier = knowledge['resolvedTier']
+                if type(retained_tier) is not int or not 1 <= retained_tier <= 4:
+                    raise ValueError('invalid retained tier')
             score = knowledge.get('mutationScore')
             mutation = [score] if isinstance(score, (int, float)) and not isinstance(score, bool) and 0 <= score <= 100 else []
         except (OSError, ValueError, TypeError, AttributeError):
@@ -85,11 +107,13 @@ def report_fields(report_path):
         'target_file': target_match.group(1).strip() if target_match else None,
         'target_function': function_match.group(1).strip() if function_match else None,
         'requested_tier': tier_match.group(1).strip() if tier_match else None,
-        'resolved_tier': int(tier_match.group(2)) if tier_match else None,
+        'resolved_tier': retained_tier if retained_tier is not None else int(tier_match.group(2)) if tier_match else None,
         'model_identity': model_identity_match.group(1).strip() if model_identity_match else None,
         'tier1_generation_mode': generation_mode_match.group(1) if generation_mode_match else None,
         'failure_category': failure_category_match.group(1) if failure_category_match else None,
         'coverage': coverage[-1] if coverage else None,
+        'coverage_scope': coverage_scope,
+        'module_coverage': module_coverage,
         'mutation_score': mutation[-1] if mutation else None,
         'review_status': review_status,
         'terminal_status': terminal_status,
@@ -189,6 +213,8 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_ide
     result.update({
         'report': str(report_path.relative_to(report_root)).replace('\\', '/'),
         'coverage': fields['coverage'],
+        'coverage_scope': fields['coverage_scope'],
+        'module_coverage': fields['module_coverage'],
         'mutation_score': fields['mutation_score'],
         'requested_tier': fields['requested_tier'],
         'resolved_tier': fields['resolved_tier'],
@@ -314,7 +340,7 @@ def format_markdown(scorecard):
         f"- 模型識別篩選：{scorecard['model_identity_filter'] or '未篩選（不可作為單一模型發行證據）'}",
         f"- Tier 1 LLM 發行門檻：{'通過' if scorecard['tier1_llm_release']['ready'] else '未通過'}（{scorecard['tier1_llm_release']['passed']}/{scorecard['tier1_llm_release']['fixture_count']}）",
         '',
-        '| Tier | Fixture | 模型識別 | 產生模式 | 狀態 | 失敗分類 | Coverage | Mutation | 報告 |',
+        '| Tier | Fixture | 模型識別 | 產生模式 | 狀態 | 失敗分類 | Coverage（範圍） | Mutation | 報告 |',
         '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ]
     for result in scorecard['results']:
@@ -322,7 +348,7 @@ def format_markdown(scorecard):
         mutation = f"{result['mutation_score']:g}%" if result['mutation_score'] is not None else 'N/A'
         report = result['report'] or '—'
         lines.append(
-            f"| {result['tier']} | {result['id']} | {result['model_identity'] or '—'} | {result['tier1_generation_mode'] or '—'} | {result['status']} | {result['failure_category'] or '—'} | {coverage} / {result['min_line_coverage']}% | "
+            f"| {result['tier']} | {result['id']} | {result['model_identity'] or '—'} | {result['tier1_generation_mode'] or '—'} | {result['status']} | {result['failure_category'] or '—'} | {coverage} / {result['min_line_coverage']}% ({result.get('coverage_scope', 'module')}) | "
             f"{mutation} / {result['min_mutation_score']}% | {report} |"
         )
     lines.extend(['', '## 判定說明', ''])

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { EVIDENCE_CONTRACT_VERSIONS } from './evidenceContracts';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
+import { classifyExecutionFailure } from '../utils/executionFailureCategory';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -17,7 +18,7 @@ export class AnalysisJournal {
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
             schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(),
-            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v4',
+            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v5',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
         this.knowledge({ target, terminalStatus: 'running', stage: 'starting' });
@@ -27,9 +28,11 @@ export class AnalysisJournal {
             time: new Date().toISOString(), loop, stage, status, detail };
         fs.appendFileSync(path.join(this.directory, 'role_events.jsonl'), JSON.stringify(event) + '\n', 'utf8');
         const progress: Record<string, unknown> = { stage, lastEvent: { sequence: this.sequence, status, time: event.time } };
-        if (/(?:failed|rejected)$/.test(status)) {
-            const value = detail as { reason?: string; out?: string } | null;
-            const failure = { sequence: this.sequence, stage, status, reason: value?.reason || value?.out || '' };
+        if (/(?:failed|rejected|error|invalid-response|budget-exceeded|retained-baseline)$/.test(status)) {
+            const value = detail as { reason?: string; out?: string; category?: string; diagnostics?: string[] } | null;
+            const reason = value?.reason || value?.out || value?.diagnostics?.join(', ') || status;
+            const failure = { sequence: this.sequence, stage, status,
+                category: value?.category || (status === 'invalid-response' ? 'model-format' : classifyExecutionFailure(reason)), reason };
             if (!this.knowledgeState.firstFailure) { progress.firstFailure = failure; }
             progress.lastFailure = failure;
         }

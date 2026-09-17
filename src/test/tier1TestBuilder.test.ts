@@ -74,9 +74,9 @@ test('collects async generators in a normal unittest method', () => {
     const methods = buildTier1TestMethods('numbers', [
         { args: ['3'], result: '[0, 2, 4]', result_type: 'async_generator', result_truncated: false }
     ], []);
-    assert.ok(methods[0].includes('async def collect():'));
-    assert.ok(methods[0].includes('async for item in numbers(3)'));
-    assert.ok(methods[0].includes("__import__('asyncio').run(collect())"));
+    assert.ok(methods[0].includes('async def _trace_collect(_trace_source):'));
+    assert.ok(methods[0].includes('async for item in _trace_source'));
+    assert.ok(methods[0].includes('_trace_asyncio.run(_trace_collect(numbers(3)))'));
 });
 
 test('runs ordinary coroutine targets before asserting their traced result or exception', () => {
@@ -86,6 +86,6 @@ test('runs ordinary coroutine targets before asserting their traced result or ex
         { args: ['0'], exception: 'ValueError' }
     ], true);
 
-    assert.ok(methods[0].includes("result = __import__('asyncio').run(double(3))"));
-    assert.ok(methods[1].includes("__import__('asyncio').run(double(0))"));
+    assert.ok(methods[0].includes('result = _trace_asyncio.run(double(3))'));
+    assert.ok(methods[1].includes('_trace_asyncio.run(double(0))'));
 });

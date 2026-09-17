@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName, resolveGoogleApiKey } from '../llm/cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, GoogleThinkingSession, normalizeGoogleModelName, resolveGoogleApiKey } from '../llm/cloudApi';
 
 test('buildGoogleGenerateContentRequest uses the selected model and a key header', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'hello');
@@ -95,6 +95,10 @@ test('uses a conservative budget when Cloud metadata omits an input limit', () =
 });
 
 test('extracts a Cloud generated text response without trusting malformed payloads', () => {
+    assert.strictEqual(getGoogleGeneratedText({ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'partial but valid looking code' }] } }] }), undefined);
+    assert.strictEqual(getGoogleGeneratedText({ candidates: [{ content: { parts: [
+        { thought: true, text: 'private reasoning is not an answer' }, { text: 'final answer' }
+    ] } }] }), 'final answer');
     assert.strictEqual(
         getGoogleGeneratedText({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] }),
         '{"ok":true}'
@@ -105,4 +109,39 @@ test('extracts a Cloud generated text response without trusting malformed payloa
         getGoogleGeneratedText({ candidates: [{ content: { parts: [{ text: '{"code":' }, { text: '"complete"}' }, { inlineData: {} }] } }] }),
         '{"code":"complete"}'
     );
+});
+
+test('minimal thinking uses a capability response, shares cancellation and remembers unsupported endpoints', async () => {
+    const session = new GoogleThinkingSession();
+    const request = buildGoogleGenerateContentRequest('arbitrary-model', 'test-key', 'hello', { thinkingMode: 'minimal' });
+    assert.deepStrictEqual(request.body.generationConfig, { thinkingConfig: { thinkingLevel: 'MINIMAL' } });
+    let sends = 0;
+    let fallbacks = 0;
+    const send = async (next: typeof request) => {
+        sends++;
+        if (sends === 1) { return new Response(JSON.stringify({ error: { message: 'Thinking level MINIMAL is not supported for this endpoint.' } }), { status: 400 }); }
+        assert.strictEqual(next.body.generationConfig?.thinkingConfig, undefined);
+        assert.strictEqual(next.headers, request.headers);
+        return new Response('{}');
+    };
+    await session.send(request, send, () => { fallbacks++; });
+    await session.send(request, send);
+    assert.strictEqual(sends, 3);
+    assert.strictEqual(fallbacks, 1);
+    assert.ok(request.body.generationConfig?.thinkingConfig, 'caller request is not mutated');
+
+    for (const status of [400, 401, 403, 404, 429, 500]) {
+        let calls = 0;
+        await new GoogleThinkingSession().send(request, async () => {
+            calls++;
+            return new Response(JSON.stringify({ error: { message: status === 400 ? 'invalid schema' : 'thinking level is not supported' } }), { status });
+        });
+        assert.strictEqual(calls, 1, 'unrelated or service errors are not thinking fallback');
+    }
+    const controller = new AbortController();
+    await assert.rejects(new GoogleThinkingSession().send(request, async () => {
+        controller.signal.throwIfAborted();
+        controller.abort();
+        return new Response(JSON.stringify({ error: { message: 'unknown field thinkingConfig' } }), { status: 400 });
+    }), /abort/i);
 });

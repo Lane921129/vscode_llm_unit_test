@@ -16,6 +16,8 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const originalEngine = utilities.detectMutationEngine;
     const processRunner = require('../utils/processRunner');
     const originalSpawn = processRunner.runSpawn;
+    const traceBuilder = require('../tier/tier1TestFileBuilder');
+    const originalTraceBuilder = traceBuilder.buildTier1TestFile;
     const mutationRuns: Array<{ args: string[]; timeout: number }> = [];
     let expectedMutationSeconds = 20;
     let externalEngine: 'mutatest' | 'mutmut' | undefined;
@@ -47,6 +49,7 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     let reviewerAvailable = true;
     let rejectedReviewSchema = false;
     let rejectAllModelRequests = false;
+    let scaffoldMode = false;
     const code = `import unittest
 from unittest.mock import patch
 from sample import target
@@ -90,26 +93,28 @@ class Cases(unittest.TestCase):
         let response: string;
         if (request.system.includes('You are the test Reviewer')) {
             if (!rejectedReviewSchema && typeof request.format === 'object') {
-                assert.equal(request.format.properties.blocking.maxItems, 5);
+                assert.equal(request.format.properties.findings.maxItems, 5);
                 rejectedReviewSchema = true;
                 return new Response('unsupported schema', { status: 400 });
             }
-            roles.push('reviewer'); response = reviewerAvailable ? '{"blocking":[],"quality":[]}' : 'invalid review';
+            roles.push('reviewer'); response = reviewerAvailable ? '{"findings":[]}' : 'invalid review';
         } else if (request.system.includes('Analyst after successful')) {
             roles.push('analyst-quality'); response = '{"tasks":[]}';
         } else if (request.system.includes('dependency_behaviors')) {
             roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
         } else {
             roles.push('writer'); writers++;
-            assert.match(request.prompt, /^compact-writer-v1/);
-            assert.match(request.prompt, /RETRIEVED DEPENDENCY read/);
-            if (writers > 1) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
+            assert.match(request.prompt, scaffoldMode ? /Complete Writer evidence/ : /^compact-writer-v1/);
+            assert.match(request.prompt, scaffoldMode ? /def read/ : /RETRIEVED DEPENDENCY read/);
+            if (writers > 1 && !scaffoldMode) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
             response = '```python\n' + (writers === 1 ? code : stronger) + '\n```';
         }
         return new Response(JSON.stringify({ response }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
+    const fixtureFetcher = globalThis.fetch;
     try {
-        fs.writeFileSync(path.join(directory, 'sample.py'), "def read(): return {'ready': True, 'kind': 'plain'}\ndef target():\n    state = read()\n    if state['ready'] and state['kind'] == 'plain':\n        return True\n    return False\n");
+        fs.writeFileSync(path.join(directory, 'helper.py'), "def read(): return {'ready': True, 'kind': 'plain'}\n");
+        fs.writeFileSync(path.join(directory, 'sample.py'), "from helper import read\ndef target():\n    state = read()\n    if state['ready'] and state['kind'] == 'plain':\n        return True\n    return False\ndef unrelated():\n    return 'not selected'\n");
         const { activate } = require('../orchestrator');
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
@@ -123,8 +128,8 @@ class Cases(unittest.TestCase):
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
-        assert.equal(manifest.promptVersion, 'role-contracts-v4');
-        assert.equal(manifest.roleContracts.reviewer, 'review-v4');
+        assert.equal(manifest.promptVersion, 'role-contracts-v5');
+        assert.equal(manifest.roleContracts.reviewer, 'review-v5');
         assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');
         assert.equal(manifest.evidenceContracts.semanticPlan, 'semantic-plan-v2');
         assert.equal(manifest.evidenceContracts.ruleSelection, 'rule-selection-v2');
@@ -136,7 +141,8 @@ class Cases(unittest.TestCase):
         assert.ok(firstStage('rule-dispatcher') < firstStage('writer-handoff'));
         assert.ok(firstStage('writer-handoff') < firstStage('writer'));
         assert.equal(events[firstStage('rule-dispatcher')].detail.provenance, 'deterministic');
-        assert.equal(events[firstStage('evidence-collection')].detail.retrieval.selected, 1);
+        assert.equal(events[firstStage('evidence-collection')].detail.dependencyCount, 1);
+        assert.ok(firstStage('validation') < firstStage('reviewer'));
         const requests = events.filter(event => event.stage === 'model-request' && event.status === 'requested');
         assert.ok(requests.length > 0);
         assert.ok(requests.every(event => event.detail.estimatedInputTokens <= event.detail.inputBudget));
@@ -160,6 +166,10 @@ class Cases(unittest.TestCase):
         assert.ok(knowledge.scenarios.length >= 3);
         assert.equal(knowledge.reviewStatus, 'completed');
         assert.equal(knowledge.terminalStatus, 'passed');
+        assert.notEqual(knowledge.coverage.coverageText, '100%', 'unrelated callable remains outside target scope');
+        assert.equal(knowledge.coverage.selectedTarget.qualifiedName, 'target');
+        assert.deepEqual(knowledge.coverage.selectedTarget.missingLines, []);
+        assert.equal(knowledge.resolvedTier, 1);
         assert.match(report, /Reviewer status\*\*: completed/);
 
         reviewerAvailable = false;
@@ -208,11 +218,62 @@ class Cases(unittest.TestCase):
         const oversizeEvents = fs.readFileSync(path.join(oversizeOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.ok(oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
         assert.ok(!oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'requested'));
+
+        // Service failures retain their category and never launch lower-Tier Writer retries.
+        handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
+            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
+            testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+        let serviceCalls = 0;
+        globalThis.fetch = async () => { serviceCalls++; return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 }); };
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier3',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'service-failure') });
+        const serviceRoot = path.join(directory, 'service-failure');
+        const serviceOutput = path.join(serviceRoot, fs.readdirSync(serviceRoot)[0], 'target');
+        const serviceJournal = fs.readFileSync(path.join(serviceOutput, 'role_events.jsonl'), 'utf8');
+        assert.doesNotMatch(serviceJournal, /PROVIDER_BODY_MUST_REMAIN_PRIVATE/);
+        const serviceEvents = serviceJournal.trim().split('\n').map(line => JSON.parse(line));
+        assert.equal(serviceCalls, 6, 'three bounded attempts each for planning and Writer');
+        assert.equal(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer').length, 1);
+        assert.ok(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error').every(event => event.detail.category === 'model-api'));
+
+        globalThis.fetch = fixtureFetcher;
+        rejectAllModelRequests = false;
+        scaffoldMode = true;
+        writers = 1;
+        roles.length = 0;
+        expectedMutationSeconds = 20;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier3',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
+        const scaffoldRoot = path.join(directory, 'scaffold-results');
+        const scaffoldOutput = path.join(scaffoldRoot, fs.readdirSync(scaffoldRoot)[0], 'target');
+        const scaffoldKnowledge = JSON.parse(fs.readFileSync(path.join(scaffoldOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(scaffoldKnowledge.terminalStatus, 'passed', scaffoldKnowledge.failure);
+        assert.equal(scaffoldKnowledge.resolvedTier, 3);
+        assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer'], 'complete scaffold output needs no wrapping repair or Tier fallback');
+
+        traceBuilder.buildTier1TestFile = (...args: any[]) => {
+            const built = originalTraceBuilder(...args);
+            return { ...built, code: built.code?.replace('import unittest', "import unittest\n__import__('math')") };
+        };
+        scaffoldMode = false;
+        writers = 0;
+        roles.length = 0;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'bad-runner-baseline') });
+        const badRoot = path.join(directory, 'bad-runner-baseline');
+        const badOutput = path.join(badRoot, fs.readdirSync(badRoot)[0], 'target');
+        const badKnowledge = JSON.parse(fs.readFileSync(path.join(badOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(badKnowledge.failureStage, 'trace-baseline');
+        assert.deepEqual(roles, ['analyst-planning', 'writer'], 'runner-owned failure never consumes model repair or review');
     } finally {
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;
         utilities.detectMutationEngine = originalEngine;
         processRunner.runSpawn = originalSpawn;
+        traceBuilder.buildTier1TestFile = originalTraceBuilder;
         fs.rmSync(directory, { recursive: true, force: true });
     }
 });

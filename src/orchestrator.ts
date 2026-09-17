@@ -12,7 +12,7 @@ import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory } from './pipeline/analysisOutput';
-import { preflightTargetModule } from './pipeline/modulePreflight';
+import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import {
     BehaviorObservation,
     BehaviorObservations,
@@ -25,7 +25,7 @@ import { dispatchTestRules } from './pipeline/testRuleDispatcher';
 import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
-import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, resolveGoogleApiKey } from './llm/cloudApi';
+import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { SerialRequestQueue } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
@@ -38,7 +38,7 @@ import { RoleQualificationProfile, qualifiedRole } from './llm/roleQualification
 import { ReviewSession, ReviewStatus } from './roles/reviewSession';
 import { canUseDeterministicTierOne, canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
-import { formatPythonImport, inferTargetImportModule, resolvePythonDependencyPath } from './utils/dependencyResolver';
+import { formatPythonImport, inferTargetImportModule } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
 import { assessTargetCoverage } from './mutation/targetCoverage';
 import { formatReportProvenance, ReportProvenance } from './utils/reportProvenance';
@@ -302,6 +302,7 @@ interface AstContext {
     condition_facts?: Array<{ kind: 'comparison' | 'membership' | 'match'; parameter: string; subject: 'value' | 'length'; operator?: string; literal?: string | null; literals?: string[]; line: number }>;
     traceResult?: BehaviorProbeResult;
     dependencyContexts?: AstContext[];
+    dependencyResolution?: ResolvedDependency[];
     localDependencyContexts?: AstContext[];
     retrieval?: { version: string; selected: number; omitted: string[] };
     sourceVersions?: Array<{ file: string; hash: string }>;
@@ -627,6 +628,7 @@ async function requestLlmApiUnlocked(
     }
     let apiUrl = "";
     let bodyData = {};
+    let cloudRequest: GoogleGenerateContentRequest | undefined;
     let headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     const contractedSystemPrompt = addOutputContract(systemPrompt, outputFormat);
@@ -663,11 +665,14 @@ async function requestLlmApiUnlocked(
             params.modelName,
             actualKey,
             contractedSystemPrompt + "\n\n" + userPrompt,
-            outputFormat === 'text' ? undefined : { responseMimeType: 'application/json', responseSchema }
+            { ...(outputFormat === 'text' ? {} : { responseMimeType: 'application/json', responseSchema }),
+                thinkingMode: vscode.workspace.getConfiguration('llmUnitTest').get('cloudThinkingMode', 'minimal') === 'minimal'
+                    ? 'minimal' : 'provider-default' }
         );
         apiUrl = googleRequest.url;
         headers = googleRequest.headers;
         bodyData = googleRequest.body;
+        cloudRequest = googleRequest;
     }
 
     throwIfExecutionCancelled();
@@ -680,9 +685,10 @@ async function requestLlmApiUnlocked(
         log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
     }, remainingTimeoutMs);
     try {
-        const response = await retryTransientProviderRequest(
-            () => fetch(apiUrl, {
-                method: 'POST', headers, body: JSON.stringify(bodyData), signal: controller.signal
+        const send = (request?: GoogleGenerateContentRequest) => retryTransientProviderRequest(
+            () => fetch(request?.url || apiUrl, {
+                method: 'POST', headers: request?.headers || headers,
+                body: JSON.stringify(request?.body || bodyData), signal: controller.signal
             }),
             {
                 maxAttempts: GENERATION_RETRY_MAX_ATTEMPTS,
@@ -695,14 +701,17 @@ async function requestLlmApiUnlocked(
                 )
             }
         );
+        const response = cloudRequest ? await googleThinkingSession.send(cloudRequest, send,
+            () => log('[思考量回退] 供應商明確不支援低思考量，沿原時限使用服務預設。')) : await send();
         throwIfExecutionCancelled();
         if (!response.ok) {
-            const errText = await response.text();
+            await response.body?.cancel();
             if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
-                log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），改用一般文字輸出：${errText.substring(0, 180)}`);
+                log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），沿原時限改用一般文字輸出。`);
                 return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
             }
-            throw new Error(`API 伺服器錯誤 (HTTP ${response.status}): ${errText}`);
+            throw new AnalysisStageError('model-api', 'model-request',
+                `API 伺服器錯誤 (HTTP ${response.status})；未記錄供應商回應內容。`, { httpStatus: response.status });
         }
 
         const resJson = await response.json() as Record<string, unknown>;
@@ -715,18 +724,18 @@ async function requestLlmApiUnlocked(
             if (customText) {
                 responseText = customText;
             } else if ((resJson as any).error) {
-                throw new Error((resJson as any).error.message || "自訂 API 呼叫失敗");
+                throw new AnalysisStageError('model-api', 'model-request', '自訂 API 回傳錯誤物件；未記錄供應商回應內容。');
             } else {
-                throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+                throw new AnalysisStageError('model-format', 'model-response', '無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。');
             }
         } else {
             const cloudText = getGoogleGeneratedText(resJson);
             if (cloudText) {
                 responseText = cloudText;
             } else if ((resJson as any).error) {
-                throw new Error((resJson as any).error.message || "Gemini 呼叫失敗");
+                throw new AnalysisStageError('model-api', 'model-request', '雲端 API 回傳錯誤物件；未記錄供應商回應內容。');
             } else {
-                throw new Error("無法解析的 API 回傳格式: " + JSON.stringify(resJson));
+                throw new AnalysisStageError('model-format', 'model-response', '無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。');
             }
         }
 
@@ -744,7 +753,8 @@ async function requestLlmApiUnlocked(
             throw new AnalysisStageError('timeout', 'model-request', `API 請求超時 (超過 ${params.timeoutSeconds} 秒總時限)`,
                 { cause: 'deadline', outputFormat, deadlineAt });
         }
-        throw error;
+        if (error instanceof AnalysisStageError) { throw error; }
+        throw new AnalysisStageError('model-api', 'model-request', 'API 連線或回應讀取失敗；未記錄供應商回應內容。');
     } finally {
         clearTimeout(timeoutId);
         release?.();
@@ -890,9 +900,19 @@ async function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: 
     return (JSON.parse(result.stdout) as { code: string }).code;
 }
 
-function extractCoverage(output: string, targetFile: string): { coverageText: string, missingLines: string } {
-    const assessment = assessTargetCoverage(output, targetFile, []);
-    return { coverageText: assessment.coverageText, missingLines: assessment.missingLines };
+interface RetainedCoverage {
+    coverageText: string;
+    missingLines: string;
+    selectedTarget?: { qualifiedName: string; executableLines: number[]; missingLines: number[]; branchesCovered: boolean };
+}
+
+function extractCoverage(output: string, targetFile: string, lines: number[], qualifiedName: string): RetainedCoverage {
+    const assessment = assessTargetCoverage(output, targetFile, lines);
+    return { coverageText: assessment.coverageText, missingLines: assessment.missingLines,
+        ...(assessment.missingTargetLines && assessment.targetBranchesCovered !== undefined ? {
+            selectedTarget: { qualifiedName, executableLines: [...new Set(lines)].sort((a, b) => a - b),
+                missingLines: assessment.missingTargetLines, branchesCovered: assessment.targetBranchesCovered }
+        } : {}) };
 }
 
 function parseMutatestSurvived(mutatestResult: string): string {
@@ -986,7 +1006,7 @@ async function resolveAstAndDependencies(
     projectRoot: string,
     pythonExecutable: string,
     log: (text: string) => void,
-    beforeBehavior: (context: AstContext) => Promise<void>
+    beforeBehavior: (context: AstContext) => Promise<PreflightResult>
 ): Promise<AstContext | null> {
     log(`[AST] 正在解析函式 \`${funcName}\` 的結構與依賴...`);
     const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
@@ -994,7 +1014,8 @@ async function resolveAstAndDependencies(
         return astContext;
     }
     log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
-    await beforeBehavior(astContext);
+    const environment = await beforeBehavior(astContext);
+    astContext.dependencyResolution = environment.dependencies || [];
     astContext.dependencyContexts = [...(astContext.localDependencyContexts || [])];
     astContext.sourceVersions = [];
     if (astContext.retrieval?.selected) {
@@ -1005,8 +1026,10 @@ async function resolveAstAndDependencies(
         log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
 
         for (const dep of astContext.dependencies) {
-            const depFilePath = resolvePythonDependencyPath(filePath, projectRoot, dep);
-            if (fs.existsSync(depFilePath)) {
+            const resolved = environment.dependencies?.find(item => item.module === dep.module
+                && item.name === dep.name && (item.level || 0) === (dep.level || 0));
+            const depFilePath = resolved?.file;
+            if (depFilePath && fs.existsSync(depFilePath)) {
                 astContext.sourceVersions.push({ file: depFilePath, hash: evidenceHash(fs.readFileSync(depFilePath, 'utf8')) });
                 const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
                 if (depAst && !depAst.error) {
@@ -1027,6 +1050,8 @@ async function resolveAstAndDependencies(
                     astContext.dependencyContexts.push(depAst);
                     log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
                 }
+            } else {
+                log(`[AST] 相依 ${formatPythonImport(dep)}.${dep.name} 未提供來源：${resolved?.reason || 'not-resolved-by-preflight'}。`);
             }
         }
     }
@@ -1075,7 +1100,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     let bestGaps: string[] = [];
     let bestReviewWarnings: string[] = [];
     let bestReviewStatus: ReviewStatus = 'incomplete';
-    let bestCoverage: { coverageText: string; missingLines: string } | null = null;
+    let bestCoverage: RetainedCoverage | null = null;
+    let bestTier: number | undefined;
     let qualityGaps: string[] = [];
     let reviewWarnings: string[] = [];
     let reviewStatus: ReviewStatus = 'incomplete';
@@ -1214,11 +1240,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     };
     const requestBudgeted = async (
         requestParams: AnalysisParams, system: string, prompt: string,
-        requestLog: (text: string) => void, format: CustomOutputFormat = 'text'
+        requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
+        role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer'
     ): Promise<string> => {
         const contractedSystem = addOutputContract(system, format);
         const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
-        const metrics = { format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
+        const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
             inputBudget: activeModelProfile.budgetTokens,
             contextWindow,
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
@@ -1234,7 +1261,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
             return response;
         } catch (error) {
-            recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started });
+            recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
+                category: error instanceof AnalysisStageError ? error.category : 'unknown',
+                reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
             throw error;
         }
     };
@@ -1249,8 +1278,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         journal.knowledge({ sourceStructure: context?.code || null, sourceContext: context,
             initialTargetObservations: null, roleQualification: roleQualification || null });
         preflight = await preflightTargetModule(pythonExecutable, params.filePath, module,
-            [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir);
+            [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir,
+            context?.dependencies || [], projectRoot);
         recordRole('environment', 'passed', { module: preflight.module });
+        return preflight;
     };
     if (params.funcName) {
         const projectRoot = (params as any).batchPath
@@ -1442,7 +1473,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             );
             const semRaw = await requestBudgeted(
                 params, semSys, semUsr, log,
-                analysisResponseFormat === 'text' ? 'text' : 'semantic-json'
+                analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning'
             );
             const parsedSemResult = parseSemanticAnalysis(semRaw);
             if (parsedSemResult) {
@@ -1644,7 +1675,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
-        let loopCoverage: { coverageText: string, missingLines: string } | null = null;
+        let loopCoverage: RetainedCoverage | null = null;
         let loopExecution = '';
         qualityGaps = [];
         try {
@@ -1734,32 +1765,20 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         traceExamples,
                         verifiedConstructorCall,
                         astContext?.code || targetCode,
-                        semanticContext
+                        semanticContext,
+                        userPrompt
                     );
                     try {
                         const raw = await requestBudgeted(params, sysP, usrP, log, testGenerationResponseFormat);
                         rawCode = raw;
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
-                            // 將 AI 補全的方法裹入完整類別
-                            const className3 = astContext?.class_context?.name ?? null;
-                            const importLine3 = className3 ? `from ${targetImportModule} import ${className3}` : `from ${targetImportModule} import *`;
-                            const patchImport = scaffoldResult.patches.length > 0 ? `from unittest.mock import patch, MagicMock\n` : '';
-                            const testBase3 = scaffoldResult.is_async ? 'unittest.IsolatedAsyncioTestCase' : 'unittest.TestCase';
-                            sanitizedCode = [
-                                `import unittest`,
-                                importLine3,
-                                patchImport.trim(),
-                                ``,
-                                `class TestTier3${targetFuncName || 'Auto'}(${testBase3}):`,
-                                extracted.split('\n').map(l => '    ' + l).join('\n'),
-                                ``,
-                                `if __name__ == '__main__':`,
-                                `    unittest.main()`,
-                            ].filter(Boolean).join('\n');
+                            sanitizedCode = extracted;
                             log(`[Tier 3] 模型補充完成！`);
                         }
                     } catch (e: any) {
+                        throwIfExecutionCancelled();
+                        if (e instanceof AnalysisStageError) { throw e; }
                         log(`[Tier 3] 模型詢問失敗: ${e.message}，退回標準流程`);
                     }
                 } else {
@@ -1842,6 +1861,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                                 log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆為空或不可擷取，將重試此子任務。`);
                             }
                         } catch (err: any) {
+                            throwIfExecutionCancelled();
+                            if (err instanceof AnalysisStageError) { throw err; }
                             if (retry === 1) {log(`[警告] 呼叫點 ${cIdx + 1} 生成失敗: ${err.message}`);}
                         }
                     }
@@ -2006,6 +2027,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     isAsync: Boolean(astContext?.is_async),
             }) : undefined;
             if (verifiedTrace?.code) {
+                const traceStructure = await validateGeneratedTestCode(verifiedTrace.code, targetFuncName, baseName,
+                    astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
+                    exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
+                if (!traceStructure.valid) {
+                    recordRole('trace-baseline', 'failed', { category: 'validation', reason: traceStructure.reason });
+                    throw new AnalysisStageError('validation', 'trace-baseline',
+                        '系統 Trace 基線未通過結構／安全檢查，停止模型修訂：' + traceStructure.reason);
+                }
                 const traceTestPath = path.join(sessionDir, `loop${currentLoop}_trace_test.py`);
                 fs.writeFileSync(traceTestPath, verifiedTrace.code, 'utf8');
                 const traceRun = await runSpawn(pythonExecutable,
@@ -2076,15 +2105,16 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
                         try {
-                            const raw = await requestBudgeted(params, sys, prompt, log, 'review-json');
-                            const { review: result, diagnostics } = parseTestReviewDetailed(raw, code);
+                            const raw = await requestBudgeted(params, sys, prompt, log, 'review-json', 'reviewer');
+                            const { review: result, diagnostics } = parseTestReviewDetailed(raw, code, true);
                             recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
                                 contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result, diagnostics
                             });
                             return result;
                         } catch (error: any) {
                             throwIfExecutionCancelled();
-                            recordRole('reviewer', 'failed', { reason: error.message });
+                            recordRole('reviewer', 'failed', { reason: error.message,
+                                category: error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(error.message) });
                             return undefined;
                         }
                     }, (status, detail) => recordRole('reviewer', status, detail));
@@ -2111,7 +2141,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
-                        role === 'bug-fixer' ? 'test-method-json' : testGenerationResponseFormat
+                        role === 'bug-fixer' ? 'test-method-json' : testGenerationResponseFormat,
+                        role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision'
                     );
                     if (role === 'bug-fixer') {
                         const merged = mergeBugFixReplacement(raw, code, failure);
@@ -2180,7 +2211,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }, 2, bestCode ? { code: bestCode, output: bestExecution } : undefined);
             finalCode = accepted.code;
             loopExecution = accepted.execution.out;
-            loopCoverage = extractCoverage(loopExecution, params.filePath);
+            loopCoverage = extractCoverage(loopExecution, params.filePath, astContext?.executable_lines || [], params.funcName || targetFuncName);
             qualityGaps = accepted.qualityIssues;
             reviewWarnings = accepted.reviewWarnings;
             reviewStatus = accepted.reviewStatus;
@@ -2349,6 +2380,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             
             if (loopCoverage) {
                 finalReportMarkdown += `- **覆蓋率**: ${loopCoverage.coverageText} (未覆蓋行號: ${loopCoverage.missingLines})\n`;
+                const selected = loopCoverage.selectedTarget;
+                if (selected?.executableLines.length) {
+                    const percent = 100 * (selected.executableLines.length - selected.missingLines.length) / selected.executableLines.length;
+                    finalReportMarkdown += `- **目標行覆蓋率**: ${percent}%（${selected.qualifiedName}；模組整體覆蓋率另列於上方）\n`;
+                }
             }
             
             let reasonStr = "";
@@ -2433,6 +2469,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 bestReviewWarnings = [...reviewWarnings];
                 bestReviewStatus = reviewStatus;
                 bestCoverage = loopCoverage;
+                bestTier = currentTier;
                 recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
                     survivors: survivorIds, qualityGaps });
             } else if (bestCode) {
@@ -2451,7 +2488,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 acceptedScenarios = bestScenarios;
                 finalReportMarkdown += `> 已還原歷史基線，測試、分數（${bestScore}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n`;
             }
-            journal.knowledge({ target: targetFuncName,
+            journal.knowledge({ target: params.funcName || targetFuncName, resolvedTier: bestTier ?? currentTier,
                 initialTargetObservations: initialTargetObservations || null,
                 supplementalTargetObservations: supplementalTargetObservations || null,
                 verifiedObservations: astContext?.traceResult || null,
@@ -2597,7 +2634,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
                     recordRole('analyst-quality', 'budget-exceeded', { measured });
                 } else {
-                    const raw = await requestBudgeted(params, sys, prompt, log, 'text');
+                    const raw = await requestBudgeted(params, sys, prompt, log, 'text', 'analyst-quality');
                     const tasks = parseQualityTasks(raw, measured);
                     recordRole('analyst-quality', tasks ? 'parsed-hypotheses' : 'invalid-response', { raw, tasks, measured });
                     if (tasks) {

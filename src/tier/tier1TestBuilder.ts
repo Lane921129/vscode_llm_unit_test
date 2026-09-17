@@ -87,40 +87,51 @@ function buildTraceCall(funcName: string, example: Tier1TraceExample): string {
     return `${funcName}(${[...example.args, ...kwargs].join(', ')})`;
 }
 
+function helperAlias(expression: string, base: string): string {
+    let alias = base;
+    while (expression.includes(alias)) { alias += '_'; }
+    return alias;
+}
+
 function buildTraceResultAssignment(funcCall: string, example: Tier1TraceExample, isAsync = false): string[] {
+    const asyncio = helperAlias(funcCall, '_trace_asyncio');
     const expected = toPythonAssertionLiteral(example.result, example.result_type);
     const limit = Number.isSafeInteger(example.result_collection_limit) && (example.result_collection_limit || 0) > 0
         ? example.result_collection_limit
         : 100;
     if (example.result_type === 'generator') {
+        const itertools = helperAlias(funcCall, '_trace_itertools');
         const tracedValue = example.result_truncated
-            ? `list(__import__('itertools').islice(${funcCall}, ${limit}))`
+            ? `list(${itertools}.islice(${funcCall}, ${limit}))`
             : `list(${funcCall})`;
-        return [`        result = ${tracedValue}`, `        self.assertEqual(result, ${expected})`];
+        return [...(example.result_truncated ? [`        import itertools as ${itertools}`] : []),
+            `        result = ${tracedValue}`, `        self.assertEqual(result, ${expected})`];
     }
     if (example.result_type === 'async_generator') {
+        const collect = helperAlias(funcCall, '_trace_collect');
         const collection = example.result_truncated
             ? [
                 '            values = []',
-                `            async for item in ${funcCall}:`,
+                '            async for item in _trace_source:',
                 '                values.append(item)',
                 `                if len(values) >= ${limit}:`,
                 '                    break',
                 '            return values'
             ]
-            : [`            return [item async for item in ${funcCall}]`];
+            : ['            return [item async for item in _trace_source]'];
         return [
-            '        async def collect():',
+            `        import asyncio as ${asyncio}`,
+            `        async def ${collect}(_trace_source):`,
             ...collection,
-            "        result = __import__('asyncio').run(collect())",
+            `        result = ${asyncio}.run(${collect}(${funcCall}))`,
             `        self.assertEqual(result, ${expected})`
         ];
     }
-    const executedCall = isAsync ? `__import__('asyncio').run(${funcCall})` : funcCall;
+    const executedCall = isAsync ? `${asyncio}.run(${funcCall})` : funcCall;
     const assertion = example.result === 'None' || example.result_type === 'NoneType'
         ? 'self.assertIsNone(result)'
         : `self.assertEqual(result, ${expected})`;
-    return [`        result = ${executedCall}`, `        ${assertion}`];
+    return [...(isAsync ? [`        import asyncio as ${asyncio}`] : []), `        result = ${executedCall}`, `        ${assertion}`];
 }
 
 /** Build Tier 1 tests deterministically from verified dynamic-trace facts. */
@@ -143,10 +154,12 @@ export function buildTier1TestMethods(
     errors.filter(error => error.call_assertable !== false && traceExceptionReference(error)).forEach((error, index) => {
         const funcCall = buildTraceCall(funcName, error);
         const exception = traceExceptionReference(error)!.expression;
+        const asyncio = helperAlias(funcCall, '_trace_asyncio');
         methods.push([
             `    def test_case_${assertableExamples.length + index + 1}(self):`,
+            ...(isAsync ? [`        import asyncio as ${asyncio}`] : []),
             `        with self.assertRaises(${exception}):`,
-            `            ${isAsync ? `__import__('asyncio').run(${funcCall})` : funcCall}`
+            `            ${isAsync ? `${asyncio}.run(${funcCall})` : funcCall}`
         ].join('\n'));
     });
 
@@ -162,7 +175,8 @@ export function buildTier1PropertyTestMethods(
     isAsync = false
 ): string[] {
     const propertyAccess = `${instanceName}.${propertyName}`;
-    const executedAccess = isAsync ? `__import__('asyncio').run(${propertyAccess})` : propertyAccess;
+    const asyncio = helperAlias(propertyAccess, '_trace_asyncio');
+    const executedAccess = isAsync ? `${asyncio}.run(${propertyAccess})` : propertyAccess;
     const methods: string[] = [];
     const assertableExamples = examples.filter(example => example.call_assertable !== false && example.result_assertable !== false);
     assertableExamples.forEach((example, index) => {
@@ -171,6 +185,7 @@ export function buildTier1PropertyTestMethods(
             : `self.assertEqual(result, ${toPythonAssertionLiteral(example.result, example.result_type)})`;
         methods.push([
             `    def test_case_${index + 1}(self):`,
+            ...(isAsync ? [`        import asyncio as ${asyncio}`] : []),
             `        result = ${executedAccess}`,
             `        ${assertion}`
         ].join('\n'));
@@ -179,6 +194,7 @@ export function buildTier1PropertyTestMethods(
         const exception = traceExceptionReference(error)!.expression;
         methods.push([
             `    def test_case_${assertableExamples.length + index + 1}(self):`,
+            ...(isAsync ? [`        import asyncio as ${asyncio}`] : []),
             `        with self.assertRaises(${exception}):`,
             `            _ = ${executedAccess}`
         ].join('\n'));

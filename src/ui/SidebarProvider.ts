@@ -4,7 +4,7 @@ import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from '../i18n';
 import { extractFunctionsWithAst } from '../utils/utils';
-import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, normalizeGoogleModelName } from '../llm/cloudApi';
+import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, googleThinkingSession, normalizeGoogleModelName } from '../llm/cloudApi';
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
 import { buildOllamaPlainTestGenerationProbe } from '../llm/ollamaCapability';
@@ -12,7 +12,7 @@ import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualifi
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, retryTransientProviderRequest } from '../llm/connectionTimeout';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -483,33 +483,32 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 }
                                 const connectionMetadata = getGoogleModelConnectionMetadata(listedModels as any[], credential.model);
                                 
-                                const request = buildGoogleGenerateContentRequest(
-                                    credential.model,
-                                    credential.key,
-                                    PLAIN_TEST_GENERATION_PROBE_PROMPT,
-                                    { temperature: 0 }
-                                );
-                                const response = await fetchWithServerRetry<Response>(fetch, request.url, {
-                                    method: 'POST',
-                                    headers: request.headers,
-                                    body: JSON.stringify(request.body)
-                                }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                const cloudProbe = async (prompt: string, json = false) => {
+                                    const controller = new AbortController();
+                                    const timer = setTimeout(() => controller.abort(), MODEL_QUALIFICATION_TIMEOUT_MS);
+                                    try {
+                                        const request = buildGoogleGenerateContentRequest(credential.model, credential.key, prompt, {
+                                            temperature: 0,
+                                            thinkingMode: vscode.workspace.getConfiguration('llmUnitTest').get('cloudThinkingMode', 'minimal') === 'minimal'
+                                                ? 'minimal' : 'provider-default',
+                                            ...(json ? { responseMimeType: 'application/json' as const } : {})
+                                        });
+                                        const response = await googleThinkingSession.send(request, next => retryTransientProviderRequest(
+                                            () => fetch(next.url, { method: 'POST', headers: next.headers,
+                                                body: JSON.stringify(next.body), signal: controller.signal }),
+                                            { maxAttempts: 2, isCancelled: () => controller.signal.aborted }
+                                        ));
+                                        if (!response.ok) { await response.body?.cancel(); return undefined; }
+                                        return getGoogleGeneratedText(await response.json());
+                                    } finally { clearTimeout(timer); }
+                                };
                                 const capability = await verifyRunnableTestGenerationProbe(
-                                    response.ok ? { response: getGoogleGeneratedText(await response.json()) } : undefined,
+                                    { response: await cloudProbe(PLAIN_TEST_GENERATION_PROBE_PROMPT) },
                                     isolatedProbeExecutor
                                 );
                                 const roleQualification = await runRoleQualificationProbes(
                                     { state: capability.capability, reason: capability.reason },
-                                    async prompt => {
-                                        const roleRequest = buildGoogleGenerateContentRequest(
-                                            credential.model, credential.key, prompt,
-                                            { responseMimeType: 'application/json', temperature: 0 }
-                                        );
-                                        const roleResponse = await fetchWithServerRetry<Response>(fetch, roleRequest.url, {
-                                            method: 'POST', headers: roleRequest.headers, body: JSON.stringify(roleRequest.body)
-                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                        return roleResponse.ok ? getGoogleGeneratedText(await roleResponse.json()) : undefined;
-                                    }
+                                    prompt => cloudProbe(prompt, true)
                                 );
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,

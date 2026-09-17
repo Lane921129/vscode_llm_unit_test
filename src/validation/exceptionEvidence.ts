@@ -1,31 +1,31 @@
 export interface ExceptionEvidenceContext {
     raised_exceptions?: string[];
     traceResult?: {
-        errors?: Array<{ exception?: string; call_assertable?: boolean }>;
+        errors?: Array<{ exception?: string; exception_qualname?: string; call_assertable?: boolean }>;
     };
 }
 
 function normalizedExceptionName(value: string): string | undefined {
-    const match = value.match(/(?:^|[.\s])([A-Za-z_]\w*(?:Error|Exception|Exit|Interrupt|Warning))\b/);
-    return match?.[1];
+    // Python exception classes need no Error/Exception suffix. Only accept an
+    // exact identifier path from AST/Trace, never a name embedded in diagnostics.
+    return /^[\p{L}_][\p{L}\p{N}\p{M}_]*(?:\.[\p{L}_][\p{L}\p{N}\p{M}_]*)*$/u.test(value)
+        ? value.split('.').pop() : undefined;
 }
 
 /** Build the exception facts that LLM-authored tests may assert for a target. */
 export function exceptionNamesFromEvidence(context?: ExceptionEvidenceContext | null): string[] {
     const names = new Set<string>();
     for (const exception of context?.raised_exceptions || []) {
-        const name = normalizedExceptionName(exception) || exception.split('.').pop();
+        const name = normalizedExceptionName(exception);
         if (name) {
             names.add(name);
         }
     }
     for (const error of context?.traceResult?.errors || []) {
-        if (error.call_assertable === false || !error.exception) {
+        if (error.call_assertable === false) {
             continue;
         }
-        const candidate = normalizedExceptionName(error.exception)
-            || (error.exception.includes('.') ? error.exception.split('.').pop()?.trim() : undefined);
-        const name = candidate && /^[A-Za-z_]\w*$/.test(candidate) ? candidate : undefined;
+        const name = normalizedExceptionName(error.exception_qualname || error.exception || '');
         if (name) {
             names.add(name);
         }

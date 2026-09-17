@@ -29,21 +29,21 @@ test('provides minimal schema contracts for semantic analysis, review, and mutan
     assert.deepStrictEqual((semantic as { required: string[] }).required, [
         'dependency_behaviors', 'unreachable_paths', 'mock_required_for', 'test_strategy'
     ]);
-    assert.deepStrictEqual((review as { required: string[] }).required, ['blocking', 'quality']);
-    assert.strictEqual((review as any).properties.blocking.maxItems, 5);
-    assert.strictEqual((review as any).properties.quality.items.properties.test_excerpt.maxLength, 600);
-    assert.strictEqual((review as any).properties.quality.items.additionalProperties, false);
+    assert.deepStrictEqual((review as { required: string[] }).required, ['findings']);
+    assert.strictEqual((review as any).properties.findings.maxItems, 5);
+    assert.strictEqual((review as any).properties.findings.items.properties.test_excerpt.maxLength, 600);
+    assert.strictEqual((review as any).properties.findings.items.additionalProperties, false);
     assert.deepStrictEqual((repair as { required: string[] }).required, ['method', 'replacement', 'imports']);
     assert.deepStrictEqual(
-        ((review as any).properties.blocking.items as { required: string[] }).required,
-        ['test_excerpt', 'reason', 'action']
+        ((review as any).properties.findings.items as { required: string[] }).required,
+        ['category', 'test_excerpt', 'reason', 'action']
     );
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'
     ]);
     assert.strictEqual(responseSchemaForOutputFormat('json'), undefined);
     assert.ok(isStructuredResponseUsable('{"verdicts":[]}', 'mutant-triage-json'));
-    assert.ok(isStructuredResponseUsable('{"blocking":[],"quality":[]}', 'review-json'));
+    assert.ok(isStructuredResponseUsable('{"findings":[]}', 'review-json'));
     assert.ok(isStructuredResponseUsable(
         '{"method":"test_x","replacement":"def test_x(self): pass","imports":[]}',
         'test-method-json'

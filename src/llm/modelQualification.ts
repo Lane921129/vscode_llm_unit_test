@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { RoleQualificationProfile } from './roleQualification';
 
 /** Bump only when the executable probe contract changes, not for unrelated UI releases. */
-export const QUALIFICATION_VERSION = 'python-unittest-v2';
+export const QUALIFICATION_VERSION = 'python-unittest-v3';
 
 export function qualificationEndpointKey(envType: string, endpoint?: string): string {
     const fallback = envType === 'local' ? 'http://127.0.0.1:11434' : envType === 'cloud'

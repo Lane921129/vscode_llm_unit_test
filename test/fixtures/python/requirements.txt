@@ -1,0 +1,3 @@
+# Dependencies used by the five-category fixtures; install only in the workspace .venv.
+httpx==0.28.1
+aiohttp==3.14.3

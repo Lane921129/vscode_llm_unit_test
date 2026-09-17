@@ -1,4 +1,4 @@
-import { RepairFeedback } from '../validation/repairFeedback';
+import { RepairFeedback, repairFailureKey } from '../validation/repairFeedback';
 import { TestReview } from '../roles/testReviewer';
 import { ReviewStatus } from '../roles/reviewSession';
 
@@ -21,7 +21,7 @@ export interface CandidatePipelineHooks {
     checkCancelled(): void;
 }
 
-/** Bounded state machine: review findings -> Writer; execution failures -> Bug Fixer. */
+/** Execute valid candidates first; only executable tests consume a Reviewer request. */
 export async function validateTestCandidate(
     initialCode: string, hooks: CandidatePipelineHooks, maxRevisions = 2,
     baseline?: { code: string; output: string }
@@ -43,7 +43,7 @@ export async function validateTestCandidate(
         if (attempt > 0) {
             if (role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
             if (role === 'bug-fixer') {
-                const failureKey = lastFailure.trim();
+                const failureKey = repairFailureKey(lastFailure);
                 if (attemptedBugFixFailures.has(failureKey)) {
                     throw new Error(`Bug Fixer 已處理過相同失敗，停止重複修復：${lastFailure}`);
                 }
@@ -53,7 +53,7 @@ export async function validateTestCandidate(
             const candidate = await hooks.revise(code, lastFailure, role);
             hooks.checkCancelled();
             hooks.event(role, 'candidate', { attempt, code: candidate });
-            if (!feedback.consider(candidate)) {
+            if (!feedback.consider(candidate, lastFailure)) {
                 lastFailure = feedback.output;
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure });
                 if (role === 'bug-fixer') {
@@ -81,17 +81,6 @@ export async function validateTestCandidate(
             role = 'writer';
             continue;
         }
-        const review = hooks.reviewRequired === false ? undefined : await hooks.review(code);
-        const reviewStatus: ReviewStatus = hooks.reviewRequired === false ? 'not-required' : review ? 'completed' : 'incomplete';
-        hooks.checkCancelled();
-        // Unavailable/malformed review is explicitly unknown, never a fabricated approval.
-        hooks.event('reviewer', reviewStatus === 'not-required' ? 'not-required' : review ? 'assessed' : 'unavailable', { attempt, review });
-        const blocking = review?.issues.filter(issue => issue.severity === 'blocking') || [];
-        if (blocking.length) {
-            lastFailure = JSON.stringify(blocking);
-            role = 'writer';
-            continue;
-        }
         const execution = await hooks.execute(code);
         hooks.checkCancelled();
         hooks.event('validation', execution.ok ? 'passed' : 'failed', { attempt, code, ...execution });
@@ -104,6 +93,17 @@ export async function validateTestCandidate(
         }
         retainedCode = code;
         if (execution.ok) {
+            const review = hooks.reviewRequired === false ? undefined : await hooks.review(code);
+            const reviewStatus: ReviewStatus = hooks.reviewRequired === false ? 'not-required' : review ? 'completed' : 'incomplete';
+            hooks.checkCancelled();
+            // Unavailable/malformed review is explicitly unknown, never a fabricated approval.
+            hooks.event('reviewer', reviewStatus === 'not-required' ? 'not-required' : review ? 'assessed' : 'unavailable', { attempt, review });
+            const blocking = review?.issues.filter(issue => issue.severity === 'blocking') || [];
+            if (blocking.length) {
+                lastFailure = JSON.stringify(blocking);
+                role = 'writer';
+                continue;
+            }
             return {
                 code,
                 execution,

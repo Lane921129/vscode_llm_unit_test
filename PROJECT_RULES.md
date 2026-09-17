@@ -35,6 +35,7 @@
 - Tier 路由的複雜度評估只能根據 Python AST 結構與可解析的匯入／呼叫關係；不得以業務、資料庫、網路或檔案等名稱關鍵字推測風險。
 - 動態追蹤執行目標函式時，必須對目標函式的 stdout 與 stderr 進行重定向隔離，確保追蹤輸出永遠為純淨 JSON，不受目標程式碼中的 print 或日誌干擾。
 - Dynamic Trace 不得執行被測模組的檔案寫入、刪除、子程序、shell 或網路副作用；被阻擋的操作只能列為診斷，不得轉化為 LLM 的例外 assertion 事實。
+- 例外事實以 AST／Trace 的確切 identifier path 或已驗證 `exception_qualname` 解析，不得要求類型名稱以 `Error`／`Exception` 結尾；診斷句子及 `call_assertable=false` 仍不得成為 assertion oracle。
 - 含記憶體位址、循環結構、非有限數值或遭截斷 repr 的 Trace 結果僅能作為診斷語境，不得轉換為 Tier 1 或 LLM 的精確 assertion oracle。
 
 ## 測試生成安全
@@ -132,12 +133,12 @@
 ## 角色分工與證據交接
 
 - Reviewer 是審查者，只輸出附有原文證據的問題清單；不產生完整測試檔。先前提及 Reviewer 輸出 Python／修復的規則，改適用於 Writer 修訂與 Bug Fixer。
-- 結構或審查問題交 Writer 修訂；實際 unittest 失敗交 Bug Fixer。候選修改後重新審查與執行。測試通過但品質不足時交分析師與 Writer 補測，不啟動另一層 Self-repair。
+- 結構或審查問題交 Writer 修訂；只有唯一定位的一個實際 unittest 方法失敗交 Bug Fixer，多方法／fixture／import 失敗交 Writer。候選先通過結構、證據與隔離執行，再交 Reviewer；每次修改重新走相同 gate。測試通過但品質不足時交分析師與 Writer 補測，不啟動另一層 Self-repair。
 - Bug Fixer 必須可唯一定位失敗方法；模組匯入、fixture 或歧義方法名稱交 Writer，不得回退猜選第一個 test 方法。Reviewer 問題必須有測試原文、具體原因與可操作的測試修訂，不接受空泛佔位動作。
 - 分析師的品質分析包含存活變異體；只提出有測量依據的情境假設，不直接注入模型生成的 kill_test，也不能宣告等效或排除分母。
 - 完整歷史存於 role_events.jsonl；當次 Prompt 僅提供必要來源、測試與證據。證據超過預算時不可截斷成不完整程式；審查失敗或格式無效必須記錄為未完成，不能假裝通過。
 - 已知環境預檢失敗可依 interpreter、來源雜湊、模組與穩定匯入根快取；session output 目錄等暫時路徑不得使同一環境障礙重新啟動子程序。來源或匯入環境變更後必須產生新 cache key。
-- 合併已驗證 Trace 與模型測試前，Trace 產物必須在獨立 Python unittest 程序先通過；失敗時停止合併並保留診斷，不能讓同一份候選測試掩蓋 Trace 基線問題。
+- 合併已驗證 Trace 與模型測試前，Trace 產物必須先通過相同的結構／安全 gate，再在獨立 Python unittest 程序通過；失敗時停止合併並保留診斷，不交模型反覆修訂，不能讓同一份候選測試掩蓋 Trace 基線問題。async／generator 使用明確標準庫 import，不使用動態 `__import__`。
 - 每輪基線綁定同一版測試、案例識別、執行輸出、覆蓋與存活變異體；回滾時全部同步還原。原候選必須保留。
 - 跨輪案例識別不可依 loop 檔名；純更名只能在測試 AST 與設定指紋一致時對應，不得猜測任意重寫的語意等價。
 - 來源或已解析相依的版本變更後停止沿用舊證據。函式紀錄區分來源結構、已驗證執行與待驗證假設，禁止自動把舊執行資料當成新版本的事實。
@@ -153,6 +154,13 @@
 - 正式 Python 工具不得以 `test_` 命名，以免被套件測試檔排除規則移除。
 
 ## 品質、Git 與紀錄
+
+- 跨檔相依來源須由預檢實際載入的模組 origin 與函式定義身分解析，且實體位於所選來源樹；不得以批次根目錄拼接猜測。未知、re-export／重綁定、動態來源與範圍外相依只保留診斷，不另行匯入或假造來源。
+- Reviewer 使用 `review-v5` 單一 `findings` 陣列，最多五項；嚴重程度由程式依 category 決定。缺少情境、弱 assertion 與型別／風格不是執行阻擋；blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Tier 3 scaffold 與其他 Writer 使用相同完整 unittest 檔案契約，scaffold 僅提供 setup 指引；不得再把完整模型回覆縮排塞入另一個 TestCase。修訂重複候選時必須保留最新診斷，不得以空白或過期輸出覆蓋。
+- Cloud 可使用 `llmUnitTest.cloudThinkingMode` 的 `minimal`（預設）或 `provider-default`；低思考量不改變品質 gate。只依實際、明確的不支援選項回應回退，與格式回退及傳輸重試共用原 deadline；不依模型名稱決定。HTTP 5xx／認證／配額錯誤不得冒充選項不支援，有限傳輸重試耗盡後不得透過 Tier 降階另開請求。
+- provider 明示截斷或非正常完成的輸出不可當成完整產物；錯誤 envelope／HTTP body 不寫入日誌或報告。只保存安全的角色、耗時、階段與分類。
+- 選取目標與模組整體的覆蓋範圍分開保存。scorecard 只在 run/source/test 身分與限定目標一致、實測行集合完整時採目標行覆蓋；未覆蓋分支仍阻擋通過，fixture 門檻不降低。舊報告無目標證據時保留原模組分數。實際 Tier 綁定保留候選，不取降階前的標頭。
 
 - 每個可交付改動都必須通過相應測試、型別檢查、靜態檢查與建置檢查。
 - 每次完成並驗證後都必須建立一次本機 Git commit，接著 push 至目前分支已設定的 upstream，供實驗室 pull 測試；commit subject 必須同時包含英文與繁體中文。此推送流程已由使用者明確授權。

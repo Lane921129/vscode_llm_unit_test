@@ -7,6 +7,7 @@ export interface GoogleGenerateContentRequest {
             responseMimeType?: 'application/json';
             responseSchema?: Record<string, unknown>;
             temperature?: number;
+            thinkingConfig?: { thinkingLevel: 'MINIMAL' };
         };
     };
 }
@@ -16,6 +17,7 @@ export interface GoogleGenerationOptions {
     responseSchema?: Record<string, unknown>;
     /** Set only for deterministic, tiny connection probes. */
     temperature?: number;
+    thinkingMode?: 'minimal' | 'provider-default';
 }
 
 export interface GoogleListModelsRequest {
@@ -49,12 +51,15 @@ export function getGoogleGeneratedText(payload: unknown): string | undefined {
     if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== 'object') {
         return undefined;
     }
+    const finishReason = (candidates[0] as { finishReason?: unknown }).finishReason;
+    if (finishReason !== undefined && finishReason !== 'STOP') { return undefined; }
     const parts = ((candidates[0] as { content?: { parts?: unknown } }).content?.parts);
     if (!Array.isArray(parts)) {
         return undefined;
     }
     const text = parts
-        .map(part => part && typeof part === 'object' ? (part as { text?: unknown }).text : undefined)
+        .map(part => part && typeof part === 'object' && (part as { thought?: unknown }).thought !== true
+            ? (part as { text?: unknown }).text : undefined)
         .filter((part): part is string => typeof part === 'string')
         .join('');
     return text || undefined;
@@ -94,16 +99,53 @@ export function buildGoogleGenerateContentRequest(
         },
         body: {
             contents: [{ parts: [{ text: prompt }] }],
-            ...(options?.responseMimeType || options?.responseSchema || options?.temperature !== undefined ? {
+            ...(options?.responseMimeType || options?.responseSchema || options?.temperature !== undefined || options?.thinkingMode === 'minimal' ? {
                 generationConfig: {
                     ...(options?.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
                     ...(options?.responseSchema ? { responseSchema: options.responseSchema } : {}),
-                    ...(options?.temperature !== undefined ? { temperature: options.temperature } : {})
+                    ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+                    ...(options?.thinkingMode === 'minimal' ? { thinkingConfig: { thinkingLevel: 'MINIMAL' as const } } : {})
                 }
             } : {})
         },
     };
 }
+
+/** Remember only explicit capability rejections, never provider/model-name guesses. */
+export class GoogleThinkingSession {
+    private readonly unsupported = new Set<string>();
+
+    async send(request: GoogleGenerateContentRequest,
+        send: (request: GoogleGenerateContentRequest) => Promise<Response>,
+        onFallback?: () => void): Promise<Response> {
+        const withoutThinking = (): GoogleGenerateContentRequest => {
+            const generationConfig = { ...request.body.generationConfig };
+            delete generationConfig.thinkingConfig;
+            return { ...request, body: { ...request.body, generationConfig } };
+        };
+        if (!request.body.generationConfig?.thinkingConfig) { return send(request); }
+        if (this.unsupported.has(request.url)) { return send(withoutThinking()); }
+        const response = await send(request);
+        if (![400, 422, 501].includes(response.status)) { return response; }
+        // Inspect transiently, never emit the provider's error text or persist it.
+        let message: unknown;
+        try { message = ((await response.clone().json()) as { error?: { message?: unknown } }).error?.message; }
+        catch { return response; }
+        if (typeof message !== 'string'
+            || !/thinking[_ .]?(?:config|level|budget)|thinking (?:is |mode )/i.test(message)
+            || !/not supported|does not support|unsupported|unknown (?:name|field)|unrecognized|invalid (?:value|enum)|not (?:allowed|available|enabled)/i.test(message)) {
+            return response;
+        }
+        await response.body?.cancel();
+        if (this.unsupported.size >= 128) { this.unsupported.delete(this.unsupported.values().next().value!); }
+        this.unsupported.add(request.url);
+        onFallback?.();
+        // The caller owns one deadline/cancellation signal across both sends.
+        return send(withoutThinking());
+    }
+}
+
+export const googleThinkingSession = new GoogleThinkingSession();
 
 /** Builds a key-safe ListModels request used to validate a saved Cloud model. */
 export function buildGoogleListModelsRequest(apiKey: string, pageToken?: string): GoogleListModelsRequest {

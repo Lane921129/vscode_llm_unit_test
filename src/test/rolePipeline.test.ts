@@ -19,7 +19,7 @@ function hooks(overrides: Partial<CandidatePipelineHooks> = {}): CandidatePipeli
         event: () => {}, checkCancelled: () => {}, ...overrides };
 }
 
-test('review findings return to Writer before execution, and repaired tests are reviewed again', async () => {
+test('executable candidates are reviewed and review revisions execute before re-review', async () => {
     const order: string[] = [];
     const result = await validateTestCandidate('draft', hooks({
         review: async code => { order.push(`review:${code}`); return { issues: code === 'draft' ? [{
@@ -29,7 +29,7 @@ test('review findings return to Writer before execution, and repaired tests are 
         execute: async code => { order.push(`execute:${code}`); return { ok: true, out: passed, qualityGaps: [] }; }
     }));
     assert.equal(result.code, 'fixed');
-    assert.deepEqual(order, ['review:draft', 'writer', 'review:fixed', 'execute:fixed']);
+    assert.deepEqual(order, ['execute:draft', 'review:draft', 'writer', 'execute:fixed', 'review:fixed']);
 });
 
 test('execution failure calls Bug Fixer with latest error; quality gaps never trigger repair', async () => {
@@ -123,12 +123,12 @@ test('the same execution failure is offered to Bug Fixer at most once', async ()
     assert.equal(revisions, 1);
 });
 
-test('cancellation after review prevents executing or accepting a candidate', async () => {
+test('cancellation after review prevents accepting an executed candidate', async () => {
     let cancelled = false;
     await assert.rejects(validateTestCandidate('draft', hooks({
         review: async () => { cancelled = true; return { issues: [] }; },
         checkCancelled: () => { if (cancelled) { throw Error('cancelled'); } },
-        execute: async () => { throw Error('must not execute'); }
+        execute: async () => ({ ok: true, out: passed, qualityGaps: [] })
     })), /cancelled/);
 });
 

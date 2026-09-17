@@ -116,6 +116,19 @@ test('every curated Writer example executes a real unittest and passes structura
     }
 });
 
+test('async context retrieval uses the selected construction rule instead of an ordinary await example', () => {
+    const ids = ['async_coroutine_testing', 'async_context_manager_testing'];
+    assert.equal(matchingWriterExamples({ is_async: true, selectedRuleIds: ids })[0].id, 'async-context-boundary-v1');
+    assert.deepEqual(matchingWriterExamples({ is_async: false, selectedRuleIds: ids }), []);
+    const example = VERIFIED_WRITER_EXAMPLES.find(item => item.feature === 'async-context')!;
+    const evidence = { ...bundle, ruleSelection: { ...bundle.ruleSelection, ids } };
+    const prompt = buildCompactWriterContext({ module: 'sample', name: 'load', source: example.source,
+        context: { is_async: true, args: ['client'] }, evidence, budgetTokens: 8000 });
+    assert.match(prompt, /VERIFIED PATTERN async-context-boundary-v1/);
+    assert.doesNotMatch(prompt, /VERIFIED PATTERN async-boundary-v1/);
+    assert.match(prompt, /client = MagicMock\(\)/);
+});
+
 test('Reviewer rejects with stable reason codes without leaking response text or weakening review-v4', () => {
     const item = { test_excerpt: 'target()', reason: 'The target is not awaited.', action: 'Await target() inside an async test method.' };
     const wrap = (value: unknown) => JSON.stringify({ blocking: [value], quality: [] });

@@ -27,6 +27,7 @@ CONTRACT:
 - Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V3.
 - Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
+- For async with client.method(...), use MagicMock for the unawaited method returning a context manager, and AsyncMock for __aenter__/__aexit__ or awaited resource methods. Configuring __aenter__ on an AsyncMock return_value does not fix calling that AsyncMock: the call still returns a coroutine.
 - Source code describes the branch under test, but exact expected values still require an explicit return/raise or same-test mock behavior.
 - Return exactly one JSON object: {"method":"test_name","replacement":"complete def test_name(self): ... method","imports":["optional import line"]}.
 - replacement must contain one method only, without a class wrapper or Markdown. imports may contain at most 3 valid Python import lines.`;
@@ -36,8 +37,7 @@ export function failedTestNamesFromOutput(output: string): string[] {
     const found = new Set<string>();
     for (const pattern of [
         /^(test_[A-Za-z0-9_]+)\s+\([^\n]+\)\s+\.\.\.\s+(?:FAIL|ERROR)\s*$/gm,
-        /^(?:FAIL|ERROR):\s+(test_[A-Za-z0-9_]+)\b/gm,
-        /\bin\s+(test_[A-Za-z0-9_]+)\b/g
+        /^(?:FAIL|ERROR):\s+(test_[A-Za-z0-9_]+)\s+\(/gm
     ]) {
         for (const match of output.matchAll(pattern)) { found.add(match[1]); }
     }
@@ -71,8 +71,12 @@ function testMethodFragments(code: string): TestMethodFragment[] {
 }
 
 function selectedFailureMethod(code: string, output: string): TestMethodFragment | undefined {
+    if (/(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown|asyncSetUp|asyncTearDown)(?:Class|Module)?\b)/.test(output)) {
+        return undefined;
+    }
     const fragments = testMethodFragments(code);
     const failed = failedTestNamesFromOutput(output);
+    if (failed.length !== 1) { return undefined; }
     const matches = fragments.filter(fragment => fragment.name === failed[0]);
     return matches.length === 1 ? matches[0] : undefined;
 }

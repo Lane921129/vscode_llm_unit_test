@@ -25,20 +25,22 @@ flowchart TD
     SupplementalProbe --> Bundle[合併 Writer 證據包]
     Bundle --> Writer[Writer 撰寫測試]
     Writer --> Structure[結構與證據檢查]
-    Structure --> Reviewer[Reviewer 審查]
-    Reviewer --> Validation[實際執行驗證]
+    Structure --> Validation[實際執行驗證]
+    Validation -->|執行通過| Reviewer[Reviewer 審查]
     Reviewer -->|具體審查問題| Writer
     Structure -->|結構問題| Writer
-    Validation -->|可定位的測試方法失敗| Fixer[Bug Fixer 修復]
-    Validation -->|測試檔匯入或 fixture 問題| Writer
+    Validation -->|唯一定位的一個方法失敗| Fixer[Bug Fixer 修復]
+    Validation -->|多方法、匯入或 fixture 問題| Writer
     Fixer --> Structure
-    Validation -->|執行通過| Quality[覆蓋與突變測量]
+    Reviewer -->|審查完成或明示未完成| Quality[覆蓋與突變測量]
     Quality -->|仍有缺口| QualityAnalyst[品質分析師提出下一輪任務]
     QualityAnalyst --> Writer
     Quality -->|達標或達停止條件| Report
 ```
 
 Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執行，但不因此宣稱品質達標。所有模型建議都是待驗證假設。
+
+`review-v5` 把最多五個 findings 的分類、原文、原因與動作固定在同一份 schema／parser 契約；缺漏情境不會自行升格為 blocking。Writer 修訂保留最新拒絕原因；只有 unittest 唯一列出的一個失敗方法可交 Bug Fixer。Tier 3 scaffold 回傳完整測試檔，不再做第二層 class／縮排包裝。
 
 `src/roles/reviewSession.ts` 以完整審查 prompt 的雜湊重用同候選／同證據評估；連續兩次無法取得合格審查後，停止該目標分析的額外審查請求。Reviewer 格式不合格不再另以文字模式重問；供應商傳輸層錯誤仍遵循既有有限重試。新目標分析重新開始，未知結果絕不改成空問題通過。
 
@@ -90,18 +92,24 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 
 來源或已解析相依變更後，舊證據不能直接沿用。探針資格也綁定探針契約版本與不含憑證的端點識別；過期只代表需要重新驗證，不會自動升格成新的通過紀錄。
 
+相依來源由預檢程序已載入的 `sys.modules`、模組 origin 與函式定義身分解析；只讀所選來源樹內已確認的 Python 檔案。這讓巢狀專案、relative import 與 namespace package 不必猜測批次根目錄，未知或 re-export 仍明示未解析。
+
+保留候選新增實際 `resolvedTier` 與 `coverage.selectedTarget`（限定目標、可執行行、未覆蓋行、分支狀態），跟隨同一份測試與 rollback 保存。scorecard 以經身分核對的目標行集合計算新結果的 coverage，另保留模組分數；舊報告沿用原範圍，不升級既有成績。
+
+Cloud 的 `llmUnitTest.cloudThinkingMode` 預設 `minimal`，可改 `provider-default`。`GoogleThinkingSession` 僅記住服務實際拒絕的思考選項；所有回退共用原時限。供應商服務錯誤在有限傳輸重試後保存為 `model-api`，不再透過 scaffold、分治或 Tier 降階擴大重試。角色請求事件保存 role 與耗時；HTTP 錯誤內容、reasoning segments、截斷產物不當作測試輸出。
+
 一般函式從 AST 前建立 `running` 紀錄；每個角色事件立即更新進度報告，保存第一個與最近一次拒絕／失敗原因。環境預檢或取消也會保存終態；若程序被外部強制終止，最後的 `running`／stage 是未完成檢查點，不能視為成功。
 
 批次結果使用 `<project>_<日期時分>/<專案相對來源路徑去掉 .py>/<qualified target>/`。同分鐘重跑建立 `__run2` 等新目錄，保留舊候選與失敗報告；不再只因 `final_report.md` 存在就跳過。
 
-測試連線會先分別驗證 Writer 的可執行 Python、Reviewer 的 blocking／quality JSON，以及 Bug Fixer 的單一方法替換。三個狀態各自保存於 model profile 與 manifest；Auto 只使用已通過的角色。生成與修復的模型請求仍受完整本地結構、執行、coverage、mutation gate 約束。
+測試連線會先分別驗證 Writer 的可執行 Python、Reviewer 的 findings 分類 JSON，以及 Bug Fixer 的單一方法替換。三個狀態各自保存於 model profile 與 manifest；Auto 只使用已通過的角色。生成與修復的模型請求仍受完整本地結構、執行、coverage、mutation gate 約束。
 
 實驗室第一輪小批次由 `test/fixtures/python/lab_batch_manifest.json` 固定五個 category，並以
 `python_scripts/lab_batch_plan.py` 驗證每個 category 對應唯一 fixture。它只驗證批次契約，實際
 模型生成、coverage 與 mutation 仍由 extension 和 `fixture_scorecard.py` 完成；UI 相依類別可
 在實驗室替換成原始目標，但不可混用不同來源的報告。
 
-模型候選合併已驗證 Trace 前，管線會先把 runner-owned Trace 測試寫成 `loop*_trace_test.py`，在乾淨 Python 程序獨立執行；只有該基線通過才放入候選。這讓 Trace 匯入／constructor 問題不會與模型候選錯誤混成同一個測試結果。
+模型候選合併已驗證 Trace 前，管線先對 runner-owned Trace 做結構／安全檢查，再寫成 `loop*_trace_test.py`，在乾淨 Python 程序獨立執行；只有該基線通過才放入候選。async／generator 使用一般標準庫 import。系統基線失敗會停止，避免反覆交模型修訂同一份被自動還原的程式碼。
 
 Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例外使用執行觀測確認的 module／qualname；不可解析的例外不產生 assertion。SQLite 檔案／共享 URI 連線會被 audit gate 阻擋；獨立 `:memory:` 連線另設 authorizer，禁止 ATTACH／VACUUM INTO，遭吞掉的安全例外也不能成為 oracle。
 

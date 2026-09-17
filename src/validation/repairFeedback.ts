@@ -16,6 +16,13 @@ export function summarizeRepairOutput(output: string, budget = 6000): string {
     }).join('\n') + '\nFull runner output is retained in the report.';
 }
 
+/** Runner timing and shifted stack line numbers do not make a failure new. */
+export function repairFailureKey(output: string): string {
+    return output.replace(/\r\n/g, '\n')
+        .replace(/^(Ran \d+ tests? in )\d+(?:\.\d+)?s\s*$/gm, '$1<elapsed>')
+        .replace(/^(\s*File "[^"]+", line )\d+(, in .*)$/gm, '$1<line>$2').trim();
+}
+
 /** Verbose unittest IDs include the class, so different suites cannot collide. */
 export function passingTestIds(output: string): Set<string> {
     const passing = new Set<string>();
@@ -42,10 +49,10 @@ export class RepairFeedback {
     }
 
     /** Repeated candidates consume an attempt but never re-run unchanged tests. */
-    consider(code: string): boolean {
+    consider(code: string, latestFailure = this.output): boolean {
         const normalized = code.trim();
         if (this.seen.has(normalized)) {
-            this.output = `NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\n${this.output}`;
+            this.output = `NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\n${latestFailure.replace(/^(?:NO CHANGE:[^\n]*\n)+/, '')}`;
             return false;
         }
         this.seen.add(normalized);

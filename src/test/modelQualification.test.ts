@@ -88,7 +88,7 @@ test('selectAnalysisResponseFormat handles legacy and normalized python mode ide
 });
 
 test('qualifies Reviewer JSON and Bug Fixer method replacement independently', () => {
-    assert.strictEqual(assessReviewerQualification('{"blocking":[],"quality":[]}').state, 'verified');
+    assert.strictEqual(assessReviewerQualification('{"findings":[]}').state, 'verified');
     assert.strictEqual(assessBugFixerQualification(JSON.stringify({
         method: 'test_increment',
         replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)',
@@ -107,12 +107,12 @@ test('role qualification runs Reviewer and Bug Fixer probes independently', asyn
         { state: 'verified', reason: 'writer passed' },
         async prompt => {
             prompts.push(prompt);
-            return prompt.includes('blocking and quality')
-                ? '{"blocking":[],"quality":[]}'
+            return prompt.includes('ONE findings array')
+                ? '{"findings":[]}'
                 : JSON.stringify({ method: 'test_increment', replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)', imports: [] });
         }
     );
-    assert.deepStrictEqual(prompts.map(prompt => prompt.includes('blocking and quality')), [true, false]);
+    assert.deepStrictEqual(prompts.map(prompt => prompt.includes('ONE findings array')), [true, false]);
     assert.deepStrictEqual(
         [profile.writer.state, profile.reviewer.state, profile.bugFixer.state],
         ['verified', 'verified', 'verified']

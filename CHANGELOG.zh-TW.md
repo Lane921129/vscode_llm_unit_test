@@ -4,6 +4,21 @@
 
 ## 2026-09-17
 
+### 修復 18:29 批次分流、統一審查與 scaffold，降低無效雲端等待
+
+- 修正多方法失敗被 Bug Fixer 猜選第一個方法；現在只有 unittest 唯一列出的一個失敗方法能做局部修復，多方法、fixture、import 及定位不明交 Writer。Python 範圍 gate 同時保留其他方法、class 設定、signature、decorator，禁止新增 import 遮蔽既有 binding。
+- Writer 重複候選保留最新診斷；結構與隔離執行通過後才請 Reviewer，避免對已知失敗的測試付出審查請求。Tier 3 scaffold 改完整測試檔契約，傳遞完整 Writer 證據，不再縮排包入另一個 class。
+- async 補測發現模型把未 await 的 context-manager factory 配成 AsyncMock；補更精確的建構規則與 Bug Fixer 指引，small Writer 依已選規則優先檢索可執行的 async-context 範例，不再套用普通 await 範例。重複失敗判斷排除 unittest 耗時與 stack 行號差異，保留方法、例外與內容差異，避免無效 Bug Fixer 重試。
+- 真實 async 樣本重現 runner-owned Trace 的 `__import__` 被安全 gate 拒絕、模型修訂後又被還原的循環；async／generator 基線改一般標準庫 import，async generator 的實際 target 呼叫保留在結果驗證鏈上。Trace 基線在合併前另做結構／安全檢查，系統基線失敗直接停止，不交模型反覆修復。
+- 真實 HTTP fixture 揭露 `UnsupportedProtocol` 已被 Trace 觀測但被例外名稱規則漏掉；改採 AST／Trace 的完整 identifier path 與 `exception_qualname`，不要求 `Error` 等結尾。被副作用阻擋的觀測及混有診斷文字的名稱仍不可作為事實；補基線生成、驗證及真實自訂例外執行回歸。
+- Reviewer 改 `review-v5` 單一 findings 陣列，schema／parser 共用最多五項及固定分類；嚴重程度由程式決定，缺情境／弱 assertion／型別風格屬品質建議。探針契約升至 `python-unittest-v3`，舊資格必須重測。修正 Reviewer／品質分析師把 `<`、`<=`、`>` 比較式當作佔位符的誤擋，仍拒絕未填模板。
+- 預檢使用實際載入 origin 與函式身分解析跨檔相依，修復巢狀專案根目錄猜錯；範圍外、動態及 re-export 來源保持未知，不改變 assertion oracle 規則。
+- 新增 Cloud `cloudThinkingMode`（預設 `minimal`），僅依服務明確拒絕選項回退至預設；不依模型品牌判斷，與傳輸／格式重試共用原 deadline。服務錯誤不再被 scaffold／分治／Tier 降階重複請求；角色事件保留耗時與正確分類，first／last failure 包含 timeout、invalid response 與 retained baseline。
+- provider reasoning／未知 segments 及明示截斷的產物不可當作完整測試；不保存 HTTP body／錯誤 envelope。金鑰仍只透過 SecretStorage 與記憶體請求使用。
+- 新結果明示所選目標行覆蓋與模組整體覆蓋，scorecard 核對同一保留測試／run／source／限定目標後評分；未覆蓋分支仍阻擋，fixture 門檻不降低，舊報告不自動改算。實際 Tier 同步綁定保留候選，避免降階前標頭誤導成績。
+- 補五類 fixture 的 `httpx`／`aiohttp` 環境安裝清單；真實模型驗證與限制記於 `docs/批次修復與雲端驗證_2026_09_17.md`。產品 API 預設仍為 60 秒，突變 20 秒、最大迭代 5 次與資料夾記憶功能保留。
+- 完整本機驗證：Node 326、Python 119 通過；TypeScript、lint、生產建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。Gemma 雲端完整五類批次只有純函式通過，三類遭 HTTP 500，HTTP 類揭露上述例外名稱缺陷；修正後 HTTP 的工具分數 100% 但 Reviewer 遭 HTTP 500，最後 async 單項則以一次 Writer 通過全部 gate、覆蓋與突變均 100%。各批次不拼接成整批通過，不代表原始應用、codellama:13b 或 1B～5B 已驗收。
+
 ### 保存資料夾選擇與調整重測預設
 
 - 專案、輸出、批次資料夾各自保存最後選擇至本機 `globalState`；重新開啟 VS Code、重建側邊欄或切換語言／策略後恢復欄位，下一次開啟選擇視窗從對應路徑開始。取消選擇保留紀錄；批次路徑不再被專案路徑覆蓋。既有 projectPath／outputPath 設定作為首次移轉 fallback。
