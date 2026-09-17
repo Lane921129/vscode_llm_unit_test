@@ -30,6 +30,9 @@ test('provides minimal schema contracts for semantic analysis, review, and mutan
         'dependency_behaviors', 'unreachable_paths', 'mock_required_for', 'test_strategy'
     ]);
     assert.deepStrictEqual((review as { required: string[] }).required, ['blocking', 'quality']);
+    assert.strictEqual((review as any).properties.blocking.maxItems, 5);
+    assert.strictEqual((review as any).properties.quality.items.properties.test_excerpt.maxLength, 600);
+    assert.strictEqual((review as any).properties.quality.items.additionalProperties, false);
     assert.deepStrictEqual((repair as { required: string[] }).required, ['method', 'replacement', 'imports']);
     assert.deepStrictEqual(
         ((review as any).properties.blocking.items as { required: string[] }).required,

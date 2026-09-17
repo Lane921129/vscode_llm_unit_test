@@ -3,7 +3,7 @@ import { MutationViewProvider } from './ui/SidebarProvider';
 import {
     getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt,
     getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacement, canRepairTestMethod,
-    fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReview,
+    fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReviewDetailed,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
     getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints,
     buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
@@ -49,6 +49,8 @@ import { buildExternalMutationExecution } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
+import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow } from './prompts/promptBudget';
+import { COMPACT_WRITER_VERSION } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure } from './utils/executionFailureCategory';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
@@ -226,24 +228,11 @@ function withBudget(profile: StoredModelProfile): ModelProfile {
 }
 
 function estimateTokens(text: string): number {
-    // 快速估算：平均 4 字元 ≈ 1 token（英文）；中文約 1.5 字元 ≈ 1 token
-    return Math.ceil(text.length / 3.5);
+    return estimatePromptTokens(text);
 }
 
 function getContextBudget(profile: ModelProfile): number {
-    const ctx = profile.contextLength;
-    // 保留 30% 給模型回應輸出，70% 用於 prompt input
-    const usable = Math.floor(ctx * 0.7);
-    // 根據參數量再限制：小模型即使 ctx 大也不要塞太多
-    const paramBillion = parseFloat(profile.paramSize);
-    if (!isNaN(paramBillion)) {
-        if (paramBillion <= 2)  {return Math.min(usable, 1800);}
-        if (paramBillion <= 7)  {return Math.min(usable, 3500);}
-        if (paramBillion <= 13) {return Math.min(usable, 6000);}
-        return Math.min(usable, 12000);
-    }
-    // Cloud / unknown -> 充裕 budget
-    return Math.min(usable, 20000);
+    return contextInputBudget(profile.paramSize, profile.contextLength);
 }
 
 interface AnalysisParams {
@@ -264,6 +253,8 @@ interface AnalysisParams {
     sessionDate?: string;
     /** Optional venv or laboratory interpreter; empty values fall back to PATH python. */
     pythonExecutable?: string;
+    /** Runner-owned context setting; not a new user/provider configuration. */
+    requestContextTokens?: number;
 }
 
 function configuredPythonExecutable(): string {
@@ -310,9 +301,12 @@ interface AstContext {
     condition_facts?: Array<{ kind: 'comparison' | 'membership' | 'match'; parameter: string; subject: 'value' | 'length'; operator?: string; literal?: string | null; literals?: string[]; line: number }>;
     traceResult?: BehaviorProbeResult;
     dependencyContexts?: AstContext[];
+    localDependencyContexts?: AstContext[];
+    retrieval?: { version: string; selected: number; omitted: string[] };
     sourceVersions?: Array<{ file: string; hash: string }>;
     callerContexts?: CallerContext[];
     code: string;
+    sourceHash?: string;
     error?: string;
 }
 
@@ -649,7 +643,8 @@ async function requestLlmApiUnlocked(
             system: contractedSystemPrompt,
             prompt: userPrompt,
             stream: false,
-            ...(expectsJsonObject ? { format: 'json' } : {})
+            ...(params.requestContextTokens ? { options: { num_ctx: params.requestContextTokens } } : {}),
+            ...(expectsJsonObject ? { format: outputFormat === 'review-json' ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
         };
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
@@ -999,11 +994,14 @@ async function resolveAstAndDependencies(
     }
     log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
     await beforeBehavior(astContext);
+    astContext.dependencyContexts = [...(astContext.localDependencyContexts || [])];
+    astContext.sourceVersions = [];
+    if (astContext.retrieval?.selected) {
+        log(`[AST] 已檢索 ${astContext.retrieval.selected} 個同模組 helper，僅作來源語境，不新增執行觀測。`);
+    }
 
     if (astContext.dependencies && astContext.dependencies.length > 0) {
         log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
-        astContext.dependencyContexts = [];
-        astContext.sourceVersions = [];
 
         for (const dep of astContext.dependencies) {
             const depFilePath = resolvePythonDependencyPath(filePath, projectRoot, dep);
@@ -1011,6 +1009,7 @@ async function resolveAstAndDependencies(
                 astContext.sourceVersions.push({ file: depFilePath, hash: evidenceHash(fs.readFileSync(depFilePath, 'utf8')) });
                 const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
                 if (depAst && !depAst.error) {
+                    depAst.sourceHash = evidenceHash(depAst.code);
                     log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
                     const callers = await findCallerContexts(dep.name, projectRoot, depFilePath, pythonExecutable);
                     if (callers.length > 0) {
@@ -1211,6 +1210,32 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
         fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
     };
+    const requestBudgeted = async (
+        requestParams: AnalysisParams, system: string, prompt: string,
+        requestLog: (text: string) => void, format: CustomOutputFormat = 'text'
+    ): Promise<string> => {
+        const contractedSystem = addOutputContract(system, format);
+        const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
+        const metrics = { format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
+            inputBudget: activeModelProfile.budgetTokens,
+            contextWindow,
+            writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
+        if (!promptFits(contractedSystem, prompt, activeModelProfile.budgetTokens)) {
+            recordRole('model-request', 'budget-exceeded', metrics);
+            throw new AnalysisStageError('validation', 'prompt-budget',
+                '完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。', metrics);
+        }
+        const started = Date.now();
+        recordRole('model-request', 'requested', metrics);
+        try {
+            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow }, system, prompt, requestLog, format);
+            recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
+            return response;
+        } catch (error) {
+            recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started });
+            throw error;
+        }
+    };
     finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
     recordRole('pipeline', 'running', { target: params.funcName });
     try {
@@ -1385,7 +1410,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         targetSourceHash,
         targetParameters: astContext?.args || [],
         callSiteCount: semCallSites.length,
-        dependencyCount: semDeps.length
+        dependencyCount: semDeps.length,
+        retrieval: astContext?.retrieval
     });
     recordRole('behavior-probe', initialTargetObservations && !initialTargetObservations.load_error
         ? 'initial-ready' : 'initial-unavailable', {
@@ -1412,7 +1438,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     initialTargetObservations
                 }
             );
-            const semRaw = await requestLlmApi(
+            const semRaw = await requestBudgeted(
                 params, semSys, semUsr, log,
                 analysisResponseFormat === 'text' ? 'text' : 'semantic-json'
             );
@@ -1709,7 +1735,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         semanticContext
                     );
                     try {
-                        const raw = await requestLlmApi(params, sysP, usrP, log, testGenerationResponseFormat);
+                        const raw = await requestBudgeted(params, sysP, usrP, log, testGenerationResponseFormat);
                         rawCode = raw;
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
@@ -1780,7 +1806,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     let subGenerationPrompt = subUserPrompt;
                     for (let retry = 0; retry < 2; retry++) {
                         try {
-                            subRaw = await requestLlmApi(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat);
+                            subRaw = await requestBudgeted(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat);
                             const subClean = sanitizeLlmResponse(subRaw);
                             if (subClean) {
                                 const subValidation = await validateGeneratedTestCode(
@@ -1834,8 +1860,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
                     if (llmRetry === 0) {log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);}
                     try {
-                        rawCode = await requestLlmApi(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat);
+                        rawCode = await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat);
                     } catch (err: any) {
+                        if (err instanceof AnalysisStageError) { throw err; }
                         if (llmRetry === 0) {
                             log(`[警告] 網路或 API 請求失敗: ${err.message}，嘗試自動重試 (1/1)...`);
                             continue;
@@ -2047,10 +2074,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
                         try {
-                            const raw = await requestLlmApi(params, sys, prompt, log, 'review-json');
-                            const result = parseTestReview(raw, code);
+                            const raw = await requestBudgeted(params, sys, prompt, log, 'review-json');
+                            const { review: result, diagnostics } = parseTestReviewDetailed(raw, code);
                             recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
-                                contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result
+                                contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result, diagnostics
                             });
                             return result;
                         } catch (error: any) {
@@ -2080,7 +2107,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                             ? 'Bug Fixer 的單方法修復內容仍超過模型預算，停止本次修復。'
                             : 'Writer 修訂所需完整證據超過模型預算；未截斷待保留的測試。');
                     }
-                    const raw = await requestLlmApi(
+                    const raw = await requestBudgeted(
                         params, sys, prompt, log,
                         role === 'bug-fixer' ? 'test-method-json' : testGenerationResponseFormat
                     );
@@ -2567,7 +2594,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
                     recordRole('analyst-quality', 'budget-exceeded', { measured });
                 } else {
-                    const raw = await requestLlmApi(params, sys, prompt, log, 'text');
+                    const raw = await requestBudgeted(params, sys, prompt, log, 'text');
                     const tasks = parseQualityTasks(raw, measured);
                     recordRole('analyst-quality', tasks ? 'parsed-hypotheses' : 'invalid-response', { raw, tasks, measured });
                     if (tasks) {

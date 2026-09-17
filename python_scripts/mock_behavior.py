@@ -70,7 +70,7 @@ def has_mock_behavior(tree, context):
         if not isinstance(cls, ast.ClassDef) or cls.decorator_list:
             continue
         bases = [dotted(base).split('.') for base in cls.bases]
-        if not any('.'.join([module_imports.get(base[0], ''), *base[1:]]) in
+        if len(bases) != 1 or not any('.'.join([module_imports.get(base[0], ''), *base[1:]]) in
                    ('unittest.TestCase', 'unittest.IsolatedAsyncioTestCase') for base in bases):
             continue
         for method in cls.body:
@@ -79,6 +79,7 @@ def has_mock_behavior(tree, context):
             aliases = dict(module_imports)
             bindings, instances, observed, manual = {}, set(), set(), set()
             blocked_paths = set()
+            patch_blocked = {}
             serial = 0
 
             def resolve(node):
@@ -91,15 +92,19 @@ def has_mock_behavior(tree, context):
                 name = dotted(node)
                 if name and any(name == prefix or name.startswith(prefix + '.') for prefix in blocked_paths):
                     return None
-                if name in bindings:
-                    return bindings[name]
-                if isinstance(node, ast.Attribute):
-                    return token(node.value)
+                for prefix in sorted(bindings, key=len, reverse=True):
+                    if name == prefix or name.startswith(prefix + '.'):
+                        value = bindings[prefix]
+                        suffix = name[len(prefix):].lstrip('.')
+                        if any(suffix == item or suffix.startswith(item + '.')
+                               for item in patch_blocked.get(value, ())):
+                            return None
+                        return value
                 return None
 
             def patch_token(call):
                 nonlocal serial
-                if not isinstance(call, ast.Call) or any(k.arg in (None, 'new', 'new_callable', 'create', 'return_value') for k in call.keywords):
+                if not isinstance(call, ast.Call) or any(k.arg in (None, 'new', 'new_callable', 'create') for k in call.keywords):
                     return None
                 factory = resolve(call.func)
                 value = None
@@ -113,6 +118,10 @@ def has_mock_behavior(tree, context):
                 if value not in permitted:
                     return None
                 serial += 1
+                # Configured return values/attributes need not be mocks. The
+                # patch itself is still a real Mock and supports call assertions.
+                patch_blocked[serial] = {k.arg for k in call.keywords
+                                         if k.arg not in ('spec', 'spec_set', 'autospec')}
                 return serial
 
             def is_target(call):
@@ -136,7 +145,7 @@ def has_mock_behavior(tree, context):
                     return False
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ASSERTIONS:
                     value = token(node.func.value)
-                    return value is not None and value in observed and value not in manual
+                    return value is not None and token(node.func) == value and value in observed and value not in manual
                 value = token(node.func)
                 if value is not None:
                     manual.add(value)
@@ -200,6 +209,32 @@ def has_mock_behavior(tree, context):
                         # supply evidence to statements that follow them.
                         return found
                 return found
+
+            # unittest invokes a direct, undecorated setUp before each test.
+            # Transfer only instance attributes from a provable straight-line
+            # setup. Never transfer setup locals or assume arbitrary helpers ran.
+            setups = [item for item in cls.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and item.name == 'setUp']
+            lifecycle_overrides = {'__getattribute__', '__getattr__', '__setattr__', 'run', '__call__', '_callSetUp', 'asyncSetUp'}
+            if (len(setups) == 1 and isinstance(setups[0], ast.FunctionDef) and not setups[0].decorator_list
+                    and not any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                and item.name in lifecycle_overrides for item in cls.body)
+                    and all(isinstance(item, (ast.Assign, ast.AnnAssign, ast.Import, ast.ImportFrom, ast.Pass))
+                            for item in setups[0].body)
+                    and [arg.arg for arg in setups[0].args.args] == ['self']):
+                statements(setups[0].body, set())
+                # Class descriptors/properties may intercept assignment and
+                # access; they cannot establish standard Mock provenance.
+                class_names = {item.name for item in cls.body
+                               if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+                class_names.update(child.id for item in cls.body if isinstance(item, (ast.Assign, ast.AnnAssign))
+                                   for child in ast.walk(item) if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store))
+                bindings = {name: value for name, value in bindings.items()
+                            if name.startswith('self.') and name.split('.')[1] not in class_names}
+                blocked_paths = {name for name in blocked_paths if name.startswith('self.')}
+                instances = {name for name in instances if name.startswith('self.')}
+                aliases = dict(module_imports)
+                observed.clear()
 
             decorated = [patch_token(decorator) for decorator in reversed(method.decorator_list)]
             if any(value is None for value in decorated):

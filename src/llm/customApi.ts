@@ -111,18 +111,20 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
     if (outputFormat === 'review-json') {
         const finding = {
             type: 'object',
+            additionalProperties: false,
             properties: {
-                test_excerpt: { type: 'string' },
-                reason: { type: 'string' },
-                action: { type: 'string' }
+                test_excerpt: { type: 'string', minLength: 1, maxLength: 600 },
+                reason: { type: 'string', minLength: 1, maxLength: 600 },
+                action: { type: 'string', minLength: 1, maxLength: 600 }
             },
             required: ['test_excerpt', 'reason', 'action']
         };
         return {
             type: 'object',
+            additionalProperties: false,
             properties: {
-                blocking: { type: 'array', items: finding },
-                quality: { type: 'array', items: finding }
+                blocking: { type: 'array', items: finding, maxItems: 5 },
+                quality: { type: 'array', items: finding, maxItems: 5 }
             },
             required: ['blocking', 'quality']
         };

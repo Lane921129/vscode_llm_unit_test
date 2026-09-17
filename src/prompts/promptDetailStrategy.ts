@@ -1,3 +1,4 @@
+import { parameterBillions } from './promptBudget';
 export type PromptDetail = 'small' | 'large';
 
 /**
@@ -14,12 +15,9 @@ export function selectPromptDetail(
     if (resolvedTier >= 3) {
         return 'large';
     }
-    const trimmed = paramSize.trim();
-    let parameters = Number.parseFloat(trimmed);
-    if (Number.isFinite(parameters)) {
-        if (/m$/i.test(trimmed)) {
-            parameters = parameters / 1000;
-        }
+    const parameters = parameterBillions(paramSize);
+    if (parameters !== undefined) {
+        if (parameters <= 13) { return 'small'; }
         if (parameters >= 20) {
             return 'large';
         }

@@ -19,6 +19,8 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const roles: string[] = [];
     let writers = 0;
     let reviewerAvailable = true;
+    let rejectedReviewSchema = false;
+    let rejectAllModelRequests = false;
     const code = `import unittest
 from unittest.mock import patch
 from sample import target
@@ -56,9 +58,16 @@ class Cases(unittest.TestCase):
     };
     utilities.detectMutationEngine = () => null;
     globalThis.fetch = async (_url, options) => {
+        assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
         const request = JSON.parse(String(options?.body));
+        assert.equal(request.options.num_ctx, 8572);
         let response: string;
         if (request.system.includes('You are the test Reviewer')) {
+            if (!rejectedReviewSchema && typeof request.format === 'object') {
+                assert.equal(request.format.properties.blocking.maxItems, 5);
+                rejectedReviewSchema = true;
+                return new Response('unsupported schema', { status: 400 });
+            }
             roles.push('reviewer'); response = reviewerAvailable ? '{"blocking":[],"quality":[]}' : 'invalid review';
         } else if (request.system.includes('Analyst after successful')) {
             roles.push('analyst-quality'); response = '{"tasks":[]}';
@@ -66,6 +75,8 @@ class Cases(unittest.TestCase):
             roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
         } else {
             roles.push('writer'); writers++;
+            assert.match(request.prompt, /^compact-writer-v1/);
+            assert.match(request.prompt, /RETRIEVED DEPENDENCY read/);
             if (writers > 1) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
             response = '```python\n' + (writers === 1 ? code : stronger) + '\n```';
         }
@@ -77,7 +88,7 @@ class Cases(unittest.TestCase):
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
-            paramSize: '32B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: 'plain-unittest' });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
@@ -99,6 +110,13 @@ class Cases(unittest.TestCase):
         assert.ok(firstStage('rule-dispatcher') < firstStage('writer-handoff'));
         assert.ok(firstStage('writer-handoff') < firstStage('writer'));
         assert.equal(events[firstStage('rule-dispatcher')].detail.provenance, 'deterministic');
+        assert.equal(events[firstStage('evidence-collection')].detail.retrieval.selected, 1);
+        const requests = events.filter(event => event.stage === 'model-request' && event.status === 'requested');
+        assert.ok(requests.length > 0);
+        assert.ok(requests.every(event => event.detail.estimatedInputTokens <= event.detail.inputBudget));
+        assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'completed'
+            && event.detail.elapsedMs >= 0 && event.detail.writerContext === 'compact-writer-v1'));
+        assert.equal(rejectedReviewSchema, true);
         const mutations = events.filter(event => event.stage === 'mutation');
         assert.equal(mutations.length, 2, logs.join('\n'));
         assert.ok(mutations[0].detail.score < 100);
@@ -130,6 +148,22 @@ class Cases(unittest.TestCase):
         assert.equal(incomplete.reviewStatus, 'incomplete');
         assert.equal(incomplete.terminalStatus, 'execution-passed-review-incomplete');
         assert.equal(roles.filter(role => role === 'reviewer').length, 2);
+        const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
+            && event.detail.diagnostics.includes('invalid-json')));
+
+        rejectAllModelRequests = true;
+        handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
+            paramSize: '1B', contextLength: 128, qualificationVersion: QUALIFICATION_VERSION,
+            testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'oversize-results') });
+        const oversizeRoot = path.join(directory, 'oversize-results');
+        const oversizeOutput = path.join(oversizeRoot, fs.readdirSync(oversizeRoot)[0], 'target');
+        const oversizeEvents = fs.readFileSync(path.join(oversizeOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
+        assert.ok(!oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'requested'));
     } finally {
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;

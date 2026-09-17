@@ -62,18 +62,23 @@ function actionable(value: unknown): value is string {
     return validText(value) && !/^(?:focused (?:correction|improvement)|fix(?: (?:it|fixture|test|issue))?|change source|(?:make|apply) (?:a )?(?:correction|improvement)|待修正|請修正)[.!。\s]*$/i.test(value.trim());
 }
 
-function normalizeReview(value: unknown, tests: string): TestReview | undefined {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) { return undefined; }
+export type ReviewRejectionCode = 'invalid-json' | 'invalid-envelope' | 'too-many-findings'
+    | 'invalid-finding' | 'invalid-excerpt' | 'excerpt-not-in-test' | 'non-actionable-reason'
+    | 'non-actionable-action' | 'duplicate-reason-action' | 'invalid-legacy-finding';
+
+function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRejectionCode) => undefined): TestReview | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return reject('invalid-envelope'); }
     const record = value as Record<string, unknown>;
     const issues: ReviewIssue[] = [];
     const add = (item: unknown, severity: 'blocking' | 'quality', index: number) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) { return false; }
+        if (!item || typeof item !== 'object' || Array.isArray(item)) { reject('invalid-finding'); return false; }
         const finding = item as Record<string, unknown>;
         const excerpt = finding.test_excerpt;
-        if (!validText(excerpt) || !actionable(finding.action) || !actionable(finding.reason)
-            || finding.action.trim() === finding.reason.trim() || !tests.includes(excerpt)) {
-            return false;
-        }
+        if (!validText(excerpt)) { reject('invalid-excerpt'); return false; }
+        if (!tests.includes(excerpt)) { reject('excerpt-not-in-test'); return false; }
+        if (!actionable(finding.reason)) { reject('non-actionable-reason'); return false; }
+        if (!actionable(finding.action)) { reject('non-actionable-action'); return false; }
+        if (finding.action.trim() === finding.reason.trim()) { reject('duplicate-reason-action'); return false; }
         issues.push({
             id: `${severity === 'blocking' ? 'B' : 'Q'}${index + 1}`,
             severity,
@@ -85,7 +90,7 @@ function normalizeReview(value: unknown, tests: string): TestReview | undefined 
     };
 
     if (Array.isArray(record.blocking) && Array.isArray(record.quality)) {
-        if (record.blocking.length + record.quality.length > 5) { return undefined; }
+        if (record.blocking.length + record.quality.length > 5) { return reject('too-many-findings'); }
         if (!record.blocking.every((item, index) => add(item, 'blocking', index))) { return undefined; }
         if (!record.quality.every((item, index) => add(item, 'quality', index))) { return undefined; }
         return { issues };
@@ -93,17 +98,18 @@ function normalizeReview(value: unknown, tests: string): TestReview | undefined 
 
     // Read the previous envelope during migration, but all new requests use
     // the compact blocking/quality transport above.
-    if (!Array.isArray(record.issues) || record.issues.length > 5) { return undefined; }
+    if (!Array.isArray(record.issues)) { return reject('invalid-envelope'); }
+    if (record.issues.length > 5) { return reject('too-many-findings'); }
     const ids = new Set<string>();
     for (const item of record.issues) {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) { return undefined; }
+        if (!item || typeof item !== 'object' || Array.isArray(item)) { return reject('invalid-legacy-finding'); }
         const legacy = item as Record<string, unknown>;
-        if (!['blocking', 'quality'].includes(String(legacy.severity))) { return undefined; }
+        if (!['blocking', 'quality'].includes(String(legacy.severity))) { return reject('invalid-legacy-finding'); }
         for (const key of ['id', 'evidence', 'reason', 'action']) {
-            if (!validText(legacy[key], 1200)) { return undefined; }
+            if (!validText(legacy[key], 1200)) { return reject('invalid-legacy-finding'); }
         }
-        if (ids.has(legacy.id as string) || !tests.includes(legacy.evidence as string)) { return undefined; }
-        if (!actionable(legacy.action) || !actionable(legacy.reason)) { return undefined; }
+        if (ids.has(legacy.id as string) || !tests.includes(legacy.evidence as string)) { return reject('invalid-legacy-finding'); }
+        if (!actionable(legacy.action) || !actionable(legacy.reason)) { return reject('invalid-legacy-finding'); }
         ids.add(legacy.id as string);
         issues.push(legacy as unknown as ReviewIssue);
     }
@@ -111,15 +117,26 @@ function normalizeReview(value: unknown, tests: string): TestReview | undefined 
 }
 
 export function parseTestReview(raw: string, tests: string): TestReview | undefined {
+    return parseTestReviewDetailed(raw, tests).review;
+}
+
+/** Codes only: diagnostics never echo source, credentials or provider content. */
+export function parseTestReviewDetailed(raw: string, tests: string): { review?: TestReview; diagnostics: ReviewRejectionCode[] } {
+    const diagnostics: ReviewRejectionCode[] = [];
+    const reject = (code: ReviewRejectionCode): undefined => {
+        if (!diagnostics.includes(code)) { diagnostics.push(code); }
+        return undefined;
+    };
     for (const candidate of jsonObjects(raw)) {
         try {
-            const review = normalizeReview(JSON.parse(candidate), tests);
-            if (review) { return review; }
+            const review = normalizeReview(JSON.parse(candidate), tests, reject);
+            if (review) { return { review, diagnostics: [] }; }
         } catch {
-            // Continue: a provider may emit a trace object before the review.
+            reject('invalid-json');
         }
     }
-    return undefined;
+    if (!diagnostics.length) { reject('invalid-json'); }
+    return { diagnostics };
 }
 
 /** Never truncate a source/test fragment into misleading partial evidence. */

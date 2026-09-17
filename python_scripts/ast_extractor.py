@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import sys
 
@@ -697,6 +698,88 @@ def branch_condition_facts(func_node, parameter_names):
     return facts
 
 
+def retrieve_local_helpers(tree, target, lines, max_depth=2, max_symbols=6, max_chars=12000):
+    """Retrieve complete, statically bound module functions, never output facts.
+
+    No import or execution is performed. Ambiguous module bindings, decorated
+    helpers, lexical shadowing and dynamic attribute calls remain unresolved.
+    """
+    definitions, bindings = {}, {}
+
+    class ModuleBindings(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            bindings[node.name] = bindings.get(node.name, 0) + 1
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+        visit_ClassDef = visit_FunctionDef
+
+        def visit_Name(self, node):
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                bindings[node.id] = bindings.get(node.id, 0) + 1
+
+        def visit_Import(self, node):
+            for alias in node.names:
+                name = alias.asname or alias.name.split('.')[0]
+                bindings[name] = bindings.get(name, 0) + 1
+
+        def visit_ExceptHandler(self, node):
+            if node.name:
+                bindings[node.name] = bindings.get(node.name, 0) + 1
+            self.generic_visit(node)
+
+        def visit_MatchAs(self, node):
+            if node.name:
+                bindings[node.name] = bindings.get(node.name, 0) + 1
+            self.generic_visit(node)
+
+        visit_MatchStar = visit_MatchAs
+
+        def visit_MatchMapping(self, node):
+            if node.rest:
+                bindings[node.rest] = bindings.get(node.rest, 0) + 1
+            self.generic_visit(node)
+
+        def visit_ImportFrom(self, node):
+            for alias in node.names:
+                name = alias.asname or alias.name
+                bindings[name] = bindings.get(name, 0) + 1
+
+    ModuleBindings().visit(tree)
+    global_rebindings = {name for node in ast.walk(tree) if isinstance(node, ast.Global) for name in node.names}
+    wildcard = '*' in bindings
+    for node in tree.body:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.decorator_list
+                and bindings.get(node.name) == 1 and node.name not in global_rebindings and not wildcard):
+            definitions[node.name] = node
+    queue, seen, contexts, omitted, used = [(target, 0)], {target.name}, [], [], 0
+    while queue:
+        current, depth = queue.pop(0)
+        calls, _, roots = function_scope_usage(current, function_scope_bindings(current))
+        for name in dict.fromkeys(calls):
+            if name not in roots or name not in definitions or name in seen:
+                continue
+            seen.add(name)
+            helper = definitions[name]
+            code = source_for(lines, helper)
+            if depth >= max_depth or len(contexts) >= max_symbols or used + len(code) > max_chars:
+                omitted.append(name)
+                continue
+            used += len(code)
+            _, loaded, _ = function_scope_usage(helper, function_scope_bindings(helper))
+            globals_context = [{'name': key, 'code': source_for(lines, node)} for node in tree.body
+                               for key in assignment_names(node) if key in loaded]
+            contexts.append({'name': name, 'code': code,
+                             'sourceHash': hashlib.sha256(code.encode('utf-8')).hexdigest(),
+                             'retrieval': {'kind': 'same-module-symbol', 'depth': depth + 1},
+                             'args': [arg['name'] for arg in extract_parameters(helper.args)],
+                             'signature': extract_parameters(helper.args),
+                             'referenced_globals': globals_context,
+                             'is_async': isinstance(helper, ast.AsyncFunctionDef)})
+            queue.append((helper, depth + 1))
+    return contexts, {'version': 'symbol-retrieval-v1', 'selected': len(contexts),
+                      'omitted': omitted, 'maxDepth': max_depth, 'maxSymbols': max_symbols, 'maxChars': max_chars}
+
+
 def extract_info(filepath, func_name):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -762,6 +845,7 @@ def extract_info(filepath, func_name):
                     seen_dependencies.add(key)
 
         referenced_globals = [module_globals[name] for name in sorted(loaded_names & module_globals.keys())]
+        local_contexts, retrieval = retrieve_local_helpers(tree, func_node, lines)
 
         print(json.dumps({
             'name': func_node.name,
@@ -771,6 +855,8 @@ def extract_info(filepath, func_name):
             'docstring': ast.get_docstring(func_node) or '',
             'calls': unique_calls,
             'dependencies': dependencies,
+            'localDependencyContexts': local_contexts,
+            'retrieval': retrieval,
             'file_imports': file_imports,
             'referenced_globals': referenced_globals,
             'class_name': class_name,

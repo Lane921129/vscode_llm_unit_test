@@ -2,6 +2,7 @@ import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorH
 import { formatWriterEvidenceBundleForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { getBugFixerUserPrompt } from './bugFixer';
 import { formatTargetContract } from '../pipeline/targetContract';
+import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 
 // ─────────────────────────────────────────────────────────────
 // Tier 1：填空法 Prompt（2–3B 極小模型）
@@ -290,22 +291,7 @@ export function compactSemanticGuidanceForBudget(guidance: string, maxTokens: nu
         : output;
 }
 
-function distillDependency(dep: any, level: 0 | 1 | 2 | 3): string {
-    if (level === 3) {
-        return `Dependency: ${dep.name} (code too long, mock it)\n`;
-    }
-    if (level === 2) {
-        const sig = dep.code?.split('\n')[0] || `def ${dep.name}(...)`;
-        return `Dependency: ${dep.name}\nSignature: ${sig}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}\n`;
-    }
-    if (level === 1) {
-        const lines = (dep.code || '').split('\n');
-        const keyLines = lines.filter((l: string) => {
-            const t = l.trim();
-            return t.startsWith('def ') || t.startsWith('return ') || t.startsWith('raise ');
-        });
-        return `Dependency: ${dep.name}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}Key lines:\n\`\`\`python\n${keyLines.join('\n')}\n\`\`\`\n\n`;
-    }
+function distillDependency(dep: any): string {
     return `Dependency: ${dep.name}\n${dep.docstring ? `Docstring: ${dep.docstring}\n` : ''}Source:\n\`\`\`python\n${dep.code}\n\`\`\`\n\n`;
 }
 
@@ -325,6 +311,12 @@ export function getUserPrompt(
         : semanticEvidence ? formatWriterEvidenceBundleForPrompt(semanticEvidence) : undefined;
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
+
+    if (strategy === 'small' && semanticEvidence && typeof semanticEvidence !== 'string') {
+        return buildCompactWriterContext({ module: moduleName, name: funcName,
+            source: astContext?.code || code, context: astContext, evidence: semanticEvidence,
+            focus: focusContexts, budgetTokens });
+    }
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n${formatTargetContract(moduleName, funcName, astContext?.args || [], astContext)}\n`;
 
@@ -561,15 +553,9 @@ export function getUserPrompt(
                     }
                 }
                 const remaining = budgetTokens - estimateTokens(prompt);
-                let level: 0 | 1 | 2 | 3;
-                const full = distillDependency(dep, 0);
-                const l1   = distillDependency(dep, 1);
-                const l2   = distillDependency(dep, 2);
-                if (remaining > estimateTokens(full) + 300) {level = 0;}
-                else if (remaining > estimateTokens(l1) + 200) {level = 1;}
-                else if (remaining > estimateTokens(l2) + 100) {level = 2;}
-                else {level = 3;}
-                prompt += distillDependency(dep, level);
+                const full = distillDependency(dep);
+                prompt += remaining > estimateTokens(full) + estimateTokens(astContext.code || code) + 300
+                    ? full : `Dependency: ${dep.name} (source omitted as a whole unit for budget; behavior unknown).\n`;
 
                 // Caller contexts for this dependency
                 if (dep.callerContexts && dep.callerContexts.length > 0 && (budgetTokens - estimateTokens(prompt)) > 150) {

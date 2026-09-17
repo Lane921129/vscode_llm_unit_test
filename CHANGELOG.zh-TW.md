@@ -2,6 +2,18 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-17
+
+### 改善 Writer 語境與小模型提示、Mock 辨識及 Reviewer 診斷
+
+- 依最新批次證據補同模組 helper 的有界符號檢索，保留完整來源、hash、必要 globals 與省略資訊；不執行檢索片段、不把 return expression 當 oracle。
+- 正式 small Writer 改用 `compact-writer-v1`：保留目標、constructor、caller 專屬 Trace、規則與已通過測試，減少重複提示；優先來源檢索，再取最多兩個有相關 AST 特徵且回歸可執行的中性範例。large 路徑同樣不再截取 dependency 的 return/raise 行冒充完整來源。
+- 修正直接 `setUp` Mock 與 `patch(return_value=...)` 的誤擋；補無關 Mock、假 assertion、descriptor、rebind、未執行分支等反例，保留全部隔離與品質 gate。
+- 參數量正確區分 M/B，已知 ≤13B 的 Tier 1/2 採精簡提示。完整角色提示先驗算預算，必要證據太長時明確停止；Ollama 明確傳入對應 `num_ctx`，避免內部預算與 server 預設 context 不一致。新增 logical request 的預估 tokens、耗時與 prompt 版本事件。
+- Reviewer 使用 bounded JSON Schema，沿既有 deadline 處理不支援 schema 的回退；parser 記錄超量、引述不符、reason/action 不可操作等穩定拒絕代碼，無效審查仍不能算通過。
+- 優先以實驗室 `codellama:13b` 的五類小批次驗收，1B～5B 留待逐個實測；不使用模型名稱特例。完整說明與測試方式見 `docs/Writer檢索與模型相容性_2026_09_17.md`。
+- 完整驗證：Node 307、Python 118 全部通過；TypeScript、lint、建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。固定模型回覆的整合測試不代表真實 13B 或小模型已通過；本輪未重跑私有應用、未下載或啟動模型。
+
 ## 2026-09-16
 
 ### 改善部分批次的預檢效率、Trace／Mock 產物及審查完成判定
