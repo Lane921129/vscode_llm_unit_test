@@ -13,7 +13,7 @@ export default {
         saveConfig: "儲存設定",
         testConfig: "⚙️ 測試參數設定",
         maxLoops: "最大迭代次數 (Self-Reflection)",
-        mutpyTimeout: "Mutatest 超時限制 (秒)",
+        mutpyTimeout: "突變階段超時限制 (秒)",
         apiTimeout: "API 超時限制 (秒)",
         outputDir: "測試輸出目錄 (預設 test)",
         testTarget: "🎯 測試目標",

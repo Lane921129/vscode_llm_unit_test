@@ -19,7 +19,17 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
     public webview?: vscode.Webview;
 
-    constructor(private readonly secretStorage: vscode.SecretStorage) {}
+    constructor(private readonly secretStorage: vscode.SecretStorage, private readonly uiState: vscode.Memento) {}
+
+    /** Keep each picker independent; local UI history must not become project configuration. */
+    private lastFolder(kind: 'project' | 'output' | 'batch', fallback = ''): string {
+        const saved = this.uiState.get<unknown>(`llmUnitTest.lastFolders.v1.${kind}`);
+        return typeof saved === 'string' && saved.trim() ? saved : fallback;
+    }
+
+    private async rememberFolder(kind: 'project' | 'output' | 'batch', folder: string): Promise<void> {
+        await this.uiState.update(`llmUnitTest.lastFolders.v1.${kind}`, folder);
+    }
 
     private appendModelQualificationLog(profile: ModelQualificationProfile, responsePreview?: string): void {
         void this.webview?.postMessage({
@@ -75,17 +85,23 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const customKeys = await this.getStoredCustomKeys();
                     this.webview?.postMessage({ command: 'setCustomKeys', keys: customKeys });
 
-                    const savedProjPath = config.get<string>('projectPath', '');
-                    const files = await this.findPythonFiles(savedProjPath);
-                    const savedPath = config.get<string>('outputPath', '');
+                    const savedProjPath = this.lastFolder('project', config.get<string>('projectPath', ''));
+                    const savedPath = this.lastFolder('output', config.get<string>('outputPath', ''));
+                    const savedBatchPath = this.lastFolder('batch');
 
+                    // Restore the explicit batch choice before the Webview's
+                    // project-path fallback can fill the batch field.
+                    if (savedBatchPath) {
+                        this.webview?.postMessage({ command: 'setBatchPath', path: savedBatchPath });
+                    }
                     if (savedProjPath) {
                         this.webview?.postMessage({ command: 'setProjectPath', path: savedProjPath });
                     }
-                    this.webview?.postMessage({ command: 'setFiles', files });
                     if (savedPath) {
                         this.webview?.postMessage({ command: 'setOutputPath', path: savedPath });
                     }
+                    const files = await this.findPythonFiles(savedProjPath);
+                    this.webview?.postMessage({ command: 'setFiles', files });
 
                     // Background fetch for local models
                     this.fetchLocalModels().then(models => {
@@ -126,7 +142,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
 
                 case 'browseProjectFolder': {
-                    const existingProject = config.get<string>('projectPath', '');
+                    const existingProject = this.lastFolder('project', config.get<string>('projectPath', ''));
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
@@ -136,6 +152,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
                         const projectPath = fileUri[0].fsPath;
+                        await this.rememberFolder('project', projectPath);
                         try {
                             await config.update('projectPath', projectPath, true);
                         } catch (e) {
@@ -160,8 +177,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'browseFolder': {
-                    const existingOutput = config.get<string>('outputPath', '');
-                    const existingProject2 = config.get<string>('projectPath', '');
+                    const existingOutput = this.lastFolder('output', config.get<string>('outputPath', ''));
+                    const existingProject2 = this.lastFolder('project', config.get<string>('projectPath', ''));
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
@@ -173,6 +190,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
                         const outputPath = fileUri[0].fsPath;
+                        await this.rememberFolder('output', outputPath);
                         try {
                             await config.update('outputPath', outputPath, true);
                         } catch (e) {
@@ -184,16 +202,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'browseBatchFolder': {
-                    const existingProject3 = config.get<string>('projectPath', '');
+                    const existingProject3 = this.lastFolder('project', config.get<string>('projectPath', ''));
+                    const existingBatch = this.lastFolder('batch', existingProject3);
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
                         openLabel: '選擇批次測試資料夾',
-                        defaultUri: existingProject3 ? vscode.Uri.file(existingProject3) : undefined
+                        defaultUri: existingBatch ? vscode.Uri.file(existingBatch) : undefined
                     };
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
                         const batchPath = fileUri[0].fsPath;
+                        await this.rememberFolder('batch', batchPath);
                         this.webview?.postMessage({ command: 'setBatchPath', path: batchPath });
                     }
                     break;

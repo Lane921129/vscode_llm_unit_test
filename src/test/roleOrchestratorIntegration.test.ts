@@ -14,6 +14,32 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const originalFetch = globalThis.fetch;
     const utilities = require('../utils/utils');
     const originalEngine = utilities.detectMutationEngine;
+    const processRunner = require('../utils/processRunner');
+    const originalSpawn = processRunner.runSpawn;
+    const mutationRuns: Array<{ args: string[]; timeout: number }> = [];
+    let expectedMutationSeconds = 20;
+    let externalEngine: 'mutatest' | 'mutmut' | undefined;
+    let externalRuns = 0;
+    processRunner.runSpawn = (command: string, args: string[], options: any) => {
+        if (externalEngine && (args[1] === 'from mutatest.cli import cli_main'
+            || (args[1] === 'mutmut' && args[2] === '--version'))) {
+            return Promise.resolve({ code: 0, stderr: '', stdout: '' });
+        }
+        if (externalEngine && (args.includes('mutmut') || args.some(arg => arg.includes('mutatest.cli')))) {
+            assert.equal(options.timeout, expectedMutationSeconds * 1000);
+            assert.ok(!args.includes('--timeout_factor'));
+            assert.ok(!args.includes('--test-time-multiplier'));
+            externalRuns++;
+            return Promise.resolve({ code: 0, stderr: '', stdout: externalEngine === 'mutmut'
+                ? '1 mutants\n0 survived\n' : 'TOTAL RUNS: 1\nSURVIVED: 0\n' });
+        }
+        if (args[0]?.endsWith('basic_mutation_runner.py')) {
+            mutationRuns.push({ args, timeout: options.timeout });
+            assert.equal(options.timeout, expectedMutationSeconds * 1000);
+            assert.equal(args[4], String(expectedMutationSeconds));
+        }
+        return originalSpawn(command, args, options);
+    };
     const handlers = new Map<string, (...args: any[]) => any>();
     const logs: string[] = [];
     const roles: string[] = [];
@@ -119,6 +145,7 @@ class Cases(unittest.TestCase):
         assert.equal(rejectedReviewSchema, true);
         const mutations = events.filter(event => event.stage === 'mutation');
         assert.equal(mutations.length, 2, logs.join('\n'));
+        assert.equal(mutationRuns.length, 2);
         assert.ok(mutations[0].detail.score < 100);
         assert.equal(mutations[1].detail.score, 100);
         assert.deepEqual(roles.filter(role => role !== 'analyst-planning'), ['writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer']);
@@ -136,11 +163,12 @@ class Cases(unittest.TestCase):
         assert.match(report, /Reviewer status\*\*: completed/);
 
         reviewerAvailable = false;
+        expectedMutationSeconds = 40;
         writers = 0;
         roles.length = 0;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
-            maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'incomplete-results') });
+            maxLoops: 3, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: path.join(directory, 'incomplete-results') });
         const incompleteRoot = path.join(directory, 'incomplete-results');
         const incompleteOutput = path.join(incompleteRoot, fs.readdirSync(incompleteRoot)[0], 'target');
         const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
@@ -151,6 +179,22 @@ class Cases(unittest.TestCase):
         const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
             && event.detail.diagnostics.includes('invalid-json')));
+
+        // External executables are replaced only at their process boundary;
+        // real coverage/target setup and production option routing still run.
+        reviewerAvailable = true;
+        expectedMutationSeconds = 25;
+        for (const engine of ['mutatest', 'mutmut'] as const) {
+            externalEngine = engine;
+            utilities.detectMutationEngine = () => engine;
+            writers = 0;
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+                maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
+        }
+        assert.equal(externalRuns, 2);
+        externalEngine = undefined;
+        utilities.detectMutationEngine = () => null;
 
         rejectAllModelRequests = true;
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
@@ -168,6 +212,7 @@ class Cases(unittest.TestCase):
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;
         utilities.detectMutationEngine = originalEngine;
+        processRunner.runSpawn = originalSpawn;
         fs.rmSync(directory, { recursive: true, force: true });
     }
 });

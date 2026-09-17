@@ -10,6 +10,7 @@ import {
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
+import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory } from './pipeline/analysisOutput';
 import { preflightTargetModule } from './pipeline/modulePreflight';
 import {
@@ -338,7 +339,7 @@ export function activate(context: vscode.ExtensionContext) {
     storedModelProfiles = restoreModelProfiles(
         context.globalState.get<unknown>(MODEL_PROFILE_STORE_KEY)
     );
-    const sidebarProvider = new MutationViewProvider(context.secrets);
+    const sidebarProvider = new MutationViewProvider(context.secrets, context.globalState);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(MutationViewProvider.viewType, sidebarProvider)
     );
@@ -1055,6 +1056,7 @@ async function resolveAstAndDependencies(
 }
 
 async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
+    params = { ...params, ...normalizeExecutionSettings(params) };
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
         ?? { current: currentModelProfile, stored: storedModelProfiles };
@@ -2261,7 +2263,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
 
             log(`[${engine}] 正在建構突變測試指令...`);
-            log(`[${engine}] 正式啟動分析 (系統超時限制: ${params.timeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
+            const mutationTimeoutSeconds = normalizeExecutionSettings(params).mutpyTimeout;
+            log(`[${engine}] 正式啟動分析 (突變階段超時限制: ${mutationTimeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
 
             if (isExecutionCancelled()) {throw new Error("使用者強制中止");}
 
@@ -2270,7 +2273,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             let mutpyResult: string;
             if (engine === 'builtin') {
                 const fallbackScript = pythonToolPath('mutation');
-                const perMutationTimeout = Math.max(1, Math.min(10, Math.floor(params.timeoutSeconds / 3)));
+                const perMutationTimeout = mutationTimeoutSeconds;
                 const selectedClassName = (astContext?.class_name as string | undefined);
                 const fallbackRun = await runSpawn(
                     pythonExecutable,
@@ -2283,7 +2286,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         targetFuncName || '',
                         selectedClassName || ''
                     ],
-                    { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: params.timeoutSeconds * 1000 }
+                    { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: mutationTimeoutSeconds * 1000 }
                 );
                 if (fallbackRun.code !== 0) {
                     throw new Error(`內建 AST 突變引擎執行失敗：${(fallbackRun.stderr || fallbackRun.stdout).slice(0, 500)}`);
@@ -2316,7 +2319,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     params.filePath,
                     testModule,
                     reportDir,
-                    params.mutpyTimeout,
+                    undefined, // Engine multipliers are distinct from the UI's seconds budget.
                     pythonExecutable
                 );
                 const mutationEnvironment = buildGeneratedTestEnvironment(process.env, [
@@ -2325,7 +2328,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const externalRun = await runSpawn(mutationPlan.command, mutationPlan.args, {
                     cwd: testDir,
                     env: mutationEnvironment,
-                    timeout: params.timeoutSeconds * 1000
+                    timeout: mutationTimeoutSeconds * 1000
                 });
                 if (isExecutionCancelled()) {
                     throw new Error('使用者強制中止');

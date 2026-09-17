@@ -13,7 +13,7 @@ export default {
         saveConfig: "Save Config",
         testConfig: "⚙️ Test Configuration",
         maxLoops: "Max Loops (Self-Reflection)",
-        mutpyTimeout: "Mutatest Timeout (s)",
+        mutpyTimeout: "Mutation Stage Timeout (s)",
         apiTimeout: "API Timeout (s)",
         outputDir: "Output Directory (default: test)",
         testTarget: "🎯 Test Target",

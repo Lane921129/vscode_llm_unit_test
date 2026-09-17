@@ -267,10 +267,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             
             <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
                 <label style="margin-top:0;">${t('ui.maxLoops')}</label>
-                <input type="number" id="max-loop" value="3" min="1">
+                <input type="number" id="max-loop" value="5" min="1">
                 
                 <label>${t('ui.mutpyTimeout')}</label>
-                <input type="number" id="mutpy-timeout" value="5" min="1" style="width:100%;">
+                <input type="number" id="mutpy-timeout" value="20" min="1" style="width:100%;">
 
                 <label>${t('ui.apiTimeout')}</label>
                 <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
@@ -743,8 +743,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return {
                 ollamaUrl: document.getElementById('ollama-url').value,
                 promptStrategy: document.getElementById('prompt-strategy').value,
-                maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 3,
-                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 5,
+                maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 5,
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 20,
                 timeoutSeconds: parseInt(document.getElementById('timeout-sec').value, 10) || 60,
                 outputPath: document.getElementById('output-path').value,
                 customUrl: document.getElementById('custom-url').value,
