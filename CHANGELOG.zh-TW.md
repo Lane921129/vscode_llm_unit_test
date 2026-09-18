@@ -2,6 +2,17 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-18
+
+### 修正時間／隨機 Trace oracle，新增整批進度與環境診斷
+
+- 最新 287 份舊建置報告中沒有完整通過；208 次環境障礙不涉及模型請求。舊 Reviewer／多方法修復問題已有修正，本輪不重做；另以當前程式重現時間 Trace 被寫成固定斷言的 runner 缺陷，分析與實驗室順序見 `docs/時間證據與批次診斷改善_2026_09_18.md`。
+- Dynamic Trace 依實際 callable 身分標記未控制的時鐘、熵、共享 RNG／程序身分讀取，回傳與例外保留為診斷，不再產生固定值基線。涵蓋 alias、helper、constructor／property、async／generator、worker thread 與應用匯入初始化；明確 mock、當次私有 seeded RNG 與純函式路徑保留。Writer／Reviewer／Bug Fixer 使用相同證據限制，不依模型品牌處理。
+- 批次先保存已發現的目標清單，逐項更新 `batch_manifest.json`／`batch_summary.md`，區分執行完成與完整通過；掃描失敗、取消、缺報告及缺 provenance 保持未完成，Dummy／Stub／Reviewer 未完成不算通過。同分鐘重跑建立新的整批根目錄，獨立輸出資料夾排除來源掃描。
+- 預檢診斷補結構化阻擋操作與專案相對位置；批次摘要彙整共同缺套件／匯入副作用，附相依安裝與初始化分離的處理方向，沒有額外模型請求、取消安全 gate 或自動修改私有應用。
+- 驗證包含實際批次 command 的取消後重跑、環境群組、語法錯誤與缺證據回歸，以及時間 mock 經正式 Python／coverage／Reviewer／mutation 管線完整通過。完整本機驗證：Node 330、Python 136 通過；TypeScript、lint、生產建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。
+- 限制：ambient 觀測器不是任意程式純度證明，未涵蓋所有原生 extension 內部讀取；部分可省略時間參數的 C API 採保守診斷。原應用、CodeLlama 13B、Gemma 雲端與 1B～5B 本輪未重新實測，不能將中性 fixture 通過當成實驗室整批通過。
+
 ## 2026-09-17
 
 ### 修復 18:29 批次分流、統一審查與 scaffold，降低無效雲端等待

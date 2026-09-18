@@ -15,6 +15,8 @@ export interface BehaviorObservation {
     result_type?: string;
     result_assertable?: boolean;
     call_assertable?: boolean;
+    non_deterministic_operations?: string[];
+    oracle_reason?: 'uncontrolled-ambient-read';
     exception?: string;
     message?: string;
 }
@@ -95,6 +97,7 @@ export function formatWriterEvidenceBundleForPrompt(bundle: WriterEvidenceBundle
         `Merged controlled observations: ${summarizeObservationPhase(bundle.mergedTargetObservations)}`,
         `Deterministically selected test rules: ${ruleIds}`,
         'Evidence priority: executed observations > explicit source paths > AST structure > analyst hypotheses and rule guidance.',
+        'Unassertable observations, including uncontrolled-ambient-read, are diagnostics only. Never copy their values or exceptions into assertions. Control clock/entropy at its target use point with an explicit mock or injected input.',
         'Test-generation rules constrain test construction. They are not evidence of a return value or exception.',
         '',
         bundle.semanticGuidance.trim(),

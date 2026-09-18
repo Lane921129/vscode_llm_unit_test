@@ -26,6 +26,7 @@ from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdo
 from pathlib import Path
 from unittest.mock import patch
 import sqlite3
+from trace_observation_guard import observe_ambient_reads
 
 
 class TraceSafetyError(RuntimeError):
@@ -72,11 +73,27 @@ def _guard_sqlite_connection(event, arguments):
 sys.addaudithook(_guard_sqlite_connection)
 
 
-def import_diagnostic(error):
-    return {'stage': 'module-import', 'exception_type': type(error).__name__,
+def import_diagnostic(error, source_root=None):
+    diagnostic = {'stage': 'module-import', 'exception_type': type(error).__name__,
             'message': str(error)[:1500],
             'missing_module': getattr(error, 'name', None) if isinstance(error, ModuleNotFoundError) else None,
             'traceback': ''.join(traceback.format_exception(type(error), error, error.__traceback__))[-5000:]}
+    if isinstance(error, TraceSafetyError):
+        diagnostic['blocked_operation'] = str(error).removeprefix('Dynamic trace safety gate blocked ')[:120]
+    if source_root:
+        root = os.path.normcase(os.path.realpath(source_root))
+        tool_files = {os.path.normcase(os.path.realpath(path)) for path in
+                      (__file__, os.path.join(os.path.dirname(__file__), 'module_preflight.py'))}
+        for frame in traceback.extract_tb(error.__traceback__):
+            file = os.path.normcase(os.path.realpath(frame.filename))
+            if file in tool_files:
+                continue
+            try:
+                if os.path.commonpath([root, file]) == root:
+                    diagnostic['origin'] = {'file': os.path.relpath(file, root).replace('\\', '/'), 'line': frame.lineno}
+            except ValueError:
+                pass
+    return diagnostic
 
 
 def _blocked_trace_operation(operation):
@@ -813,12 +830,15 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
         "load_error": None,
         "blocked_operations": []
     }
+    _, observation_root, _ = package_module_context(file_path)
+    import_reads = set()
 
     # 載入模組
     # The CLI protocol is JSON on stdout. Target modules may print or configure
     # noisy imports, but their output is trace evidence rather than protocol.
     try:
-        with block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        with observe_ambient_reads(observation_root, importing=True) as import_reads, \
+                block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             module = load_module_from_file(file_path)
     except TraceSafetyError as error:
         result["load_error"] = str(error)
@@ -1000,10 +1020,13 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
             constructor_args = []
         if not isinstance(constructor_kwargs, dict):
             constructor_kwargs = {}
+        ambient_reads = set()
+        setup_callable = getattr(getattr(module, method_class_name), '__init__', None) if method_class_name else None
         try:
             # Keep stdout/stderr from constructors, target calls and generator
             # materialisation out of the JSON document printed by this script.
-            with block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with observe_ambient_reads(observation_root, (func, setup_callable)) as ambient_reads, \
+                    block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 if func_is_method or func_is_property:
                     # 將 class 實例化後呼叫 method
                     cls_obj = getattr(module, method_class_name)
@@ -1049,6 +1072,10 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                 "result": formatted_result,
                 "result_type": result_type
             }
+            if import_reads or ambient_reads:
+                example.update(call_assertable=False, result_assertable=False,
+                               non_deterministic_operations=sorted(import_reads | ambient_reads),
+                               oracle_reason='uncontrolled-ambient-read')
             if not result_assertable:
                 example['result_assertable'] = False
             if not all(assertable for _, assertable in formatted_args) or not all(
@@ -1096,6 +1123,10 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None) -> 
                     "exception": exc_type,
                     "message": exc_msg
                 }
+                if import_reads or ambient_reads:
+                    error_record.update(call_assertable=False,
+                                        non_deterministic_operations=sorted(import_reads | ambient_reads),
+                                        oracle_reason='uncontrolled-ambient-read')
                 exception_type = type(e)
                 exception_module = exception_type.__module__
                 exception_qualname = exception_type.__qualname__

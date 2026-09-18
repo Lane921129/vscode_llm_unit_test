@@ -66,7 +66,7 @@ def preflight(payload):
                 'dependencies': resolve_loaded_dependencies(module, payload.get('dependencies', []),
                                                             payload.get('sourceRoot') or package_root)}
     except (Exception, SystemExit) as error:
-        diagnostic = import_diagnostic(error)
+        diagnostic = import_diagnostic(error, payload.get('sourceRoot') or package_root)
         return {'ok': False, 'category': 'environment', 'stage': 'module-import',
                 'reason': f'{type(error).__name__}: {error}', 'diagnostic': diagnostic}
 

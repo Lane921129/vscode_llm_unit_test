@@ -31,6 +31,9 @@ export function buildCompactWriterContext(input: {
         // bundle's merged trace would leak another caller's assertion oracle.
         'VERIFIED OBSERVATIONS (exact call/setup only; blocked or unassertable entries are diagnostics):\n'
             + JSON.stringify(context.traceResult || null),
+        'Observations marked uncontrolled-ambient-read are diagnostic values, never fixed expected values or exception facts. '
+            + 'Control the clock/entropy at the target use point with an explicit mock, or inject a fixed dependency/input before asserting. '
+            + 'Do not copy the observed timestamp/random value into assertions.',
         'VERIFIED DEPENDENCY OBSERVATIONS (never substitute for target results):\n'
             + JSON.stringify(dependencies.filter(dep => dep.traceResult).map(dep => ({ name: dep.name, observations: dep.traceResult }))),
         'SELECTED RULES (construction constraints, not output facts):\n'

@@ -457,6 +457,11 @@ export function getUserPrompt(
 
         // 動態執行追蹤結果（真實 input→output 範例，讓 LLM 不用猜 assert 值）
         const trace = astContext.traceResult;
+        const ambientReads = [...new Set([...(trace?.examples || []), ...(trace?.errors || [])]
+            .flatMap((item: any) => item.non_deterministic_operations || []))];
+        if (ambientReads.length) {
+            prompt += `\nUNCONTROLLED AMBIENT READS: ${ambientReads.join(', ')}. These observations cannot supply fixed values or exception facts. Control the dependency at its use point with an explicit mock or input before asserting.\n`;
+        }
         if (trace && !trace.load_error && (trace.examples.length > 0 || trace.errors.length > 0)) {
             prompt += `\nVerified Real Execution Results (Use these EXACT values in your test assertions):\n`;
             for (const ex of trace.examples.filter((example: any) =>
@@ -475,7 +480,8 @@ export function getUserPrompt(
 
         // Void/None 函式提示：當所有 trace 都回傳 None 且無 error 時
         if (trace && !trace.load_error) {
-            const allNone = trace.examples.length > 0 && trace.examples.every((e: any) => e.result === 'None' || e.result === 'null');
+            const assertableExamples = trace.examples.filter((e: any) => e.call_assertable !== false && e.result_assertable !== false);
+            const allNone = assertableExamples.length > 0 && assertableExamples.every((e: any) => e.result === 'None' || e.result === 'null');
             const noErrors = trace.errors.length === 0;
             if (allNone && noErrors) {
                 prompt += `\nOBSERVED NONE RESULTS:\n`;

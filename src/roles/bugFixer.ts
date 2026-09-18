@@ -29,6 +29,7 @@ CONTRACT:
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
 - For async with client.method(...), use MagicMock for the unawaited method returning a context manager, and AsyncMock for __aenter__/__aexit__ or awaited resource methods. Configuring __aenter__ on an AsyncMock return_value does not fix calling that AsyncMock: the call still returns a coroutine.
 - Source code describes the branch under test, but exact expected values still require an explicit return/raise or same-test mock behavior.
+- Observations marked uncontrolled-ambient-read cannot supply expected values or exceptions. Control clock/entropy at its use point instead of copying a captured value.
 - Return exactly one JSON object: {"method":"test_name","replacement":"complete def test_name(self): ... method","imports":["optional import line"]}.
 - replacement must contain one method only, without a class wrapper or Markdown. imports may contain at most 3 valid Python import lines.`;
 }

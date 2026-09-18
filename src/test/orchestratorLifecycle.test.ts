@@ -1,8 +1,13 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { currentExecution, ExecutionContext } from '../pipeline/executionContext';
 
 test('abort and immediate restart suppress stale completion and freeze model facts per batch', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-lifecycle-'));
+    const params = { batchPath: directory, outputPath: path.join(directory, 'results'), envType: 'local', modelName: 'fixture' };
     const Module = require('module');
     const originalLoad = Module._load;
     const handlers = new Map<string, (...args: any[]) => any>();
@@ -44,17 +49,17 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         const update = handlers.get('llm-unit-test.updateModelProfile')!;
         const batch = handlers.get('llm-unit-test.runBatchAnalysis')!;
         update({ envType: 'local', modelName: 'first', paramSize: '3B', contextLength: 4096 });
-        const oldBatch = batch({ batchPath: 'fixture' });
+        const oldBatch = batch(params);
         assert.strictEqual(scans.length, 1);
         handlers.get('llm-unit-test.abortTest')!();
         assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 1);
         update({ envType: 'local', modelName: 'second', paramSize: '8B', contextLength: 8192 });
-        const newBatch = batch({ batchPath: 'fixture' });
+        const newBatch = batch(params);
         assert.strictEqual(scans.length, 2);
         assert.strictEqual(scans[0].context.snapshot.current.modelName, 'first');
         assert.strictEqual(scans[1].context.snapshot.current.modelName, 'second');
         assert.strictEqual(scans[0].context.snapshot.stored.length, 1);
-        await batch({ batchPath: 'duplicate' });
+        await batch(params);
         assert.strictEqual(scans.length, 2);
         assert.strictEqual(warnings.length, 1);
         const beforeOldCompletion = messages.length;
@@ -65,9 +70,14 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         scans[1].resume();
         await newBatch;
         assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 2);
+        const records = fs.readdirSync(params.outputPath).map(name => JSON.parse(
+            fs.readFileSync(path.join(params.outputPath, name, 'batch_manifest.json'), 'utf8')));
+        assert.deepStrictEqual(records.map(record => record.status).sort(), ['cancelled', 'completed']);
+        assert.strictEqual(new Set(records.map(record => record.batchId)).size, 2);
     } finally {
         Module._load = originalLoad;
         utilities.findPythonFilesInDir = originalScan;
         for (const scan of scans) { scan.resume(); }
+        fs.rmSync(directory, { recursive: true, force: true });
     }
 });

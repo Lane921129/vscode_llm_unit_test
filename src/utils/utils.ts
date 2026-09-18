@@ -15,8 +15,11 @@ export interface FunctionAstInfo {
 /**
  * 透過 Python 原生 AST 完整解析檔案內所有函式、Class Method、Async 函式
  */
-export async function extractFunctionsWithAst(filePath: string, pythonExecutable?: string): Promise<FunctionAstInfo[]> {
-    if (!fs.existsSync(filePath)) {return [];}
+export async function extractFunctionsWithAst(filePath: string, pythonExecutable?: string, strict = false): Promise<FunctionAstInfo[]> {
+    if (!fs.existsSync(filePath)) {
+        if (strict) { throw new Error('AST discovery failed'); }
+        return [];
+    }
 
     const pythonScript = `
 import sys, ast, json
@@ -84,15 +87,17 @@ except Exception as e:
         const { stdout, code } = await runSpawn(normalizePythonExecutable(pythonExecutable), ['-c', pythonScript, filePath], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
-        return code === 0 && stdout.trim() ? JSON.parse(stdout) : [];
+        if (code !== 0 || !stdout.trim()) { throw new Error('AST discovery failed'); }
+        return JSON.parse(stdout);
     } catch {
         throwIfExecutionCancelled();
+        if (strict) { throw new Error('AST discovery failed'); }
         return [];
     }
 }
 
 /** 遞迴掃描資料夾 */
-export async function findPythonFilesInDir(dir: string): Promise<string[]> {
+export async function findPythonFilesInDir(dir: string, strict = false, excludedRoots: string[] = [], excludeBatchResults = false): Promise<string[]> {
     throwIfExecutionCancelled();
     const ignored = new Set(['.git', 'node_modules', 'env', '.env', 'venv', '.venv', '.pytest_cache', '__pycache__']);
     const results: string[] = [];
@@ -100,15 +105,31 @@ export async function findPythonFilesInDir(dir: string): Promise<string[]> {
         const list = await fs.promises.readdir(dir, { withFileTypes: true });
         for (const item of list) {
             const fullPath = path.join(dir, item.name);
+            if (excludedRoots.some(root => path.relative(root, fullPath) === '')) { continue; }
             if (item.isDirectory()) {
                 if (ignored.has(item.name)) {continue;}
-                results.push(...await findPythonFilesInDir(fullPath));
+                if (excludeBatchResults && isRecordedBatchDirectory(fullPath)) { continue; }
+                results.push(...await findPythonFilesInDir(fullPath, strict, excludedRoots, excludeBatchResults));
             } else if (item.name.endsWith('.py')) {
                 results.push(fullPath);
             }
         }
-    } catch { throwIfExecutionCancelled(); }
+    } catch {
+        throwIfExecutionCancelled();
+        if (strict) { throw new Error('Python source discovery failed'); }
+    }
     return results;
+}
+
+function isRecordedBatchDirectory(directory: string): boolean {
+    const manifest = path.join(directory, 'batch_manifest.json');
+    if (!fs.existsSync(manifest)) { return false; }
+    try {
+        const record = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+        return record.schemaVersion === 1 && typeof record.batchId === 'string'
+            && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(record.batchId)
+            && Array.isArray(record.targets) && Array.isArray(record.discoveredFiles);
+    } catch { return false; }
 }
 
 export type MutationEngine = 'mutatest' | 'mutmut' | null;

@@ -11,7 +11,8 @@ import {
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
-import { createAnalysisDirectory } from './pipeline/analysisOutput';
+import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
+import { BatchJournal } from './pipeline/batchJournal';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import {
     BehaviorObservation,
@@ -256,6 +257,9 @@ interface AnalysisParams {
     pythonExecutable?: string;
     /** Runner-owned context setting; not a new user/provider configuration. */
     requestContextTokens?: number;
+    /** Internal batch inventory; never serialized with provider credentials. */
+    batchJournal?: BatchJournal;
+    batchTargetId?: number;
 }
 
 function configuredPythonExecutable(): string {
@@ -387,26 +391,58 @@ export function activate(context: vscode.ExtensionContext) {
             }
             const paramsWithPython = { ...params, pythonExecutable: configuredPythonExecutable() };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
-                const files = await findPythonFilesInDir(runParams.batchPath);
-                throwIfExecutionCancelled();
-                const tasks: Array<() => Promise<void>> = [];
-                for (const file of files) {
-                    throwIfExecutionCancelled();
-                    const funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable);
-                    for (const func of funcs) {
-                        tasks.push(async () => {
-                            throwIfExecutionCancelled();
-                            log(`[系統] 批次目標：${path.basename(file)}:${func.fullName}`);
-                            await executeSingleFileAnalysis({
-                                ...runParams, filePath: file, funcName: func.fullName,
-                                projectName: path.basename(runParams.batchPath)
-                            }, log, view);
-                        });
+                const projectName = path.basename(runParams.batchPath);
+                const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,
+                    runParams.sessionDate || formatSessionDate(), projectName);
+                const batch = new BatchJournal(batchDirectory, runParams.batchPath, {
+                    model: runParams.modelName, buildTimestamp: extensionBuildIdentity.buildTimestamp,
+                    python: runParams.pythonExecutable
+                });
+                let outcome: 'completed' | 'cancelled' | 'failed' = 'failed';
+                try {
+                    const output = path.resolve(runParams.outputPath || batchDirectory);
+                    const excluded = path.relative(runParams.batchPath, output) === '' ? [batchDirectory] : [output];
+                    let files: string[];
+                    try { files = await findPythonFilesInDir(runParams.batchPath, true, excluded, true); }
+                    catch {
+                        throwIfExecutionCancelled();
+                        batch.discoveryFailed(runParams.batchPath, 'source-discovery');
+                        throw new Error('批次來源掃描未完成，請檢查資料夾是否存在及讀取權限。');
                     }
+                    const tasks: Array<() => Promise<void>> = [];
+                    for (const file of files) {
+                        throwIfExecutionCancelled();
+                        let funcs;
+                        try { funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable, true); }
+                        catch {
+                            throwIfExecutionCancelled();
+                            batch.discoveryFailed(file, 'ast-discovery');
+                            log(`[系統] 無法解析 ${path.relative(runParams.batchPath, file)}，批次摘要將保留掃描未完成狀態。`);
+                            continue;
+                        }
+                        batch.discover(file, funcs.map(func => func.fullName));
+                        for (const func of funcs) {
+                            const id = tasks.length;
+                            tasks.push(async () => {
+                                throwIfExecutionCancelled();
+                                batch.begin(id);
+                                log(`[系統] 批次目標：${path.basename(file)}:${func.fullName}`);
+                                try { await executeSingleFileAnalysis({
+                                    ...runParams, filePath: file, funcName: func.fullName,
+                                    projectName, batchJournal: batch, batchTargetId: id
+                                }, log, view); }
+                                finally { batch.refresh(id); }
+                            });
+                        }
+                    }
+                    batch.start();
+                    log(`[系統] 批次掃描完成：${tasks.length} 個函式，將逐一分析與測試。`);
+                    await runSequentially(tasks, log);
+                    outcome = 'completed';
+                } finally {
+                    batch.finish(isExecutionCancelled() ? 'cancelled' : outcome);
+                    log(`[系統] 批次狀態與環境問題摘要：${path.join(batchDirectory, 'batch_summary.md')}（執行結束不代表全部通過）`);
                 }
-                log(`[系統] 批次掃描完成：${tasks.length} 個函式，將逐一分析與測試。`);
-                await runSequentially(tasks, log);
-                log('[系統] 批次自動化測試執行完畢。');
             });
         }
     );
@@ -1215,7 +1251,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const displayFile = params.projectName ? path.relative(projectRoot, params.filePath) : path.basename(params.filePath);
     const displayName = params.funcName ? `${displayFile}:${params.funcName}` : displayFile;
     throwIfExecutionCancelled();
-    const sessionDir = createAnalysisDirectory(baseDir, dateStr, params.filePath, safeFuncName, params.projectName, projectRoot);
+    const sessionDir = createAnalysisDirectory(baseDir, dateStr, params.filePath, safeFuncName, params.projectName, projectRoot,
+        params.batchJournal?.directory);
+    if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, sessionDir); }
     const existingReport = path.join(sessionDir, 'final_report.md');
 
     // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
@@ -1227,6 +1265,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         finalReportMarkdown += `- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n`;
         throwIfExecutionCancelled();
         fs.writeFileSync(existingReport, finalReportMarkdown, 'utf-8');
+        if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.dummy(params.batchTargetId); }
         log(`[快速通道] ✅ Dummy 函式 ${params.funcName} 已略過；結果已寫入 ${existingReport}`);
         return;
     }
