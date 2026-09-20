@@ -18,7 +18,7 @@ export class AnalysisJournal {
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
             schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(),
-            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v5',
+            sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v6',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
         this.knowledge({ target, terminalStatus: 'running', stage: 'starting' });

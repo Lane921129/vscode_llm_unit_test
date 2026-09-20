@@ -3,7 +3,8 @@ import { EVIDENCE_CONTRACT_VERSIONS } from '../pipeline/evidenceContracts';
 
 export const ROLE_CONTRACT_VERSIONS = {
     ...EVIDENCE_CONTRACT_VERSIONS,
-    reviewer: 'review-v5',
+    reviewer: 'review-v6',
+    qualityAnalyst: 'quality-task-v2',
     writerRevision: 'writer-revision-v2',
     bugFix: 'bug-fix-v3'
 } as const;

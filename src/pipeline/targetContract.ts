@@ -13,6 +13,10 @@ export function formatTargetContract(module: string, name: string, args: string[
         `Target binding: ${kind}${context?.is_async ? ' (await required)' : ''}`,
         `Target signature: ${invocation}`,
         `AST signature (input shape, not oracle): ${JSON.stringify(context?.signature || [])}`,
-        ...(owner ? ['Never import the method as a top-level function. Reuse the verified instance setup; do not invent constructor arguments.'] : [])
+        ...(owner ? ['Never import the method as a top-level function.',
+            ...(['static', 'class'].includes(kind)
+                ? ['Call this method on the class. No instance setup or mock is required merely because it is a static/class method.']
+                : ['Reuse the verified instance setup; do not invent constructor arguments.'])] : []),
+        'Keep the selected target real. Mock only its dependencies; never patch the target itself or change its implementation/decorators.'
     ].join('\n');
 }

@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 語意分析師 | 整合 AST、呼叫點與初始受控行為觀測，提出待測情境；不選規則 | [semanticAnalyzer.ts](semanticAnalyzer.ts) | 情境與證據假設 JSON |
 | Writer | 根據合併證據包與程式選出的測試生成規則寫測試，或依 Reviewer 意見修改 | [unittestWriter.ts](unittestWriter.ts) | 完整 Python unittest |
-| Reviewer | 隔離執行通過後檢查測試，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v5` 單一 findings 陣列，每項含 category、原文引述、原因與具體動作 |
+| Reviewer | 隔離執行通過後檢查測試，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v6` 單一 findings 陣列，每項含 category、test_line、原因與具體動作；程式還原原文 |
 | Bug Fixer | 根據可明確定位的實際測試失敗做單一方法修復 | [bugFixer.ts](bugFixer.ts) | `bug-fix-v3` 的方法替換 JSON，由管線合併回完整 unittest |
 | 品質分析師 | 執行通過後，根據覆蓋／突變結果規劃下一輪 | [qualityAnalyst.ts](qualityAnalyst.ts) | 最多三個待驗證任務 |
 
@@ -25,7 +25,9 @@ Reviewer 只有原文引述而缺少具體原因／動作時屬無效回覆；`f
 
 `legacy/mutantTriage.ts` 只保留舊格式處理，不在正式流程中啟動，也不是第六個角色。
 
-`review-v5` 的 schema 與 parser 共用最多五項及七個分類；程式推導 blocking／quality，模型不可自行輸出 severity。舊 JSON 只供歷史讀取，正式請求與 `python-unittest-v3` 資格探針必須使用新契約。分類／原文檢查仍不能證明模型意見正確。
+`review-v6` 的 schema 與 parser 共用最多五項及七個分類；程式推導 blocking／quality，模型不可自行輸出 severity。`test_line` 必須引用本次候選的有效非空、非註解行；程式保存該行原文。舊 JSON 只供歷史讀取，正式請求與 `python-unittest-v4` 資格探針必須使用新契約。明確違反 target binding／目標自我 mock／來源修改規則的審查保持未完成；這些有界檢查仍不能證明任意模型意見正確。
+
+品質分析使用 `quality-task-v2`：只接收一個程式選定的量測證據 ID、完整目標來源與目前測試，最多交付一項待執行情境。格式補正最多一次且共用原 deadline，傳輸錯誤或取消不啟動補正。歷史 `parseQualityTasks` 僅讀舊資料，正式流程使用 `requestFocusedQualityTask` 與 `parseFocusedQualityTask`。
 
 Bug Fixer 只接受 unittest 明確列出的一個失敗方法，不能從 traceback 中的方法名猜測；多方法、fixture、匯入或定位不明交 Writer。修改範圍驗證保留其他方法、class 屬性、signature、decorator 與 fixture，新增 import 不得遮蔽原 binding。
 

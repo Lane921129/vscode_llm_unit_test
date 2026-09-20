@@ -31,12 +31,12 @@ test('provides minimal schema contracts for semantic analysis, review, and mutan
     ]);
     assert.deepStrictEqual((review as { required: string[] }).required, ['findings']);
     assert.strictEqual((review as any).properties.findings.maxItems, 5);
-    assert.strictEqual((review as any).properties.findings.items.properties.test_excerpt.maxLength, 600);
+    assert.strictEqual((review as any).properties.findings.items.properties.test_line.pattern, '^L[1-9][0-9]*$');
     assert.strictEqual((review as any).properties.findings.items.additionalProperties, false);
     assert.deepStrictEqual((repair as { required: string[] }).required, ['method', 'replacement', 'imports']);
     assert.deepStrictEqual(
         ((review as any).properties.findings.items as { required: string[] }).required,
-        ['category', 'test_excerpt', 'reason', 'action']
+        ['category', 'test_line', 'reason', 'action']
     );
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'

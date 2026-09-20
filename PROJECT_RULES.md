@@ -56,6 +56,7 @@
 - Reviewer 與 Self-repair 必須使用相同驗證規則；失敗回應只能寫入報告，不可覆寫有效測試。
 - Reviewer 與 Self-repair 階段必須提供與生成端同等完整度的語境（目標原始碼、imports、引用常數、Class 定義、相依、真實 Trace 數據與證據觸發的技能卡），禁止在缺乏常數與依賴定義的狀態下進行盲目修復。來源碼與技能策略只可選擇路徑／setup，不可取代精確 Trace assertion 事實。
 - 涉及外部模組副作用或跨模組返回值測試時，必須使用標準的 `unittest.mock.patch`；嚴禁透過竄改本地變數進行無效的偽 Mock。
+- 生成測試的標準 `patch` 字串或可解析 `patch.object` 不得替換所選目標或其類別，即使同檔另有真實 Trace 基線亦不例外。已知直接 unittest 類別中、沒有 decorator 的測試方法若要求額外必填參數，須於結構階段交 Writer 修正；無法證明的 decorator 注入仍由隔離執行判斷。
 - 動態追蹤只提供可呼叫性的基礎 I/O 事實；複雜邊界與多分支策略由 Semantic Analyzer 產生。
 - Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物仍須通過結構、隔離執行、coverage 與 mutation gate。Auto 未驗證模型的 deterministic Trace 產物只能作為明確標示的 fallback，不得稱為 LLM 生成成果。
 - LLM 證據導向 Tier 1 與 Tier 2–4 都必須保留所有可安全 assertion 的 Dynamic Trace I/O；模型可增加情境與測試組織，但不可因遺漏而移除已驗證基線。deterministic Tier 1 本身已由 Trace 建構，不得再重複附加。
@@ -158,7 +159,10 @@
 ## 品質、Git 與紀錄
 
 - 跨檔相依來源須由預檢實際載入的模組 origin 與函式定義身分解析，且實體位於所選來源樹；不得以批次根目錄拼接猜測。未知、re-export／重綁定、動態來源與範圍外相依只保留診斷，不另行匯入或假造來源。
-- Reviewer 使用 `review-v5` 單一 `findings` 陣列，最多五項；嚴重程度由程式依 category 決定。缺少情境、弱 assertion 與型別／風格不是執行阻擋；blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Reviewer 使用 `review-v6` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度。缺少情境、弱 assertion 與型別／風格不是執行阻擋；blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Reviewer 明確違反所選 static／instance 契約、要求修改目標實作或 mock 目標本身時，整份審查保持未完成，不得刪掉錯誤 finding 後偽裝為空問題通過，也不得交 Writer 執行矛盾動作。有限語句檢查不是任意自然語言正確性證明，所有工具 gate 仍須保留。
+- 品質回滾及停滯判斷使用實測未覆蓋行／分支的個別身份與存活突變體；不能因缺口清單縮短而改變顯示文字，就將改善誤判退步。已知覆蓋變未知、新增未覆蓋行／分支、舊突變體重新存活及分數降低仍受保護。
+- 品質分析師 `quality-task-v2` 每輪最多一項任務，引用程式選定的量測證據 ID；模型不可自行發明證據或預期值。格式補正最多一次，與初次請求共用絕對 deadline；取消／傳輸失敗不再啟動格式重試。空任務只代表無建議，不能將剩餘缺口算通過。
 - Tier 3 scaffold 與其他 Writer 使用相同完整 unittest 檔案契約，scaffold 僅提供 setup 指引；不得再把完整模型回覆縮排塞入另一個 TestCase。修訂重複候選時必須保留最新診斷，不得以空白或過期輸出覆蓋。
 - Cloud 可使用 `llmUnitTest.cloudThinkingMode` 的 `minimal`（預設）或 `provider-default`；低思考量不改變品質 gate。只依實際、明確的不支援選項回應回退，與格式回退及傳輸重試共用原 deadline；不依模型名稱決定。HTTP 5xx／認證／配額錯誤不得冒充選項不支援，有限傳輸重試耗盡後不得透過 Tier 降階另開請求。
 - provider 明示截斷或非正常完成的輸出不可當成完整產物；錯誤 envelope／HTTP body 不寫入日誌或報告。只保存安全的角色、耗時、階段與分類。

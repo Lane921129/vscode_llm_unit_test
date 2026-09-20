@@ -46,6 +46,45 @@ def validate_bindings(code, context):
                 if (module and node.module != module and node.module == module.rsplit('.', 1)[-1]
                         and item.name in (target, context.get('className'), '*')):
                     return {'valid': False, 'reason': f'Use from {module} import {item.name}; bare and package imports create different module instances.'}
+    def resolve(node):
+        name = dotted(node)
+        root, _, suffix = name.partition('.')
+        return aliases.get(root, root) + ('.' + suffix if suffix else '')
+
+    # unittest calls undecorated bound test methods without user arguments.
+    # Decorators may inject mocks; leave those unknown cases to execution.
+    for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+        if cls.decorator_list or not any(resolve(base) in (
+                'unittest.TestCase', 'unittest.IsolatedAsyncioTestCase') for base in cls.bases):
+            continue
+        for method in cls.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or not method.name.startswith('test_') or method.decorator_list:
+                continue
+            required = len(method.args.posonlyargs) + len(method.args.args) - len(method.args.defaults)
+            if required > 1 or any(default is None for default in method.args.kw_defaults):
+                return {'valid': False, 'reason': f'Unittest method {method.name} requires extra arguments. Put inputs inside the test; unittest supplies only the bound instance. Use a declared patch decorator only for its injected mocks.'}
+
+    owner = context.get('className')
+    qualified = target if not owner or target.startswith(owner + '.') else owner + '.' + target
+    forbidden = {f'{module}.{qualified}'} if module and target else set()
+    if module and owner:
+        forbidden.add(f'{module}.{owner}')
+    # Reject replacing the selected target even when there is another real Trace
+    # test in the file. A normal assertion on a patched return is not target evidence.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        factory = resolve(node.func)
+        patch_path = None
+        if factory == 'unittest.mock.patch' and node.args and isinstance(node.args[0], ast.Constant):
+            patch_path = node.args[0].value
+        elif factory == 'unittest.mock.patch.object' and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            attribute = node.args[1].value
+            if isinstance(attribute, str):
+                patch_path = resolve(node.args[0]) + '.' + attribute
+        if isinstance(patch_path, str) and patch_path in forbidden:
+            return {'valid': False, 'reason': 'Do not mock or replace the selected target or its class. Keep the real target and patch only its dependencies at their use points.'}
+
     # patch(...).start() returns a Mock, not its patcher. Calling stop on
     # that Mock cannot undo the patch and contaminates later real Trace cases.
     for scope in tree.body:

@@ -1,6 +1,6 @@
 import { REVIEW_CATEGORIES, REVIEW_FINDING_LIMIT } from '../roles/testReviewer';
 
-export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'test-method-json' | 'semantic-json' | 'review-json' | 'mutant-triage-json';
+export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'test-method-json' | 'semantic-json' | 'review-json' | 'quality-json' | 'mutant-triage-json';
 
 // These client-error statuses are commonly used by compatible providers when
 // a response-format / JSON-schema option is unsupported.  Authentication,
@@ -68,7 +68,7 @@ export function addOutputContract(systemPrompt: string, outputFormat: CustomOutp
     if (outputFormat === 'test-method-json') {
         return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one JSON object with method, replacement, and imports fields. replacement contains one Python test method; imports is an array of import lines. Do not use Markdown fences or add other fields.`;
     }
-    if (outputFormat === 'json' || outputFormat === 'semantic-json' || outputFormat === 'review-json' || outputFormat === 'mutant-triage-json') {
+    if (outputFormat === 'json' || outputFormat === 'semantic-json' || outputFormat === 'review-json' || outputFormat === 'quality-json' || outputFormat === 'mutant-triage-json') {
         return `${systemPrompt}\n\nOUTPUT CONTRACT: Return exactly one valid JSON object. Do not use Markdown fences or explanatory prose.`;
     }
     return systemPrompt;
@@ -81,6 +81,16 @@ export function addOutputContract(systemPrompt: string, outputFormat: CustomOutp
  * never the only validation layer.
  */
 export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat): Record<string, unknown> | undefined {
+    if (outputFormat === 'quality-json') {
+        return { type: 'object', additionalProperties: false, required: ['tasks'], properties: {
+            tasks: { type: 'array', maxItems: 1, items: { type: 'object', additionalProperties: false,
+                required: ['evidence_id', 'hypothesis', 'scenario', 'verification'], properties: {
+                    evidence_id: { type: 'string', pattern: '^E[0-9a-f]{16}$' },
+                    ...Object.fromEntries(['hypothesis', 'scenario', 'verification'].map(key =>
+                        [key, { type: 'string', minLength: 1, maxLength: 800 }]))
+                } } }
+        } };
+    }
     if (outputFormat === 'test-code-json') {
         return {
             type: 'object',
@@ -120,11 +130,11 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
             additionalProperties: false,
             properties: {
                 category: { type: 'string', enum: Object.keys(REVIEW_CATEGORIES) },
-                test_excerpt: { type: 'string', minLength: 1, maxLength: 600 },
+                test_line: { type: 'string', pattern: '^L[1-9][0-9]*$' },
                 reason: { type: 'string', minLength: 1, maxLength: 600 },
                 action: { type: 'string', minLength: 1, maxLength: 600 }
             },
-            required: ['category', 'test_excerpt', 'reason', 'action']
+            required: ['category', 'test_line', 'reason', 'action']
         };
         return {
             type: 'object',

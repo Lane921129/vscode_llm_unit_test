@@ -1,4 +1,4 @@
-import { QUALIFICATION_VERSION } from '../llm/modelQualification';
+import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -119,7 +119,7 @@ class Cases(unittest.TestCase):
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
-            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
@@ -128,8 +128,8 @@ class Cases(unittest.TestCase):
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
-        assert.equal(manifest.promptVersion, 'role-contracts-v5');
-        assert.equal(manifest.roleContracts.reviewer, 'review-v5');
+        assert.equal(manifest.promptVersion, 'role-contracts-v6');
+        assert.equal(manifest.roleContracts.reviewer, 'review-v6');
         assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');
         assert.equal(manifest.evidenceContracts.semanticPlan, 'semantic-plan-v2');
         assert.equal(manifest.evidenceContracts.ruleSelection, 'rule-selection-v2');
@@ -209,7 +209,7 @@ class Cases(unittest.TestCase):
         rejectAllModelRequests = true;
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '1B', contextLength: 128, qualificationVersion: QUALIFICATION_VERSION,
-            testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+            testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'oversize-results') });
@@ -222,7 +222,7 @@ class Cases(unittest.TestCase):
         // Service failures retain their category and never launch lower-Tier Writer retries.
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
-            testGenerationReady: true, testGenerationMode: 'plain-unittest' });
+            testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         let serviceCalls = 0;
         globalThis.fetch = async () => { serviceCalls++; return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 }); };
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
@@ -252,6 +252,88 @@ class Cases(unittest.TestCase):
         assert.equal(scaffoldKnowledge.terminalStatus, 'passed', scaffoldKnowledge.failure);
         assert.equal(scaffoldKnowledge.resolvedTier, 3);
         assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer'], 'complete scaffold output needs no wrapping repair or Tier fallback');
+
+        // Partial progress must survive even while coverage/mutation remain below 100.
+        fs.writeFileSync(path.join(directory, 'partial.py'), `def read(): return {'mode': 'a'}
+class Widget:
+    @staticmethod
+    def normalize():
+        state = read()
+        if state['mode'] == 'a':
+            return 1
+        if state['mode'] == 'b':
+            return 2
+        if state['mode'] == 'c':
+            return 3
+        return 0
+`);
+        const partialFirst = `import unittest
+from unittest.mock import patch
+from partial import Widget
+class Cases(unittest.TestCase):
+    def test_keep(self):
+        with patch('partial.read', return_value={'mode': 'a'}):
+            self.assertEqual(Widget.normalize(), 1)
+`;
+        const partialSecond = partialFirst + `    def test_more(self):
+        with patch('partial.read', return_value={'mode': 'b'}):
+            self.assertEqual(Widget.normalize(), 2)
+`;
+        let partialWriters = 0, partialReviews = 0, qualityCalls = 0;
+        globalThis.fetch = async (_url, options) => {
+            const request = JSON.parse(String(options?.body));
+            let response: string;
+            if (request.system.includes('You are the test Reviewer')) {
+                partialReviews++;
+                response = partialReviews === 1 ? '{"findings":[]}' : JSON.stringify({ findings: [{
+                    category: 'target-binding', test_line: 'L7', reason: 'The target function is not static.',
+                    action: 'Add @staticmethod to Widget.normalize.'
+                }] });
+            } else if (request.system.includes('Analyst after successful')) {
+                qualityCalls++;
+                assert.equal(request.format, undefined, 'plain-unittest profiles retain text transport');
+                const focus = JSON.parse(request.prompt.split('FOCUS\n')[1].split('\n')[0]);
+                response = qualityCalls === 1 ? 'INVALID_PRIVATE_RESPONSE' : JSON.stringify({ tasks: [{
+                    evidence_id: focus.id, hypothesis: 'Another controlled input may cover the next branch.',
+                    scenario: 'Mock read with mode b.', verification: 'Run original and mutants with the same mock.'
+                }] });
+                if (qualityCalls === 2) {
+                    assert.match(request.prompt, /FORMAT CORRECTION/);
+                    assert.doesNotMatch(request.prompt, /INVALID_PRIVATE_RESPONSE/);
+                }
+            } else if (request.system.includes('dependency_behaviors')) {
+                response = '{"dependency_behaviors":[]}';
+            } else {
+                partialWriters++;
+                if (partialWriters === 2) { assert.match(request.prompt, /Mock read with mode b/); }
+                response = '```python\n' + (partialWriters === 1 ? partialFirst : partialSecond) + '\n```';
+            }
+            return new Response(JSON.stringify({ response }), { status: 200 });
+        };
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'partial.py'), funcName: 'Widget.normalize', promptStrategy: 'tier1',
+            maxLoops: 2, timeoutSeconds: 60, outputPath: path.join(directory, 'partial-results') });
+        const partialRoot = path.join(directory, 'partial-results');
+        const partialOutput = path.join(partialRoot, fs.readdirSync(partialRoot)[0], 'Widget.normalize');
+        const partialKnowledge = JSON.parse(fs.readFileSync(path.join(partialOutput, 'function_knowledge.json'), 'utf8'));
+        const partialEvents = fs.readFileSync(path.join(partialOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        const accepted = partialEvents.filter(event => event.stage === 'baseline' && event.status === 'accepted');
+        const covered = partialEvents.filter(event => event.stage === 'coverage' && event.status === 'measured');
+        assert.equal(accepted.length, 2, JSON.stringify({ failure: partialKnowledge.failure, baseline: accepted }));
+        assert.ok(accepted[1].detail.score > accepted[0].detail.score);
+        assert.ok(covered[1].detail.missingTargetLines.length < covered[0].detail.missingTargetLines.length);
+        assert.ok(covered[1].detail.missingTargetLines.length > 0, 'this is partial improvement, not a full pass');
+        assert.equal(partialKnowledge.mutationScore, accepted[1].detail.score);
+        assert.equal(partialKnowledge.reviewStatus, 'incomplete');
+        assert.equal(partialWriters, 2, JSON.stringify(partialEvents.filter(event =>
+            (event.stage === 'model-request' && event.status === 'requested') || ['rejected', 'tier-failed', 'failed'].includes(event.status))
+            .map(event => ({ stage: event.stage, status: event.status, role: event.detail.role, reason: event.detail.reason }))));
+        assert.equal(qualityCalls, 2, 'one invalid response receives one bounded format repair');
+        assert.ok(partialEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
+            && event.detail.diagnostics.includes('target-binding-contradiction')));
+        assert.ok(!partialEvents.some(event => event.stage === 'baseline' && event.status === 'rollback'));
+        assert.match(fs.readFileSync(path.join(partialOutput, partialKnowledge.acceptedTest), 'utf8'), /test_more/);
+        globalThis.fetch = fixtureFetcher;
 
         traceBuilder.buildTier1TestFile = (...args: any[]) => {
             const built = originalTraceBuilder(...args);

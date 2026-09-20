@@ -21,6 +21,8 @@ test('abort and immediate restart suppress stale completion and freeze model fac
     });
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 },
+        Uri: { file: (fsPath: string) => ({ fsPath }) },
+        workspace: { workspaceFolders: [], getConfiguration: () => ({ get: () => undefined }) },
         window: {
             registerWebviewViewProvider: (_: string, provider: any) => {
                 provider.webview = { postMessage: (message: { command: string }) => {

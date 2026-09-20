@@ -2,6 +2,19 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-20
+
+### 保留部分品質改善、綁定審查原文並縮小品質分析任務
+
+- 修正未覆蓋行清單縮短卻因文字改變而被判為品質倒退的問題。回滾與停滯改比較實際行／分支身份；新增缺口、已知證據變未知、分數下降及舊突變體重新存活仍受保護，rollback 附結構化原因。
+- Reviewer 升級 `review-v6`，以 TEST_FILE 行號還原精確原文，拒絕無效／混用引用。明確與 static／instance 契約矛盾、要求修改被測來源或 mock 目標自身的建議保持審查未完成，不交 Writer，也不刪除 finding 後算通過。Writer 共用更清楚的 class／static 呼叫指引。
+- Reviewer 預算改採與其他角色相同的 token 估算，避免額外字元門檻誤擋仍在預算內的完整語境；超額仍停止，不截斷原文。
+- 品質分析使用 `quality-task-v2`，每輪一個實測證據 ID、最多一項情境。格式補正最多一次、共用原絕對 deadline；取消或傳輸錯誤不啟動格式補正。Python-only 模型使用文字傳輸，其他能力可使用 schema，所有回覆仍經同一本地 parser。
+- Python binding gate 拒絕明確 patch 所選目標／類別，以及直接 unittest 類別中沒有 decorator 卻要求額外必填參數的測試方法；結構錯誤交 Writer。標準 dependency mock 與 decorator 注入保持原有處理。
+- 探針契約升為 `python-unittest-v4`，舊資格必須重新測試。實作範圍、限制與實驗室重測步驟見 `docs/品質回滾與角色契約修復_2026_09_20.md`。
+- 驗證：中性 static method 的正式 Python／coverage／mutation 部分改善流程、矛盾審查、證據 ID 與有限重試回歸。實際提交快照 Node 339、Python 138 全部通過；含暫停環境功能的工作區 Node 351、Python 146 全部通過。兩者型別、lint、生產建置與 Webview 語法均通過，主專案 tracked files／可達 Git 歷史密鑰掃描與差異格式檢查通過。另僅補齊暫停功能測試的 Windows UTF-8 讀取設定，該測試仍留在工作區未提交。
+- 限制：自然語言矛盾檢查只辨識明確語句，不能證明任意審查正確；未知動態 patch／decorator 仍依既有執行與品質 gate。未重跑原應用、CodeLlama 13B 或 1B～5B，不以中性 fixture 取代實驗室驗收。先前暫停的 Python 環境功能保留於工作區，不納入本次提交。
+
 ## 2026-09-18
 
 ### 修正時間／隨機 Trace oracle，新增整批進度與環境診斷

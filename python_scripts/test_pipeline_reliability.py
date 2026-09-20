@@ -12,6 +12,31 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class PipelineReliabilityTests(unittest.TestCase):
+    def test_selected_target_patches_are_rejected_even_with_ordinary_assertions(self):
+        context = {'module': 'sample', 'target': 'normalize', 'className': 'Widget'}
+        imports = 'from unittest.mock import patch as p\nfrom sample import Widget as W\nimport sample as m\n'
+        for expression in ["p('sample.Widget.normalize')", "p('sample.Widget')",
+                           "p.object(W, 'normalize')", "p.object(m.Widget, 'normalize')"]:
+            candidate = imports + f'with {expression}:\n    assert W.normalize(2) == 2\n'
+            self.assertFalse(validate_bindings(candidate, context)['valid'], expression)
+        for expression in ["p('sample.read')", "p.object(W, 'read')", "p('other.Widget.normalize')"]:
+            self.assertTrue(validate_bindings(imports + expression, context)['valid'], expression)
+        module_context = {'module': 'sample', 'target': 'normalize'}
+        self.assertFalse(validate_bindings(imports + "p.object(m, 'normalize')", module_context)['valid'])
+        self.assertTrue(validate_bindings(imports + "p.object(m, 'read')", module_context)['valid'])
+
+    def test_unittest_required_inputs_are_structure_failures_without_breaking_mock_injection(self):
+        prefix = 'from unittest import TestCase as Case\nfrom unittest.mock import patch\nclass Tests(Case):\n'
+        for signature in ['self, value', 'self, /, value', 'self, *, value']:
+            code = prefix + f'    def test_case({signature}):\n        self.assertTrue(True)\n'
+            result = validate_bindings(code, {'module': 'sample', 'target': 'target'})
+            self.assertFalse(result['valid'], signature)
+            self.assertIn('extra arguments', result['reason'])
+        for signature in ['self', 'self, value=2', 'self, *, value=2', 'self, *args']:
+            self.assertTrue(validate_bindings(prefix + f'    def test_case({signature}):\n        pass\n', {})['valid'])
+        injected = prefix + "    @patch('sample.read')\n    def test_case(self, dependency):\n        pass\n"
+        self.assertTrue(validate_bindings(injected, {'module': 'sample', 'target': 'target'})['valid'])
+
     def test_binding_source_context_uses_stdin_without_windows_command_line_limit(self):
         code = ('import unittest\nfrom unittest.mock import MagicMock\nfrom sample import target\n'
                 'class Cases(unittest.TestCase):\n    def test_mock(self):\n'

@@ -5,10 +5,11 @@ import {
     getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacement, canRepairTestMethod,
     fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReviewDetailed,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
-    getQualityAnalystSystemPrompt, parseQualityTasks, qualityStrategyHints,
+    getQualityAnalystSystemPrompt, selectQualityFocus, requestFocusedQualityTask, qualityStrategyHints,
     buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
+import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
@@ -641,11 +642,12 @@ async function requestLlmApi(
     systemPrompt: string,
     userPrompt: string,
     log: (text: string) => void,
-    outputFormat: CustomOutputFormat = 'text'
+    outputFormat: CustomOutputFormat = 'text',
+    sharedDeadlineAt?: number
 ): Promise<string> {
     return llmRequestQueue.run(() => requestLlmApiUnlocked(
             params, systemPrompt, userPrompt, log, outputFormat,
-            deadlineAtFromTimeoutSeconds(params.timeoutSeconds)
+            sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(params.timeoutSeconds)
         ));
 }
 
@@ -672,6 +674,7 @@ async function requestLlmApiUnlocked(
         || outputFormat === 'test-method-json'
         || outputFormat === 'semantic-json'
         || outputFormat === 'review-json'
+        || outputFormat === 'quality-json'
         || outputFormat === 'mutant-triage-json';
 
     if (params.envType === 'local') {
@@ -683,7 +686,7 @@ async function requestLlmApiUnlocked(
             prompt: userPrompt,
             stream: false,
             ...(params.requestContextTokens ? { options: { num_ctx: params.requestContextTokens } } : {}),
-            ...(expectsJsonObject ? { format: outputFormat === 'review-json' ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
+            ...(expectsJsonObject ? { format: ['review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
         };
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
@@ -777,7 +780,7 @@ async function requestLlmApiUnlocked(
 
         // Reviewer contract failures belong to the bounded review session.
         // Repeating the same invalid assessment in text mode doubles its cost.
-        if (outputFormat !== 'review-json' && !isStructuredResponseUsable(responseText, outputFormat)) {
+        if (!['review-json', 'quality-json'].includes(outputFormat) && !isStructuredResponseUsable(responseText, outputFormat)) {
             log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
             return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
         }
@@ -1280,7 +1283,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const requestBudgeted = async (
         requestParams: AnalysisParams, system: string, prompt: string,
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
-        role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer'
+        role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
+        sharedDeadlineAt?: number
     ): Promise<string> => {
         const contractedSystem = addOutputContract(system, format);
         const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
@@ -1296,7 +1300,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         const started = Date.now();
         recordRole('model-request', 'requested', metrics);
         try {
-            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow }, system, prompt, requestLog, format);
+            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow }, system, prompt, requestLog, format, sharedDeadlineAt);
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
             return response;
         } catch (error) {
@@ -2137,15 +2141,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     const sys = getTestReviewerSystemPrompt();
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence },
-                        Math.max(0, Math.floor(activeModelProfile.budgetTokens * 2) - sys.length));
-                    if (!prompt) {
+                        Number.MAX_SAFE_INTEGER);
+                    if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt, activeModelProfile.budgetTokens)) {
                         recordRole('reviewer', 'budget-exceeded', { reason: '完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。' });
                         return undefined;
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
                         try {
                             const raw = await requestBudgeted(params, sys, prompt, log, 'review-json', 'reviewer');
-                            const { review: result, diagnostics } = parseTestReviewDetailed(raw, code, true);
+                            const { review: result, diagnostics } = parseTestReviewDetailed(raw, code, true, {
+                                target: params.funcName || targetFuncName,
+                                methodKind: astContext?.method_kind || (astContext?.class_name ? 'instance' : 'module')
+                            });
                             recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
                                 contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result, diagnostics
                             });
@@ -2492,7 +2499,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const survivorIds = survivedMutants.split('\n').filter(Boolean);
             const oldSurvivorIds = bestSurvivors.split('\n').filter(Boolean);
             const reintroduced = Boolean(bestCode) && survivorIds.some(id => !oldSurvivorIds.includes(id));
-            const lostQuality = Boolean(bestCode) && measuredQualityGaps.some(gap => !bestMeasuredGaps.includes(gap));
+            const measuredCoverage = assessTargetCoverage(loopExecution, params.filePath, astContext?.executable_lines || []);
+            const coverageComparison = bestCode ? compareCoverageQuality(
+                assessTargetCoverage(bestExecution, params.filePath, astContext?.executable_lines || []), measuredCoverage) : undefined;
+            const lostQuality = coverageComparison?.regressed === true;
             if (!evidenceStillCurrent()) { throw new Error('來源或相依版本改變，捨棄本輪品質證據。'); }
             recordRole('mutation', 'measured', { code: fs.readFileSync(testPath, 'utf8'),
                 score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps });
@@ -2513,7 +2523,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     survivors: survivorIds, qualityGaps });
             } else if (bestCode) {
                 recordRole('baseline', 'rollback', { rejectedScore: mutationScore, retainedScore: bestScore,
-                    reintroduced, lostQuality, retainedCodeHash: evidenceHash(bestCode) });
+                    reintroduced, lostQuality, coverageComparison, retainedCodeHash: evidenceHash(bestCode) });
                 throwIfExecutionCancelled();
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore;
@@ -2585,7 +2595,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
             }
 
-            if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), measuredQualityGaps)) {
+            if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), coverageGapIds(
+                assessTargetCoverage(loopExecution, params.filePath, astContext?.executable_lines || [])))) {
                 recordRole('analyst-quality', 'stagnated', { reason: '連續 3 輪沒有減少已測量缺口；保留基線並停止。' });
                 finalReportMarkdown += '> 品質尚未達標：連續 3 輪沒有進步，停止相同策略重試。\n';
                 journal.knowledge({ terminalStatus: 'stagnated' });
@@ -2664,18 +2675,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         // Analyst proposes bounded scenarios; Writer owns code. Do not spend a call after the last round.
         analystTasks = qualityStrategyHints(survivedMutants).join('\n');
         if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
-            const measured = [survivedMutants, ...qualityGaps].filter(Boolean).join('\n');
             try {
                 const sys = getQualityAnalystSystemPrompt();
-                const prompt = `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
-                    + `MEASURED GAPS\n${measured}\nCURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
-                    + `CONDITIONAL STRATEGIES (not output facts)\n${analystTasks}`;
-                if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
-                    recordRole('analyst-quality', 'budget-exceeded', { measured });
-                } else {
-                    const raw = await requestBudgeted(params, sys, prompt, log, 'text', 'analyst-quality');
-                    const tasks = parseQualityTasks(raw, measured);
-                    recordRole('analyst-quality', tasks ? 'parsed-hypotheses' : 'invalid-response', { raw, tasks, measured });
+                const focus = selectQualityFocus(assessTargetCoverage(loopExecution, params.filePath,
+                    astContext?.executable_lines || []), survivedMutants.split('\n').filter(Boolean), currentLoop);
+                if (focus) {
+                    const tasks = await requestFocusedQualityTask({ focus,
+                        context: `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
+                            + `CURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
+                            + `CONDITIONAL STRATEGIES (not output facts)\n${qualityStrategyHints(focus.evidence).join('\n')}`,
+                        deadlineAt: deadlineAtFromTimeoutSeconds(params.timeoutSeconds),
+                        checkCancelled: throwIfExecutionCancelled,
+                        event: (status, detail) => recordRole('analyst-quality', status, detail),
+                        request: (prompt, deadline) => requestBudgeted(params, sys, prompt, log,
+                            analysisResponseFormat === 'text' ? 'text' : 'quality-json', 'analyst-quality', deadline)
+                    });
                     if (tasks) {
                         analystTasks += '\n' + JSON.stringify(tasks);
                         journal.record(currentLoop, 'next-tasks', 'unverified', { tasks });

@@ -1,5 +1,5 @@
 import { canRepairTestMethod, mergeBugFixReplacement } from '../roles/bugFixer';
-import { getTestReviewerSystemPrompt, parseTestReview } from '../roles/testReviewer';
+import { getTestReviewerSystemPrompt, numberReviewLines, parseTestReviewDetailed } from '../roles/testReviewer';
 
 export type RoleQualificationState = 'verified' | 'unverified' | 'not-run';
 
@@ -35,9 +35,9 @@ export const ROLE_QUALIFICATION_FAILURE =
 
 export const REVIEWER_QUALIFICATION_PROMPT = `${getTestReviewerSystemPrompt()}
 Review this exact TEST_FILE for a concrete demonstrated test problem. It is valid to return an empty findings array.
-Every finding must contain test_excerpt, reason, and action. Do not write Python or modify the target implementation.
+Every finding must contain test_line, reason, and action. Target binding: module. Do not write Python or modify the target implementation.
 TEST_FILE:
-${ROLE_QUALIFICATION_TEST_FILE}`;
+${numberReviewLines(ROLE_QUALIFICATION_TEST_FILE)}`;
 
 export const BUG_FIXER_QUALIFICATION_PROMPT = `Return only one JSON object with method, replacement, and imports.
 Repair only the named failing method test_increment in the supplied TEST_FILE. Keep the method name and return one method body.
@@ -53,9 +53,10 @@ function status(state: RoleQualificationState, reason: string): RoleQualificatio
 
 export function assessReviewerQualification(response: string | undefined): RoleQualificationStatus {
     if (!response?.trim()) { return status('unverified', 'Reviewer 沒有回傳 JSON。'); }
-    const parsed = parseTestReview(response, ROLE_QUALIFICATION_TEST_FILE, true);
+    const parsed = parseTestReviewDetailed(response, ROLE_QUALIFICATION_TEST_FILE, true,
+        { target: 'increment', methodKind: 'module' }).review;
     return parsed
-        ? status('verified', 'Reviewer 已通過 review-v5 分類、原文引述與欄位契約。')
+        ? status('verified', 'Reviewer 已通過 review-v6 分類、行號引用與欄位契約。')
         : status('unverified', 'Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。');
 }
 
