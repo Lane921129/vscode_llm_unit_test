@@ -103,15 +103,18 @@ test('qualifies Reviewer JSON and Bug Fixer method replacement independently', (
 
 test('role qualification runs Reviewer and Bug Fixer probes independently', async () => {
     const prompts: string[] = [];
+    const formats: string[] = [];
     const profile = await runRoleQualificationProbes(
         { state: 'verified', reason: 'writer passed' },
-        async prompt => {
+        async (prompt, format) => {
             prompts.push(prompt);
+            formats.push(format);
             return prompt.includes('ONE findings array')
                 ? '{"findings":[]}'
                 : JSON.stringify({ method: 'test_increment', replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)', imports: [] });
         }
     );
+    assert.deepStrictEqual(formats, ['json', 'text']);
     assert.deepStrictEqual(prompts.map(prompt => prompt.includes('ONE findings array')), [true, false]);
     assert.deepStrictEqual(
         [profile.writer.state, profile.reviewer.state, profile.bugFixer.state],

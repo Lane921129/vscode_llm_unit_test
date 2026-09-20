@@ -2,6 +2,7 @@ import * as path from 'path';
 
 /** One map from the TypeScript workflow to the Python executables it owns. */
 export const PYTHON_TOOLS = {
+    testRunner: 'generated_test_runner.py',
     complexity: 'complexity_assessor.py',
     ast: 'ast_extractor.py',
     callers: 'ast_caller_finder.py',

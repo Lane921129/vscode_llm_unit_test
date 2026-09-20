@@ -22,6 +22,7 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     let expectedMutationSeconds = 20;
     let externalEngine: 'mutatest' | 'mutmut' | undefined;
     let externalRuns = 0;
+    let externalEvidence: 'passed' | 'isolation-blocked' | 'missing' = 'passed';
     processRunner.runSpawn = (command: string, args: string[], options: any) => {
         if (externalEngine && (args[1] === 'from mutatest.cli import cli_main'
             || (args[1] === 'mutmut' && args[2] === '--version'))) {
@@ -31,6 +32,14 @@ test('orchestrator carries measured quality into Writer and verifies improvement
             assert.equal(options.timeout, expectedMutationSeconds * 1000);
             assert.ok(!args.includes('--timeout_factor'));
             assert.ok(!args.includes('--test-time-multiplier'));
+            const runner = args[args.indexOf(externalEngine === 'mutmut' ? '--runner' : '-t') + 1];
+            const report = runner.match(/["']--violation-report["'] ["']([^"']+)["']/)?.[1];
+            assert.ok(report, 'native engines must invoke the guarded runner with an evidence report');
+            const runId = 'a'.repeat(32);
+            if (externalEvidence !== 'missing') {
+                fs.writeFileSync(report, [JSON.stringify({ runId, event: 'started' }),
+                    JSON.stringify({ runId, event: 'completed', status: externalEvidence })].join('\n'));
+            }
             externalRuns++;
             return Promise.resolve({ code: 0, stderr: '', stdout: externalEngine === 'mutmut'
                 ? '1 mutants\n0 survived\n' : 'TOTAL RUNS: 1\nSURVIVED: 0\n' });
@@ -128,8 +137,8 @@ class Cases(unittest.TestCase):
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
-        assert.equal(manifest.promptVersion, 'role-contracts-v6');
-        assert.equal(manifest.roleContracts.reviewer, 'review-v6');
+        assert.equal(manifest.promptVersion, 'role-contracts-v7');
+        assert.equal(manifest.roleContracts.reviewer, 'review-v7');
         assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');
         assert.equal(manifest.evidenceContracts.semanticPlan, 'semantic-plan-v2');
         assert.equal(manifest.evidenceContracts.ruleSelection, 'rule-selection-v2');
@@ -203,6 +212,21 @@ class Cases(unittest.TestCase):
                 maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
         }
         assert.equal(externalRuns, 2);
+        for (const evidence of ['missing', 'isolation-blocked'] as const) {
+            externalEvidence = evidence;
+            externalEngine = 'mutmut';
+            utilities.detectMutationEngine = () => 'mutmut';
+            writers = 1;
+            const resultRoot = path.join(directory, `external-${evidence}`);
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+                maxLoops: 1, mutpyTimeout: expectedMutationSeconds, timeoutSeconds: 60, outputPath: resultRoot });
+            const resultFolder = path.join(resultRoot, fs.readdirSync(resultRoot)[0], 'target');
+            const failed = JSON.parse(fs.readFileSync(path.join(resultFolder, 'function_knowledge.json'), 'utf8'));
+            assert.equal(failed.failureStage, 'mutation-isolation');
+            assert.notEqual(failed.terminalStatus, 'passed');
+        }
+        externalEvidence = 'passed';
         externalEngine = undefined;
         utilities.detectMutationEngine = () => null;
 

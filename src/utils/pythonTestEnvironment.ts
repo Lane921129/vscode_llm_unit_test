@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { pythonToolPath } from '../pipeline/pythonTools';
 
 /** Resolve a user-selected interpreter without introducing shell arguments. */
 export function normalizePythonExecutable(value?: string): string {
@@ -67,9 +68,8 @@ export function generatedUnittestArguments(
     useCoverage: boolean,
     verbose: boolean = false
 ): string[] {
-    const args = useCoverage
-        ? ['-m', 'coverage', 'run', '--branch', `--source=${targetDirectory}`, '-m', 'unittest', testModule]
-        : ['-m', 'unittest', testModule];
+    const args = ['-B', pythonToolPath('testRunner'), testModule];
+    if (useCoverage) { args.push(`--coverage-source=${targetDirectory}`); }
     return verbose ? [...args, '-v'] : args;
 }
 

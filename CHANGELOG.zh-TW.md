@@ -4,6 +4,17 @@
 
 ## 2026-09-20
 
+### 完整批次重分析、正式執行隔離與角色回覆修復
+
+- 重新核對已補齊的 587／587 結果：275 failed、302 dummy、2 stub、3 stagnated、3 review-incomplete、2 無突變候選；完整通過仍為 0。舊 501／587 分析為當時未完成快照，不能作為最終統計。
+- 新增正式 unittest／coverage、Trace baseline 及 mutation 共用 runner，在執行時阻擋漏 mock 的檔案、網路、shell 與非隔離 SQLite。被吞掉的安全例外仍不算通過；記憶體 SQLite、明確 mock 與 asyncio 正常使用。工具 import／traceback 與 coverage 儲存另行處理。
+- 內建突變的隔離阻擋記為 ERROR，不算 killed；有執行錯誤不產生品質分數。外部引擎也改用 guarded runner，要求每次開始／結束與隔離狀態紀錄完整；缺少紀錄、未完成或隔離違規均拒絕分數，防止引擎將安全阻擋誤計為測試殺死突變。
+- Reviewer 升為 review-v7，完整語境中只有程式行可選 ID；拒絕模板回聲、明顯不相關引用，以及帶引號的 staticmethod／mocked target 指令。無效回覆仍是審查未完成。
+- 品質分析升為 quality-task-v3，拒絕空泛模板，要求具體 input／state／mock 配置；仍最多一項、最多一次共用 deadline 的格式補正，建議不是 assertion oracle。Writer 增加精簡 fixture 檢查。
+- Bug Fixer 升為 bug-fix-v4，正式輸出使用 Python 單方法 fence，避免 JSON 多行轉義破壞程式；保留舊 JSON 解析相容性及唯一方法／Python 範圍檢查。隔離問題交 Writer。三種 provider 的角色資格依任務選 JSON／文字，資格版本升為 python-unittest-v5。
+- 修正缺少 assertRaises 例外依據被文字分類器誤列 ast-trace 的診斷；仍屬驗證失敗，不改變 gate。
+- 驗證與限制：中性案例涵蓋間接 SQLite、吞例外、網路／檔案／shell、coverage、async、突變計分、錯誤審查與 native Python 方法修復；並離線重播本批角色回覆。完整提交快照 Node 347、Python 146 全部通過；包含暫停環境功能的工作區 Node 359、Python 154 全部通過。兩者型別、lint、生產建置、Webview 語法與密鑰掃描通過。本次不執行私有應用或模型；實驗室通過率與 1B～5B 能力仍待實測，詳見 `docs/完整批次修復_2026_09_20.md`。先前暫停的環境初始化功能保留於未提交工作區。
+
 ### 保留部分品質改善、綁定審查原文並縮小品質分析任務
 
 - 修正未覆蓋行清單縮短卻因文字改變而被判為品質倒退的問題。回滾與停滯改比較實際行／分支身份；新增缺口、已知證據變未知、分數下降及舊突變體重新存活仍受保護，rollback 附結構化原因。

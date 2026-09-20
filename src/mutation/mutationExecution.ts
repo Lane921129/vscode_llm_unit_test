@@ -1,8 +1,28 @@
+import { pythonToolPath } from '../pipeline/pythonTools';
+
 export type ExternalMutationEngine = 'mutatest' | 'mutmut';
 
 export interface ExternalMutationExecution {
     command: string;
     args: string[];
+}
+
+/** Require positive runner evidence, never infer isolation from a missing log. */
+export function externalIsolationVerified(text: string): boolean {
+    const starts = new Set<string>(), finishes = new Set<string>();
+    let passed = false;
+    try {
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+            const event = JSON.parse(line);
+            if (!/^[0-9a-f]{32}$/.test(event.runId)) { return false; }
+            if (event.event === 'started' && !starts.has(event.runId)) { starts.add(event.runId); }
+            else if (event.event === 'completed' && starts.has(event.runId) && !finishes.has(event.runId)
+                && ['passed', 'failed'].includes(event.status)) {
+                finishes.add(event.runId); passed ||= event.status === 'passed';
+            } else { return false; }
+        }
+    } catch { return false; }
+    return passed && starts.size === finishes.size;
 }
 
 const mutatestCompatibilityPatch = [
@@ -28,11 +48,23 @@ export function buildExternalMutationExecution(
     testModule: string,
     reportDirectory: string,
     timeoutFactor?: number,
-    pythonExecutable: string = 'python'
+    pythonExecutable: string = 'python',
+    violationReport?: string
 ): ExternalMutationExecution {
-    // mutmut owns this runner string. JSON quoting keeps a selected interpreter
-    // path with spaces as one executable token when mutmut launches it.
-    const testRunner = `${JSON.stringify(pythonExecutable)} -m unittest ${testModule}`;
+    const quote = (value: string): string => {
+        if (/[\r\n\0]/.test(value)) { throw new Error('Invalid mutation runner argument'); }
+        if (process.platform === 'win32') {
+            // Native engines own the final shell. Reject command expansion
+            // characters rather than interpolating a path they may execute.
+            if (/["%!^&|<>`]/.test(value)) { throw new Error('Unsupported mutation runner path characters'); }
+            return `"${value}"`;
+        }
+        return `'${value.replace(/'/g, `'"'"'`)}'`;
+    };
+    if (!/^[A-Za-z_]\w*$/.test(testModule)) { throw new Error('Invalid mutation test module'); }
+    const runnerArgs = [pythonExecutable, '-B', pythonToolPath('testRunner'), testModule,
+        ...(violationReport ? ['--violation-report', violationReport] : [])];
+    const testRunner = runnerArgs.map(quote).join(' ');
     if (engine === 'mutmut') {
         const args = ['-m', 'mutmut', 'run', '--paths-to-mutate', targetPath, '--runner', testRunner];
         if (timeoutFactor) {

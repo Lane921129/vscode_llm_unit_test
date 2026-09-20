@@ -41,6 +41,9 @@
 
 ## 測試生成安全
 
+- 正式 unittest、coverage 與突變試驗必須使用 `generated_test_runner.py` 的執行防護；沒有明確 mock 的檔案／網路／shell 與非隔離 SQLite 操作須失敗，遭吞掉的安全例外也不能算通過。工具載入／traceback 的必要來源讀取與 coverage 自身寫檔須和應用執行分開。
+- 突變觸發隔離阻擋時列為執行錯誤，不得算成 killed；內建／外部引擎都必須拒絕含這類錯誤的品質分數。獨立 `:memory:` SQLite 可用，共享 URI、ATTACH／VACUUM INTO、extension loading 與替換隔離 authorizer 不可用。
+
 - LLM 回應必須先通過 unittest 結構檢查與 Python AST 解析，才可寫入 `loop*_test.py`。
 - 結構驗證必須接受可追溯的合法匯入別名，但不得允許測試碼重新定義被測函式或其匯入別名。
 - `unittest.TestCase`／`IsolatedAsyncioTestCase` 類別可使用明確由標準庫 `unittest` 匯入的直接名稱或別名；驗證器必須追溯該 import，不可因模型選擇慣用拼寫而誤拒，也不可接受未證實來源的同名類別。
@@ -134,6 +137,9 @@
 
 ## 角色分工與證據交接
 
+- `bug-fix-v4` 正式輸出為單段 Python fence，最多三個必要 import 與唯一失敗方法，使用真實換行；JSON 僅保留歷史解析相容性。角色探針與正式請求的輸出格式一致，仍須保留其餘測試、signature、decorator 與 fixture，且通過 Python AST 範圍檢查。隔離 fixture 問題交 Writer。
+- Reviewer 必須從有效程式行 ID 集合選取證據；空白／註解保留語境但無可引用 ID。不得任意把無效 ID 改成附近程式。審查與品質分析不得把提示詞欄位說明／模板回聲當成可操作計畫；合法 None 輸入情境與空泛的 None 字串要分開判斷。
+
 - Reviewer 是審查者，只輸出附有原文證據的問題清單；不產生完整測試檔。先前提及 Reviewer 輸出 Python／修復的規則，改適用於 Writer 修訂與 Bug Fixer。
 - 結構或審查問題交 Writer 修訂；只有唯一定位的一個實際 unittest 方法失敗交 Bug Fixer，多方法／fixture／import 失敗交 Writer。候選先通過結構、證據與隔離執行，再交 Reviewer；每次修改重新走相同 gate。測試通過但品質不足時交分析師與 Writer 補測，不啟動另一層 Self-repair。
 - Bug Fixer 必須可唯一定位失敗方法；模組匯入、fixture 或歧義方法名稱交 Writer，不得回退猜選第一個 test 方法。Reviewer 問題必須有測試原文、具體原因與可操作的測試修訂，不接受空泛佔位動作。
@@ -159,10 +165,10 @@
 ## 品質、Git 與紀錄
 
 - 跨檔相依來源須由預檢實際載入的模組 origin 與函式定義身分解析，且實體位於所選來源樹；不得以批次根目錄拼接猜測。未知、re-export／重綁定、動態來源與範圍外相依只保留診斷，不另行匯入或假造來源。
-- Reviewer 使用 `review-v6` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度。缺少情境、弱 assertion 與型別／風格不是執行阻擋；blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Reviewer 使用 `review-v7` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度。缺少情境、弱 assertion 與型別／風格不是執行阻擋；blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
 - Reviewer 明確違反所選 static／instance 契約、要求修改目標實作或 mock 目標本身時，整份審查保持未完成，不得刪掉錯誤 finding 後偽裝為空問題通過，也不得交 Writer 執行矛盾動作。有限語句檢查不是任意自然語言正確性證明，所有工具 gate 仍須保留。
 - 品質回滾及停滯判斷使用實測未覆蓋行／分支的個別身份與存活突變體；不能因缺口清單縮短而改變顯示文字，就將改善誤判退步。已知覆蓋變未知、新增未覆蓋行／分支、舊突變體重新存活及分數降低仍受保護。
-- 品質分析師 `quality-task-v2` 每輪最多一項任務，引用程式選定的量測證據 ID；模型不可自行發明證據或預期值。格式補正最多一次，與初次請求共用絕對 deadline；取消／傳輸失敗不再啟動格式重試。空任務只代表無建議，不能將剩餘缺口算通過。
+- 品質分析師 `quality-task-v3` 每輪最多一項任務，引用程式選定的量測證據 ID；模型不可自行發明證據或預期值。格式補正最多一次，與初次請求共用絕對 deadline；取消／傳輸失敗不再啟動格式重試。空任務只代表無建議，不能將剩餘缺口算通過。
 - Tier 3 scaffold 與其他 Writer 使用相同完整 unittest 檔案契約，scaffold 僅提供 setup 指引；不得再把完整模型回覆縮排塞入另一個 TestCase。修訂重複候選時必須保留最新診斷，不得以空白或過期輸出覆蓋。
 - Cloud 可使用 `llmUnitTest.cloudThinkingMode` 的 `minimal`（預設）或 `provider-default`；低思考量不改變品質 gate。只依實際、明確的不支援選項回應回退，與格式回退及傳輸重試共用原 deadline；不依模型名稱決定。HTTP 5xx／認證／配額錯誤不得冒充選項不支援，有限傳輸重試耗盡後不得透過 Tier 降階另開請求。
 - provider 明示截斷或非正常完成的輸出不可當成完整產物；錯誤 envelope／HTTP body 不寫入日誌或報告。只保存安全的角色、耗時、階段與分類。

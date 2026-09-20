@@ -15,6 +15,7 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_rescue_unittest.py',
         'python_scripts/test_ast_pipeline.py',
         'python_scripts/test_pipeline_reliability.py',
+        'python_scripts/test_generated_test_runner.py',
         'python_scripts/test_trace_observation_guard.py',
         'python_scripts/test_writer_retrieval.py',
         'python_scripts/test_fixture_corpus.py',

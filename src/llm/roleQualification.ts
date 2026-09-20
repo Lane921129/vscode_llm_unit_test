@@ -1,5 +1,5 @@
-import { canRepairTestMethod, mergeBugFixReplacement } from '../roles/bugFixer';
-import { getTestReviewerSystemPrompt, numberReviewLines, parseTestReviewDetailed } from '../roles/testReviewer';
+import { canRepairTestMethod, getBugFixerSystemPrompt, mergeBugFixReplacement } from '../roles/bugFixer';
+import { getTestReviewerSystemPrompt, numberReviewLines, parseTestReviewDetailed, reviewableLineIds } from '../roles/testReviewer';
 
 export type RoleQualificationState = 'verified' | 'unverified' | 'not-run';
 
@@ -21,7 +21,7 @@ export function qualifiedRole(role: keyof RoleQualificationProfile, profile: Rol
     return profile ? profile[role]?.state === 'verified' : role === 'writer' && legacyWriterReady === true;
 }
 
-export type RoleQualificationRequester = (prompt: string) => Promise<string | undefined>;
+export type RoleQualificationRequester = (prompt: string, format: 'json' | 'text') => Promise<string | undefined>;
 
 export const ROLE_QUALIFICATION_TEST_FILE = `import unittest
 from fixture_module import increment
@@ -36,12 +36,13 @@ export const ROLE_QUALIFICATION_FAILURE =
 export const REVIEWER_QUALIFICATION_PROMPT = `${getTestReviewerSystemPrompt()}
 Review this exact TEST_FILE for a concrete demonstrated test problem. It is valid to return an empty findings array.
 Every finding must contain test_line, reason, and action. Target binding: module. Do not write Python or modify the target implementation.
+VALID_TEST_LINE_IDS: ${reviewableLineIds(ROLE_QUALIFICATION_TEST_FILE).join(', ')}
 TEST_FILE:
 ${numberReviewLines(ROLE_QUALIFICATION_TEST_FILE)}`;
 
-export const BUG_FIXER_QUALIFICATION_PROMPT = `Return only one JSON object with method, replacement, and imports.
+export const BUG_FIXER_QUALIFICATION_PROMPT = `${getBugFixerSystemPrompt()}
 Repair only the named failing method test_increment in the supplied TEST_FILE. Keep the method name and return one method body.
-Do not add a class, target source, or unrelated test. imports must be an array.
+Return one Python fence; do not add a class, target source, or unrelated test.
 FAILURE:
 ${ROLE_QUALIFICATION_FAILURE}
 TEST_FILE:
@@ -56,12 +57,12 @@ export function assessReviewerQualification(response: string | undefined): RoleQ
     const parsed = parseTestReviewDetailed(response, ROLE_QUALIFICATION_TEST_FILE, true,
         { target: 'increment', methodKind: 'module' }).review;
     return parsed
-        ? status('verified', 'Reviewer 已通過 review-v6 分類、行號引用與欄位契約。')
+        ? status('verified', 'Reviewer 已通過 review-v7 分類、行號引用與欄位契約。')
         : status('unverified', 'Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。');
 }
 
 export function assessBugFixerQualification(response: string | undefined): RoleQualificationStatus {
-    if (!response?.trim()) { return status('unverified', 'Bug Fixer 沒有回傳方法替換 JSON。'); }
+    if (!response?.trim()) { return status('unverified', 'Bug Fixer 沒有回傳 Python 單方法替換。'); }
     if (!canRepairTestMethod(ROLE_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE)) {
         return status('unverified', '資格 fixture 沒有可唯一定位的失敗方法。');
     }
@@ -90,8 +91,8 @@ export async function runRoleQualificationProbes(
 ): Promise<RoleQualificationProfile> {
     let reviewer: string | undefined;
     let bugFixer: string | undefined;
-    try { reviewer = await request(REVIEWER_QUALIFICATION_PROMPT); } catch { reviewer = undefined; }
-    try { bugFixer = await request(BUG_FIXER_QUALIFICATION_PROMPT); } catch { bugFixer = undefined; }
+    try { reviewer = await request(REVIEWER_QUALIFICATION_PROMPT, 'json'); } catch { reviewer = undefined; }
+    try { bugFixer = await request(BUG_FIXER_QUALIFICATION_PROMPT, 'text'); } catch { bugFixer = undefined; }
     return buildRoleQualificationProfile(writer, reviewer, bugFixer);
 }
 

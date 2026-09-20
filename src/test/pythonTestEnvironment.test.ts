@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import { test } from 'node:test';
+import { pythonToolPath } from '../pipeline/pythonTools';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable, resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 test('builds a portable Python environment without shell placeholders', () => {
@@ -20,11 +21,11 @@ test('builds a portable Python environment without shell placeholders', () => {
 test('uses direct Python arguments for coverage and unittest execution', () => {
     assert.deepStrictEqual(
         generatedUnittestArguments('loop1_test', '/portable/project', true),
-        ['-m', 'coverage', 'run', '--branch', '--source=/portable/project', '-m', 'unittest', 'loop1_test']
+        ['-B', pythonToolPath('testRunner'), 'loop1_test', '--coverage-source=/portable/project']
     );
     assert.deepStrictEqual(
         generatedUnittestArguments('loop1_test', '/portable/project', false),
-        ['-m', 'unittest', 'loop1_test']
+        ['-B', pythonToolPath('testRunner'), 'loop1_test']
     );
 });
 

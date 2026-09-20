@@ -456,7 +456,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
 
         try:
             baseline = subprocess.run(
-                [sys.executable, '-B', '-m', 'unittest', baseline_test.stem],
+                [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem],
                 cwd=baseline_root,
                 env=baseline_environment,
                 capture_output=True,
@@ -507,7 +507,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
 
             try:
                 completed = subprocess.run(
-                    [sys.executable, '-B', '-m', 'unittest', mutant_test.stem],
+                    [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), mutant_test.stem],
                     cwd=mutant_root,
                     env=mutant_environment,
                     capture_output=True,
@@ -516,7 +516,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                     errors='replace',
                     timeout=timeout_seconds,
                 )
-                status = 'KILLED' if completed.returncode else 'SURVIVED'
+                # A forbidden external operation is missing test isolation,
+                # never proof that an assertion killed the mutant.
+                status = 'ERROR' if completed.returncode == 86 else 'KILLED' if completed.returncode else 'SURVIVED'
                 output = (completed.stdout + completed.stderr).strip()[-500:]
             except subprocess.TimeoutExpired as error:
                 # This timeout happened while exercising one mutated copy.

@@ -24,14 +24,14 @@ export function getBugFixerSystemPrompt(): string {
     return `You are a Python unittest Bug Fixer. Repair one failing test method only.
 
 CONTRACT:
-- Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V3.
+- Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V4.
 - Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
 - For async with client.method(...), use MagicMock for the unawaited method returning a context manager, and AsyncMock for __aenter__/__aexit__ or awaited resource methods. Configuring __aenter__ on an AsyncMock return_value does not fix calling that AsyncMock: the call still returns a coroutine.
 - Source code describes the branch under test, but exact expected values still require an explicit return/raise or same-test mock behavior.
 - Observations marked uncontrolled-ambient-read cannot supply expected values or exceptions. Control clock/entropy at its use point instead of copying a captured value.
-- Return exactly one JSON object: {"method":"test_name","replacement":"complete def test_name(self): ... method","imports":["optional import line"]}.
-- replacement must contain one method only, without a class wrapper or Markdown. imports may contain at most 3 valid Python import lines.`;
+- Return one Python code fence containing at most 3 missing import statements followed by exactly the complete named test method. Use real Python newlines and indentation, never JSON strings or escaped newline text.
+- Keep the original method signature and decorators already owned by the host. Do not repeat decorators or wrap the method in a class. Every unchanged test and fixture is preserved by the host.`;
 }
 
 export function failedTestNamesFromOutput(output: string): string[] {
@@ -72,6 +72,7 @@ function testMethodFragments(code: string): TestMethodFragment[] {
 }
 
 function selectedFailureMethod(code: string, output: string): TestMethodFragment | undefined {
+    if (output.includes('TEST_ISOLATION_BLOCKED')) { return undefined; }
     if (/(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown|asyncSetUp|asyncTearDown)(?:Class|Module)?\b)/.test(output)) {
         return undefined;
     }
@@ -113,7 +114,7 @@ export function getBugFixerUserPrompt(
     void semanticGuidance;
     const method = selectedFailureMethod(brokenCode, errorOutput);
     const imports = importLines(brokenCode);
-    return `BUG_FIX_REQUEST_V3
+    return `BUG_FIX_REQUEST_V4
 === REPAIR TARGET ===
 - Failing method: ${method?.name || 'not identified; stop without guessing'}
 ${formatTargetContract(moduleName, funcName, funcArgs, astContext)}
@@ -135,7 +136,7 @@ ${formatRepairSetup(brokenCode, astContext, method)}
 ${focusedSource(sourceCode)}
 
 RESPONSE:
-Return the V3 JSON replacement object. Repair only the named method; request only truly missing imports.`;
+Return one Python fence with only truly missing imports and the complete named method. Repair only that method. Preserve its signature. The host merges this fragment into the existing tests.`;
 }
 
 /** Target context is read-only; every finding still quotes the test file. */
@@ -223,8 +224,9 @@ const SAFE_IMPORT = /^(?:import\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s+as\s+[A-Z
 
 /** Merge a one-method model response into the runner-owned complete test file. */
 export function mergeBugFixReplacement(raw: string, originalCode: string, failure: string): string | undefined {
-    const parsed = parseReplacement(raw);
     const selected = selectedFailureMethod(originalCode, failure);
+    if (!selected) { return undefined; }
+    const parsed = parsePythonReplacement(raw, selected.name) || parseReplacement(raw);
     if (!parsed || !selected || parsed.method !== selected.name || parsed.imports.length > 3) { return undefined; }
     if (!parsed.imports.every(line => SAFE_IMPORT.test(line.trim()))) { return undefined; }
     const replacement = normalizedReplacementMethod(parsed.replacement, selected);
@@ -242,4 +244,16 @@ export function mergeBugFixReplacement(raw: string, originalCode: string, failur
         lines.splice(insertAt, 0, ...missingImports);
     }
     return lines.join('\n').trimEnd();
+}
+
+/** Native Python avoids asking small models to JSON-escape a method body. */
+function parsePythonReplacement(raw: string, method: string): BugFixReplacement | undefined {
+    const block = raw.trim().match(/^```(?:python|py)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+    if (!block || block[1].includes('```')) { return undefined; }
+    const lines = block[1].replace(/\r\n/g, '\n').split('\n');
+    const start = lines.findIndex(line => /^\s*(?:async\s+)?def\s+test_\w*\s*\(/.test(line));
+    if (start < 0) { return undefined; }
+    const imports = lines.slice(0, start).map(line => line.trim()).filter(Boolean);
+    if (imports.length > 3 || !imports.every(line => SAFE_IMPORT.test(line))) { return undefined; }
+    return { method, replacement: lines.slice(start).join('\n'), imports };
 }

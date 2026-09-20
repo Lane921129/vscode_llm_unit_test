@@ -25,6 +25,7 @@ export class AnalysisStageError extends Error {
  * metadata only: it never changes routing, retries, or the quality gates.
  */
 export function classifyExecutionFailure(message: string): ExecutionFailureCategory {
+    if (message.includes('TEST_ISOLATION_BLOCKED')) { return 'validation'; }
     // Paths, Python line numbers and test names are evidence, not error kinds.
     const normalized = message.split(/\r?\n/)
         .filter(line => !/^\s*(?:File ["']|at |test_\w+.*\.\.\.)/.test(line))
@@ -50,6 +51,7 @@ export function classifyExecutionFailure(message: string): ExecutionFailureCateg
         return 'mutation';
     }
     if (normalized.includes('dynamic trace') || normalized.includes('動態 trace') || normalized.includes('行為觀測') || /\bast\b/.test(normalized) || normalized.includes('caller literal')) {
+        if (/assertraises\([^)]*\).*例外事實依據/.test(normalized)) { return 'validation'; }
         return 'ast-trace';
     }
     if (normalized.includes('模型輸出') || normalized.includes('unittest 格式') || normalized.includes('程式碼內容為空') || normalized.includes('原始碼而非測試碼')) {

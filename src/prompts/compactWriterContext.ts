@@ -27,6 +27,10 @@ export function buildCompactWriterContext(input: {
             imports: context.file_imports || [], globals: context.referenced_globals || [],
             callers: context.callerContexts || [], conditions: context.condition_facts || []
         }),
+        'FIXTURE CHECK: Before choosing expected values, arrange every required constructor input and the object state needed by this case. '
+            + 'Keep the target real. Patch a proven dependency at its use point and configure every return layer actually used by the target; a bare MagicMock is not a concrete row, string, number, or timestamp. '
+            + 'Declare all test imports. Do not add speculative invalid-input exceptions just to increase case count. '
+            + 'For a later quality task, add one distinguishable input/state/mock configuration and preserve passing tests; first verify its actual behavior.',
         // The caller-partitioned AST trace is authoritative here. Using the
         // bundle's merged trace would leak another caller's assertion oracle.
         'VERIFIED OBSERVATIONS (exact call/setup only; blocked or unassertable entries are diagnostics):\n'

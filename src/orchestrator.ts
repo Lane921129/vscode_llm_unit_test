@@ -48,7 +48,7 @@ import { buildStubSmokeAssertion } from './tier/stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stubClassifier';
 import { buildStubTestPlan } from './tier/stubTestPlan';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable, resolvePythonExecutable } from './utils/pythonTestEnvironment';
-import { buildExternalMutationExecution } from './mutation/mutationExecution';
+import { buildExternalMutationExecution, externalIsolationVerified } from './mutation/mutationExecution';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
@@ -2187,7 +2187,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     }
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
-                        role === 'bug-fixer' ? 'test-method-json' : testGenerationResponseFormat,
+                        role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision'
                     );
                     if (role === 'bug-fixer') {
@@ -2384,6 +2384,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         `內建 AST 突變引擎的隔離 baseline 測試失敗，拒絕產生不可信突變分數：${(builtinMutation.baseline_output || '').slice(0, 300)}`
                     );
                 }
+                if (builtinMutation.errors > 0) {
+                    throw new AnalysisStageError('mutation', 'mutation-execution',
+                        '突變執行發生隔離或工具錯誤；未將這些錯誤計為 killed，也不產生品質分數。');
+                }
                 mutpyResult = JSON.stringify(builtinMutation, null, 2);
             } else {
                 const targetDir = path.dirname(params.filePath);
@@ -2391,13 +2395,15 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 const grandParentDir = path.dirname(parentDir);
                 const testDir = path.dirname(testPath);
                 const testModule = path.basename(testPath, '.py');
+                const isolationReport = path.join(testDir, `loop${currentLoop}_mutation_isolation.jsonl`);
                 const mutationPlan = buildExternalMutationExecution(
                     engine,
                     params.filePath,
                     testModule,
                     reportDir,
                     undefined, // Engine multipliers are distinct from the UI's seconds budget.
-                    pythonExecutable
+                    pythonExecutable,
+                    isolationReport
                 );
                 const mutationEnvironment = buildGeneratedTestEnvironment(process.env, [
                     targetDir, parentDir, grandParentDir, testDir
@@ -2409,6 +2415,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 });
                 if (isExecutionCancelled()) {
                     throw new Error('使用者強制中止');
+                }
+                if (!fs.existsSync(isolationReport) || !externalIsolationVerified(fs.readFileSync(isolationReport, 'utf8'))) {
+                    throw new AnalysisStageError('mutation', 'mutation-isolation',
+                        '突變測試缺少完整隔離執行證據，或觸發未隔離操作；不接受引擎分數。');
                 }
                 if (externalRun.code !== 0) {
                     mutpyResult = `[${engine} 系統錯誤訊息]\n結束碼: ${externalRun.code ?? 'unknown'}\n[Stderr]\n${externalRun.stderr}\n[Stdout]\n${externalRun.stdout}`;

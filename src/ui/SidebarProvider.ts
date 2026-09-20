@@ -394,10 +394,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 );
                                                 const roleQualification = await runRoleQualificationProbes(
                                                     { state: capability.capability, reason: capability.reason },
-                                                    async prompt => {
+                                                    async (prompt, format) => {
                                                         const roleResponse = await timedFetch(`${baseUrl}/api/generate`, {
                                                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify({ model: message.modelName, prompt, stream: false, format: 'json', options: { temperature: 0 } })
+                                                            body: JSON.stringify({ model: message.modelName, prompt, stream: false,
+                                                                ...(format === 'json' ? { format: 'json' } : {}), options: { temperature: 0 } })
                                                         }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                                         if (!roleResponse.ok) { return undefined; }
                                                         return (await roleResponse.json() as { response?: string }).response;
@@ -508,7 +509,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 );
                                 const roleQualification = await runRoleQualificationProbes(
                                     { state: capability.capability, reason: capability.reason },
-                                    prompt => cloudProbe(prompt, true)
+                                    (prompt, format) => cloudProbe(prompt, format === 'json')
                                 );
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,
@@ -558,11 +559,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 );
                                 const roleQualification = await runRoleQualificationProbes(
                                     { state: capability.capability, reason: capability.reason },
-                                    async prompt => {
+                                    async (prompt, format) => {
                                         const roleResponse = await timedFetch(message.customUrl, {
                                             method: 'POST', headers,
                                             body: JSON.stringify(buildCustomChatCompletionBody(
-                                                message.modelName, 'Return only the requested JSON object.', prompt, 'json'
+                                                message.modelName, 'Return only the requested role artifact.', prompt, format
                                             ))
                                         }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                         return roleResponse.ok ? getCustomChatCompletionText(await roleResponse.json()) : undefined;

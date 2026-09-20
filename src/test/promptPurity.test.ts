@@ -294,7 +294,7 @@ test('Tier 4 self-repair uses the same focused one-method interface as Bug Fixer
         }, 'calculator', '=== TEST RULES ===\n[Float Precision]'
     );
 
-    assert.match(prompt, /BUG_FIX_REQUEST_V3/);
+    assert.match(prompt, /BUG_FIX_REQUEST_V4/);
     assert.match(prompt, /NECESSARY TARGET BRANCH/);
     assert.match(prompt, /LIMIT = 3/);
     assert.match(prompt, /observations/);
