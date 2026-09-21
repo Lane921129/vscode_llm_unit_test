@@ -86,6 +86,10 @@ test('environment preparation uses the target workspace setting, remembers selec
         assert.equal(updates.length, 1);
         assert.equal(states.get('llmUnitTest.lastEnvironmentFile.v1'), file);
         const release = setup.pythonEnvironmentActivity.acquire('setup'); assert.ok(release); release();
+        settings.set('packageMappings', { existing_import: 'existing-dist' });
+        await prepared.savePackageMappings({ neutral_import: 'neutral-dist' });
+        assert.deepEqual(settings.get('packageMappings'), { existing_import: 'existing-dist', neutral_import: 'neutral-dist' });
+        assert.deepEqual(updates.at(-1), { key: 'packageMappings', value: settings.get('packageMappings'), target: 3 });
     } finally {
         setupModule.preparePythonEnvironment = originalPrepare;
         require('module')._load = originalLoad;

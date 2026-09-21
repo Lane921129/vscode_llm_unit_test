@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { EnvironmentInspection, findRequirementFiles, preparePythonEnvironment, PythonEnvironmentActivity,
     SetupCommand, SetupRunner, setupEnvironment, runSetupCommand } from '../environment/pythonEnvironmentSetup';
 import { DependencyInventory, inventoryReport, isDependencyInventory } from '../environment/dependencyInventory';
-import { PythonInstallationPlan } from '../environment/pythonInstallationPlan';
+import { PythonInstallationDecision, PythonInstallationPlan } from '../environment/pythonInstallationPlan';
 
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-setup-'));
@@ -389,5 +389,76 @@ test('a requirements change after one approved operation blocks the next operati
         await assert.rejects(preparePythonEnvironment({ ...f.options, confirmInstall: async () => { confirmations++; return true; } }, h.runner), /requirements 已變更/);
         assert.equal(h.installations().length, 1); assert.equal(confirmations, 1);
         assert.equal(h.commands.some(command => command.args.includes('check')), false);
+    } finally { f.dispose(); }
+});
+
+test('an unmapped import can be named in the preview, saved and installed only after confirming a rebuilt plan', async () => {
+    const f = fixture();
+    try {
+        let installed = false;
+        const plans: PythonInstallationPlan[] = [], saved: Record<string, string>[] = [];
+        const h = harness(() => installed ? ready(f.python) : { ...ready(f.python), status: 'missing', missing: 'neutral_alpha' }, command => {
+            assert.equal(plans.length, 2); assert.equal(command.args.at(-1), 'neutral-distribution'); installed = true;
+        });
+        await preparePythonEnvironment({ ...f.options, packageName: undefined,
+            savePackageMappings: async mappings => { saved.push(mappings); assert.equal(h.installations().length, 0); },
+            confirmInstall: async (plan): Promise<PythonInstallationDecision> => {
+                plans.push(plan);
+                if (plans.length === 1) {
+                    assert.ok(plan.blockers.length); assert.equal(plan.missing[0].mappingEditable, true);
+                    return { mappings: { neutral_alpha: 'neutral-distribution' } };
+                }
+                assert.equal(plan.blockers.length, 0); assert.notEqual(plan.id, plans[0].id);
+                assert.equal(plan.mappings.neutral_alpha, 'neutral-distribution');
+                assert.equal(h.installations().length, 0); return true;
+            } }, h.runner);
+        assert.deepEqual(saved, [{ neutral_alpha: 'neutral-distribution' }]);
+        assert.equal(h.installations().length, 1);
+    } finally { f.dispose(); }
+});
+
+test('saving names does not approve installation, and invalid or unsaved edits cannot run pip', async () => {
+    const f = fixture();
+    try {
+        const inspection = () => ({ ...ready(f.python), status: 'missing' as const, missing: 'neutral_alpha' });
+        const cancelled = harness(inspection);
+        const saved: Record<string, string>[] = [];
+        let reviews = 0;
+        await assert.rejects(preparePythonEnvironment({ ...f.options, packageName: undefined,
+            savePackageMappings: async mappings => { saved.push(mappings); },
+            confirmInstall: async (): Promise<PythonInstallationDecision> => ++reviews === 1
+                ? { mappings: { neutral_alpha: 'neutral-dist' } } : false }, cancelled.runner), /未確認安裝清單/);
+        assert.equal(cancelled.installations().length, 0); assert.equal(saved.length, 1);
+        const invalidMappings: Record<string, string>[] = [
+            { other_import: 'neutral-dist' }, { neutral_alpha: '--upgrade' }, { neutral_alpha: '../package' }, { neutral_alpha: '' }
+        ];
+        for (const mappings of invalidMappings) {
+            const invalid = harness(inspection);
+            await assert.rejects(preparePythonEnvironment({ ...f.options, packageName: undefined,
+                savePackageMappings: async () => assert.fail('Invalid mappings must not be saved'),
+                confirmInstall: async () => ({ mappings }) }, invalid.runner), /安裝名稱無效/);
+            assert.equal(invalid.installations().length, 0);
+        }
+        const failed = harness(inspection);
+        await assert.rejects(preparePythonEnvironment({ ...f.options, packageName: undefined,
+            confirmInstall: async () => ({ mappings: { neutral_alpha: 'neutral-dist' } }),
+            savePackageMappings: async () => { throw new Error('PRIVATE_STORAGE_ERROR'); } }, failed.runner), error => {
+            assert.match(String(error), /無法儲存安裝名稱/); assert.doesNotMatch(String(error), /PRIVATE_STORAGE_ERROR/); return true;
+        });
+        assert.equal(failed.installations().length, 0);
+    } finally { f.dispose(); }
+});
+
+test('inline mappings cannot override requirements pins or unrelated plan entries', async () => {
+    const f = fixture();
+    try {
+        fs.writeFileSync(path.join(f.root, 'requirements.txt'), 'neutral_alpha==1.0\n');
+        const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_alpha' }));
+        await assert.rejects(preparePythonEnvironment({ ...f.options,
+            confirmInstall: async plan => {
+                assert.equal(plan.missing[0].mappingEditable, false);
+                return { mappings: { neutral_alpha: 'override-pin' } };
+            } }, h.runner), /安裝名稱無效/);
+        assert.equal(h.installations().length, 0);
     } finally { f.dispose(); }
 });

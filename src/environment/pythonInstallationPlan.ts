@@ -5,12 +5,28 @@ import { DependencyInventory } from './dependencyInventory';
 
 export interface PythonInstallationPlan {
     id: string; python: string; virtual: boolean; target: string;
-    missing: { module: string; installation: string; locations: string[] }[];
+    missing: { module: string; installation: string; locations: string[]; mappingEditable?: boolean }[];
     declarations: { package: string; version: string; conditional: boolean; source: string; constraint: boolean }[];
     optionalMissing: string[]; notes: string[]; blockers: string[]; previouslyInstalled: string[];
     operations: { args: string[]; cwd: string; label: string }[];
     mappings: Record<string, string>;
     files: { path: string; realPath: string; hash: string }[];
+}
+
+export type PythonInstallationDecision = boolean | { mappings: Record<string, string> };
+
+/** Only explicit edits for this plan's editable imports may be saved. Never accept pip arguments or URLs. */
+export function validateInstallationMappings(plan: PythonInstallationPlan, value: unknown): Record<string, string> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return undefined; }
+    const entries = Object.entries(value);
+    const editable = new Set(plan.missing.filter(item => item.mappingEditable).map(item => item.module));
+    if (!entries.length || entries.length > editable.size) { return undefined; }
+    const result: Record<string, string> = {};
+    for (const [module, name] of entries) {
+        if (!editable.has(module) || typeof name !== 'string' || !safeName(name.trim())) { return undefined; }
+        result[module] = name.trim();
+    }
+    return result;
 }
 
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -92,7 +108,7 @@ export async function createPythonInstallationPlan(options: {
             const name = await options.packageName?.(module);
             if (!name) {
                 installation = '尚未設定安裝名稱';
-                plan.blockers.push('請補充 requirements 或 llmUnitTest.packageMappings 的明確對應，未安裝猜測套件。');
+                plan.blockers.push('請在下方填寫安裝名稱並更新清單，或補充 requirements／llmUnitTest.packageMappings。');
             } else if (!safeName(name)) {
                 installation = '安裝名稱無效';
                 plan.blockers.push('安裝名稱必須是單一套件名稱，不接受網址、路徑或 pip 引數。');
@@ -104,7 +120,8 @@ export async function createPythonInstallationPlan(options: {
                 }
             }
         }
-        plan.missing.push({ module, installation, locations: [...new Set(locations)] });
+        plan.missing.push({ module, installation, locations: [...new Set(locations)],
+            mappingEditable: !options.requirements && /^[A-Za-z][A-Za-z0-9_]*$/.test(module) });
     }
     if (options.requirements && options.missing.length) {
         plan.operations.push({ args: ['-r', options.requirements], cwd: path.dirname(options.requirements), label: '專案 requirements' });
@@ -130,9 +147,9 @@ export function installationPlanFilesUnchanged(plan: PythonInstallationPlan): bo
     });
 }
 
-export function installationPlanReport(plan: PythonInstallationPlan, approved: boolean): string {
+export function installationPlanReport(plan: PythonInstallationPlan, approved: boolean, mappingsUpdated = false): string {
     const cell = (value: string) => value.replace(/[&<>|`\r\n\[\]]/g, char => `&#${char.charCodeAt(0)};`);
-    return ['## Python 安裝清單', '', `確認狀態：${approved ? '已確認此清單（安裝結果以本次終態為準）' : '未確認／取消，未執行此清單'}。`,
+    return ['## Python 安裝清單', '', `確認狀態：${mappingsUpdated ? '已儲存安裝名稱，重新產生清單；此清單未執行安裝' : approved ? '已確認此清單（安裝結果以本次終態為準）' : '未確認／取消，未執行此清單'}。`,
         `Python：${cell(plan.python)}`, `檢查範圍：${cell(plan.target)}`, '',
         ...plan.blockers.map(value => '- ' + cell(value)),
         '| 缺少的 import | 安裝依據 | 使用位置 |', '| --- | --- | --- |',

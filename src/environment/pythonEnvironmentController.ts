@@ -97,7 +97,7 @@ export class PythonEnvironmentController {
         this.controller = new AbortController();
         let latestInventory: DependencyInventory | undefined;
         let initialMissing: string[] | undefined;
-        const installationPlans: { plan: PythonInstallationPlan; approved: boolean }[] = [];
+        const installationPlans: { plan: PythonInstallationPlan; approved: boolean; mappingsUpdated?: boolean }[] = [];
         let outcome = '環境準備尚未完成。';
         try {
             const preferredProject = projectRoot || vscode.workspace.getConfiguration('llmUnitTest',
@@ -139,6 +139,8 @@ export class PythonEnvironmentController {
             const resource = vscode.Uri.file(filePath);
             const containingWorkspace = vscode.workspace.getWorkspaceFolder?.(resource);
             const config = vscode.workspace.getConfiguration('llmUnitTest', resource);
+            const configurationTarget = containingWorkspace ? vscode.ConfigurationTarget.WorkspaceFolder
+                : vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
             const fallbackRoot = scope === 'folder' ? filePath : path.dirname(filePath);
             projectRoot = selection.scope === 'project' ? filePath
                 : projectRoot || config.get<string>('projectPath', '') || containingWorkspace?.uri.fsPath || fallbackRoot;
@@ -159,8 +161,14 @@ export class PythonEnvironmentController {
                         inventory: scan => { latestInventory = scan; initialMissing ??= [...scan.missing]; },
                         confirmInstall: async plan => {
                             const record = { plan, approved: false }; installationPlans.push(record);
-                            record.approved = await confirmPythonInstallation(plan, this.controller!.signal);
-                            return record.approved;
+                            const decision = await confirmPythonInstallation(plan, this.controller!.signal);
+                            record.approved = decision === true;
+                            return decision;
+                        },
+                        savePackageMappings: async mappings => {
+                            await config.update('packageMappings', { ...config.get<Record<string, string>>('packageMappings', {}), ...mappings }, configurationTarget);
+                            const record = installationPlans.at(-1);
+                            if (record) { record.mappingsUpdated = true; }
                         },
                         toolRequirements: path.resolve(path.dirname(pythonToolPath('ast')), '..', 'requirements.txt'),
                         signal: this.controller!.signal,
@@ -179,9 +187,7 @@ export class PythonEnvironmentController {
                         }
                     });
                     if (this.controller!.signal.aborted) { outcome = '環境準備已取消，未保存 Python 設定。'; return; }
-                    const target = containingWorkspace ? vscode.ConfigurationTarget.WorkspaceFolder
-                        : vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
-                    await config.update('pythonPath', result.python, target);
+                    await config.update('pythonPath', result.python, configurationTarget);
                     if (result.requirements) { await this.state.update('llmUnitTest.lastRequirements.v1.' + root, result.requirements); }
                     outcome = '靜態相依與測試工具檢查完成，已保存 Python；正式模組載入尚待測試預檢。';
                     this.publish({ command: 'environmentPreparation', busy: false,
@@ -208,7 +214,7 @@ export class PythonEnvironmentController {
             if (latestInventory || installationPlans.length) {
                 try {
                     const content = [latestInventory ? inventoryReport(latestInventory, initialMissing, outcome) : '# Python 環境準備\n\n' + outcome,
-                        ...installationPlans.map(record => installationPlanReport(record.plan, record.approved))].join('\n\n');
+                        ...installationPlans.map(record => installationPlanReport(record.plan, record.approved, record.mappingsUpdated))].join('\n\n');
                     const document = await vscode.workspace.openTextDocument({ language: 'markdown',
                         content });
                     await vscode.window.showTextDocument(document, { preview: false });

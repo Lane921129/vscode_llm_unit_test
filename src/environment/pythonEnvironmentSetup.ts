@@ -6,7 +6,8 @@ import { killProcessTree } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { inferTargetImportModule } from '../utils/dependencyResolver';
 import { DependencyInventory, inventorySummary, isDependencyInventory } from './dependencyInventory';
-import { createPythonInstallationPlan, installationPlanFilesUnchanged, PythonInstallationPlan } from './pythonInstallationPlan';
+import { createPythonInstallationPlan, installationPlanFilesUnchanged, PythonInstallationPlan,
+    PythonInstallationDecision, validateInstallationMappings } from './pythonInstallationPlan';
 
 export class EnvironmentSetupError extends Error {
     constructor(readonly stage: string, message: string) { super(message); }
@@ -131,7 +132,8 @@ export async function preparePythonEnvironment(options: {
     signal?: AbortSignal; progress?: (message: string) => void;
     chooseRequirements?: (files: string[]) => Promise<string | undefined>;
     packageName?: (missing: string) => Promise<string | undefined>;
-    confirmInstall?: (plan: PythonInstallationPlan) => Promise<boolean>;
+    confirmInstall?: (plan: PythonInstallationPlan) => Promise<PythonInstallationDecision>;
+    savePackageMappings?: (mappings: Record<string, string>) => Promise<void>;
 }, runner: SetupRunner = runSetupCommand): Promise<{ python: string; requirements?: string; installed: string[]; inventory?: DependencyInventory }> {
     const cancelled = () => {
         if (options.signal?.aborted) { throw new EnvironmentSetupError('cancelled', '環境準備已取消；已安裝的套件會保留，下次會重新檢查。'); }
@@ -169,6 +171,7 @@ export async function preparePythonEnvironment(options: {
     const installed: string[] = [];
     const approvedOperations = new Map<string, PythonInstallationPlan>();
     const approvedMappings = new Map<string, string>();
+    const editedMappings = new Map<string, string>();
     const operationKey = (args: string[], cwd: string) => JSON.stringify([args, cwd]);
     const install = async (args: string[], cwd: string) => {
         cancelled();
@@ -185,26 +188,41 @@ export async function preparePythonEnvironment(options: {
     };
     let requirements: string | undefined;
     const approve = async (current: EnvironmentInspection) => {
-        const plan = await createPythonInstallationPlan({ python, virtual: current.virtual, target: options.file,
-            projectRoot: options.projectRoot, inventory: current.inventory,
-            missing: current.status === 'missing' ? current.inventory?.missing || [current.missing || ''] : [],
-            requirements, toolRequirements: options.toolRequirements, needsTools: !current.coverage,
-            packageName: options.packageName, previouslyInstalled: installed });
-        cancelled();
-        // The callback receives a copy; UI code cannot expand the approved operations.
-        const accepted = await options.confirmInstall?.(structuredClone(plan));
-        cancelled();
-        if (plan.blockers.length) { throw new EnvironmentSetupError('dependency', plan.blockers.join(' ')); }
-        if (accepted !== true) {
-            throw new EnvironmentSetupError('install-plan', installed.length
-                ? '已取消此安裝清單；先前已完成的安裝會保留，環境尚未就緒。'
-                : '未確認安裝清單，本次未安裝任何套件，也未變更 Python 設定。');
+        for (let revision = 0; revision < 64; revision++) {
+            const plan = await createPythonInstallationPlan({ python, virtual: current.virtual, target: options.file,
+                projectRoot: options.projectRoot, inventory: current.inventory,
+                missing: current.status === 'missing' ? current.inventory?.missing || [current.missing || ''] : [],
+                requirements, toolRequirements: options.toolRequirements, needsTools: !current.coverage,
+                packageName: async module => editedMappings.has(module) ? editedMappings.get(module) : options.packageName?.(module),
+                previouslyInstalled: installed });
+            cancelled();
+            // Editing a copy can only request mappings; actual installation always needs a rebuilt plan and confirmation.
+            const accepted = await options.confirmInstall?.(structuredClone(plan));
+            cancelled();
+            if (accepted && typeof accepted === 'object') {
+                const mappings = validateInstallationMappings(plan, accepted.mappings);
+                if (!mappings) { throw new EnvironmentSetupError('package-mappings', '安裝名稱無效或不屬於本次清單；未依此清單安裝。'); }
+                try { await options.savePackageMappings?.(mappings); }
+                catch { throw new EnvironmentSetupError('package-mappings', '無法儲存安裝名稱，請檢查設定寫入權限；未依此清單安裝。'); }
+                cancelled();
+                for (const [module, name] of Object.entries(mappings)) { editedMappings.set(module, name); }
+                progress('安裝名稱已更新，請確認重新產生的清單…');
+                continue;
+            }
+            if (plan.blockers.length) { throw new EnvironmentSetupError('dependency', plan.blockers.join(' ')); }
+            if (accepted !== true) {
+                throw new EnvironmentSetupError('install-plan', installed.length
+                    ? '已取消此安裝清單；先前已完成的安裝會保留，環境尚未就緒。'
+                    : '未確認安裝清單，本次未安裝任何套件，也未變更 Python 路徑設定。');
+            }
+            if (!installationPlanFilesUnchanged(plan)) {
+                throw new EnvironmentSetupError('install-plan', 'requirements 在確認期間已變更，請重新檢查並確認新的安裝清單。');
+            }
+            for (const operation of plan.operations) { approvedOperations.set(operationKey(operation.args, operation.cwd), plan); }
+            for (const [module, name] of Object.entries(plan.mappings)) { approvedMappings.set(module, name); }
+            return;
         }
-        if (!installationPlanFilesUnchanged(plan)) {
-            throw new EnvironmentSetupError('install-plan', 'requirements 在確認期間已變更，請重新檢查並確認新的安裝清單。');
-        }
-        for (const operation of plan.operations) { approvedOperations.set(operationKey(operation.args, operation.cwd), plan); }
-        for (const [module, name] of Object.entries(plan.mappings)) { approvedMappings.set(module, name); }
+        throw new EnvironmentSetupError('install-plan', '清單更新次數過多，請重新檢查；未依最後清單安裝。');
     };
     if (selected.status === 'missing' || !selected.coverage) {
         const files = findRequirementFiles(options.projectRoot, options.file, scope);

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { preparePythonEnvironment, runSetupCommand, SetupCommand } from '../environment/pythonEnvironmentSetup';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { PythonInstallationPlan } from '../environment/pythonInstallationPlan';
+import { PythonInstallationDecision, PythonInstallationPlan } from '../environment/pythonInstallationPlan';
 
 test('offline real pip installs one neutral missing dependency into an existing interpreter and the next preparation reuses it', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-offline-'));
@@ -48,17 +48,25 @@ test('offline real pip installs one neutral missing dependency into an existing 
             return result;
         };
         let confirmations = 0;
+        const savedMappings: Record<string, string> = {};
         const options = { projectRoot: root, file, candidates: [{ executable: python }],
-            confirmInstall: async (plan: PythonInstallationPlan) => {
+            confirmInstall: async (plan: PythonInstallationPlan): Promise<PythonInstallationDecision> => {
                 confirmations++; assert.equal(installed.length, 0);
                 assert.equal(plan.python.toLowerCase(), python.toLowerCase());
+                if (confirmations === 1) {
+                    assert.ok(plan.blockers.length); assert.equal(plan.missing[0].mappingEditable, true);
+                    assert.deepEqual(savedMappings, {});
+                    return { mappings: { neutral_environment_fixture: 'neutral_environment_fixture' } };
+                }
+                assert.equal(plan.blockers.length, 0);
+                assert.equal(savedMappings.neutral_environment_fixture, 'neutral_environment_fixture');
                 assert.equal(plan.missing[0].installation, 'neutral_environment_fixture'); return true;
             },
+            savePackageMappings: async (mappings: Record<string, string>) => { Object.assign(savedMappings, mappings); },
             toolRequirements: path.resolve(__dirname, '../../requirements.txt'),
-            packageName: async (missing: string) => missing === 'neutral_environment_fixture'
-                ? 'neutral_environment_fixture' : undefined };
+            packageName: async (missing: string) => savedMappings[missing] };
         fs.writeFileSync(path.join(root, 'second.py'), 'def later():\n    import neutral_environment_fixture\n');
-        await assert.rejects(preparePythonEnvironment({ ...options, file: root, scope: 'folder', confirmInstall: async () => false }, runner), /未確認安裝清單/);
+        await assert.rejects(preparePythonEnvironment({ ...options, file: root, scope: 'folder', confirmInstall: async () => false }, runner), /填寫安裝名稱/);
         assert.equal(installed.length, 0);
         const first = await preparePythonEnvironment({ ...options, file: root, scope: 'folder' }, runner);
         assert.equal(first.inventory?.filesScanned, 2);
@@ -71,6 +79,6 @@ test('offline real pip installs one neutral missing dependency into an existing 
         assert.deepEqual(second.installed, []);
         assert.equal(installed.length, 1);
         assert.equal(fs.existsSync(path.join(root, '.venv')), false);
-        assert.equal(confirmations, 1);
+        assert.equal(confirmations, 2);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

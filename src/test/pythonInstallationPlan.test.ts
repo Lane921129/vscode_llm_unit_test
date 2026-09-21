@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as vm from 'node:vm';
-import { createPythonInstallationPlan, installationPlanFilesUnchanged, installationPlanReport } from '../environment/pythonInstallationPlan';
+import { createPythonInstallationPlan, installationPlanFilesUnchanged, installationPlanReport, validateInstallationMappings } from '../environment/pythonInstallationPlan';
 
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'installation-plan-'));
@@ -62,7 +62,7 @@ test('preview buttons bind to one plan; dismissal, abort and blocked plans never
         const disposeListeners = new Set<() => void>();
         const messages = new Set<(message: unknown) => void>();
         const panel: any = { options, closed: false,
-            webview: { html: '', onDidReceiveMessage: (listener: (message: unknown) => void) => {
+            webview: { html: '', errors: [] as any[], postMessage: async (message: unknown) => { panel.webview.errors.push(message); }, onDidReceiveMessage: (listener: (message: unknown) => void) => {
                 messages.add(listener); return { dispose: () => messages.delete(listener) };
             } },
             onDidDispose: (listener: () => void) => { disposeListeners.add(listener); return { dispose: () => disposeListeners.delete(listener) }; },
@@ -97,6 +97,26 @@ test('preview buttons bind to one plan; dismissal, abort and blocked plans never
         assert.match(panels.at(-1)!.webview.html, /id="install" disabled/);
         panels.at(-1)!.emit({ command: 'install', planId: plan.id }); assert.equal(panels.at(-1)!.closed, false);
         panels.at(-1)!.dispose(); assert.equal(await invalid, false);
+        const unmapped = await createPythonInstallationPlan({ ...f.options, requirements: undefined });
+        assert.match(installationPlanReport(unmapped, false, true), /已儲存安裝名稱，重新產生清單；此清單未執行安裝/);
+        const specialName = await createPythonInstallationPlan({ ...f.options, requirements: undefined, missing: ['toString'] });
+        assert.match(installationPreviewHtml(specialName, 'special-nonce'), /data-module="toString" value=""/);
+        const editing = confirmPythonInstallation(unmapped);
+        const editablePanel = panels.at(-1)!;
+        assert.match(editablePanel.webview.html, /儲存名稱並更新清單/);
+        assert.match(editablePanel.webview.html, /使用此 import 名稱/);
+        assert.equal(editablePanel.options.retainContextWhenHidden, true);
+        editablePanel.emit({ command: 'updateMappings', planId: 'stale-id', mappings: { neutral_alpha: 'neutral-dist' } });
+        assert.equal(editablePanel.closed, false);
+        for (const mappings of [{ other: 'neutral-dist' }, { neutral_alpha: '--upgrade' }, { neutral_alpha: '../package' }, { neutral_alpha: 'https://example.invalid/x' }]) {
+            editablePanel.emit({ command: 'updateMappings', planId: unmapped.id, mappings });
+            assert.equal(editablePanel.closed, false);
+        }
+        assert.equal(editablePanel.webview.errors.length, 4);
+        editablePanel.emit({ command: 'updateMappings', planId: unmapped.id, mappings: { neutral_alpha: ' neutral-dist ' } });
+        assert.deepEqual(await editing, { mappings: { neutral_alpha: 'neutral-dist' } });
+        assert.equal(editablePanel.count(), 0);
+        assert.equal(validateInstallationMappings(plan, { neutral_alpha: 'override-pin' }), undefined);
         const html = installationPreviewHtml({ ...plan, target: '<script>untrusted</script>', notes: ['<img src=x>'] }, 'fixed-nonce');
         assert.doesNotMatch(html, /<script>untrusted|<img src=x>/);
         assert.match(html, /default-src 'none'/);
@@ -105,10 +125,32 @@ test('preview buttons bind to one plan; dismissal, abort and blocked plans never
         for (const id of ['install', 'cancel']) { buttons[id] = { disabled: false, addEventListener: (_event, handler) => { buttons[id].handler = handler; } }; }
         const posted: unknown[] = [];
         new vm.Script(script).runInNewContext({ acquireVsCodeApi: () => ({ postMessage: (message: unknown) => posted.push(message) }),
-            document: { getElementById: (id: string) => buttons[id] } });
+            document: { getElementById: (id: string) => buttons[id], querySelectorAll: () => [] }, window: { addEventListener: () => {} } });
         buttons.install.handler!(); buttons.cancel.handler!();
         assert.equal(buttons.install.disabled, true);
         assert.equal(JSON.stringify(posted), JSON.stringify([{ command: 'install', planId: plan.id }, { command: 'cancel', planId: plan.id }]));
+        // Exercise the actual editable page script: explicit same-name selection, dirty state and host validation feedback.
+        const editScript = installationPreviewHtml(unmapped, 'editing-nonce').match(/<script nonce="editing-nonce">([\s\S]*?)<\/script>/)![1];
+        const elements: Record<string, any> = {};
+        for (const id of ['install', 'cancel', 'save-mappings', 'mapping-status', 'mapping-0', 'copy']) {
+            elements[id] = { disabled: false, textContent: '', handlers: {} as Record<string, () => void>,
+                addEventListener: (event: string, callback: () => void) => { elements[id].handlers[event] = callback; } };
+        }
+        Object.assign(elements['mapping-0'], { value: '', defaultValue: '', dataset: { module: 'neutral_alpha' } });
+        elements.copy.dataset = { input: 'mapping-0' };
+        let receive!: (event: unknown) => void;
+        const edits: any[] = [];
+        new vm.Script(editScript).runInNewContext({ acquireVsCodeApi: () => ({ postMessage: (message: unknown) => edits.push(message) }),
+            document: { getElementById: (id: string) => elements[id], querySelectorAll: (selector: string) => selector === 'input[data-module]' ? [elements['mapping-0']] : [elements.copy] },
+            window: { addEventListener: (_event: string, callback: typeof receive) => { receive = callback; } } });
+        elements['save-mappings'].handlers.click(); assert.equal(edits.length, 0);
+        elements.copy.handlers.click(); assert.equal(elements['mapping-0'].value, 'neutral_alpha');
+        assert.equal(elements.install.disabled, true);
+        elements.install.handlers.click(); assert.equal(edits.length, 0);
+        elements['save-mappings'].handlers.click();
+        assert.equal(JSON.stringify(edits[0]), JSON.stringify({ command: 'updateMappings', planId: unmapped.id, mappings: { neutral_alpha: 'neutral_alpha' } }));
+        receive({ data: { command: 'mappingError', text: '請修正名稱' } });
+        assert.equal(elements['save-mappings'].disabled, false); assert.equal(elements['mapping-status'].textContent, '請修正名稱');
     } finally {
         require('module')._load = originalLoad;
         delete require.cache[require.resolve('../environment/pythonInstallationPreview')];
