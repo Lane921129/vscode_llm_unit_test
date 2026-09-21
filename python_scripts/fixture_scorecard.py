@@ -15,12 +15,14 @@ Usage:
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from collections import Counter
 from pathlib import Path
 
 from lab_batch_plan import DEFAULT_BATCH_MANIFEST, resolve_lab_batch
+from quality_policy import create_fixture_quality_policy, evaluate_quality, validate_quality_policy
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +41,82 @@ def percentage_values(markdown, field_name):
     return [float(value) for value in pattern.findall(markdown)]
 
 
+def _local_artifact(directory, name):
+    if type(name) is not str or not name or Path(name).name != name or '/' in name or '\\' in name:
+        raise ValueError('invalid artifact name')
+    return directory / name
+
+
+def _same_json(left, right):
+    # Match JSON number semantics without Python's True == 1 shortcut. Mutation
+    # contexts may carry fractional stage deadlines; policy hashes remain on
+    # the stricter shared canonical integer contract.
+    if type(left) in (int, float) and type(right) in (int, float):
+        try:
+            return math.isfinite(left) and math.isfinite(right) and left == right
+        except OverflowError:
+            return False
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        return left.keys() == right.keys() and all(_same_json(left[key], right[key]) for key in left)
+    if type(left) is list:
+        return len(left) == len(right) and all(_same_json(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def _read_policy_assessment(report_path, knowledge, manifest, target_file, target_function):
+    """Recompute new evidence; serialized pass booleans never authorize a pass."""
+    if knowledge.get('evidenceValid') is False:
+        raise ValueError('quality evidence explicitly invalidated')
+    directory = Path(report_path).parent
+    snapshot = json.loads((directory / 'quality_baseline.json').read_text(encoding='utf-8'))
+    if any(item.get('qualityContractVersion') != 'quality-policy-v1' for item in (manifest, knowledge)):
+        raise ValueError('quality contract version missing or unsupported')
+    policies = [validate_quality_policy(item.get('qualityPolicy')) for item in (manifest, knowledge, snapshot)]
+    if not all(item['ok'] for item in policies) or not all(_same_json(policies[0]['policy'], item['policy']) for item in policies[1:]):
+        raise ValueError('quality policies do not match')
+    policy = policies[0]['policy']
+    if snapshot.get('schemaVersion') != 'quality-baseline-v1' or not manifest.get('runId') \
+            or manifest['runId'] != knowledge.get('runId') \
+            or type(knowledge.get('terminalStatus')) is not str \
+            or any(item.get('sourceHash') != manifest.get('sourceHash') for item in (knowledge, snapshot)) \
+            or any(item.get('target') != target_function for item in (manifest, knowledge, snapshot)):
+        raise ValueError('quality snapshot identity mismatch')
+    code = snapshot.get('code')
+    digest = hashlib.sha256(_local_artifact(directory, snapshot.get('testFile')).read_bytes()).hexdigest()
+    accepted_digest = hashlib.sha256(_local_artifact(directory, knowledge.get('acceptedTest')).read_bytes()).hexdigest()
+    if type(code) is not str or hashlib.sha256(code.encode('utf-8')).hexdigest() != digest \
+            or digest != snapshot.get('codeHash') or digest != knowledge.get('acceptedCodeHash') or digest != accepted_digest:
+        raise ValueError('quality snapshot test mismatch')
+    for field in ('mutation', 'reviewStatus', 'generationMode', 'execution'):
+        if not _same_json(snapshot.get(field), knowledge.get(field)):
+            raise ValueError('quality snapshot evidence mismatch')
+    if not _same_json(snapshot['coverage']['assessment'], knowledge['coverage']['assessment']):
+        raise ValueError('quality snapshot coverage mismatch')
+    if snapshot.get('tier') != knowledge.get('resolvedTier'):
+        raise ValueError('quality snapshot tier mismatch')
+    if any(type(snapshot.get(field)) is not list or not all(type(item) is str for item in snapshot[field])
+           for field in ('qualityGaps', 'measuredQualityGaps')):
+        raise ValueError('invalid quality gap provenance')
+    target_scope = {'kind': 'function', 'qualifiedName': target_function}
+    evidence = {
+        'identity': {'sourcePath': target_file, 'sourceHash': manifest.get('sourceHash'), 'testHash': digest,
+                     'targetScope': target_scope, 'policyHash': policy['policyHash']},
+        'executionPassed': type(snapshot.get('execution')) is str and bool(snapshot['execution'].strip()),
+        'coverage': {'sourceHash': manifest.get('sourceHash'), 'testHash': digest, 'targetScope': target_scope,
+                     'assessment': snapshot['coverage']['assessment']},
+        'mutation': snapshot['mutation'], 'reviewStatus': snapshot.get('reviewStatus'),
+        # Coverage gaps are derived display strings, already evaluated through
+        # native counts/arcs. They must not become a second threshold policy.
+        'generationMode': snapshot.get('generationMode'), 'qualityGaps': [],
+    }
+    assessed = evaluate_quality(policy, evidence)
+    if not _same_json(assessed, snapshot.get('qualityAssessment')) or not _same_json(assessed, knowledge.get('qualityAssessment')):
+        raise ValueError('quality assessment does not match recomputed evidence')
+    return policy, assessed
+
+
 def report_fields(report_path):
     """Extract only stable, user-visible facts from one final report."""
     text = Path(report_path).read_text(encoding='utf-8', errors='replace')
@@ -55,11 +133,20 @@ def report_fields(report_path):
     if review_status is None and 'Reviewer 審查未完成' in text:
         review_status = 'incomplete'
     terminal_status, quality_gaps, invalid_journal = None, [], False
+    new_quality_policy, policy, quality_assessment = False, None, None
+    checkpoint_path = Path(report_path).with_name('quality_baseline.json')
+    if checkpoint_path.exists():
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding='utf-8'))
+            new_quality_policy = any(key in checkpoint for key in ('qualityPolicy', 'qualityAssessment', 'qualityContractVersion'))
+        except (OSError, ValueError, TypeError):
+            pass  # A declared new contract below still fails its mandatory read.
     coverage_scope, module_coverage, retained_tier = 'module', coverage[-1] if coverage else None, None
     journal_path = Path(report_path).with_name('function_knowledge.json')
     if journal_path.exists():
         try:
             knowledge = json.loads(journal_path.read_text(encoding='utf-8'))
+            new_quality_policy = new_quality_policy or any(key in knowledge for key in ('qualityPolicy', 'qualityAssessment', 'qualityContractVersion'))
             terminal_status = knowledge.get('terminalStatus')
             review_status = knowledge.get('reviewStatus', review_status)
             if not knowledge.get('reviewStatus') and any('審查未完成' in warning for warning in knowledge.get('reviewWarnings', [])):
@@ -68,6 +155,7 @@ def report_fields(report_path):
             # Scores and review must describe the retained file from this run,
             # never independently selected maxima from different repair loops.
             manifest = json.loads(journal_path.with_name('run_manifest.json').read_text(encoding='utf-8'))
+            new_quality_policy = new_quality_policy or 'qualityPolicy' in manifest or 'qualityContractVersion' in manifest
             accepted = knowledge.get('acceptedTest', '')
             if not accepted or Path(accepted).name != accepted or '/' in accepted or '\\' in accepted:
                 raise ValueError('missing retained test')
@@ -101,8 +189,30 @@ def report_fields(report_path):
                     raise ValueError('invalid retained tier')
             score = knowledge.get('mutationScore')
             mutation = [score] if isinstance(score, (int, float)) and not isinstance(score, bool) and 0 <= score <= 100 else []
-        except (OSError, ValueError, TypeError, AttributeError):
+            if new_quality_policy:
+                policy, quality_assessment = _read_policy_assessment(report_path, knowledge, manifest,
+                    target_match.group(1).strip() if target_match else None,
+                    function_match.group(1).strip() if function_match else None)
+                counts = quality_assessment['counts']
+                coverage = [100 * counts['lines']['executed'] / counts['lines']['total']] if counts['lines'] else []
+                mutation = [100 * counts['mutation']['killed'] / counts['mutation']['total']] \
+                    if counts['mutation'] and counts['mutation']['total'] and quality_assessment['measurementStatus'] == 'complete' else []
+                coverage_scope = 'selected-target'
+                if retained_tier == 1 and knowledge.get('generationMode') != (generation_mode_match.group(1) if generation_mode_match else None):
+                    raise ValueError('quality generation mode mismatch')
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
             invalid_journal = True
+    else:
+        # A new-format manifest cannot silently fall back to Markdown when its
+        # mandatory journal is absent. Old reports without policy stay readable.
+        manifest_path = journal_path.with_name('run_manifest.json')
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                new_quality_policy = new_quality_policy or 'qualityPolicy' in manifest or 'qualityContractVersion' in manifest
+                invalid_journal = new_quality_policy
+            except (OSError, ValueError, TypeError):
+                invalid_journal = True
     return {
         'target_file': target_match.group(1).strip() if target_match else None,
         'target_function': function_match.group(1).strip() if function_match else None,
@@ -119,6 +229,9 @@ def report_fields(report_path):
         'terminal_status': terminal_status,
         'quality_gaps': quality_gaps,
         'invalid_journal': invalid_journal,
+        'new_quality_policy': new_quality_policy,
+        'quality_policy': policy,
+        'quality_assessment': quality_assessment,
         'execution_error': '### ❌ 執行中斷' in text or '### 執行停止' in text,
     }
 
@@ -139,7 +252,7 @@ def matching_reports(report_root, fixture):
     return sorted(matches, key=lambda pair: pair[0].stat().st_mtime, reverse=True)
 
 
-def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_identity=None):
+def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_identity=None, manifest_hash=None):
     """Classify one fixture without treating missing data as a passing score."""
     matches = matching_reports(report_root, fixture)
     result = {
@@ -223,6 +336,9 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_ide
         'failure_category': fields['failure_category'],
         'review_status': fields['review_status'],
         'terminal_status': fields['terminal_status'],
+        'quality_policy': fields['quality_policy'],
+        'quality_assessment': fields['quality_assessment'],
+        'policy_mode': fields['quality_policy']['mode'] if fields['quality_policy'] else 'legacy',
     })
     if fixture['tier'] == 1 and fields['tier1_generation_mode'] not in TIER1_GENERATION_MODES:
         result.update(status='incomplete_provenance', reason='Tier 1 報告缺少可機讀的 generation mode；不與 LLM 或 deterministic fallback 成績混算。')
@@ -242,6 +358,28 @@ def evaluate_fixture(report_root, fixture, tier1_generation_mode=None, model_ide
         result.update(status='incomplete_provenance', reason='缺少可確認的 Reviewer 完成狀態。')
     elif fields['invalid_journal']:
         result.update(status='incomplete_provenance', reason='執行 journal 不完整，或保留測試與執行證據的身分不一致。')
+    elif fields['new_quality_policy']:
+        policy, assessment = fields['quality_policy'], fields['quality_assessment']
+        fixture_policy_matches = True
+        if policy and policy['mode'] == 'fixture':
+            try:
+                expected_policy = create_fixture_quality_policy(fixtureId=fixture['id'], manifestHash=manifest_hash,
+                    minLineCoverage=fixture['acceptance']['min_line_coverage'], minMutationScore=fixture['acceptance']['min_mutation_score'])
+                fixture_policy_matches = _same_json(policy, expected_policy)
+            except (ValueError, TypeError):
+                fixture_policy_matches = False
+        if not policy or not assessment or not fixture_policy_matches:
+            result.update(status='incomplete_provenance', reason='品質政策與執行前 fixture 契約不一致，不能事後改用較低門檻。')
+        elif assessment['policyStatus'] == 'unassessable':
+            result.update(status='unscored', reason='品質測量不完整或不適用，不能形成完整通過結論。')
+        elif assessment['policyStatus'] == 'below-threshold':
+            numeric_only = set(assessment['reasons']).issubset({'line-threshold-not-met', 'mutation-threshold-not-met'})
+            result.update(status='threshold_failed' if numeric_only else 'quality_incomplete',
+                          reason='未符合執行前固定的品質政策：' + ', '.join(assessment['reasons']))
+        elif not assessment['fullyPassed']:
+            result.update(status='review_incomplete', reason='工具政策達標，但完整審查尚未完成。')
+        else:
+            result.update(status='passed', reason='符合執行前固定的品質政策：' + policy['policyId'])
     elif fields['quality_gaps']:
         result.update(status='quality_incomplete', reason='已測量的品質缺口仍未解決，不能以數值分數宣稱通過。')
     elif fields['coverage'] is None or fields['mutation_score'] is None:
@@ -296,8 +434,10 @@ def build_scorecard(report_root, manifest_path=DEFAULT_MANIFEST, tier1_generatio
     )
     if tier1_generation_mode and tier1_generation_mode not in TIER1_GENERATION_MODES:
         raise ValueError(f'unsupported Tier 1 generation mode: {tier1_generation_mode}')
+    manifest_hash = hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
     results = [
-        evaluate_fixture(report_root, fixture, tier1_generation_mode, model_identity)
+        evaluate_fixture(report_root, fixture, tier1_generation_mode, model_identity,
+                         manifest_hash)
         for fixture in manifest['fixtures']
     ]
     status_counts = Counter(item['status'] for item in results)

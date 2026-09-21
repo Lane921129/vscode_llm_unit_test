@@ -7,7 +7,7 @@ import { spawnSync } from 'child_process';
 import { test } from 'node:test';
 import { MutationContext, MutationRun, mutationMeetsThreshold, mutationScore, parseBuiltinMutationRun,
     parseExternalMutationRun, mutationCandidateSetId, BUILTIN_MUTATION_OPERATOR_SET_VERSION,
-    FUNCTION_BODY_MUTATION_SCOPE_VERSION } from '../mutation/mutationResult';
+    FUNCTION_BODY_MUTATION_SCOPE_VERSION, readStoredMutationRun } from '../mutation/mutationResult';
 
 const context: MutationContext = { sourcePath: path.resolve('sample.py'), sourceHash: 'a'.repeat(64), testHash: 'b'.repeat(64),
     targetScope: { kind: 'function', qualifiedName: 'target' }, stageTimeoutSeconds: 20 };
@@ -46,6 +46,27 @@ test('builtin contract validates candidate identity and exact outcome counts', (
         assert.equal(mutationScore(invalid), null);
     }
     assert.equal(mutationScore(parseBuiltinMutationRun('not json', context)), null);
+});
+
+test('persisted camelCase mutation results are revalidated and malformed evidence stays distinct from failed measurement', () => {
+    const original = parseBuiltinMutationRun(builtin(), context);
+    const saved = readStoredMutationRun(JSON.stringify(original), context);
+    assert.equal(saved.ok, true);
+    if (saved.ok) { assert.equal(mutationMeetsThreshold(saved.run), true); }
+    const failed = builtin();
+    failed.mutants[0].status = 'ERROR'; failed.counts.killed = 0; failed.counts.error = 1;
+    failed.status = 'failed'; failed.scoreAvailable = false;
+    const validFailure = readStoredMutationRun(parseBuiltinMutationRun(failed, context), context);
+    assert.equal(validFailure.ok, true);
+    if (validFailure.ok) { assert.equal(validFailure.run.status, 'failed'); }
+    for (const altered of [
+        { ...original, testHash: 'e'.repeat(64) }, { ...original, sourceHash: 'e'.repeat(64) },
+        { ...original, scopeVersion: 'old-scope' }, { ...original, operatorSetVersion: 'unknown' },
+        { ...original, candidateSetId: '0'.repeat(64) }, { ...original, candidateIds: [] },
+        { ...original, targetScope: { kind: 'function', qualifiedName: 'other' } },
+        { ...original, counts: { ...original.counts, killed: 0 } }, { ...original, baselineStatus: ['passed'] },
+        { ...original, targetScope: { ...original.targetScope, startLine: 3, endLine: 1 } }
+    ]) { assert.equal(readStoredMutationRun(altered, context).ok, false); }
 });
 
 test('the Python runner and TypeScript adapter agree on the actual wire contract', () => {

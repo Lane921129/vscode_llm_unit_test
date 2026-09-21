@@ -504,7 +504,13 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             result['excluded']['invalid'] += 1
             continue
         seen_variants.add(variant_ast)
-        identity = json.dumps([OPERATOR_SET_VERSION, result['scopeVersion'], source_hash, scope_name, candidate], sort_keys=True, separators=(',', ':'))
+        # Nested expressions can share the same start line/column and operator
+        # description. Bind identity to the actual changed AST as well, without
+        # changing the operator set or depending on the tests. This deliberately
+        # replaces the old colliding IDs; old candidate sets are not reused.
+        variant_hash = hashlib.sha256(variant_ast.encode('utf-8')).hexdigest()
+        identity = json.dumps([OPERATOR_SET_VERSION, result['scopeVersion'], source_hash, scope_name, candidate, variant_hash],
+                              sort_keys=True, separators=(',', ':'))
         candidates.append(({**candidate, 'id': hashlib.sha256(identity.encode('utf-8')).hexdigest()}, ast.unparse(variant) + '\n'))
     result['counts']['available'] = len(candidates)
     result['candidateIds'] = [candidate['id'] for candidate, _ in candidates]

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { CandidateCheckpointStore, ExecutableCandidate } from '../pipeline/candidateCheckpoint';
 import { validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { evidenceHash } from '../pipeline/analysisJournal';
+import { createStrictQualityPolicy } from '../pipeline/qualityPolicy';
 
 const execution = 'test_keep (Cases.test_keep) ... ok\nRan 1 test\nOK';
 function candidate(code = 'import unittest\n'): ExecutableCandidate {
@@ -66,4 +67,31 @@ test('failed or regressed execution does not enter the executable checkpoint hoo
         event: () => {}, checkCancelled: () => {}
     }, 0), /未通過/);
     assert.equal(checkpointed, 0);
+});
+
+test('invalid measured evidence cannot replace a quality baseline or erase executable work', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-checkpoint-'));
+    try {
+        const vectors = JSON.parse(fs.readFileSync(path.resolve('contracts/quality-policy-cases-v1.json'), 'utf8'));
+        const input = structuredClone(vectors.cases[0].evidence);
+        const policy = createStrictQualityPolicy();
+        const sourceHash = input.identity.sourceHash;
+        const store = new CandidateCheckpointStore(directory, sourceHash, 'target', {
+            policy, sourcePath: input.identity.sourcePath, targetScope: input.identity.targetScope });
+        const first = store.saveExecutable({ ...candidate(), qualityGaps: [], measuredQualityGaps: [], reviewStatus: 'completed',
+            coverage: { assessment: { ...input.coverage.assessment,
+                invocationEvidence: { ...input.coverage.assessment.invocationEvidence, testHash: evidenceHash(candidate().code) } },
+            coverageText: '100%', missingLines: '' } });
+        const mutation = { ...input.mutation, testHash: first.codeHash };
+        const good = store.saveQuality(first, mutation);
+        assert.equal(good.qualityAssessment?.fullyPassed, true);
+        const saved = fs.readFileSync(path.join(directory, 'quality_baseline.json'), 'utf8');
+        const next = store.saveExecutable({ ...candidate(first.code + '# later candidate\n'), reviewStatus: 'completed' });
+        assert.throws(() => store.saveQuality(next, { ...mutation, testHash: next.codeHash }), /not assessable/);
+        assert.equal(store.quality, good);
+        assert.equal(store.executable, next);
+        assert.equal(fs.readFileSync(path.join(directory, 'quality_baseline.json'), 'utf8'), saved);
+        assert.equal(fs.readFileSync(path.join(directory, next.testFile), 'utf8'), next.code);
+        assert.throws(() => store.saveQuality(first, { ...mutation, candidateSetId: 'f'.repeat(64) }), /not assessable/);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

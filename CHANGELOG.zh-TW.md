@@ -4,6 +4,16 @@
 
 ## 2026-09-21
 
+### 完善計畫第二批：保留 caller 型態並統一品質判定
+
+- Python caller 先編碼完整呼叫與已證明的 constructor，再以 `probe-inputs-v1` 傳給 Trace；tuple、bytes、非字串 dict key、大整數、float／負零與 kwargs 順序不再被一般 JSON 改變。非 literal、超限及不合法輸入留作診斷，typed 欄位無效不降回舊值。
+- 抽出共用 snapshot validator、typed input builder 與 Python literal renderer。Tier 2 按同一筆輸入／constructor 配對觀測；Tier 1 每個案例建立自己的實例，不再共用首個 caller 的 setup。Unicode／特殊字串 kwargs 用有序字典呼叫，Python 精確斷言 gate 僅展開可證明的 literal `**dict`，不借用未知流程的 oracle。
+- 新增 TS／Python 共用版本化 QualityPolicy 定義與 45 組跨語言一致性案例。正式 `strict100` 與事先固定的 fixture ID／manifest hash／原門檻分開，使用精確比例及完整候選集合，不依顯示百分比或事後政策判通過。checkpoint、主流程、批次與 scorecard 核對同一份來源／測試／coverage／mutation／review，再重算 assessment；來源失效及篡改不得通過，舊報告不升級。
+- 主流程與介面分開顯示完整量測、政策達標及審查完成；無候選保持 N/A，保存好基線不會把取消、回合耗盡或失敗改成整次成功。不完整證據不能取代最佳品質基線，仍保留已成功執行的候選。
+- corpus 新增三個型態／大數／雙 constructor 正向案例，改用正式 guarded runner、原生目標 coverage 與完整突變全集驗收。測試找出巢狀 BinOp 在相同行欄的候選 ID 碰撞，現加入變更後 AST hash，保留全部候選；運算子語意版本不變，舊 ID 不沿用。
+- 驗證：本機 Windows／Python 3.13.2，Node 403／403、Python 225／225 通過；最後增補的 scorecard 來源失效拒絕另以 14／14 專項回歸通過。新版 corpus、真實主流程／批次／Python scorecard 一致性與四種篡改拒絕通過；型別、lint、生產 build、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式檢查通過。新增 constructor fixture 補齊正式 class 語境後重跑全部 Node 測試，門檻及預期規則不變。
+- 限制：仍未完成靜態型態樹與自動產值、受限制 setup／Mock、缺口導向 Trace、增量 Writer、突變穩定性與 durable progress、逐筆 UI、完整環境身分及主控拆分。set／frozenset 不因此取得精確 oracle 資格；本輪沒有真實模型、外部引擎矩陣或遠端 CI 結果，整份計畫仍在進行中。
+
 ### 完善計畫第一階段：保存真實輸入、隔離案例與核對品質證據
 
 - 接續既有 Python 環境準備功能，整合 interpreter 選擇、環境檢查、明確套件映射與 UI；不再由 import 名猜測安裝套件，也不以別的 interpreter 取代使用者明確設定。既有 requirements 的版本限制保留。

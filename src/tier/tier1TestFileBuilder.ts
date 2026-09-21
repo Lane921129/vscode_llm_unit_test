@@ -1,5 +1,6 @@
 import {
     buildTier1InstanceSetup,
+    buildObservedConstructorCall,
     buildTier1PropertyTestMethods,
     buildTier1TestMethods,
     Tier1ConstructorContext,
@@ -45,11 +46,13 @@ export function buildTier1TestFile(input: Tier1TestFileInput): Tier1TestFileResu
 
     const className = input.className || undefined;
     const directClassCall = className && (input.methodKind === 'static' || input.methodKind === 'class');
+    const perObservationSetup = !!className && !directClassCall
+        && [...input.examples, ...input.errors].some(example => example.input_before !== undefined);
     const verifiedSetup = className && !directClassCall
         ? buildTier1InstanceSetup(className, input.callerContexts)
         : null;
     const requiredConstructorParams = input.constructorParams || [];
-    if (className && !directClassCall && requiredConstructorParams.length > 0 && !verifiedSetup) {
+    if (className && !directClassCall && !perObservationSetup && requiredConstructorParams.length > 0 && !verifiedSetup) {
         return { methodCount: methods.length, missingConstructorFacts: requiredConstructorParams };
     }
 
@@ -70,14 +73,37 @@ export function buildTier1TestFile(input: Tier1TestFileInput): Tier1TestFileResu
         };
     }
 
-    const setupBlock = directClassCall ? '' : (verifiedSetup || [
+    const setupBlock = directClassCall || perObservationSetup ? '' : (verifiedSetup || [
         '    def setUp(self):',
         `        self._instance = ${className}()`,
     ].join('\n'));
     const callPrefix = directClassCall
         ? `${className}.${input.functionName}(`
         : `self._instance.${input.functionName}(`;
-    const boundMethods = isProperty ? methods : methods.map(method =>
+    let sourceMethods = methods;
+    if (perObservationSetup) {
+        const observations = [
+            ...input.examples.filter(example => example.call_assertable !== false && example.result_assertable !== false).map(example => ({ example, error: false })),
+            ...input.errors.filter(error => error.call_assertable !== false && traceExceptionReference(error)).map(example => ({ example, error: true }))
+        ];
+        sourceMethods = [];
+        for (const [index, observation] of observations.entries()) {
+            const constructor = buildObservedConstructorCall(className, observation.example.input_before);
+            if (!constructor) {
+                return { methodCount: methods.length, missingConstructorFacts: requiredConstructorParams.length
+                    ? requiredConstructorParams : ['verified per-observation constructor input'] };
+            }
+            const example = observation.error ? [] : [observation.example];
+            const errors = observation.error ? [observation.example] : [];
+            const method = (isProperty ? buildTier1PropertyTestMethods(input.functionName, example, errors, 'self._instance', input.isAsync)
+                : buildTier1TestMethods(input.functionName, example, errors, input.isAsync))[0];
+            const lines = method.split('\n');
+            lines[0] = `    def test_case_${index + 1}(self):`;
+            lines.splice(1, 0, `        self._instance = ${constructor}`);
+            sourceMethods.push(lines.join('\n'));
+        }
+    }
+    const boundMethods = isProperty ? sourceMethods : sourceMethods.map(method =>
         method.replace(new RegExp(`(?<![._])\\b${input.functionName}\\(`, 'g'), callPrefix)
     );
     return {

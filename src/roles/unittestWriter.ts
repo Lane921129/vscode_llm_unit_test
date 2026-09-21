@@ -2,6 +2,7 @@ import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorH
 import { formatWriterEvidenceBundleForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
+import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 
 /**
  * Tier 1 is intentionally small, but it is still an LLM judgement step: the
@@ -310,19 +311,13 @@ export function getUserPrompt(
                 prompt += `  - Binding: ${astContext.method_kind} method. Do NOT instantiate the class.\n`;
                 prompt += `  - Call method as: ${astContext.class_name}.${funcName}(...).\n`;
             } else {
-                const constructorCaller = (astContext.callerContexts || []).find((caller: any) =>
-                    Array.isArray(caller.trace_constructor_args)
-                    && caller.trace_constructor_kwargs !== null
-                    && Array.isArray(caller.constructor_args)
-                    && caller.constructor_kwargs !== null
-                );
-                if (constructorCaller) {
-                    const kwargs = Object.entries(constructorCaller.constructor_kwargs || {})
-                        .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
-                        .map(([name, value]) => `${name}=${value}`);
-                    const constructorArgs = [...constructorCaller.constructor_args, ...kwargs].join(', ');
-                    prompt += `  - Verified constructor setup from an actual call site: self._obj = ${astContext.class_name}(${constructorArgs})\n`;
-                    prompt += `  - Use that setup for observation-derived assertions; do NOT pass these constructor values to ${funcName}().\n`;
+                const constructorCalls = [...new Set<string>((astContext.callerContexts || [])
+                    .map((caller: any) => buildVerifiedConstructorCall(astContext.class_name, [caller])).filter(Boolean))];
+                if (constructorCalls.length) {
+                    for (const constructorCall of constructorCalls) {
+                        prompt += `  - Verified constructor setup from an actual call site: self._obj = ${constructorCall}\n`;
+                    }
+                    prompt += `  - Match each observation to its own constructor setup; do NOT pass these constructor values to ${funcName}().\n`;
                 } else {
                     prompt += `  - Instantiate in setUp using source-supported constructor values; do not guess required dependencies.\n`;
                 }

@@ -26,6 +26,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from trace_observation_guard import observe_ambient_reads
 from trace_value_codec import snapshot_value, snapshot_call, restore_value, safe_type_name, type_field
+from probe_input_transport import prepare_probe_inputs
 from runtime_policy import POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, block_operation, guarded_runtime
 
 
@@ -1126,6 +1127,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
                    progress_path=None) -> dict:
     """Plan in one guarded worker, then execute each case in a fresh process.
 
+    Inputs may be the legacy Python list or a probe-inputs-v1 typed envelope.
+    Invalid envelope cases remain independent diagnostics, never target values.
     Deadlines include imports and setup. Completed cases are appended to an
     optional host-owned JSONL journal immediately; target workers never see it.
     This is process state isolation, not an OS sandbox for hostile native code.
@@ -1159,9 +1162,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
 
     journal('run_started', schema_version=result['schema_version'], func_name=func_name,
             policy_version=POLICY_VERSION, isolation=result['isolation'])
-    supplied = None if test_inputs is None else [snapshot_value(candidate) for candidate in test_inputs]
-    valid_supplied = None if supplied is None else [value for value in supplied if value['replayable']]
-    invalid_supplied = [] if supplied is None else [value for value in supplied if not value['replayable']]
+    valid_supplied, invalid_supplied = prepare_probe_inputs(test_inputs)
 
     def case_base(encoded, index):
         digest = hashlib.sha256((os.path.abspath(file_path) + '\n' + func_name + '\n' + json.dumps(encoded, sort_keys=True)).encode()).hexdigest()[:20]
@@ -1189,9 +1190,9 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
                 result['blocked_operations'].append(operation)
         journal('case_completed', case=case, examples=examples, errors=errors, blocked_operations=blocked)
 
-    for index, encoded in enumerate(invalid_supplied):
+    for index, (encoded, source, reason) in enumerate(invalid_supplied):
         case = case_base(encoded, index)
-        case.update(status='not_started', reason='unsupported-input-snapshot')
+        case.update(status='not_started', reason=reason, source=source)
         append_case(case)
 
     plan_started = time.monotonic()
@@ -1272,8 +1273,8 @@ if __name__ == '__main__':
     if len(sys.argv) >= 4:
         try:
             test_inputs = json.loads(sys.argv[3])
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            test_inputs = {'schema_version': 'invalid-probe-inputs', 'cases': [{}]}
 
     options = {}
     if len(sys.argv) >= 5:
@@ -1285,4 +1286,4 @@ if __name__ == '__main__':
         except (ValueError, TypeError):
             pass
     output = trace_function(file_path, func_name, test_inputs, **options)
-    print(json.dumps(output, ensure_ascii=False))
+    print(json.dumps(output, ensure_ascii=True))

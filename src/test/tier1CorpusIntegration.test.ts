@@ -4,9 +4,16 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { test } from 'node:test';
+import { randomUUID } from 'node:crypto';
 import { buildTier1TestFile } from '../tier/tier1TestFileBuilder';
 import { buildSupplementalProbeInputs } from '../tier/supplementalProbeInputs';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { buildProbeInputs } from '../pipeline/probeInputs';
+import { parseBehaviorObservations, mergeBehaviorObservations } from '../pipeline/behaviorObservations';
+import { evidenceHash } from '../pipeline/analysisJournal';
+import { assessTargetCoverageEvidence } from '../mutation/targetCoverage';
+import { parseBuiltinMutationRun } from '../mutation/mutationResult';
+import { createFixtureQualityPolicy, evaluateQuality } from '../pipeline/qualityPolicy';
 
 interface Fixture {
     id: string;
@@ -21,16 +28,18 @@ interface Fixture {
         inherited_constructor_required?: string[];
         truthiness_parameters?: string[];
     };
-    acceptance: { min_mutation_score: number };
+    acceptance: { min_line_coverage: number; min_mutation_score: number };
 }
 
 const fixtureRoot = resolve(__dirname, '../../test/fixtures/python');
 const scriptsRoot = resolve(__dirname, '../../python_scripts');
-const manifest = JSON.parse(readFileSync(join(fixtureRoot, 'manifest.json'), 'utf8')) as { fixtures: Fixture[] };
+const manifestSource = readFileSync(join(fixtureRoot, 'manifest.json'), 'utf8');
+const manifest = JSON.parse(manifestSource) as { fixtures: Fixture[] };
 const pythonExecutable = resolvePythonExecutable(undefined, resolve(__dirname, '../..'));
 
-function pythonJson(args: string[], label: string): any {
-    const result = spawnSync(pythonExecutable, args, { encoding: 'utf8' });
+function pythonJson(args: string[], label: string, cwd?: string): any {
+    const result = spawnSync(pythonExecutable, args, { encoding: 'utf8', cwd, timeout: 90000,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
     assert.strictEqual(result.status, 0, `${label}: ${result.stdout}\n${result.stderr}`);
     return JSON.parse(result.stdout);
 }
@@ -42,6 +51,8 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
     for (const fixture of fixtures) {
         const tempDir = mkdtempSync(join(tmpdir(), `tier1-corpus-${fixture.id}-`));
         try {
+            const policy = createFixtureQualityPolicy({ fixtureId: fixture.id, manifestHash: evidenceHash(manifestSource),
+                minLineCoverage: fixture.acceptance.min_line_coverage, minMutationScore: fixture.acceptance.min_mutation_score });
             const original = join(fixtureRoot, fixture.source);
             const sourcePath = join(tempDir, fixture.source.split('/').pop()!);
             const moduleName = fixture.source.split('/').pop()!.replace(/\.py$/, '');
@@ -73,19 +84,9 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                 [join(scriptsRoot, 'ast_caller_finder.py'), fixture.target, tempDir, sourcePath],
                 `${fixture.id} caller extraction`
             ) as Array<Record<string, unknown>>;
-            const inputs = callers
-                .filter(caller => Array.isArray(caller.trace_args))
-                .map(caller => ({
-                    args: caller.trace_args,
-                    kwargs: caller.trace_kwargs || {},
-                    constructor_args: caller.trace_constructor_args,
-                    constructor_kwargs: caller.trace_constructor_kwargs || {},
-                }));
-            const traceArgs = [join(scriptsRoot, 'dynamic_tracer.py'), sourcePath, fixture.target];
-            if (inputs.length > 0) {
-                traceArgs.push(JSON.stringify(inputs));
-            }
-            const trace = pythonJson(traceArgs, `${fixture.id} initial behavior probe`);
+            const inputs = buildProbeInputs(callers);
+            const traceArgs = [join(scriptsRoot, 'dynamic_tracer.py'), sourcePath, fixture.target, JSON.stringify(inputs)];
+            let trace = parseBehaviorObservations(pythonJson(traceArgs, `${fixture.id} initial behavior probe`), fixture.target);
             if (fixture.expected.semantic_trace_inputs?.length) {
                 const supplementalInputs = buildSupplementalProbeInputs({
                     test_strategy: {
@@ -102,19 +103,11 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
                         key_rules: []
                     }
                 }, ast.signature);
-                const semanticTraceArgs = [join(scriptsRoot, 'dynamic_tracer.py'), sourcePath, fixture.target, JSON.stringify([...inputs, ...supplementalInputs])];
-                const semanticTrace = pythonJson(semanticTraceArgs, `${fixture.id} supplemental behavior probe`);
-                const appendUnique = (left: any[], right: any[]) => {
-                    const seen = new Set<string>();
-                    return [...left, ...right].filter(item => {
-                        const key = JSON.stringify(item);
-                        if (seen.has(key)) {return false;}
-                        seen.add(key);
-                        return true;
-                    });
-                };
-                trace.examples = appendUnique(trace.examples, semanticTrace.examples);
-                trace.errors = appendUnique(trace.errors, semanticTrace.errors);
+                const semanticTraceArgs = [join(scriptsRoot, 'dynamic_tracer.py'), sourcePath, fixture.target,
+                    JSON.stringify(buildProbeInputs([], supplementalInputs))];
+                const semanticTrace = parseBehaviorObservations(pythonJson(semanticTraceArgs,
+                    `${fixture.id} supplemental behavior probe`), fixture.target);
+                trace = mergeBehaviorObservations(trace, semanticTrace);
             }
             assert.strictEqual(trace.load_error, null, `${fixture.id}: ${trace.load_error}`);
             for (const expectedInput of fixture.expected.trace_inputs || []) {
@@ -150,29 +143,46 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
             assert.ok(built.code, `${fixture.id}: missing deterministic test code`);
             writeFileSync(testPath, built.code!, 'utf8');
 
-            const execution = spawnSync(pythonExecutable, ['-m', 'unittest', testPath.split(/[/\\]/).pop()!], {
-                cwd: tempDir,
-                encoding: 'utf8',
+            const invocationPath = join(tempDir, 'invocation.json');
+            const testRunId = randomUUID();
+            const testHash = evidenceHash(built.code!);
+            const sourceHash = evidenceHash(readFileSync(sourcePath, 'utf8'));
+            const targetScope = { kind: 'function' as const, qualifiedName: fixture.target };
+            const execution = spawnSync(pythonExecutable, [join(scriptsRoot, 'generated_test_runner.py'),
+                `test_${moduleName}`, `--coverage-source=${tempDir}`, '--target-file', sourcePath,
+                '--target-name', fixture.target, '--target-evidence', invocationPath,
+                '--target-run-id', testRunId, '--target-test-file', testPath], {
+                cwd: tempDir, encoding: 'utf8', timeout: 30000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
             });
             assert.strictEqual(execution.status, 0, `${fixture.id}: ${execution.stdout}\n${execution.stderr}`);
+
+            const nativeCoverage = pythonJson([join(scriptsRoot, 'coverage_read.py'), sourcePath, fixture.target,
+                '--invocation-evidence', invocationPath, '--expected-run-id', testRunId, '--expected-test-hash', testHash],
+                `${fixture.id} guarded target coverage`, tempDir);
+            const assessment = assessTargetCoverageEvidence(nativeCoverage, sourcePath, fixture.target, sourceHash,
+                { testRunId, testHash });
 
             const mutation = pythonJson(
                 [
                     join(scriptsRoot, 'basic_mutation_runner.py'),
                     sourcePath,
                     testPath,
-                    '30',
-                    '10',
+                    '0',
+                    '5',
                     fixture.target,
                     ast.class_name || '',
+                    '60',
                 ],
                 `${fixture.id} mutation`
             );
-            assert.strictEqual(mutation.baseline_passed, true, `${fixture.id}: ${mutation.baseline_output || ''}`);
-            assert.ok(mutation.total > 0, `${fixture.id}: no mutation candidates`);
-            const score = Math.round((mutation.killed / mutation.total) * 100);
-            assert.ok(score >= fixture.acceptance.min_mutation_score,
-                `${fixture.id}: ${score}% < ${fixture.acceptance.min_mutation_score}%\n${JSON.stringify(mutation)}`);
+            const measured = parseBuiltinMutationRun(mutation, { sourcePath, sourceHash, testHash, targetScope });
+            const quality = evaluateQuality(policy, { identity: { sourcePath, sourceHash, testHash, targetScope,
+                policyHash: policy.policyHash }, executionPassed: true,
+                coverage: { sourceHash, testHash, targetScope, assessment }, mutation: measured,
+                reviewStatus: 'not-required', generationMode: 'deterministic-fallback', qualityGaps: [] });
+            assert.equal(quality.fullyPassed, true,
+                `${fixture.id}: ${JSON.stringify({ quality, mutationDiagnostic: measured.diagnostic,
+                    counts: measured.counts, coverage: assessment, rawMutation: mutation })}`);
         } finally {
             rmSync(tempDir, { recursive: true, force: true });
         }

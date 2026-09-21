@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "quality-policy-v1",
+  "assessmentVersion": "quality-assessment-v1",
+  "policyIds": {"strict100": "strict100-v1", "fixture": "fixture-manifest-v1"},
+  "fixed": {
+    "scopeVersion": "selected-function-body-v1",
+    "branchPolicy": "complete-required",
+    "mutationPolicy": "complete-universe-no-timeout-or-error",
+    "noCandidatePolicy": "not-applicable-unpassed",
+    "reviewPolicy": "completed-or-verified-deterministic-fallback",
+    "baselinePolicy": "single-passed-baseline",
+    "timeoutPolicy": "unscored"
+  },
+  "strictThresholds": {
+    "lineThreshold": {"numerator": 100, "denominator": 100},
+    "mutationThreshold": {"numerator": 100, "denominator": 100}
+  },
+  "mutationVersions": {"operatorSetVersion": "builtin-ast-v1", "scopeVersion": "selected-function-body-v1"},
+  "coverageVersion": "coverage-evidence-v1"
+}

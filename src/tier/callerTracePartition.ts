@@ -1,4 +1,8 @@
+import { TraceInputSnapshot } from '../pipeline/evidenceContracts';
+import { callerMatchesObservation, callerToProbeInput, hasVerifiedConstructorInput } from '../pipeline/probeInputs';
+
 export interface CallerTraceContext {
+    trace_input?: unknown;
     /** Source literals, retained only when caller-finder also proved trace_args. */
     args?: string[];
     kwargs?: Record<string, string>;
@@ -11,6 +15,7 @@ export interface CallerTraceContext {
 }
 
 export interface CallerTraceExample {
+    input_before?: TraceInputSnapshot;
     args: string[];
     kwargs?: Record<string, string>;
     constructor_args?: string[];
@@ -33,8 +38,8 @@ export interface CallerTraceResult {
 }
 
 function sameRecord(left: Record<string, string> | undefined, right: Record<string, string> | undefined): boolean {
-    const leftEntries = Object.entries(left || {}).sort(([a], [b]) => a.localeCompare(b));
-    const rightEntries = Object.entries(right || {}).sort(([a], [b]) => a.localeCompare(b));
+    const leftEntries = Object.entries(left || {});
+    const rightEntries = Object.entries(right || {});
     return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
 }
 
@@ -47,19 +52,21 @@ export function traceSubsetForCaller(
     trace: CallerTraceResult | undefined,
     caller: CallerTraceContext
 ): CallerTraceResult | undefined {
-    if (!trace || trace.load_error || !Array.isArray(caller.trace_args) || caller.trace_kwargs === null) {
+    if (!trace || trace.load_error) {
         return undefined;
     }
+    if (Object.prototype.hasOwnProperty.call(caller, 'trace_input')) {
+        return { ...trace, examples: trace.examples.filter(example => callerMatchesObservation(caller, example.input_before)),
+            errors: trace.errors.filter(example => callerMatchesObservation(caller, example.input_before)), input_source: 'caller_partition' };
+    }
+    if (!callerToProbeInput(caller)) { return undefined; }
     const expectedArgs = caller.args || [];
     const expectedKwargs = caller.kwargs || {};
-    const hasVerifiedConstructorContext = Array.isArray(caller.trace_constructor_args)
-        && caller.trace_constructor_kwargs !== null
-        && Array.isArray(caller.constructor_args)
-        && caller.constructor_kwargs !== null;
+    const hasVerifiedConstructorContext = hasVerifiedConstructorInput(caller);
     const matches = (example: CallerTraceExample) =>
         JSON.stringify(example.args || []) === JSON.stringify(expectedArgs)
         && sameRecord(example.kwargs, expectedKwargs)
-        && (!hasVerifiedConstructorContext || (
+        && (!hasVerifiedConstructorContext ? !example.constructor_args?.length && !Object.keys(example.constructor_kwargs || {}).length : (
             JSON.stringify(example.constructor_args || []) === JSON.stringify(caller.constructor_args || [])
             && sameRecord(example.constructor_kwargs, caller.constructor_kwargs || {})
         ));

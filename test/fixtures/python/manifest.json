@@ -2,6 +2,31 @@
   "schema_version": 2,
   "fixtures": [
     {
+      "id": "tier1-typed-caller",
+      "tier": 1,
+      "source": "tier1_typed_caller.py",
+      "target": "combine",
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "typed_caller": true},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["changing tuple or integer dictionary keys during caller transport", "changing bytes or nested tuple values"]}
+    },
+    {
+      "id": "tier1-typed-number",
+      "tier": 1,
+      "source": "tier1_typed_number.py",
+      "target": "advance",
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "typed_caller": true},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["rounding large integers", "changing float type or negative zero during caller transport"]}
+    },
+    {
+      "id": "tier1-typed-constructor",
+      "tier": 1,
+      "source": "tier1_typed_constructor.py",
+      "target": "BytePrefix.join",
+      "context": {"class_name": "BytePrefix", "method_kind": "instance"},
+      "expected": {"method_kind": "instance", "is_async": false, "rules": ["class_method_testing"], "trace": "assertable", "typed_caller": true},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["borrowing another constructor's oracle", "discarding typed constructor literals"]}
+    },
+    {
       "id": "tier1-boundary",
       "tier": 1,
       "source": "tier1_boundary.py",

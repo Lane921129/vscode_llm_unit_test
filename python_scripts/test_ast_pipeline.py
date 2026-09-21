@@ -2003,7 +2003,9 @@ def target(value: Literal[7] = 7) -> Literal[8]:
         self.assertFalse(any(item['from'] == '12' for item in result['mutants']))
 
     def test_candidate_universe_is_independent_of_sampling_and_names_operator_scope_versions(self):
+        import ast
         import hashlib
+        from basic_mutation_runner import apply_mutation
         source = 'def target(value):\n    return value + 1\n'
         full = self.measure(source, 'self.assertEqual(target(1), 2)', max_mutations=0)
         sample = self.measure(source, 'self.assertEqual(target(2), 3)', max_mutations=1)
@@ -2012,9 +2014,34 @@ def target(value: Literal[7] = 7) -> Literal[8]:
         self.assertEqual(full['candidateSetId'], hashlib.sha256('\n'.join(sorted(full['candidateIds'])).encode('ascii')).hexdigest())
         candidate = full['mutants'][0]
         metadata = {key: candidate[key] for key in ['kind', 'line', 'column', 'position', 'from', 'to']}
-        identity = json.dumps([full['operatorSetVersion'], full['scopeVersion'], full['sourceHash'], 'target', metadata],
+        variant = apply_mutation(ast.parse(source), 0, 'target')
+        variant_hash = hashlib.sha256(ast.dump(variant, include_attributes=False).encode('utf-8')).hexdigest()
+        identity = json.dumps([full['operatorSetVersion'], full['scopeVersion'], full['sourceHash'], 'target', metadata, variant_hash],
                               sort_keys=True, separators=(',', ':'))
         self.assertEqual(candidate['id'], hashlib.sha256(identity.encode('utf-8')).hexdigest())
+
+    def test_nested_binary_nodes_with_identical_locations_retain_distinct_stable_ids(self):
+        import hashlib
+        source = "def target(value):\n    return '[' + value + ']'\n"
+        first = self.measure(source, "self.assertEqual(target('a'), '[a]')", max_mutations=0)
+        second = self.measure(source, "self.assertEqual(target('b'), '[b]')", max_mutations=0)
+        self.assertEqual(first['status'], 'complete')
+        self.assertEqual(first['counts']['available'], 3)
+        self.assertEqual(first['counts']['killed'], 3)
+        self.assertEqual(len(set(first['candidateIds'])), 3)
+        binaries = [item for item in first['mutants'] if item['kind'] == 'binary']
+        self.assertEqual(len(binaries), 2)
+        fields = ['kind', 'line', 'column', 'position', 'from', 'to']
+        metadata = [{key: item[key] for key in fields} for item in binaries]
+        self.assertEqual(metadata[0], metadata[1], 'the two AST nodes share the old location-only identity')
+        self.assertNotEqual(binaries[0]['id'], binaries[1]['id'])
+        old_identity = json.dumps([first['operatorSetVersion'], first['scopeVersion'], first['sourceHash'], 'target', metadata[0]],
+                                  sort_keys=True, separators=(',', ':'))
+        old_id = hashlib.sha256(old_identity.encode('utf-8')).hexdigest()
+        self.assertTrue(all(item['id'] != old_id for item in binaries), 'do not silently reuse old colliding candidate IDs')
+        self.assertEqual(first['candidateIds'], second['candidateIds'])
+        self.assertEqual(first['candidateSetId'], second['candidateSetId'])
+        self.assertNotEqual(first['testHash'], second['testHash'])
 
     def test_zero_candidate_limit_selects_the_full_scope(self):
         result = self.measure('def target():\n    return (1, 2, 3)\n', 'self.assertEqual(target(), (1, 2, 3))', max_mutations=0)

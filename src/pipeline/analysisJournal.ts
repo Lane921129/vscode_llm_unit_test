@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'crypto';
 import { EVIDENCE_CONTRACT_VERSIONS } from './evidenceContracts';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import { classifyExecutionFailure } from '../utils/executionFailureCategory';
+import type { QualityPolicySnapshot } from './qualityPolicy';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -13,15 +14,18 @@ export class AnalysisJournal {
     private knowledgeState: Record<string, unknown> = {};
     readonly runId = randomUUID();
     readonly sourceHash: string;
-    constructor(private readonly directory: string, source: string, target: string, model: string) {
+    constructor(private readonly directory: string, source: string, target: string, model: string,
+        qualityPolicy?: QualityPolicySnapshot) {
         this.sourceHash = evidenceHash(source);
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
             schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(),
             sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v7',
-            evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS
+            evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS,
+            ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {})
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
-        this.knowledge({ target, terminalStatus: 'running', stage: 'starting' });
+        this.knowledge({ target, terminalStatus: 'running', stage: 'starting',
+            ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {}) });
     }
     record(loop: number, stage: string, status: string, detail: unknown): void {
         const event = { sequence: ++this.sequence, runId: this.runId, sourceHash: this.sourceHash,

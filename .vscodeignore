@@ -4,6 +4,7 @@ out/**
 node_modules/**
 src/**
 test/**
+contracts/quality-policy-cases-v1.json
 target/**
 output/**
 log/**

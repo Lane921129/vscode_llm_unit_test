@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { evidenceHash } from './analysisJournal';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
+import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -13,6 +15,52 @@ interface BatchTarget {
 interface EnvironmentIssue {
     kind: 'missing-dependency' | 'import-side-effect' | 'module-resolution' | 'other';
     missingModule?: string; operation?: string; origin?: { file: string; line: number };
+}
+
+/** Recompute a new report from its fixed policy and immutable candidate. The
+ * displayed score and the persisted "passed" flag are never sufficient. */
+function verifyQualityPass(directory: string, sourcePath: string, target: string,
+    manifest: any, knowledge: any): void {
+    const invalid = () => { throw Error('incomplete-quality-provenance'); };
+    const validated = validateQualityPolicy(manifest.qualityPolicy);
+    if (!validated.ok || validated.policy.mode !== 'strict100'
+        || manifest.qualityContractVersion !== 'quality-policy-v1'
+        || knowledge.qualityContractVersion !== 'quality-policy-v1'
+        || !isDeepStrictEqual(manifest.qualityPolicy, knowledge.qualityPolicy)
+        || knowledge.evidenceValid === false) { return invalid(); }
+    const snapshot = JSON.parse(fs.readFileSync(path.join(directory, 'quality_baseline.json'), 'utf8'));
+    const test = knowledge.acceptedTest;
+    const immutableTest = snapshot.testFile;
+    if (snapshot.schemaVersion !== 'quality-baseline-v1'
+        || snapshot.sourceHash !== knowledge.sourceHash || snapshot.target !== target
+        || !isDeepStrictEqual(snapshot.qualityPolicy, validated.policy)
+        || typeof test !== 'string' || path.basename(test) !== test || /[\\/]/.test(test)
+        || typeof immutableTest !== 'string' || path.basename(immutableTest) !== immutableTest || /[\\/]/.test(immutableTest)
+        || typeof snapshot.code !== 'string' || evidenceHash(snapshot.code) !== snapshot.codeHash
+        || knowledge.acceptedCodeHash !== snapshot.codeHash
+        || evidenceHash(fs.readFileSync(sourcePath, 'utf8')) !== knowledge.sourceHash
+        || evidenceHash(fs.readFileSync(path.join(directory, test), 'utf8')) !== snapshot.codeHash
+        || evidenceHash(fs.readFileSync(path.join(directory, immutableTest), 'utf8')) !== snapshot.codeHash
+        || typeof snapshot.execution !== 'string' || !snapshot.execution.trim()
+        || snapshot.execution !== knowledge.execution || snapshot.reviewStatus !== knowledge.reviewStatus
+        || snapshot.generationMode !== knowledge.generationMode
+        || snapshot.tier !== knowledge.resolvedTier
+        || ['qualityGaps', 'measuredQualityGaps'].some(field => !Array.isArray(snapshot[field])
+            || !snapshot[field].every((item: unknown) => typeof item === 'string'))
+        || !isDeepStrictEqual(snapshot.coverage?.assessment, knowledge.coverage?.assessment)
+        || !isDeepStrictEqual(snapshot.mutation, knowledge.mutation)) { return invalid(); }
+    const targetScope = { kind: 'function' as const, qualifiedName: target };
+    const assessment = evaluateQuality(validated.policy, {
+        identity: { sourcePath, sourceHash: knowledge.sourceHash, testHash: snapshot.codeHash,
+            targetScope, policyHash: validated.policy.policyHash },
+        executionPassed: true,
+        coverage: { sourceHash: knowledge.sourceHash, testHash: snapshot.codeHash, targetScope,
+            assessment: snapshot.coverage.assessment },
+        mutation: snapshot.mutation, reviewStatus: snapshot.reviewStatus,
+        generationMode: snapshot.generationMode, qualityGaps: []
+    });
+    if (!assessment.fullyPassed || !isDeepStrictEqual(assessment, snapshot.qualityAssessment)
+        || !isDeepStrictEqual(assessment, knowledge.qualityAssessment)) { return invalid(); }
 }
 
 /** Explicit inventory and completion; a report's mere existence is never a pass. */
@@ -66,14 +114,20 @@ export class BatchJournal {
                     || manifest.target !== target.target || knowledge.target !== target.target || typeof knowledge.terminalStatus !== 'string'
                     || knowledge.terminalStatus === 'running') { throw Error('incomplete-provenance'); }
                 if (knowledge.terminalStatus === 'passed') {
-                    const test = knowledge.acceptedTest;
-                    if (typeof test !== 'string' || path.basename(test) !== test || /[\\/]/.test(test)
-                        || !['completed', 'not-required'].includes(knowledge.reviewStatus)
-                        || !Array.isArray(knowledge.qualityGaps) || knowledge.qualityGaps.length
-                        || typeof knowledge.execution !== 'string' || !knowledge.execution.trim()
-                        || knowledge.mutationScore !== 100 || !Array.isArray(knowledge.survivors) || knowledge.survivors.length
-                        || evidenceHash(fs.readFileSync(path.join(directory, test), 'utf8')) !== knowledge.acceptedCodeHash) {
-                        throw Error('incomplete-provenance');
+                    const hasQualityContract = [manifest, knowledge].some(artifact =>
+                        ['qualityContractVersion', 'qualityPolicy', 'qualityAssessment'].some(key => Object.hasOwn(artifact, key)));
+                    if (hasQualityContract) {
+                        verifyQualityPass(directory, path.resolve(this.sourceRoot, target.file), target.target, manifest, knowledge);
+                    } else {
+                        const test = knowledge.acceptedTest;
+                        if (typeof test !== 'string' || path.basename(test) !== test || /[\\/]/.test(test)
+                            || !['completed', 'not-required'].includes(knowledge.reviewStatus)
+                            || !Array.isArray(knowledge.qualityGaps) || knowledge.qualityGaps.length
+                            || typeof knowledge.execution !== 'string' || !knowledge.execution.trim()
+                            || knowledge.mutationScore !== 100 || !Array.isArray(knowledge.survivors) || knowledge.survivors.length
+                            || evidenceHash(fs.readFileSync(path.join(directory, test), 'utf8')) !== knowledge.acceptedCodeHash) {
+                            throw Error('incomplete-provenance');
+                        }
                     }
                 }
                 target.terminalStatus = knowledge.terminalStatus;

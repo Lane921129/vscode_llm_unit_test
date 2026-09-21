@@ -3,6 +3,10 @@ import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { BatchJournal } from '../pipeline/batchJournal';
+import { evidenceHash } from '../pipeline/analysisJournal';
+import { createStrictQualityPolicy, evaluateQuality } from '../pipeline/qualityPolicy';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { findPythonFilesInDir } from '../utils/utils';
 
@@ -135,6 +139,111 @@ class Cases(unittest.TestCase):
         assert.ok(roles.includes('writer') && roles.includes('reviewer'));
         assert.ok(knowledge.initialTargetObservations.examples.every((item: any) => item.call_assertable === false));
         assert.equal(fs.readdirSync(clockOutput).some(name => /^loop\d+_trace_test\.py$/.test(name)), false);
+
+        // These are the production files just created above, including real
+        // guarded execution, selected-target coverage and a complete mutation
+        // universe. No hand-built score or checkpoint substitutes for them.
+        const readClockJson = (name: string) => JSON.parse(fs.readFileSync(path.join(clockOutput, name), 'utf8'));
+        const runManifest = readClockJson('run_manifest.json');
+        const executable = readClockJson('executable_baseline.json');
+        const checkpoint = readClockJson('quality_baseline.json');
+        const policy = createStrictQualityPolicy();
+        for (const artifact of [runManifest, knowledge, executable, checkpoint]) {
+            assert.deepEqual(artifact.qualityPolicy, policy, 'every stage must retain the policy fixed before execution');
+        }
+        const sourceFile = path.join(clockRoot, 'clock_sample.py');
+        const testHash = evidenceHash(fs.readFileSync(path.join(clockOutput, knowledge.acceptedTest), 'utf8'));
+        const sourceHash = evidenceHash(fs.readFileSync(sourceFile, 'utf8'));
+        const targetScope = { kind: 'function' as const, qualifiedName: 'target' };
+        const reassessment = evaluateQuality(policy, {
+            identity: { sourcePath: sourceFile, sourceHash, testHash, targetScope, policyHash: policy.policyHash },
+            executionPassed: Boolean(knowledge.execution?.trim()),
+            coverage: { sourceHash, testHash, targetScope, assessment: knowledge.coverage.assessment },
+            mutation: knowledge.mutation, reviewStatus: knowledge.reviewStatus,
+            generationMode: knowledge.generationMode, qualityGaps: knowledge.qualityGaps
+        });
+        assert.equal(reassessment.measurementStatus, 'complete');
+        assert.equal(reassessment.policyStatus, 'met');
+        assert.equal(reassessment.fullyPassed, true, JSON.stringify(reassessment));
+        assert.deepEqual(knowledge.qualityAssessment, reassessment);
+        assert.deepEqual(checkpoint.qualityAssessment, reassessment);
+        assert.deepEqual(checkpoint.mutation, knowledge.mutation);
+        assert.equal(checkpoint.codeHash, testHash);
+
+        const fixtureManifest = path.join(clockOutput, 'neutral_clock_scorecard_manifest.json');
+        fs.writeFileSync(fixtureManifest, JSON.stringify({ schema_version: 2, fixtures: [{
+            id: 'neutral-clock', tier: knowledge.resolvedTier, source: 'clock_sample.py', target: 'target',
+            acceptance: { min_line_coverage: 100, min_mutation_score: 100 }
+        }] }));
+        const scorecard = () => {
+            const scripts = path.resolve(__dirname, '../../python_scripts');
+            const script = 'import json,sys;sys.path.insert(0,sys.argv[1]);'
+                + 'from fixture_scorecard import build_scorecard;'
+                + 'print(json.dumps(build_scorecard(sys.argv[2],manifest_path=sys.argv[3])))';
+            const result = spawnSync(python, ['-B', '-c', script, scripts, clockOutput, fixtureManifest], {
+                encoding: 'utf8', timeout: 20000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+            });
+            assert.equal(result.status, 0, result.stderr || result.error?.message);
+            const card = JSON.parse(result.stdout);
+            assert.equal(card.fixture_count, 1);
+            return card;
+        };
+        const card = scorecard();
+        assert.deepEqual(card.status_counts, { passed: 1 });
+        assert.equal(card.results[0].status, clockTarget.terminalStatus);
+        assert.deepEqual(card.results[0].quality_policy, policy);
+        assert.deepEqual(card.results[0].quality_assessment, reassessment,
+            'Python scorecard must recompute exactly the same assessment from the actual saved run');
+
+        // Read the same report again through BatchJournal. Restore every file
+        // in finally, including the batch index that refresh rewrites, so the
+        // remaining source-discovery assertions still see the original run.
+        const preservedFiles = [
+            path.join(clockRun.directory, 'batch_manifest.json'),
+            path.join(clockRun.directory, 'batch_summary.md'),
+            ...['function_knowledge.json', 'run_manifest.json', 'quality_baseline.json'].map(name => path.join(clockOutput, name))
+        ];
+        const originalArtifacts = new Map(preservedFiles.map(file => [file, fs.readFileSync(file)]));
+        const restoreArtifacts = () => {
+            for (const [file, bytes] of originalArtifacts) { fs.writeFileSync(file, bytes); }
+        };
+        const rereadBatch = () => {
+            const reader = new BatchJournal(clockRun.directory, clockRoot, {
+                model: 'fixture', buildTimestamp: 'integration-reread', python
+            });
+            reader.discover(sourceFile, ['target']); reader.start(); reader.begin(0);
+            reader.attach(0, clockOutput); reader.refresh(0); reader.finish('completed');
+            return JSON.parse(fs.readFileSync(path.join(clockRun.directory, 'batch_manifest.json'), 'utf8'));
+        };
+        try {
+            assert.equal(rereadBatch().allTargetsPassed, true);
+            const corruptions: Array<{ name: string; artifact: string; change: (value: any) => void }> = [
+                { name: 'mutation universe identity', artifact: 'function_knowledge.json',
+                    change: value => { value.mutation.candidateSetId = '0'.repeat(64); } },
+                { name: 'policy fixed before execution', artifact: 'run_manifest.json',
+                    change: value => { value.qualityPolicy.lineThreshold.numerator = 0; } },
+                { name: 'saved assessment counts', artifact: 'function_knowledge.json',
+                    change: value => { value.qualityAssessment.counts.lines.executed++; } },
+                { name: 'checkpoint assessment', artifact: 'quality_baseline.json',
+                    change: value => { value.qualityAssessment.fullyPassed = false; } }
+            ];
+            for (const corruption of corruptions) {
+                restoreArtifacts();
+                const value = readClockJson(corruption.artifact);
+                corruption.change(value);
+                fs.writeFileSync(path.join(clockOutput, corruption.artifact), JSON.stringify(value));
+                const rejected = rereadBatch();
+                assert.equal(rejected.targets[0].terminalStatus, 'incomplete-report', corruption.name);
+                assert.equal(rejected.complete, false, corruption.name);
+                assert.equal(rejected.allTargetsPassed, false, corruption.name);
+                assert.equal(rejected.finishedTargets, 0, corruption.name);
+                assert.notEqual(scorecard().results[0].status, 'passed', `Python must also reject ${corruption.name}`);
+            }
+        } finally {
+            restoreArtifacts();
+        }
+        assert.deepEqual(scorecard().results[0].quality_assessment, reassessment, 'restoring original evidence restores its verified assessment');
+        assert.equal(JSON.parse(fs.readFileSync(path.join(clockRun.directory, 'batch_manifest.json'), 'utf8')).allTargetsPassed, true);
 
         // When users store output within the source root, earlier generated
         // helpers must not become targets of the next batch.

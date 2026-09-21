@@ -16,7 +16,7 @@ export interface TraceInputSnapshot {
 }
 export interface ObservationOrigin {
     kind: 'caller_literals' | 'source_guided' | 'semantic_guided' | 'unknown';
-    file?: string; caller?: string; detail?: string; requestId?: string;
+    file?: string; caller?: string; line?: number; detail?: string; requestId?: string;
 }
 export interface ProbeCaseObservation {
     case_id: string;

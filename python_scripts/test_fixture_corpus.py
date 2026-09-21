@@ -56,6 +56,15 @@ class FixtureCorpusTests(unittest.TestCase):
         completed = subprocess.run(args, check=True, capture_output=True, encoding='utf-8')
         return json.loads(completed.stdout)
 
+    @staticmethod
+    def caller_inputs(callers):
+        cases = [
+            {'input': caller['trace_input'], 'source': {'kind': 'caller_literals',
+                'file': caller['caller_file'], 'caller': caller['caller_func'], 'line': caller['line']}}
+            for caller in callers if 'trace_input' in caller
+        ]
+        return {'schema_version': 'probe-inputs-v1', 'cases': cases} if cases else None
+
     def test_manifest_has_three_fixtures_for_each_tier(self):
         self.assertEqual(self.manifest['schema_version'], 2)
         self.assertGreaterEqual(len(self.manifest['fixtures']), 12)
@@ -106,17 +115,7 @@ class FixtureCorpusTests(unittest.TestCase):
         for fixture in tier_one:
             with self.subTest(fixture=fixture['id']):
                 callers = self.find_callers(fixture)
-                literal_inputs = [
-                    {
-                        'args': caller['trace_args'],
-                        'kwargs': caller['trace_kwargs'] or {},
-                        'constructor_args': caller['trace_constructor_args'],
-                        'constructor_kwargs': caller['trace_constructor_kwargs'] or {},
-                    }
-                    for caller in callers
-                    if isinstance(caller.get('trace_args'), list)
-                ]
-                trace = self.trace(fixture, literal_inputs or None)
+                trace = self.trace(fixture, self.caller_inputs(callers))
                 self.assertIsNone(trace['load_error'])
                 self.assertTrue(trace['examples'] or trace['errors'])
                 self.assertTrue(all(item.get('call_assertable', True) for item in trace['examples'] + trace['errors']))
@@ -142,17 +141,7 @@ class FixtureCorpusTests(unittest.TestCase):
                 for expected_input in expected_caller_inputs:
                     self.assertIn((expected_input,), observed_caller_inputs)
 
-                literal_inputs = [
-                    {
-                        'args': caller['trace_args'],
-                        'kwargs': caller['trace_kwargs'] or {},
-                        'constructor_args': caller['trace_constructor_args'],
-                        'constructor_kwargs': caller['trace_constructor_kwargs'] or {},
-                    }
-                    for caller in callers
-                    if isinstance(caller.get('trace_args'), list)
-                ]
-                trace = self.trace(fixture, literal_inputs)
+                trace = self.trace(fixture, self.caller_inputs(callers))
                 self.assertIsNone(trace['load_error'])
                 observed_trace_inputs = {tuple(item.get('args', [])) for item in trace['examples']}
                 for expected_input in fixture['expected'].get('trace_inputs', []):

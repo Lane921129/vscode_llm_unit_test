@@ -3,6 +3,8 @@ import json
 import os
 import sys
 
+from trace_value_codec import snapshot_value, unavailable_snapshot, is_lossless_json_value
+
 
 def module_matches(module, target_module):
     normalized = module.lstrip('.')
@@ -93,6 +95,55 @@ def literal_arguments(call):
         )
     except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
         return None, None
+
+
+def caller_input_facts(args, kwargs, constructor_args, constructor_kwargs, constructor_present=False):
+    """Keep literal Python values typed before any JSON serialization occurs."""
+    if args is None or kwargs is None:
+        encoded = unavailable_snapshot()
+        diagnostic = {'reason': 'non-literal-arguments'}
+    else:
+        call = {'args': args, 'kwargs': kwargs}
+        if constructor_args is not None and constructor_kwargs is not None:
+            call.update(constructor_args=constructor_args, constructor_kwargs=constructor_kwargs)
+        encoded = snapshot_value(call)
+        if encoded['replayable']:
+            diagnostic = None
+        else:
+            reasons = set()
+            def collect(node):
+                if node.get('type') == 'unavailable':
+                    reasons.add(node['reason'])
+                for child in node.get('items', []):
+                    if 'key' in child:
+                        collect(child['key'])
+                        collect(child['value'])
+                    else:
+                        collect(child)
+            collect(encoded['value'])
+            diagnostic = {'reason': 'unreplayable-input', 'details': sorted(reasons)}
+
+    def legacy_pair(positional, keywords):
+        if positional is None or keywords is None:
+            return None, None
+        # Test the shared graph first, bounding recursion and rejecting aliases.
+        graph = snapshot_value({'args': positional, 'kwargs': keywords})
+        if not graph['replayable'] or not is_lossless_json_value(positional) or not is_lossless_json_value(keywords):
+            return None, None
+        return positional, keywords
+
+    legacy_args, legacy_kwargs = legacy_pair(args, kwargs)
+    legacy_constructor_args, legacy_constructor_kwargs = legacy_pair(constructor_args, constructor_kwargs)
+    return {
+        'trace_input': encoded,
+        'trace_input_diagnostic': diagnostic,
+        'trace_constructor_diagnostic': {'reason': 'non-literal-constructor'}
+            if constructor_present and constructor_args is None else None,
+        'trace_args': legacy_args,
+        'trace_kwargs': legacy_kwargs,
+        'trace_constructor_args': legacy_constructor_args,
+        'trace_constructor_kwargs': legacy_constructor_kwargs,
+    }
 
 
 def source_arguments(call):
@@ -504,6 +555,7 @@ def find_call_sites(func_name, project_root, target_path=None):
                 is_target_call = not target_module or os.path.abspath(filepath) == target_absolute
                 constructor_args, constructor_kwargs = None, None
                 constructor_code_args, constructor_code_kwargs = None, None
+                constructor_call = None
                 if target_class and attribute_call:
                     receiver = node.func.value
                     constructor_call = (
@@ -540,13 +592,11 @@ def find_call_sites(func_name, project_root, target_path=None):
                     'args': args_list,
                     'kwargs': kwargs_dict,
                     'call_expr': ast.unparse(node) if hasattr(ast, 'unparse') else func_name,
-                    'trace_args': trace_args,
-                    'trace_kwargs': trace_kwargs,
+                    **caller_input_facts(trace_args, trace_kwargs, constructor_args, constructor_kwargs,
+                                         constructor_call is not None),
                     # These facts are deliberately separate from the method
                     # arguments: Dynamic Trace needs them only to construct an
                     # instance, never to call the selected member itself.
-                    'trace_constructor_args': constructor_args,
-                    'trace_constructor_kwargs': constructor_kwargs,
                     'constructor_args': constructor_code_args,
                     'constructor_kwargs': constructor_code_kwargs
                 })
@@ -556,6 +606,6 @@ def find_call_sites(func_name, project_root, target_path=None):
 if __name__ == '__main__':
     if len(sys.argv) in (3, 4):
         target = sys.argv[3] if len(sys.argv) == 4 else None
-        print(json.dumps(find_call_sites(sys.argv[1], sys.argv[2], target), ensure_ascii=False))
+        print(json.dumps(find_call_sites(sys.argv[1], sys.argv[2], target), ensure_ascii=True))
     else:
         print(json.dumps({'error': 'Usage: ast_caller_finder.py <func_name> <project_root> [target_path]'}))

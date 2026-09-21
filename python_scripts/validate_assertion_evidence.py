@@ -7,6 +7,9 @@ import ast
 import json
 import sys
 
+from probe_input_transport import restore_call
+from trace_value_codec import snapshot_value
+
 
 def literal(node):
     return ast.literal_eval(node)
@@ -18,6 +21,56 @@ def signature(args, keywords):
     for node in list(args) + [value for _, value in keywords]:
         literal(node)
     return tuple(ast.dump(node) for node in args), tuple((key, ast.dump(value)) for key, value in keywords)
+
+
+def literal_keywords(keywords):
+    """Expand only literal **dict arguments with Python's ordering semantics.
+
+    Within one dict, the last value wins while the first key position remains.
+    Duplicates across call keywords/expansions would raise TypeError, so they
+    cannot borrow a successful Trace call's oracle. Every overwritten value is
+    still checked: evaluating an unknown expression can change target state.
+    """
+    expanded, seen = [], set()
+    for keyword in keywords:
+        if keyword.arg is not None:
+            entries = [(keyword.arg, keyword.value)]
+        else:
+            if not isinstance(keyword.value, ast.Dict):
+                raise ValueError('Unknown keyword expansion')
+            values = {}
+            for key_node, value_node in zip(keyword.value.keys, keyword.value.values):
+                if key_node is None:
+                    raise ValueError('Nested keyword expansion is unknown')
+                key = literal(key_node)
+                if type(key) is not str:
+                    raise ValueError('Keyword keys must be strings')
+                literal(value_node)
+                values[key] = value_node
+            entries = list(values.items())
+        for key, value in entries:
+            if key in seen:
+                raise ValueError('Duplicate call keyword')
+            seen.add(key)
+            expanded.append((key, value))
+    return expanded
+
+
+def observed_arguments(example):
+    """Use exact typed input order when present; malformed facts never fall back."""
+    if 'input_before' not in example:
+        return ([ast.parse(value, mode='eval').body for value in example.get('args', [])],
+                [(key, ast.parse(value, mode='eval').body) for key, value in example.get('kwargs', {}).items()])
+    before = example['input_before']
+    if type(before) is not dict or before.get('replayable') is not True:
+        raise ValueError('Input snapshot is not replayable')
+    call = restore_call(before.get('call_graph'))
+    fields = ('args', 'kwargs', 'constructor_args', 'constructor_kwargs')
+    if set(call) != set(fields) or any(snapshot_value(call[field]) != before.get(field) for field in fields):
+        raise ValueError('Input snapshot views disagree')
+    # restore_call only creates exact builtins; repr cannot invoke user hooks.
+    return ([ast.parse(repr(value), mode='eval').body for value in call['args']],
+            [(key, ast.parse(repr(value), mode='eval').body) for key, value in call['kwargs'].items()])
 
 
 def check(payload):
@@ -57,8 +110,7 @@ def check(payload):
         if example.get('call_assertable') is False or example.get('result_assertable') is False:
             continue
         try:
-            args = [ast.parse(value, mode='eval').body for value in example.get('args', [])]
-            kwargs = [(key, ast.parse(value, mode='eval').body) for key, value in example.get('kwargs', {}).items()]
+            args, kwargs = observed_arguments(example)
             key = signature(args, kwargs)
             value = literal(ast.parse(example['result'], mode='eval').body)
             # Conflicting observations are not a stable oracle.
@@ -85,8 +137,7 @@ def check(payload):
                 if not isinstance(node, ast.Call): return UNKNOWN
                 call_name = dotted(node.func)
                 if call_name not in names and call_name not in {name + '.' + target for name in modules}: return UNKNOWN
-                if any(item.arg is None for item in node.keywords): return UNKNOWN
-                try: return facts.get(signature(node.args, [(item.arg, item.value) for item in node.keywords]), UNKNOWN)
+                try: return facts.get(signature(node.args, literal_keywords(node.keywords)), UNKNOWN)
                 except (ValueError, TypeError): return UNKNOWN
             for statement in method.body:
                 if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):

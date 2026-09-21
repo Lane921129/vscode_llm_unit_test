@@ -2,6 +2,7 @@ import { observationsForPrompt, summarizeObservationPhase, WriterEvidenceBundleV
 import { formatTargetContract } from '../pipeline/targetContract';
 import { estimatePromptTokens } from './promptBudget';
 import { matchingWriterExamples } from './verifiedWriterExamples';
+import { callerForPrompt } from '../pipeline/probeInputs';
 
 export const COMPACT_WRITER_VERSION = 'compact-writer-v1';
 
@@ -25,7 +26,7 @@ export function buildCompactWriterContext(input: {
         'SETUP FACTS (source only; caller values are input candidates, not expected outputs):\n' + JSON.stringify({
             constructor: context.class_context || null, property: context.property_context || null,
             imports: context.file_imports || [], globals: context.referenced_globals || [],
-            callers: context.callerContexts || [], conditions: context.condition_facts || []
+            callers: (context.callerContexts || []).map(callerForPrompt), conditions: context.condition_facts || []
         }),
         'FIXTURE CHECK: Arrange required constructor inputs and per-case state. '
             + 'Keep the target real. Patch proven dependencies at use points and configure each consumed return layer; a bare MagicMock is not a concrete row, string, number, or timestamp. '

@@ -1,6 +1,10 @@
 import { toPythonAssertionLiteral } from './tier1Literals';
+import { hasVerifiedConstructorInput, traceValuePythonLiteral, typedCallFields, typedDictionaryEntries } from '../pipeline/probeInputs';
+import { TraceInputSnapshot, TraceValue } from '../pipeline/evidenceContracts';
+import { validTraceInputSnapshot } from '../pipeline/traceValues';
 
 export interface Tier1TraceExample {
+    input_before?: TraceInputSnapshot;
     args: string[];
     kwargs?: Record<string, string>;
     result?: string;
@@ -12,6 +16,22 @@ export interface Tier1TraceExample {
     exception?: string;
     exception_module?: string;
     exception_qualname?: string;
+}
+
+function constructorExpression(className: string, argsValue: TraceValue, kwargsValue: TraceValue): string {
+    const args = argsValue.items!.map(value => traceValuePythonLiteral(value as TraceValue)!);
+    const keywords = typedDictionaryEntries(kwargsValue)!;
+    const reserved = new Set('False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield'.split(' '));
+    if (keywords.every(item => typeof item.key.value === 'string' && /^[A-Za-z_]\w*$/.test(item.key.value) && !reserved.has(item.key.value))) {
+        args.push(...keywords.map(item => `${item.key.value}=${traceValuePythonLiteral(item.value)}`));
+    } else if (keywords.length) { args.push(`**${traceValuePythonLiteral(kwargsValue)}`); }
+    return `${className}(${args.join(', ')})`;
+}
+
+/** Replay this observation's actual pre-constructor values, never another caller's setup. */
+export function buildObservedConstructorCall(className: string, before: TraceInputSnapshot | undefined): string | null {
+    return validTraceInputSnapshot(before) && before.replayable
+        ? constructorExpression(className, before.constructor_args!.value, before.constructor_kwargs!.value) : null;
 }
 
 const builtinExceptions = new Set(('BaseException Exception ArithmeticError AssertionError AttributeError '
@@ -44,6 +64,7 @@ export function traceExceptionReference(error: Tier1TraceExample): { expression:
  * constructor contract.
  */
 export interface Tier1ConstructorContext {
+    trace_input?: unknown;
     trace_constructor_args?: unknown[] | null;
     trace_constructor_kwargs?: Record<string, unknown> | null;
     constructor_args?: string[] | null;
@@ -55,14 +76,15 @@ export function buildVerifiedConstructorCall(
     className: string,
     callerContexts: Tier1ConstructorContext[] | undefined
 ): string | null {
-    const context = (callerContexts || []).find(candidate =>
-        Array.isArray(candidate.trace_constructor_args)
-        && candidate.trace_constructor_kwargs !== null
-        && Array.isArray(candidate.constructor_args)
-        && candidate.constructor_kwargs !== null
-    );
+    const context = (callerContexts || []).find(hasVerifiedConstructorInput);
     if (!context) {
         return null;
+    }
+    if (Object.prototype.hasOwnProperty.call(context, 'trace_input')) {
+        const values = typedCallFields(context.trace_input)!;
+        // Keyword unpacking also supports literal string keys that cannot be
+        // written as Python identifiers, while retaining their insertion order.
+        return constructorExpression(className, values.constructor_args!, values.constructor_kwargs!);
     }
     const kwargs = Object.entries(context.constructor_kwargs || {})
         .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
@@ -81,6 +103,9 @@ export function buildTier1InstanceSetup(
 }
 
 function buildTraceCall(funcName: string, example: Tier1TraceExample): string {
+    if (validTraceInputSnapshot(example.input_before) && example.input_before.replayable) {
+        return constructorExpression(funcName, example.input_before.args!.value, example.input_before.kwargs!.value);
+    }
     const kwargs = Object.entries(example.kwargs || {})
         .filter(([name]) => /^[A-Za-z_]\w*$/.test(name))
         .map(([name, value]) => `${name}=${value}`);

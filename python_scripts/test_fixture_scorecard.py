@@ -1,4 +1,5 @@
 import json
+import copy
 import hashlib
 import pathlib
 import sys
@@ -8,7 +9,8 @@ import unittest
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
-from fixture_scorecard import DEFAULT_BATCH_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard
+from fixture_scorecard import DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard
+from quality_policy import create_fixture_quality_policy, create_strict_quality_policy, evaluate_quality
 
 
 def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None, resolved_tier=1, model_identity='cloud/test-model'):
@@ -29,6 +31,108 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 
 
 class FixtureScorecardTests(unittest.TestCase):
+    def write_policy_report(self, root, policy, vector_name='strict-full-success', terminal='passed'):
+        fixture = next(item for item in load_manifest()['fixtures'] if item['id'] == 'tier1-class-method')
+        vectors = json.loads((SCRIPTS_DIR.parent / 'contracts' / 'quality-policy-cases-v1.json').read_text(encoding='utf-8'))
+        evidence = copy.deepcopy(next(item['evidence'] for item in vectors['cases'] if item['name'] == vector_name))
+        source_file = '/portable/' + fixture['source']
+        code = '# retained policy fixture\r\n'
+        digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        evidence['identity'].update(sourcePath=source_file, testHash=digest, policyHash=policy['policyHash'])
+        evidence['mutation'].update(sourcePath=source_file, testHash=digest)
+        evidence['coverage']['testHash'] = digest
+        evidence['coverage']['assessment']['invocationEvidence']['testHash'] = digest
+        for scope in (evidence['identity']['targetScope'], evidence['mutation']['targetScope'], evidence['coverage']['targetScope']):
+            scope['qualifiedName'] = fixture['target']
+        assessment = evaluate_quality(policy, evidence)
+        coverage = {'coverageText': '100%', 'missingLines': 'none', 'assessment': evidence['coverage']['assessment'],
+                    'selectedTarget': {'qualifiedName': fixture['target'], 'executableLines': [2, 3], 'missingLines': [], 'branchesCovered': True}}
+        path = self.write_report(root, 'policy-case', report(source_file, fixture['target'], 100, 100))
+        snapshot = {'schemaVersion': 'quality-baseline-v1', 'sourceHash': evidence['identity']['sourceHash'], 'target': fixture['target'],
+                    'code': code, 'codeHash': digest, 'testFile': 'immutable_test.py', 'execution': 'Ran 1 test\nOK',
+                    'coverage': coverage, 'mutation': evidence['mutation'], 'reviewStatus': evidence['reviewStatus'],
+                    'generationMode': evidence['generationMode'], 'tier': 1, 'qualityGaps': [], 'measuredQualityGaps': [],
+                    'qualityPolicy': policy, 'qualityAssessment': assessment}
+        manifest = {'runId': 'new-policy-run', 'sourceHash': snapshot['sourceHash'], 'target': fixture['target'],
+                    'qualityContractVersion': 'quality-policy-v1', 'qualityPolicy': policy}
+        knowledge = {**manifest, 'terminalStatus': terminal, 'reviewStatus': snapshot['reviewStatus'],
+                     'generationMode': snapshot['generationMode'], 'execution': snapshot['execution'], 'resolvedTier': 1,
+                     'acceptedTest': 'loop1_test.py', 'acceptedCodeHash': digest, 'coverage': coverage,
+                     'mutation': snapshot['mutation'], 'mutationScore': 100, 'qualityGaps': [], 'qualityAssessment': assessment}
+        path.with_name('immutable_test.py').write_bytes(code.encode('utf-8'))
+        path.with_name('loop1_test.py').write_bytes(code.encode('utf-8'))
+        artifacts = {'quality_baseline.json': snapshot, 'run_manifest.json': manifest, 'function_knowledge.json': knowledge}
+        for name, value in artifacts.items():
+            path.with_name(name).write_text(json.dumps(value), encoding='utf-8')
+        return path, artifacts
+
+    def test_new_policy_reader_recomputes_exact_counts_and_retains_strict_vs_fixture_distinction(self):
+        fixture_policy = create_fixture_quality_policy(fixtureId='tier1-class-method',
+            manifestHash=hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest(), minLineCoverage=100, minMutationScore=85)
+        for policy, vector, expected in [(create_strict_quality_policy(), 'fixture-90-of-100-meets-85', 'threshold_failed'),
+                                         (fixture_policy, 'fixture-90-of-100-meets-85', 'passed'),
+                                         (create_strict_quality_policy(), 'strict-199-of-200-does-not-round', 'threshold_failed'),
+                                         (create_strict_quality_policy(), 'strict-full-success', 'passed')]:
+            with self.subTest(policy=policy['mode'], vector=vector), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                self.write_policy_report(root, policy, vector)
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+                self.assertEqual(result['status'], expected)
+                self.assertEqual(result['policy_mode'], policy['mode'])
+                self.assertEqual(result['mutation_score'], 99.5 if '199' in vector else 100 if 'full-success' in vector else 90)
+
+    def test_new_policy_requires_bound_manifest_contract_and_does_not_upgrade_round_limit(self):
+        correct_hash = hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()
+        for threshold, manifest_hash, fixture_id, terminal, expected in [
+                (85, correct_hash, 'tier1-class-method', 'round-limit', 'incomplete_run'),
+                (80, correct_hash, 'tier1-class-method', 'passed', 'incomplete_provenance'),
+                (85, 'e' * 64, 'tier1-class-method', 'passed', 'incomplete_provenance'),
+                (85, correct_hash, 'another-fixture', 'passed', 'incomplete_provenance')]:
+            with self.subTest(threshold=threshold, terminal=terminal, fixture=fixture_id), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                policy = create_fixture_quality_policy(fixtureId=fixture_id, manifestHash=manifest_hash,
+                                                       minLineCoverage=100, minMutationScore=threshold)
+                self.write_policy_report(root, policy, 'fixture-90-of-100-meets-85', terminal)
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+                self.assertEqual(result['status'], expected)
+
+    def test_new_policy_rejects_mixed_or_missing_artifacts_and_self_declared_pass(self):
+        mutations = [
+            lambda a: a['function_knowledge.json'].update(evidenceValid=False),
+            lambda a: a['run_manifest.json'].pop('qualityPolicy'),
+            lambda a: a['function_knowledge.json'].pop('qualityPolicy'),
+            lambda a: a['quality_baseline.json'].pop('qualityPolicy'),
+            lambda a: a['run_manifest.json'].update(qualityContractVersion='unknown'),
+            lambda a: a['quality_baseline.json'].update(sourceHash='e' * 64),
+            lambda a: a['quality_baseline.json'].update(target='other'),
+            lambda a: a['quality_baseline.json']['mutation'].update(candidateSetId='e' * 64),
+            lambda a: a['function_knowledge.json']['qualityAssessment'].update(fullyPassed=False),
+            lambda a: a['function_knowledge.json'].pop('terminalStatus'),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                path, artifacts = self.write_policy_report(root, create_strict_quality_policy())
+                # Break aliases intentionally: persisted files are separate values.
+                artifacts = copy.deepcopy(json.loads(json.dumps(artifacts)))
+                mutate(artifacts)
+                for name, value in artifacts.items():
+                    path.with_name(name).write_text(json.dumps(value), encoding='utf-8')
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+                self.assertEqual(result['status'], 'incomplete_provenance')
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            path.with_name('function_knowledge.json').unlink()
+            result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            self.assertEqual(result['status'], 'incomplete_provenance')
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            path.with_name('immutable_test.py').write_bytes(b'# changed test\n')
+            result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            self.assertEqual(result['status'], 'incomplete_provenance')
+
     def test_selected_target_coverage_is_bound_to_retained_test_and_keeps_module_coverage_separate(self):
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)

@@ -68,6 +68,8 @@ const outcomes: MutationOutcome[] = ['KILLED', 'SURVIVED', 'TIMEOUT', 'ERROR', '
 const normalizePath = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
 const sourceBasename = (value: string) => path.posix.basename(value.replace(/\\/g, '/'));
 
+export type MutationReadResult = { ok: true; run: MutationRun } | { ok: false; reason: string };
+
 export function failedMutationRun(engine: MutationEngine, context: MutationContext, diagnostic: string): MutationRun {
     return { ...context, targetScope: { ...context.targetScope }, schemaVersion: 1, engine, status: 'failed',
         operatorSetVersion: engine === 'builtin' ? BUILTIN_MUTATION_OPERATOR_SET_VERSION : null,
@@ -87,7 +89,12 @@ function countStatus(counts: MutationCounts, baselinePassed: boolean): Pick<Muta
 
 /** Parse a fresh result; malformed or stale evidence never inherits an old score. */
 export function parseBuiltinMutationRun(raw: unknown, context: MutationContext): MutationRun {
-    const fail = (message: string) => failedMutationRun('builtin', context, message);
+    const result = readBuiltinMutationRun(raw, context);
+    return result.ok ? result.run : failedMutationRun('builtin', context, result.reason);
+}
+
+function readBuiltinMutationRun(raw: unknown, context: MutationContext): MutationReadResult {
+    const fail = (reason: string): MutationReadResult => ({ ok: false, reason });
     let value: unknown = raw;
     if (typeof raw === 'string') {
         try { value = JSON.parse(raw); } catch { return fail('Invalid builtin mutation JSON'); }
@@ -109,8 +116,10 @@ export function parseBuiltinMutationRun(raw: unknown, context: MutationContext):
         if ((observed !== undefined && (!integer(observed) || observed < 1))
             || (context.targetScope[field] !== undefined && observed !== context.targetScope[field])) { return fail('Invalid mutation source range'); }
     }
+    if (typeof value.targetScope.startLine === 'number' && typeof value.targetScope.endLine === 'number'
+        && value.targetScope.startLine > value.targetScope.endLine) { return fail('Invalid mutation source range'); }
     if (typeof value.scope_found !== 'boolean' || typeof value.baseline_passed !== 'boolean'
-        || !['passed', 'failed', 'timeout', 'error', 'not-run'].includes(String(value.baselineStatus))
+        || typeof value.baselineStatus !== 'string' || !['passed', 'failed', 'timeout', 'error', 'not-run'].includes(value.baselineStatus)
         || value.baseline_passed !== (value.baselineStatus === 'passed') || (!value.scope_found && value.baseline_passed)) {
         return fail('Invalid mutation baseline evidence');
     }
@@ -156,13 +165,27 @@ export function parseBuiltinMutationRun(raw: unknown, context: MutationContext):
     if (!record(value.excluded) || ['noop', 'duplicate', 'invalid'].some(field => !integer((value.excluded as Record<string, unknown>)[field]))) {
         return fail('Invalid excluded mutation counts');
     }
-    return { ...context, targetScope: { ...value.targetScope } as unknown as MutationScope,
+    return { ok: true, run: { ...context, targetScope: { ...value.targetScope } as unknown as MutationScope,
         schemaVersion: 1, engine: 'builtin', ...state, baselinePassed: value.baseline_passed,
         operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION, scopeVersion,
         candidateSetId: value.candidateSetId as string | null, candidateIds: [...candidateIds],
         baselineStatus: value.baselineStatus as MutationRun['baselineStatus'], counts, mutants,
         excluded: { ...value.excluded } as MutationRun['excluded'],
-        diagnostic: typeof value.baseline_output === 'string' ? value.baseline_output : typeof value.diagnostic === 'string' ? value.diagnostic : undefined };
+        diagnostic: typeof value.baseline_output === 'string' ? value.baseline_output : typeof value.diagnostic === 'string' ? value.diagnostic : undefined } };
+}
+
+/** Validate persisted camelCase evidence against caller-owned identity, without
+ * confusing a valid failed measurement with malformed tool output. External
+ * reports lack a verified persisted full-universe contract and stay unscored. */
+export function readStoredMutationRun(raw: unknown, context: MutationContext): MutationReadResult {
+    let value: unknown = raw;
+    if (typeof value === 'string') {
+        try { value = JSON.parse(value); } catch { return { ok: false, reason: 'Invalid stored mutation JSON' }; }
+    }
+    if (!record(value) || value.engine !== 'builtin' || typeof value.baselinePassed !== 'boolean'
+        || !record(value.counts)) { return { ok: false, reason: 'Unsupported stored mutation contract' }; }
+    return readBuiltinMutationRun({ ...value, baseline_passed: value.baselinePassed,
+        scope_found: value.counts.available !== null }, context);
 }
 
 export interface ExternalMutationContext extends MutationContext {
