@@ -9,10 +9,11 @@ test('all folder pickers restore independent selections after provider recreatio
     const originalLoad = Module._load;
     const stored = new Map<string, unknown>();
     const settings = new Map<string, unknown>([['projectPath', '/old-project'], ['outputPath', '/old-output']]);
-    const dialogs: any[] = [];
+    const dialogs: any[] = [], executed: any[] = [];
     const choices: Array<Array<{ fsPath: string }> | undefined> = [];
     const state = { get: (key: string) => stored.get(key), update: async (key: string, value: unknown) => { stored.set(key, value); } };
     const vscode = {
+        commands: { executeCommand: async (...args: any[]) => { executed.push(args); } },
         workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => settings.get(key) ?? fallback,
             update: async (key: string, value: unknown) => { settings.set(key, value); } }) },
         env: { language: 'zh-tw' }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -37,6 +38,10 @@ test('all folder pickers restore independent selections after provider recreatio
             return { receive, messages, scans };
         };
         let view = attach();
+        await view.receive({ command: 'prepareProjectEnvironment', projectRoot: '/selected-project', filePath: '/stale.py' });
+        assert.deepEqual(executed.at(-1), ['llm-unit-test.preparePythonEnvironment', { filePath: '/selected-project', projectRoot: '/selected-project' }]);
+        await view.receive({ command: 'preparePythonEnvironment', projectRoot: '/selected-project', filePath: '/selected-project/module.py' });
+        assert.deepEqual(executed.at(-1), ['llm-unit-test.preparePythonEnvironment', { filePath: '/selected-project/module.py', projectRoot: '/selected-project' }]);
         await view.receive({ command: 'getInitialData' });
         assert.equal(view.messages.find(item => item.command === 'setProjectPath').path, '/old-project');
         assert.equal(view.messages.find(item => item.command === 'setOutputPath').path, '/old-output');
@@ -108,12 +113,21 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     receive({ data: { command: 'setProjectPath', path: '/project' } });
     assert.equal(elements.get('batch-path').value, '/batch');
     elements.get('btn-prepare-env').onclick();
+    assert.equal(messages.at(-1).command, 'prepareProjectEnvironment');
+    assert.equal(messages.at(-1).filePath, undefined);
+    assert.equal(messages.at(-1).projectRoot, '/project');
+    elements.get('btn-prepare-env-scope').onclick();
     assert.equal(messages.at(-1).command, 'preparePythonEnvironment');
     assert.equal(messages.at(-1).filePath, '/project/target.py');
     assert.equal(messages.at(-1).projectRoot, '/project');
+    elements.get('project-path').value = '';
+    elements.get('btn-prepare-env').onclick();
+    assert.equal(messages.at(-1).command, 'browseProjectFolder');
+    elements.get('project-path').value = '/project';
     receive({ data: { command: 'environmentPreparation', busy: true, text: 'Checking environment' } });
     assert.equal(elements.get('btn-run').disabled, true);
     assert.equal(elements.get('btn-prepare-env').disabled, true);
+    assert.equal(elements.get('btn-prepare-env-scope').disabled, true);
     assert.equal(elements.get('python-environment-status').value, 'Checking environment');
     receive({ data: { command: 'analysisFinished' } });
     assert.equal(elements.get('btn-run').disabled, true);

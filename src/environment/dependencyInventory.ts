@@ -49,5 +49,5 @@ export function inventoryReport(scan: DependencyInventory, initialMissing: strin
         '| Import | 分類 | 檢查結果 | 使用位置（所選範圍相對路徑） |', '| --- | --- | --- | --- |',
         ...scan.imports.map(item => `| ${cell(item.module)} | ${kinds[item.kind]} | ${statuses[item.availability]} | `
             + item.references.map(ref => `${cell(ref.file)}:${ref.line}（${contexts[ref.context]}）`).join('<br>') + ' |'), '',
-        '缺少必要套件時優先使用所選目錄至專案根目錄間最近的 requirements；沒有清單時只採 llmUnitTest.packageMappings 的明確對應。語法錯誤、讀取失敗或容量超限均不能算掃描成功。', ''].join('\n');
+        '缺少必要套件時優先使用所選目錄至專案根目錄間最近的 requirements；沒有清單時採 llmUnitTest.packageMappings，未對應者列為 import 同名候選，確認後嘗試 pip 安裝並重新檢查。語法錯誤、讀取失敗或容量超限均不能算掃描成功。', ''].join('\n');
 }

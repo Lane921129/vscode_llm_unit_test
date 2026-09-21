@@ -230,10 +230,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'prepareProjectEnvironment':
                 case 'preparePythonEnvironment': {
+                    const projectRoot = typeof message.projectRoot === 'string' ? message.projectRoot : undefined;
                     await vscode.commands.executeCommand('llm-unit-test.preparePythonEnvironment', {
-                        filePath: typeof message.filePath === 'string' ? message.filePath : undefined,
-                        projectRoot: typeof message.projectRoot === 'string' ? message.projectRoot : undefined
+                        filePath: message.command === 'prepareProjectEnvironment' ? projectRoot
+                            : typeof message.filePath === 'string' ? message.filePath : undefined,
+                        projectRoot
                     });
                     break;
                 }

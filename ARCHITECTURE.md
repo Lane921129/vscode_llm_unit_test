@@ -14,9 +14,9 @@
 
 ## 主流程
 
-Python 環境準備由 `pythonEnvironmentController.ts` 選擇整個專案、資料夾或單一 Python 檔案，分別保存最近選擇。資料夾／專案模式經 `environment_probe.py` 呼叫 `dependency_inventory.py`，只以 AST 盤點所選樹內 import，依所選 Python 的標準庫與頂層套件位置彙整缺項；不執行應用或外部套件的 import。`dependencyInventory.ts` 驗證並呈現 `dependency-inventory-v1` 報告，保留逐檔行號、條件／可選／型別相依、首次與最近缺項及不完整掃描原因。必要缺項沿用原有 requirements／明確 packageMappings 安裝流程；條件缺項只列出。靜態可找到套件不代表正式模組載入成功，原有單檔隔離預檢與測試 gate 不變。詳細操作及範圍限制見 [專案相依掃描](docs/Python相依掃描.md)。
+Python 環境準備入口與結果置於專案資料夾欄位下方。「檢查此專案相依」把已選資料夾直接交給 `pythonEnvironmentController.ts`，不重問範圍；「其他範圍…」仍可選整個專案、資料夾或單一 Python 檔案，分別保存最近選擇。資料夾／專案模式經 `environment_probe.py` 呼叫 `dependency_inventory.py`，只以 AST 盤點所選樹內 import，依所選 Python 的標準庫與頂層套件位置彙整缺項；不執行應用或外部套件的 import。`dependencyInventory.ts` 驗證並呈現 `dependency-inventory-v1` 報告，保留逐檔行號、條件／可選／型別相依、首次與最近缺項及不完整掃描原因。必要缺項優先採 requirements／明確 packageMappings，否則預填同名候選供確認補裝；條件缺項只列出。靜態可找到套件不代表正式模組載入成功，原有單檔隔離預檢與測試 gate 不變。詳細操作及範圍限制見 [專案相依掃描](docs/Python相依掃描.md)。
 
-補裝前由 `pythonInstallationPlan.ts` 彙整目前缺項、明確映射、requirements 與工具宣告，`pythonInstallationPreview.ts` 提供獨立清單頁面。使用者確認的計畫綁定 Python、安裝操作與本機 requirements／引用／constraint 檔案 hash；安裝前再次核對，取消或未確認時不執行 pip。新增缺項重新預覽；初次清單會一次列出資料夾掃描的所有已知必要缺項。未知映射、無法讀取或範圍外引用不可批准。來源網址與任意原文不進入頁面／Markdown 報告，直接宣告與 pip 後續解析的間接相依分開說明。原有 interpreter 選擇、隔離載入與安裝後驗證仍保留。
+補裝前由 `pythonInstallationPlan.ts` 彙整目前缺項、明確映射、requirements 與工具宣告，`pythonInstallationPreview.ts` 提供獨立清單頁面。無宣告的外部必要缺項以 `sameNameCandidate` 標示同名候選，頁面與報告保留未驗證對應的區別；可直接確認補裝，候選不自動持久化。使用者確認的計畫綁定 Python、安裝操作與本機 requirements／引用／constraint 檔案 hash；安裝前再次核對，取消或未確認時不執行 pip。新增缺項重新預覽；初次清單會一次列出資料夾掃描的所有已知必要缺項。無效名稱、無法讀取或範圍外引用不可批准。來源網址與任意原文不進入頁面／Markdown 報告，直接宣告與 pip 後續解析的間接相依分開說明。原有 interpreter 選擇、隔離載入與安裝後驗證仍保留。
 
 沒有 requirements 時，清單可直接編輯缺項的 pip 套件名稱，或由使用者明確選擇同名 import。`updateMappings` 必須綁定目前 plan ID，只接受該清單可編輯的 import 與單一套件名稱；控制器合併保存至所選 workspace 的 `packageMappings`。保存後重新建立計畫再要求安裝確認，修改中的頁面不允許直接批准舊清單。保存名稱、確認安裝與最終環境就緒是三個不同狀態；保存後取消不安裝該清單，名稱仍保留。requirements 宣告不可透過此流程覆蓋。
 

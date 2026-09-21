@@ -5,7 +5,7 @@ import { DependencyInventory } from './dependencyInventory';
 
 export interface PythonInstallationPlan {
     id: string; python: string; virtual: boolean; target: string;
-    missing: { module: string; installation: string; locations: string[]; mappingEditable?: boolean }[];
+    missing: { module: string; installation: string; locations: string[]; mappingEditable?: boolean; sameNameCandidate?: boolean }[];
     declarations: { package: string; version: string; conditional: boolean; source: string; constraint: boolean }[];
     optionalMissing: string[]; notes: string[]; blockers: string[]; previouslyInstalled: string[];
     operations: { args: string[]; cwd: string; label: string }[];
@@ -102,17 +102,17 @@ export async function createPythonInstallationPlan(options: {
         const locations = options.inventory?.imports.filter(item => item.kind === 'external' && item.module.split('.')[0] === module)
             .flatMap(item => item.references.map(ref => `${ref.file}:${ref.line}`)) || [];
         let installation = '依專案 requirements';
+        let sameNameCandidate = false;
         if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(module)) {
             plan.blockers.push('缺少的模組名稱無法可靠對應外部套件，請檢查相依宣告。');
         } else if (!options.requirements) {
-            const name = await options.packageName?.(module);
-            if (!name) {
-                installation = '尚未設定安裝名稱';
-                plan.blockers.push('請在下方填寫安裝名稱並更新清單，或補充 requirements／llmUnitTest.packageMappings。');
-            } else if (!safeName(name)) {
+            const mapping = await options.packageName?.(module);
+            const name = mapping ?? module;
+            if (!safeName(name)) {
                 installation = '安裝名稱無效';
                 plan.blockers.push('安裝名稱必須是單一套件名稱，不接受網址、路徑或 pip 引數。');
             } else {
+                sameNameCandidate = mapping === undefined;
                 installation = name;
                 plan.mappings[module] = name;
                 if (!plan.operations.some(operation => operation.args.length === 1 && operation.args[0] === name)) {
@@ -121,7 +121,7 @@ export async function createPythonInstallationPlan(options: {
             }
         }
         plan.missing.push({ module, installation, locations: [...new Set(locations)],
-            mappingEditable: !options.requirements && /^[A-Za-z][A-Za-z0-9_]*$/.test(module) });
+            mappingEditable: !options.requirements && /^[A-Za-z][A-Za-z0-9_]*$/.test(module), sameNameCandidate });
     }
     if (options.requirements && options.missing.length) {
         plan.operations.push({ args: ['-r', options.requirements], cwd: path.dirname(options.requirements), label: '專案 requirements' });
@@ -133,6 +133,9 @@ export async function createPythonInstallationPlan(options: {
     }
     if (options.requirements && (options.missing.length || options.needsTools)) {
         readDeclarations(plan, options.requirements, options.projectRoot, '專案');
+    }
+    if (plan.missing.some(item => item.sameNameCandidate)) {
+        plan.notes.push('未宣告對應的缺項會以 import 同名套件嘗試 pip 安裝，尚未驗證套件對應；確認後才執行。安裝後仍須重新檢查 import，失敗時可修改名稱後重試，不會把同名候選自動保存為已確認映射。');
     }
     plan.notes.push('這是直接宣告與已知缺項清單，並非 pip 最終解析結果。安裝可能補入間接相依或調整既有版本；條件宣告由 pip 依 Python／平台判定。');
     plan.notes = [...new Set(plan.notes)]; plan.blockers = [...new Set(plan.blockers)];
@@ -153,7 +156,7 @@ export function installationPlanReport(plan: PythonInstallationPlan, approved: b
         `Python：${cell(plan.python)}`, `檢查範圍：${cell(plan.target)}`, '',
         ...plan.blockers.map(value => '- ' + cell(value)),
         '| 缺少的 import | 安裝依據 | 使用位置 |', '| --- | --- | --- |',
-        ...plan.missing.map(item => `| ${cell(item.module)} | ${cell(item.installation)} | ${item.locations.map(cell).join('<br>') || '單檔載入預檢'} |`), '',
+        ...plan.missing.map(item => `| ${cell(item.module)} | ${cell(item.installation)}${item.sameNameCandidate ? '（同名候選，未驗證對應）' : ''} | ${item.locations.map(cell).join('<br>') || '單檔載入預檢'} |`), '',
         '| Requirements 宣告 | 條件 | 來源 |', '| --- | --- | --- |',
         ...plan.declarations.map(item => `| ${cell(item.package + item.version)} | ${item.constraint ? '版本限制；' : ''}${item.conditional ? '依環境條件' : '一般宣告'} | ${cell(item.source)} |`), '',
         `本清單前已完成：${plan.previouslyInstalled.map(cell).join('、') || '無'}。`,

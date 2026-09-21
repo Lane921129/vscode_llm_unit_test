@@ -98,9 +98,14 @@ test('preview buttons bind to one plan; dismissal, abort and blocked plans never
         panels.at(-1)!.emit({ command: 'install', planId: plan.id }); assert.equal(panels.at(-1)!.closed, false);
         panels.at(-1)!.dispose(); assert.equal(await invalid, false);
         const unmapped = await createPythonInstallationPlan({ ...f.options, requirements: undefined });
+        assert.equal(unmapped.blockers.length, 0);
+        assert.equal(unmapped.missing[0].sameNameCandidate, true);
+        assert.match(installationPlanReport(unmapped, false), /同名候選，未驗證對應/);
+        assert.match(installationPreviewHtml(unmapped, 'filled-nonce'), /data-module="neutral_alpha" value="neutral_alpha"/);
+        assert.doesNotMatch(installationPreviewHtml(unmapped, 'filled-nonce'), /id="install" disabled/);
         assert.match(installationPlanReport(unmapped, false, true), /已儲存安裝名稱，重新產生清單；此清單未執行安裝/);
         const specialName = await createPythonInstallationPlan({ ...f.options, requirements: undefined, missing: ['toString'] });
-        assert.match(installationPreviewHtml(specialName, 'special-nonce'), /data-module="toString" value=""/);
+        assert.match(installationPreviewHtml(specialName, 'special-nonce'), /data-module="toString" value="toString"/);
         const editing = confirmPythonInstallation(unmapped);
         const editablePanel = panels.at(-1)!;
         assert.match(editablePanel.webview.html, /儲存名稱並更新清單/);
@@ -130,25 +135,30 @@ test('preview buttons bind to one plan; dismissal, abort and blocked plans never
         assert.equal(buttons.install.disabled, true);
         assert.equal(JSON.stringify(posted), JSON.stringify([{ command: 'install', planId: plan.id }, { command: 'cancel', planId: plan.id }]));
         // Exercise the actual editable page script: explicit same-name selection, dirty state and host validation feedback.
-        const editScript = installationPreviewHtml(unmapped, 'editing-nonce').match(/<script nonce="editing-nonce">([\s\S]*?)<\/script>/)![1];
+        const mapped = await createPythonInstallationPlan({ ...f.options, requirements: undefined,
+            packageName: async () => 'neutral-dist' });
+        const editScript = installationPreviewHtml(mapped, 'editing-nonce').match(/<script nonce="editing-nonce">([\s\S]*?)<\/script>/)![1];
         const elements: Record<string, any> = {};
         for (const id of ['install', 'cancel', 'save-mappings', 'mapping-status', 'mapping-0', 'copy']) {
             elements[id] = { disabled: false, textContent: '', handlers: {} as Record<string, () => void>,
                 addEventListener: (event: string, callback: () => void) => { elements[id].handlers[event] = callback; } };
         }
-        Object.assign(elements['mapping-0'], { value: '', defaultValue: '', dataset: { module: 'neutral_alpha' } });
+        Object.assign(elements['mapping-0'], { value: 'neutral-dist', defaultValue: 'neutral-dist', dataset: { module: 'neutral_alpha' } });
         elements.copy.dataset = { input: 'mapping-0' };
         let receive!: (event: unknown) => void;
         const edits: any[] = [];
         new vm.Script(editScript).runInNewContext({ acquireVsCodeApi: () => ({ postMessage: (message: unknown) => edits.push(message) }),
             document: { getElementById: (id: string) => elements[id], querySelectorAll: (selector: string) => selector === 'input[data-module]' ? [elements['mapping-0']] : [elements.copy] },
             window: { addEventListener: (_event: string, callback: typeof receive) => { receive = callback; } } });
+        elements.install.handlers.click();
+        assert.equal(JSON.stringify(edits[0]), JSON.stringify({ command: 'install', planId: mapped.id }));
+        edits.length = 0;
         elements['save-mappings'].handlers.click(); assert.equal(edits.length, 0);
         elements.copy.handlers.click(); assert.equal(elements['mapping-0'].value, 'neutral_alpha');
         assert.equal(elements.install.disabled, true);
         elements.install.handlers.click(); assert.equal(edits.length, 0);
         elements['save-mappings'].handlers.click();
-        assert.equal(JSON.stringify(edits[0]), JSON.stringify({ command: 'updateMappings', planId: unmapped.id, mappings: { neutral_alpha: 'neutral_alpha' } }));
+        assert.equal(JSON.stringify(edits[0]), JSON.stringify({ command: 'updateMappings', planId: mapped.id, mappings: { neutral_alpha: 'neutral_alpha' } }));
         receive({ data: { command: 'mappingError', text: '請修正名稱' } });
         assert.equal(elements['save-mappings'].disabled, false); assert.equal(elements['mapping-status'].textContent, '請修正名稱');
     } finally {

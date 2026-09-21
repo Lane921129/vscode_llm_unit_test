@@ -100,7 +100,9 @@ export class PythonEnvironmentController {
         const installationPlans: { plan: PythonInstallationPlan; approved: boolean; mappingsUpdated?: boolean }[] = [];
         let outcome = '環境準備尚未完成。';
         try {
-            const preferredProject = projectRoot || vscode.workspace.getConfiguration('llmUnitTest',
+            // An explicit directory from the project button is already a selected scope.
+            const directProject = filePath && fs.existsSync(filePath) && fs.statSync(filePath).isDirectory() ? filePath : undefined;
+            const preferredProject = directProject || projectRoot || vscode.workspace.getConfiguration('llmUnitTest',
                 filePath ? vscode.Uri.file(filePath) : undefined).get<string>('projectPath', '');
             const previousScope = this.state.get<string>('llmUnitTest.lastEnvironmentScope.v1', 'project');
             const scopes = [
@@ -108,7 +110,8 @@ export class PythonEnvironmentController {
                 { label: '選擇資料夾', description: '掃描所選資料夾及其子目錄', scope: 'folder' },
                 { label: '單一 Python 檔案', description: '保留原有的隔離載入與相依檢查', scope: 'file' }
             ].sort((a, b) => Number(b.scope === previousScope) - Number(a.scope === previousScope));
-            const selection = await vscode.window.showQuickPick(scopes, { title: '選擇 Python 相依檢查範圍' });
+            const selection = directProject ? { scope: 'project' }
+                : await vscode.window.showQuickPick(scopes, { title: '選擇 Python 相依檢查範圍' });
             if (!selection) { return; }
             const scope = selection.scope === 'file' ? 'file' : 'folder';
             if (selection.scope === 'project') {

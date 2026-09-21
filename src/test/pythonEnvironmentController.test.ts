@@ -184,6 +184,18 @@ test('project and folder scopes retain separate history, publish full diagnostic
         assert.equal(previewed, true); assert.equal(updates.length, saved);
         assert.match(reports.at(-1)!, /Python 安裝清單/); assert.match(reports.at(-1)!, /未確認.*取消/);
         assert.match(reports.at(-1)!, /coverage/);
+        // The project-area shortcut already has a scope and must not reopen a picker
+        // or inspect the previously selected file/project instead.
+        const pickerCount = choices.length;
+        scope = undefined;
+        let direct: any;
+        setupModule.preparePythonEnvironment = async (options: any) => {
+            direct = options; return { python: '/selected/python', installed: [] };
+        };
+        await controller.prepare(nested, root);
+        assert.equal(choices.length, pickerCount);
+        assert.equal(direct.file, nested); assert.equal(direct.projectRoot, nested); assert.equal(direct.scope, 'folder');
+        assert.equal(states.get('llmUnitTest.lastEnvironmentProject.v1'), nested);
         const release = setup.pythonEnvironmentActivity.acquire('setup'); assert.ok(release); release();
     } finally {
         setupModule.preparePythonEnvironment = originalPrepare;

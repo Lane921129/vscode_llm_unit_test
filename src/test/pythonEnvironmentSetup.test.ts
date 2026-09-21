@@ -95,14 +95,62 @@ test('a repeated missing import stops after one installation and never claims su
     } finally { f.dispose(); }
 });
 
-test('an undeclared import never causes a guessed distribution install, including cancelled mapping selection', async () => {
+test('one confirmation installs same-name candidates and saved mappings for a folder, then verifies every required import', async () => {
     const f = fixture();
     try {
-        for (const packageName of [undefined, async () => undefined, async () => '']) {
-            const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'project_helper' }));
-            await assert.rejects(preparePythonEnvironment({ ...f.options, packageName }, h.runner), /packageMappings/);
-            assert.equal(h.installations().length, 0);
-            assert.equal(h.commands.some(command => command.args.includes('check')), false);
+        const pending = ['neutral_alpha', 'neutral_beta'];
+        let confirmations = 0;
+        const h = harness(() => ({ ...ready(f.python), status: pending.length ? 'missing' : 'ready', missing: pending[0],
+            inventory: { ...inventory([...pending]), optionalMissing: ['neutral_optional'] } }), command => {
+            assert.equal(confirmations, 1);
+            assert.equal(command.args.at(-1), pending[0] === 'neutral_alpha' ? 'neutral-dist' : 'neutral_beta');
+            pending.shift();
+        });
+        const result = await preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder',
+            packageName: async name => name === 'neutral_alpha' ? 'neutral-dist' : undefined,
+            savePackageMappings: async () => assert.fail('Automatic candidates must not become persisted mappings'),
+            confirmInstall: async plan => {
+                confirmations++; assert.equal(h.installations().length, 0);
+                assert.equal(plan.blockers.length, 0);
+                assert.deepEqual(plan.missing.map(item => item.sameNameCandidate), [false, true]);
+                assert.deepEqual(plan.operations.map(operation => operation.args), [['neutral-dist'], ['neutral_beta']]);
+                return true;
+            } }, h.runner);
+        assert.equal(confirmations, 1); assert.equal(h.installations().length, 2);
+        assert.deepEqual(result.inventory?.missing, []);
+        assert.deepEqual(result.inventory?.optionalMissing, ['neutral_optional']);
+    } finally { f.dispose(); }
+});
+
+test('a same-name candidate rejected by pip does not retry guesses or report the environment ready', async () => {
+    const f = fixture();
+    try {
+        const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_unknown' }));
+        let attempts = 0;
+        await assert.rejects(preparePythonEnvironment({ ...f.options, packageName: undefined }, async command => {
+            if (command.args.includes('install')) {
+                attempts++;
+                return { code: 1, stdout: 'PRIVATE_RESPONSE_SENTINEL', stderr: 'No matching distribution found' };
+            }
+            return h.runner(command);
+        }), error => {
+            assert.match(String(error), /import 名稱可能與安裝名稱不同/);
+            assert.doesNotMatch(String(error), /PRIVATE_RESPONSE/); return true;
+        });
+        assert.equal(attempts, 1); assert.equal(h.commands.some(command => command.args.includes('check')), false);
+    } finally { f.dispose(); }
+});
+
+test('same-name proposals require confirmation even when no package mapping exists', async () => {
+    const f = fixture();
+    try {
+        for (const packageName of [undefined, async () => undefined]) {
+            for (const confirmInstall of [undefined, async () => false]) {
+                const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_dependency' }));
+                await assert.rejects(preparePythonEnvironment({ ...f.options, packageName, confirmInstall }, h.runner), /未確認安裝清單/);
+                assert.equal(h.installations().length, 0);
+                assert.equal(h.commands.some(command => command.args.includes('check')), false);
+            }
         }
     } finally { f.dispose(); }
 });
@@ -179,7 +227,7 @@ test('tool installation preserves the application requirements even when target 
 test('package names cannot inject pip options, paths or URLs; requirements picker cancellation installs nothing', async () => {
     const f = fixture();
     try {
-        for (const name of ['--upgrade', '../package', 'https://example.invalid/package', 'name another']) {
+        for (const name of ['', '--upgrade', '../package', 'https://example.invalid/package', 'name another']) {
             const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_missing' }));
             await assert.rejects(preparePythonEnvironment({ ...f.options, packageName: async () => name }, h.runner), /單一套件名稱/);
             assert.equal(h.installations().length, 0);
@@ -265,9 +313,9 @@ test('folder mapping fallback installs distinct required dependencies only and r
         const reports: DependencyInventory[] = [];
         const failed = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_alpha', inventory: inventory(['neutral_alpha', 'neutral_beta']) }));
         await assert.rejects(preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder',
-            packageName: undefined, inventory: scan => reports.push(scan) }, failed.runner), /packageMappings/);
+            packageName: undefined, inventory: scan => reports.push(scan) }, failed.runner), /停止重複安裝/);
         assert.deepEqual(reports.at(-1)?.missing, ['neutral_alpha', 'neutral_beta']);
-        assert.equal(failed.installations().length, 0);
+        assert.equal(failed.installations().length, 1);
     } finally { f.dispose(); }
 });
 
@@ -308,7 +356,7 @@ test('an installation never starts without explicit confirmation, including requ
     } finally { f.dispose(); }
 });
 
-test('folder confirmation includes all known dependencies and tools; unresolved mapping blocks every installation', async () => {
+test('folder confirmation includes all known dependencies and tools; invalid mapping blocks every installation', async () => {
     const f = fixture();
     try {
         const pending = ['neutral_alpha', 'neutral_beta'];
@@ -328,8 +376,8 @@ test('folder confirmation includes all known dependencies and tools; unresolved 
         let blocked: PythonInstallationPlan | undefined;
         const unknown = harness(() => ({ ...ready(f.python), coverage: false, status: 'missing', missing: 'neutral_alpha', inventory: inventory(['neutral_alpha', 'neutral_beta']) }));
         await assert.rejects(preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder',
-            packageName: async name => name === 'neutral_alpha' ? name : undefined,
-            confirmInstall: async plan => { blocked = plan; return true; } }, unknown.runner), /packageMappings/);
+            packageName: async name => name === 'neutral_alpha' ? name : '--invalid',
+            confirmInstall: async plan => { blocked = plan; return true; } }, unknown.runner), /單一套件名稱/);
         assert.equal(blocked?.missing.length, 2); assert.ok(blocked?.blockers.length);
         assert.equal(unknown.installations().length, 0);
     } finally { f.dispose(); }
@@ -392,7 +440,7 @@ test('a requirements change after one approved operation blocks the next operati
     } finally { f.dispose(); }
 });
 
-test('an unmapped import can be named in the preview, saved and installed only after confirming a rebuilt plan', async () => {
+test('a same-name proposal can be changed in the preview, saved and installed only after confirming a rebuilt plan', async () => {
     const f = fixture();
     try {
         let installed = false;
@@ -405,7 +453,8 @@ test('an unmapped import can be named in the preview, saved and installed only a
             confirmInstall: async (plan): Promise<PythonInstallationDecision> => {
                 plans.push(plan);
                 if (plans.length === 1) {
-                    assert.ok(plan.blockers.length); assert.equal(plan.missing[0].mappingEditable, true);
+                    assert.equal(plan.blockers.length, 0); assert.equal(plan.missing[0].sameNameCandidate, true);
+                    assert.equal(plan.missing[0].mappingEditable, true);
                     return { mappings: { neutral_alpha: 'neutral-distribution' } };
                 }
                 assert.equal(plan.blockers.length, 0); assert.notEqual(plan.id, plans[0].id);

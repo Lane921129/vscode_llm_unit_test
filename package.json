@@ -113,7 +113,7 @@
           "type": "object",
           "default": {},
           "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
-          "description": "沒有 requirements 時，明確指定 import 名稱對應的 pip 套件名稱，例如 PIL → Pillow。未宣告的模組會停止並提示補充映射，不會猜測或自動安裝同名套件。"
+          "description": "沒有 requirements 時，優先使用這裡的 import → pip 套件名稱，例如 PIL → Pillow。未設定者在安裝清單帶入同名候選，確認後才嘗試 pip 安裝並重新檢查；也可在清單修改名稱並保存對應。"
         },
         "llmUnitTest.targetBudget": {
           "type": "object",

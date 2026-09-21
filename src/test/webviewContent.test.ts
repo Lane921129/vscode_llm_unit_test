@@ -35,3 +35,13 @@ test('test settings do not expose an unsupported concurrency control', () => {
     assert.ok(!html.includes('concurrency-select'));
     assert.ok(!html.includes('Concurrency Workers'));
 });
+
+test('dependency checks and their result are placed beside the project selection with a separate scope option', () => {
+    const html = getWebviewContent(key => key);
+    const projectArea = html.slice(html.indexOf('id="project-path"'), html.indexOf('id="output-path"'));
+    assert.ok(projectArea.includes('id="btn-prepare-env"'));
+    assert.ok(projectArea.includes('id="btn-prepare-env-scope"'));
+    assert.ok(projectArea.includes('id="python-environment-status"'));
+    assert.equal((html.match(/id="btn-prepare-env"/g) || []).length, 1);
+    assert.ok(!html.slice(html.indexOf('id="file-select"'), html.indexOf('id="btn-run"')).includes('id="btn-prepare-env"'));
+});

@@ -258,6 +258,12 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <input type="text" id="project-path" readonly placeholder="${t('ui.projectPath')}">
                 <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
             </div>
+            <div class="flex-row">
+                <button id="btn-prepare-env" style="flex:1;">${t('ui.prepareProjectEnvironment')}</button>
+                <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
+            </div>
+            <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
+            <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
             
             <label>📂 ${t('ui.outputDir')}</label>
             <div class="flex-row">
@@ -287,9 +293,6 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             <label style="margin-top:8px;">${t('ui.function')}</label>
             <select id="func-select"><option value="">-- All --</option></select>
 
-            <button id="btn-prepare-env">${t('ui.prepareEnvironment')}</button>
-            <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
-            <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
             
             <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
                 <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
@@ -631,13 +634,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
-                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = environmentBusy;
                     }
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
-                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = false;
                     }
                     break;
@@ -655,6 +658,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     const abortBtn = document.getElementById('btn-abort');
                     if (abortBtn) abortBtn.style.display = 'none';
                     document.getElementById('btn-prepare-env').disabled = environmentBusy;
+                    document.getElementById('btn-prepare-env-scope').disabled = environmentBusy;
                     break;
             }
         });
@@ -744,6 +748,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
 
         document.getElementById('btn-prepare-env').onclick = () => {
+            const projectRoot = document.getElementById('project-path').value;
+            vscode.postMessage(projectRoot ? { command: 'prepareProjectEnvironment', projectRoot }
+                : { command: 'browseProjectFolder' });
+        };
+        document.getElementById('btn-prepare-env-scope').onclick = () => {
             vscode.postMessage({ command: 'preparePythonEnvironment',
                 filePath: document.getElementById('file-select').value,
                 projectRoot: document.getElementById('project-path').value });
@@ -784,6 +793,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function setRunningState(isBatch) {
             document.getElementById('btn-prepare-env').disabled = true;
+            document.getElementById('btn-prepare-env-scope').disabled = true;
             document.getElementById('btn-run').disabled = true;
             document.getElementById('btn-batch-run').disabled = true;
             if (isBatch) {

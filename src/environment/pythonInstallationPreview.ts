@@ -6,7 +6,7 @@ export function installationPreviewHtml(plan: PythonInstallationPlan, nonce: str
     const escape = (value: string) => value.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
     const editable = plan.missing.some(item => item.mappingEditable);
     const rows = plan.missing.map((item, index) => `<tr><td>${escape(item.module)}</td><td>${item.mappingEditable
-        ? `<label for="mapping-${index}">pip 套件名稱</label><input id="mapping-${index}" data-module="${escape(item.module)}" value="${escape(Object.hasOwn(plan.mappings, item.module) ? plan.mappings[item.module] : '')}" placeholder="請填入安裝名稱" autocomplete="off" spellcheck="false"><button class="use-import" data-input="mapping-${index}">使用此 import 名稱</button>`
+        ? `<label for="mapping-${index}">pip 套件名稱</label><input id="mapping-${index}" data-module="${escape(item.module)}" value="${escape(Object.hasOwn(plan.mappings, item.module) ? plan.mappings[item.module] : '')}" placeholder="請填入安裝名稱" autocomplete="off" spellcheck="false">${item.sameNameCandidate ? '<div>同名候選，尚未驗證對應；可直接確認嘗試安裝。</div>' : ''}<button class="use-import" data-input="mapping-${index}">使用此 import 名稱</button>`
         : escape(item.installation)}</td><td>${item.locations.map(escape).join('<br>') || '單檔載入預檢'}</td></tr>`).join('');
     const declarations = plan.declarations.map(item => `<tr><td>${escape(item.package + item.version)}</td><td>${item.constraint ? '版本限制；' : ''}${item.conditional ? '依 Python／平台條件' : '一般宣告'}</td><td>${escape(item.source)}</td></tr>`).join('');
     return `<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
@@ -30,7 +30,7 @@ input{box-sizing:border-box;width:100%;min-width:180px;margin:6px 0;padding:8px;
 ${plan.previouslyInstalled.length ? `<p>先前已完成：${plan.previouslyInstalled.map(escape).join('、')}。取消此清單會保留先前已安裝的套件。</p>` : ''}
 ${plan.blockers.length ? `<div class="blocker"><strong>請先完成以下項目</strong><ul>${plan.blockers.map(value => `<li>${escape(value)}</li>`).join('')}</ul></div>` : ''}
 <h2>目前缺少的必要相依</h2>${rows ? `<table><thead><tr><th>Import</th><th>安裝依據／名稱</th><th>使用位置</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>目前沒有缺少的應用 import；本次準備測試工具相依。</p>'}
-${editable ? '<p>安裝名稱可能與 import 不同。確認兩者相同時，可按「使用此 import 名稱」；填好後按「儲存名稱並更新清單」。名稱會記住供下次使用，儲存本身不會安裝套件。</p>' : ''}
+${editable ? '<p>已自動帶入安裝名稱，可直接按「確認並安裝」。若套件名稱與 import 不同，可修改後按「儲存名稱並更新清單」；手動修改的對應會記住供下次使用。</p>' : ''}
 <h2>將執行的安裝項目</h2>${plan.operations.length ? `<ul>${plan.operations.map(operation => `<li>${escape(operation.label)}</li>`).join('')}</ul>` : '<p>完成安裝名稱並更新清單後，這裡會列出安裝項目。</p>'}
 ${declarations ? `<h2>Requirements 直接宣告</h2><p>保留清單內原有版本與平台條件；不只處理第一個缺少的 import。</p><table><thead><tr><th>套件／版本</th><th>條件</th><th>來源清單</th></tr></thead><tbody>${declarations}</tbody></table>` : ''}
 ${plan.optionalMissing.length ? `<p>條件／可選缺項（不據此補裝）：${plan.optionalMissing.map(escape).join('、')}。</p>` : ''}
