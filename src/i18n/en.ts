@@ -28,7 +28,7 @@ export default {
         prepareEnvironment: "Choose scope and check Python dependencies",
         pythonEnvironment: "Python environment result",
         currentPython: "Current Python (target dependencies not checked yet): ",
-        prepareEnvironmentHint: "Check a project, folder or Python file; remember the last selection. Reuse an existing Python and install missing required packages using requirements or explicit mappings.",
+        prepareEnvironmentHint: "Check a project, folder or Python file and remember the selection. Inspect the existing Python, review the installation list, then confirm before installing missing dependencies.",
         batchScope: "Batch Scope",
         env: "Environment",
         ollamaUrl: "Ollama URL",

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { preparePythonEnvironment, runSetupCommand, SetupCommand } from '../environment/pythonEnvironmentSetup';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { PythonInstallationPlan } from '../environment/pythonInstallationPlan';
 
 test('offline real pip installs one neutral missing dependency into an existing interpreter and the next preparation reuses it', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-offline-'));
@@ -46,11 +47,19 @@ test('offline real pip installs one neutral missing dependency into an existing 
             if (command.args.includes('install')) { assert.equal(result.code, 0, result.stdout + result.stderr); }
             return result;
         };
+        let confirmations = 0;
         const options = { projectRoot: root, file, candidates: [{ executable: python }],
+            confirmInstall: async (plan: PythonInstallationPlan) => {
+                confirmations++; assert.equal(installed.length, 0);
+                assert.equal(plan.python.toLowerCase(), python.toLowerCase());
+                assert.equal(plan.missing[0].installation, 'neutral_environment_fixture'); return true;
+            },
             toolRequirements: path.resolve(__dirname, '../../requirements.txt'),
             packageName: async (missing: string) => missing === 'neutral_environment_fixture'
                 ? 'neutral_environment_fixture' : undefined };
         fs.writeFileSync(path.join(root, 'second.py'), 'def later():\n    import neutral_environment_fixture\n');
+        await assert.rejects(preparePythonEnvironment({ ...options, file: root, scope: 'folder', confirmInstall: async () => false }, runner), /未確認安裝清單/);
+        assert.equal(installed.length, 0);
         const first = await preparePythonEnvironment({ ...options, file: root, scope: 'folder' }, runner);
         assert.equal(first.inventory?.filesScanned, 2);
         assert.deepEqual(first.inventory?.missing, []);
@@ -62,5 +71,6 @@ test('offline real pip installs one neutral missing dependency into an existing 
         assert.deepEqual(second.installed, []);
         assert.equal(installed.length, 1);
         assert.equal(fs.existsSync(path.join(root, '.venv')), false);
+        assert.equal(confirmations, 1);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

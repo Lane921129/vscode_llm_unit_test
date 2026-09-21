@@ -6,6 +6,7 @@ import { killProcessTree } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { inferTargetImportModule } from '../utils/dependencyResolver';
 import { DependencyInventory, inventorySummary, isDependencyInventory } from './dependencyInventory';
+import { createPythonInstallationPlan, installationPlanFilesUnchanged, PythonInstallationPlan } from './pythonInstallationPlan';
 
 export class EnvironmentSetupError extends Error {
     constructor(readonly stage: string, message: string) { super(message); }
@@ -130,6 +131,7 @@ export async function preparePythonEnvironment(options: {
     signal?: AbortSignal; progress?: (message: string) => void;
     chooseRequirements?: (files: string[]) => Promise<string | undefined>;
     packageName?: (missing: string) => Promise<string | undefined>;
+    confirmInstall?: (plan: PythonInstallationPlan) => Promise<boolean>;
 }, runner: SetupRunner = runSetupCommand): Promise<{ python: string; requirements?: string; installed: string[]; inventory?: DependencyInventory }> {
     const cancelled = () => {
         if (options.signal?.aborted) { throw new EnvironmentSetupError('cancelled', '環境準備已取消；已安裝的套件會保留，下次會重新檢查。'); }
@@ -165,8 +167,16 @@ export async function preparePythonEnvironment(options: {
     const python = selected.python;
     progress('選用 Python：' + python);
     const installed: string[] = [];
+    const approvedOperations = new Map<string, PythonInstallationPlan>();
+    const approvedMappings = new Map<string, string>();
+    const operationKey = (args: string[], cwd: string) => JSON.stringify([args, cwd]);
     const install = async (args: string[], cwd: string) => {
         cancelled();
+        const approved = approvedOperations.get(operationKey(args, cwd));
+        if (!approved || !installationPlanFilesUnchanged(approved)) {
+            throw new EnvironmentSetupError('install-plan', '安裝清單尚未確認或 requirements 已變更，請重新檢查並確認後再安裝。');
+        }
+        approvedOperations.delete(operationKey(args, cwd));
         const output = await runner({ executable: python,
             args: ['-B', pythonToolPath('installer'), 'install', '--no-input', '--disable-pip-version-check', ...args],
             cwd, env: setupEnvironment(process.env), signal: options.signal });
@@ -174,12 +184,36 @@ export async function preparePythonEnvironment(options: {
         installationFailure('install', output);
     };
     let requirements: string | undefined;
+    const approve = async (current: EnvironmentInspection) => {
+        const plan = await createPythonInstallationPlan({ python, virtual: current.virtual, target: options.file,
+            projectRoot: options.projectRoot, inventory: current.inventory,
+            missing: current.status === 'missing' ? current.inventory?.missing || [current.missing || ''] : [],
+            requirements, toolRequirements: options.toolRequirements, needsTools: !current.coverage,
+            packageName: options.packageName, previouslyInstalled: installed });
+        cancelled();
+        // The callback receives a copy; UI code cannot expand the approved operations.
+        const accepted = await options.confirmInstall?.(structuredClone(plan));
+        cancelled();
+        if (plan.blockers.length) { throw new EnvironmentSetupError('dependency', plan.blockers.join(' ')); }
+        if (accepted !== true) {
+            throw new EnvironmentSetupError('install-plan', installed.length
+                ? '已取消此安裝清單；先前已完成的安裝會保留，環境尚未就緒。'
+                : '未確認安裝清單，本次未安裝任何套件，也未變更 Python 設定。');
+        }
+        if (!installationPlanFilesUnchanged(plan)) {
+            throw new EnvironmentSetupError('install-plan', 'requirements 在確認期間已變更，請重新檢查並確認新的安裝清單。');
+        }
+        for (const operation of plan.operations) { approvedOperations.set(operationKey(operation.args, operation.cwd), plan); }
+        for (const [module, name] of Object.entries(plan.mappings)) { approvedMappings.set(module, name); }
+    };
     if (selected.status === 'missing' || !selected.coverage) {
         const files = findRequirementFiles(options.projectRoot, options.file, scope);
         requirements = files.length === 1 ? files[0] : files.length ? await options.chooseRequirements?.(files) : undefined;
         cancelled();
         if (files.length && !requirements) { throw new EnvironmentSetupError('requirements', '尚未選擇相依清單，未安裝任何套件。'); }
         if (requirements && !files.includes(requirements)) { throw new EnvironmentSetupError('requirements', '相依清單不屬於目前選取的專案。'); }
+        progress('檢查完成，等待確認安裝清單…');
+        await approve(selected);
         if (requirements && selected.status === 'missing') {
             progress('依原專案 requirements 安裝相依…');
             await install(['-r', requirements], path.dirname(requirements));
@@ -205,7 +239,8 @@ export async function preparePythonEnvironment(options: {
             throw new EnvironmentSetupError('dependency', '安裝後仍缺少 ' + missing + ' 或已達補裝上限；請確認套件名稱／版本，停止重複安裝。');
         }
         missingAttempts.add(missing);
-        const name = await options.packageName?.(missing);
+        if (!approvedMappings.has(missing)) { await approve(current); }
+        const name = approvedMappings.get(missing);
         cancelled();
         if (!name) {
             throw new EnvironmentSetupError('dependency', '缺少 ' + missing
@@ -221,7 +256,9 @@ export async function preparePythonEnvironment(options: {
     if (!selected.coverage) {
         if (!fs.existsSync(options.toolRequirements)) { throw new EnvironmentSetupError('tools', '擴充套件的測試工具相依清單遺失，請重新安裝擴充套件。'); }
         progress('正在補齊 coverage 與突變測試工具…');
-        await install(['-r', options.toolRequirements, ...requirements ? ['-r', requirements] : []], options.projectRoot);
+        const args = ['-r', options.toolRequirements, ...requirements ? ['-r', requirements] : []];
+        if (!approvedOperations.has(operationKey(args, options.projectRoot))) { await approve(selected); }
+        await install(args, options.projectRoot);
         installed.push('test-tools');
     }
     progress('正在確認相依版本與最終匯入結果…');

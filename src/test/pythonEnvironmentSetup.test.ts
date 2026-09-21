@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { EnvironmentInspection, findRequirementFiles, preparePythonEnvironment, PythonEnvironmentActivity,
     SetupCommand, SetupRunner, setupEnvironment, runSetupCommand } from '../environment/pythonEnvironmentSetup';
 import { DependencyInventory, inventoryReport, isDependencyInventory } from '../environment/dependencyInventory';
+import { PythonInstallationPlan } from '../environment/pythonInstallationPlan';
 
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-setup-'));
@@ -15,7 +16,7 @@ function fixture() {
     fs.writeFileSync(tools, 'coverage\n');
     const python = path.join(root, 'existing-python');
     const options = { projectRoot: root, file, toolRequirements: tools, candidates: [{ executable: python }],
-        packageName: async (missing: string) => missing };
+        packageName: async (missing: string) => missing, confirmInstall: async () => true };
     return { root, python, options, dispose: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 function ready(python: string): EnvironmentInspection {
@@ -288,4 +289,105 @@ test('large scan output preserves UTF-8 paths across process chunks and supports
             "const b=Buffer.from('測試.py'); process.stdout.write(b.subarray(0,2)); setTimeout(()=>{process.stdout.write(b.subarray(2)); process.stdout.write('x'.repeat(70000));},30);"] });
     assert.equal(result.code, 0);
     assert.equal(result.stdout, '測試.py' + 'x'.repeat(70000));
+});
+
+test('an installation never starts without explicit confirmation, including requirements and test tools', async () => {
+    const f = fixture();
+    try {
+        fs.writeFileSync(path.join(f.root, 'requirements.txt'), 'neutral_dependency==1.0\n');
+        for (const confirmInstall of [undefined, async () => false]) {
+            for (const current of [{ ...ready(f.python), status: 'missing' as const, missing: 'neutral_dependency' }, { ...ready(f.python), coverage: false }]) {
+                const h = harness(() => current);
+                await assert.rejects(preparePythonEnvironment({ ...f.options, confirmInstall }, h.runner), /未確認安裝清單/);
+                assert.equal(h.installations().length, 0);
+                assert.equal(h.commands.some(command => command.args.includes('check')), false);
+            }
+        }
+        const readyHarness = harness(() => ready(f.python));
+        await preparePythonEnvironment({ ...f.options, confirmInstall: async () => { assert.fail('No install needs no confirmation'); } }, readyHarness.runner);
+    } finally { f.dispose(); }
+});
+
+test('folder confirmation includes all known dependencies and tools; unresolved mapping blocks every installation', async () => {
+    const f = fixture();
+    try {
+        const pending = ['neutral_alpha', 'neutral_beta'];
+        let tools = false, requests = 0;
+        const h = harness(() => ({ ...ready(f.python), coverage: tools, status: pending.length ? 'missing' : 'ready', missing: pending[0],
+            inventory: inventory([...pending]) }), command => {
+                if (command.args.includes('-r')) { tools = true; } else { pending.shift(); }
+            });
+        await preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder', confirmInstall: async plan => {
+            requests++; assert.equal(h.installations().length, 0);
+            assert.deepEqual(plan.missing.map(item => item.module), ['neutral_alpha', 'neutral_beta']);
+            assert.equal(plan.operations.length, 3); assert.equal(plan.python, f.python);
+            assert.equal(plan.declarations[0].package, 'coverage');
+            assert.deepEqual(plan.missing[0].locations, ['nested/source.py:2']); return true;
+        } }, h.runner);
+        assert.equal(requests, 1); assert.equal(h.installations().length, 3);
+        let blocked: PythonInstallationPlan | undefined;
+        const unknown = harness(() => ({ ...ready(f.python), coverage: false, status: 'missing', missing: 'neutral_alpha', inventory: inventory(['neutral_alpha', 'neutral_beta']) }));
+        await assert.rejects(preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder',
+            packageName: async name => name === 'neutral_alpha' ? name : undefined,
+            confirmInstall: async plan => { blocked = plan; return true; } }, unknown.runner), /packageMappings/);
+        assert.equal(blocked?.missing.length, 2); assert.ok(blocked?.blockers.length);
+        assert.equal(unknown.installations().length, 0);
+    } finally { f.dispose(); }
+});
+
+test('newly discovered single-file imports require a new list and cancellation preserves only previously installed packages', async () => {
+    const f = fixture();
+    try {
+        const pending = ['neutral_alpha', 'neutral_beta'];
+        const plans: PythonInstallationPlan[] = [];
+        const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: pending[0] }), () => { pending.shift(); });
+        await assert.rejects(preparePythonEnvironment({ ...f.options, confirmInstall: async plan => {
+            plans.push(plan); return plans.length === 1;
+        } }, h.runner), /先前已完成的安裝會保留/);
+        assert.equal(plans.length, 2);
+        assert.equal(plans[1].missing[0].module, 'neutral_beta');
+        assert.deepEqual(plans[1].previouslyInstalled, ['neutral_alpha']);
+        assert.equal(h.installations().length, 1);
+    } finally { f.dispose(); }
+});
+
+test('requirements changed during confirmation, abort after confirmation and modified preview objects cannot expand installation', async () => {
+    const f = fixture();
+    try {
+        const requirements = path.join(f.root, 'requirements.txt');
+        fs.writeFileSync(requirements, 'neutral_alpha==1\n');
+        const h = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_alpha' }));
+        await assert.rejects(preparePythonEnvironment({ ...f.options, confirmInstall: async () => {
+            fs.writeFileSync(requirements, 'neutral_beta==2\n'); return true;
+        } }, h.runner), /確認期間已變更/);
+        assert.equal(h.installations().length, 0);
+        const abort = new AbortController();
+        await assert.rejects(preparePythonEnvironment({ ...f.options, signal: abort.signal,
+            confirmInstall: async () => { abort.abort(); return true; } }, h.runner), /取消/);
+        assert.equal(h.installations().length, 0);
+        fs.unlinkSync(requirements);
+        let installed = false;
+        const mutation = harness(() => installed ? ready(f.python) : { ...ready(f.python), status: 'missing', missing: 'neutral_alpha' }, command => {
+            assert.equal(command.args.at(-1), 'neutral_alpha'); installed = true;
+        });
+        await preparePythonEnvironment({ ...f.options, confirmInstall: async plan => {
+            plan.operations[0].args = ['unapproved_package']; plan.mappings.neutral_alpha = 'unapproved_package'; return true;
+        } }, mutation.runner);
+        assert.equal(mutation.installations().length, 1);
+    } finally { f.dispose(); }
+});
+
+test('a requirements change after one approved operation blocks the next operation without silently approving it again', async () => {
+    const f = fixture();
+    try {
+        let dependencyInstalled = false, confirmations = 0;
+        const h = harness(() => dependencyInstalled ? { ...ready(f.python), coverage: false }
+            : { ...ready(f.python), coverage: false, status: 'missing', missing: 'neutral_alpha' }, () => {
+            dependencyInstalled = true;
+            fs.writeFileSync(f.options.toolRequirements, 'unapproved_tool\n');
+        });
+        await assert.rejects(preparePythonEnvironment({ ...f.options, confirmInstall: async () => { confirmations++; return true; } }, h.runner), /requirements 已變更/);
+        assert.equal(h.installations().length, 1); assert.equal(confirmations, 1);
+        assert.equal(h.commands.some(command => command.args.includes('check')), false);
+    } finally { f.dispose(); }
 });

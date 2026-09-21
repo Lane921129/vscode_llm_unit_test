@@ -5,6 +5,8 @@ import { preparePythonEnvironment, PythonCandidate, pythonEnvironmentActivity, E
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { DependencyInventory, inventoryReport, inventorySummary } from './dependencyInventory';
+import { installationPlanReport, PythonInstallationPlan } from './pythonInstallationPlan';
+import { confirmPythonInstallation } from './pythonInstallationPreview';
 
 interface PythonApi {
     environments?: {
@@ -95,6 +97,7 @@ export class PythonEnvironmentController {
         this.controller = new AbortController();
         let latestInventory: DependencyInventory | undefined;
         let initialMissing: string[] | undefined;
+        const installationPlans: { plan: PythonInstallationPlan; approved: boolean }[] = [];
         let outcome = '環境準備尚未完成。';
         try {
             const preferredProject = projectRoot || vscode.workspace.getConfiguration('llmUnitTest',
@@ -154,6 +157,11 @@ export class PythonEnvironmentController {
                     const result = await preparePythonEnvironment({ projectRoot: root, file: targetFile, candidates,
                         scope, excludedPaths: [config.get<string>('outputPath', '')].filter(Boolean).map(value => path.resolve(root, value)),
                         inventory: scan => { latestInventory = scan; initialMissing ??= [...scan.missing]; },
+                        confirmInstall: async plan => {
+                            const record = { plan, approved: false }; installationPlans.push(record);
+                            record.approved = await confirmPythonInstallation(plan, this.controller!.signal);
+                            return record.approved;
+                        },
                         toolRequirements: path.resolve(path.dirname(pythonToolPath('ast')), '..', 'requirements.txt'),
                         signal: this.controller!.signal,
                         progress: text => { progress.report({ message: text }); this.publish({ command: 'appendLog', text: '[環境] ' + text }); },
@@ -197,13 +205,15 @@ export class PythonEnvironmentController {
             this.controller = undefined;
             release();
             this.publish({ command: 'environmentPreparationFinished' });
-            if (latestInventory) {
+            if (latestInventory || installationPlans.length) {
                 try {
+                    const content = [latestInventory ? inventoryReport(latestInventory, initialMissing, outcome) : '# Python 環境準備\n\n' + outcome,
+                        ...installationPlans.map(record => installationPlanReport(record.plan, record.approved))].join('\n\n');
                     const document = await vscode.workspace.openTextDocument({ language: 'markdown',
-                        content: inventoryReport(latestInventory, initialMissing, outcome) });
+                        content });
                     await vscode.window.showTextDocument(document, { preview: false });
                 } catch {
-                    this.publish({ command: 'appendLog', text: '[環境] 無法開啟相依報告；' + inventorySummary(latestInventory) });
+                    this.publish({ command: 'appendLog', text: '[環境] 無法開啟相依報告；' + (latestInventory ? inventorySummary(latestInventory) : outcome) });
                 }
             }
         }

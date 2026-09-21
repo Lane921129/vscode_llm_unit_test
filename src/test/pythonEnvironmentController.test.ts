@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as setup from '../environment/pythonEnvironmentSetup';
+import { createPythonInstallationPlan } from '../environment/pythonInstallationPlan';
 
 test('environment preparation uses the target workspace setting, remembers selections and preserves configuration on failure', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-controller-'));
@@ -103,6 +104,7 @@ test('project and folder scopes retain separate history, publish full diagnostic
     const dialogs: any[] = [], choices: any[] = [], calls: any[] = [], reports: string[] = [], updates: any[] = [];
     let scope: string | undefined = 'project', folderChoice: string | undefined = nested, failed = false;
     let selectedProject: string | undefined = root;
+    let previewModule: any, originalPreview: any;
     const vscode = {
         ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 }, ProgressLocation: { Notification: 15 },
         Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -124,6 +126,8 @@ test('project and folder scopes retain separate history, publish full diagnostic
     try {
         delete require.cache[require.resolve('../environment/pythonEnvironmentController')];
         const { PythonEnvironmentController } = require('../environment/pythonEnvironmentController');
+        previewModule = require('../environment/pythonInstallationPreview');
+        originalPreview = previewModule.confirmPythonInstallation;
         setupModule.preparePythonEnvironment = async (options: any) => {
             calls.push(options);
             const inventory = { schemaVersion: 'dependency-inventory-v1', filesScanned: 2, excludedDirectories: 1,
@@ -160,9 +164,26 @@ test('project and folder scopes retain separate history, publish full diagnostic
         selectedProject = undefined; await controller.prepare();
         assert.equal(choices.at(-1)[0].description, other);
         assert.equal(calls.length, priorCalls + 1);
+        const tools = path.join(root, 'tools.txt'); fs.writeFileSync(tools, 'coverage>=7\n');
+        let previewed = false;
+        previewModule.confirmPythonInstallation = async (plan: any, signal: AbortSignal) => {
+            previewed = true; assert.equal(plan.python, '/selected/python'); assert.equal(signal.aborted, false); return false;
+        };
+        setupModule.preparePythonEnvironment = async (options: any) => {
+            const plan = await createPythonInstallationPlan({ python: '/selected/python', virtual: false,
+                target: root, projectRoot: root, missing: [], toolRequirements: tools, needsTools: true, previouslyInstalled: [] });
+            assert.equal(await options.confirmInstall(plan), false);
+            throw new setup.EnvironmentSetupError('install-plan', '未確認安裝清單，本次未安裝任何套件。');
+        };
+        const saved = updates.length;
+        await controller.prepare(undefined, root);
+        assert.equal(previewed, true); assert.equal(updates.length, saved);
+        assert.match(reports.at(-1)!, /Python 安裝清單/); assert.match(reports.at(-1)!, /未確認.*取消/);
+        assert.match(reports.at(-1)!, /coverage/);
         const release = setup.pythonEnvironmentActivity.acquire('setup'); assert.ok(release); release();
     } finally {
         setupModule.preparePythonEnvironment = originalPrepare;
+        if (previewModule) { previewModule.confirmPythonInstallation = originalPreview; }
         require('module')._load = originalLoad;
         delete require.cache[require.resolve('../environment/pythonEnvironmentController')];
         fs.rmSync(root, { recursive: true, force: true });

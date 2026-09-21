@@ -28,7 +28,7 @@ export default {
         prepareEnvironment: "選擇範圍並檢查 Python 相依",
         pythonEnvironment: "Python 環境檢查結果",
         currentPython: "目前選用 Python（尚未驗證此目標的相依）：",
-        prepareEnvironmentHint: "可選整個專案、資料夾或單一檔案，記住上次選擇。先檢查現有 Python，缺少必要套件時依 requirements 或明確映射補裝。",
+        prepareEnvironmentHint: "可選專案、資料夾或單一檔案並記住選擇。先檢查現有 Python，列出安裝清單，確認後才補裝必要相依。",
         batchScope: "整體專案",
         env: "執行環境",
         ollamaUrl: "Ollama URL",
