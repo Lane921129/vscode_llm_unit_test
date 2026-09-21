@@ -3,6 +3,8 @@ import { TestReview } from '../roles/testReviewer';
 import { ReviewStatus } from '../roles/reviewSession';
 import { currentTargetBudget } from './targetBudget';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
+import { RepairDiagnostic, repairHash, repairReasonCode } from './repairDiagnostics';
+import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -15,10 +17,10 @@ export interface CandidatePipelineHooks {
     reviewRequired?: boolean;
     validate(code: string): Promise<string | undefined>;
     review(code: string): Promise<TestReview | undefined>;
-    revise(code: string, feedback: string, role: 'writer' | 'bug-fixer'): Promise<string>;
+    revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number): Promise<string>;
     repairRole?(code: string, failure: string): 'writer' | 'bug-fixer';
     validateRevision?(previousCode: string, candidateCode: string, failure: string,
-        role: 'writer' | 'bug-fixer'): Promise<string | undefined>;
+        role: 'writer' | 'bug-fixer'): Promise<string | { reason: string; reasonCode: string } | undefined>;
     execute(code: string): Promise<CandidateExecution>;
     executable?(code: string, execution: CandidateExecution): void | Promise<void>;
     event(stage: string, status: string, detail: unknown): void;
@@ -50,28 +52,44 @@ export async function validateTestCandidate(
             if (role === 'bug-fixer') {
                 const failureKey = repairFailureKey(lastFailure);
                 if (attemptedBugFixFailures.has(failureKey)) {
+                    hooks.event(role, 'repair-rejected', { attempt, category: 'validation', contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
+                        diagnostic: { version: 'repair-diagnostics-v1', gate: 'candidate-deduplication',
+                            reasonCodes: ['repeated-failure'], previousTestHash: repairHash(code), previousTestUnchanged: true } satisfies RepairDiagnostic });
                     throw new Error(`Bug Fixer 已處理過相同失敗，停止重複修復：${lastFailure}`);
                 }
                 attemptedBugFixFailures.add(failureKey);
             }
             const previousCode = code;
-            const candidate = await hooks.revise(code, lastFailure, role);
+            const candidate = await hooks.revise(code, lastFailure, role, attempt);
             hooks.checkCancelled();
             hooks.event(role, 'candidate', { attempt, code: candidate });
             if (!feedback.consider(candidate, lastFailure)) {
                 lastFailure = feedback.output;
-                hooks.event(role, 'repeated', { attempt, reason: lastFailure });
+                hooks.event(role, 'repeated', { attempt, reason: lastFailure, category: 'validation', contractVersion: role === 'bug-fixer'
+                    ? ROLE_CONTRACT_VERSIONS.bugFix : ROLE_CONTRACT_VERSIONS.writerRevision,
+                    diagnostic: { version: 'repair-diagnostics-v1', gate: 'candidate-deduplication',
+                        reasonCodes: ['repeated-candidate'], previousTestHash: repairHash(previousCode),
+                        candidateTestHash: repairHash(candidate), previousTestUnchanged: true } satisfies RepairDiagnostic });
                 if (role === 'bug-fixer') {
                     throw new Error(`Bug Fixer 未產生有效變更，停止重複修復：${lastFailure}`);
                 }
                 continue;
             }
+            const scopeStarted = Date.now();
             const revisionViolation = await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
             if (revisionViolation) {
-                feedback.reject(revisionViolation);
+                const reason = typeof revisionViolation === 'string' ? revisionViolation : revisionViolation.reason;
+                feedback.reject(reason);
                 lastFailure = feedback.output;
                 code = retainedCode;
-                hooks.event(role, 'scope-rejected', { attempt, reason: revisionViolation });
+                hooks.event(role, 'scope-rejected', { attempt, reason, category: 'validation', elapsedMs: Date.now() - scopeStarted,
+                    contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
+                    diagnostic: { version: 'repair-diagnostics-v1', gate: 'repair-scope',
+                        reasonCodes: [repairReasonCode(typeof revisionViolation === 'string' ? undefined : revisionViolation.reasonCode)],
+                        previousTestHash: repairHash(previousCode), candidateTestHash: repairHash(candidate),
+                        previousTestUnchanged: true } satisfies RepairDiagnostic });
+                hooks.event('repair-routing', 'selected', { attempt, action: attempt < maxRevisions ? 'continue-repair' : 'stop-revisions',
+                    previousTestUnchanged: true });
                 role = 'bug-fixer';
                 continue;
             }

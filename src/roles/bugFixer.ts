@@ -5,6 +5,7 @@
 
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { formatTargetContract } from '../pipeline/targetContract';
+import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } from '../pipeline/repairDiagnostics';
 
 interface TestMethodFragment {
     name: string;
@@ -224,13 +225,53 @@ const SAFE_IMPORT = /^(?:import\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\s+as\s+[A-Z
 
 /** Merge a one-method model response into the runner-owned complete test file. */
 export function mergeBugFixReplacement(raw: string, originalCode: string, failure: string): string | undefined {
+    return mergeBugFixReplacementDetailed(raw, originalCode, failure).code;
+}
+
+export function mergeBugFixReplacementDetailed(raw: string, originalCode: string, failure: string): {
+    code?: string; diagnostic?: RepairDiagnostic;
+} {
+    const fence = raw.trim().match(/^```(?:python|py)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+    const blocks = [...raw.matchAll(/```[^\r\n]*\r?\n[\s\S]*?\r?\n```/g)];
+    const responseShape: RepairResponseShape = {
+        characterCount: raw.length,
+        codeFenceCount: blocks.length,
+        classCount: [...raw.matchAll(/^\s*class\s+\w+/gm)].length,
+        testMethodCount: [...raw.matchAll(/^\s*(?:async\s+)?def\s+test_\w*\s*\(/gm)].length,
+        importCount: [...raw.matchAll(/^\s*(?:import\s+|from\s+\S+\s+import\s+)/gm)].length,
+        hasOutsideText: blocks.length > 0 && raw.replace(/```[^\r\n]*\r?\n[\s\S]*?\r?\n```/g, '').trim().length > 0
+    };
+    const reject = (reasonCode: RepairReasonCode): { diagnostic: RepairDiagnostic } => ({ diagnostic: {
+        version: 'repair-diagnostics-v1', gate: 'response-format', reasonCodes: [reasonCode],
+        previousTestHash: repairHash(originalCode), responseHash: repairHash(raw), responseShape,
+        previousTestUnchanged: true
+    } });
     const selected = selectedFailureMethod(originalCode, failure);
-    if (!selected) { return undefined; }
+    if (!selected) { return reject('unidentified-failure'); }
     const parsed = parsePythonReplacement(raw, selected.name) || parseReplacement(raw);
-    if (!parsed || !selected || parsed.method !== selected.name || parsed.imports.length > 3) { return undefined; }
-    if (!parsed.imports.every(line => SAFE_IMPORT.test(line.trim()))) { return undefined; }
+    if (!parsed) {
+        if (!raw.trim()) { return reject('empty-response'); }
+        if (blocks.length > 1) { return reject('multiple-code-blocks'); }
+        if (responseShape.hasOutsideText) { return reject('extra-text'); }
+        if (/^\s*(?:\{|```json\b)/i.test(raw)) { return reject('invalid-json-replacement'); }
+        if (!fence) { return reject('missing-code-fence'); }
+        if (responseShape.classCount) { return reject('class-wrapper'); }
+        if (!responseShape.testMethodCount) { return reject('missing-test-method'); }
+        const prefix = fence[1].split('\n').slice(0, fence[1].split('\n')
+            .findIndex(line => /^\s*(?:async\s+)?def\s+test_\w*\s*\(/.test(line))).filter(line => line.trim());
+        return reject(prefix.length > 3 && prefix.every(line => SAFE_IMPORT.test(line.trim())) ? 'import-limit' : 'invalid-import');
+    }
+    if (parsed.method !== selected.name) { return reject('method-name-mismatch'); }
+    if (parsed.imports.length > 3) { return reject('import-limit'); }
+    if (!parsed.imports.every(line => SAFE_IMPORT.test(line.trim()))) { return reject('invalid-import'); }
     const replacement = normalizedReplacementMethod(parsed.replacement, selected);
-    if (!replacement) { return undefined; }
+    if (!replacement) {
+        if (/^\s*class\s+/m.test(parsed.replacement)) { return reject('class-wrapper'); }
+        if (/unittest\.main\s*\(/.test(parsed.replacement)) { return reject('forbidden-entrypoint'); }
+        const methods = [...parsed.replacement.matchAll(/^\s*(?:async\s+)?def\s+(test_\w*)\s*\(/gm)];
+        if (!methods.some(match => match[1] === selected.name)) { return reject('method-name-mismatch'); }
+        return reject(methods.length > 1 ? 'multiple-test-methods' : 'invalid-method-fragment');
+    }
 
     const lines = originalCode.replace(/\r\n/g, '\n').split('\n');
     lines.splice(selected.start, selected.end - selected.start, ...replacement.split('\n'));
@@ -243,7 +284,7 @@ export function mergeBugFixReplacement(raw: string, originalCode: string, failur
         }
         lines.splice(insertAt, 0, ...missingImports);
     }
-    return lines.join('\n').trimEnd();
+    return { code: lines.join('\n').trimEnd() };
 }
 
 /** Native Python avoids asking small models to JSON-escape a method body. */

@@ -447,6 +447,56 @@ class Cases(unittest.TestCase):
         const badKnowledge = JSON.parse(fs.readFileSync(path.join(badOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(badKnowledge.failureStage, 'trace-baseline');
         assert.deepEqual(roles, ['analyst-planning', 'writer'], 'runner-owned failure never consumes model repair or review');
+
+        traceBuilder.buildTier1TestFile = originalTraceBuilder;
+        for (const mode of ['format', 'scope'] as const) {
+            const marker = 'PRIVATE_FIXER_REPLY_MUST_NOT_APPEAR';
+            let fixerCalls = 0;
+            globalThis.fetch = async (_url, options) => {
+                const request = JSON.parse(String(options?.body));
+                let response: string;
+                if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+                else if (request.system.includes('Python unittest Bug Fixer')) {
+                    fixerCalls++;
+                    assert.equal(request.format, undefined);
+                    const fragment = "def test_false(self):\n    with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):\n        self.assertFalse(target())";
+                    response = mode === 'format' ? marker + '\n```python\n' + fragment + '\n```'
+                        : '```python\nfrom datetime import datetime\n' + fragment + '\n```';
+                } else if (request.system.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+                else {
+                    response = '```python\n' + (mode === 'scope' ? 'import datetime\n' : '')
+                        + code.replace('self.assertFalse(target())', 'self.assertTrue(target())') + '\n```';
+                }
+                return new Response(JSON.stringify({ response }), { status: 200 });
+            };
+            const repairRoot = path.join(directory, 'repair-' + mode);
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier2',
+                maxLoops: 1, timeoutSeconds: 60, outputPath: repairRoot });
+            const repairOutput = path.join(repairRoot, fs.readdirSync(repairRoot)[0], 'target');
+            const eventText = fs.readFileSync(path.join(repairOutput, 'role_events.jsonl'), 'utf8');
+            const repairEvents = eventText.trim().split('\n').map(line => JSON.parse(line));
+            const repairKnowledge = JSON.parse(fs.readFileSync(path.join(repairOutput, 'function_knowledge.json'), 'utf8'));
+            const repairReport = fs.readFileSync(path.join(repairOutput, 'final_report.md'), 'utf8');
+            const reason = mode === 'format' ? 'extra-text' : 'import-conflict';
+            assert.ok(fixerCalls > 0, mode);
+            const rejected = repairEvents.filter(event => event.detail?.diagnostic?.reasonCodes.includes(reason));
+            assert.ok(rejected.length > 0, JSON.stringify(repairEvents.map(event => [event.stage, event.status])));
+            assert.equal(rejected[0].stage, 'bug-fixer');
+            assert.ok(repairKnowledge.repairFailureCounts[reason] > 0);
+            assert.match(repairReport, /修復失敗診斷/);
+            assert.match(repairReport, new RegExp(reason));
+            assert.match(repairReport, /修復後續處理/);
+            assert.equal(repairKnowledge.terminalStatus, 'failed');
+            assert.ok(!eventText.includes(marker) && !repairReport.includes(marker));
+            assert.ok(!fs.readFileSync(path.join(repairOutput, 'loop1_test.py'), 'utf8').includes('from datetime import datetime'));
+            if (mode === 'format') {
+                assert.equal(repairKnowledge.failureCategory, 'model-format');
+                assert.equal(repairKnowledge.failureStage, 'bug-fixer-response');
+                assert.equal(repairKnowledge.repairFailureCounts[reason], fixerCalls, 'each response refusal must be journaled once');
+                assert.ok(repairEvents.some(event => event.stage === 'repair-routing' && event.detail.action === 'tier-fallback'));
+            }
+        }
     } finally {
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;

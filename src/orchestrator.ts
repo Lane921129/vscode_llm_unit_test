@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
 import {
     getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt,
-    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacement, canRepairTestMethod,
+    getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacementDetailed, canRepairTestMethod,
     fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReviewDetailed,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
     getQualityAnalystSystemPrompt, selectQualityFocus, requestFocusedQualityTask, qualityStrategyHints,
@@ -64,6 +64,7 @@ import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow } from './prompts/promptBudget';
 import { COMPACT_WRITER_VERSION } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure } from './utils/executionFailureCategory';
+import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
@@ -1275,9 +1276,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         targetScope: { kind: params.funcName ? 'function' : 'module', qualifiedName: params.funcName || 'module' }
     });
     const recordRole = (stage: string, status: string, detail: unknown) => {
-        journal.record(currentLoop, stage, status, detail);
+        const diagnosticReport = journal.record(currentLoop, stage, status, detail);
         log(`[${stage}] ${status}`);
         finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
+        finalReportMarkdown += diagnosticReport + (stage === 'repair-routing' ? formatRepairRouting(detail) : '');
         fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
     };
     const requestBudgeted = async (
@@ -2211,7 +2213,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     }, (status, detail) => recordRole('reviewer', status, detail));
                 },
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
-                revise: async (code, failure, role) => {
+                revise: async (code, failure, role, attempt) => {
                     if (role === 'writer' ? !mayUseModelAuthoredTests : !mayUseModelAuthoredRepair) {
                         throw new Error(`Auto 未驗證 ${role} 角色不可呼叫該角色修訂。`);
                     }
@@ -2230,17 +2232,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             ? 'Bug Fixer 的單方法修復內容仍超過模型預算，停止本次修復。'
                             : 'Writer 修訂所需完整證據超過模型預算；未截斷待保留的測試。');
                     }
+                    const repairStarted = Date.now();
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision'
                     );
                     if (role === 'bug-fixer') {
-                        const merged = mergeBugFixReplacement(raw, code, failure);
-                        if (!merged) {
-                            throw new Error('Bug Fixer 回傳的局部修復介面無效，未修改測試檔。');
+                        const merged = mergeBugFixReplacementDetailed(raw, code, failure);
+                        if (merged.diagnostic) {
+                            const error = new RepairResponseError(merged.diagnostic);
+                            recordRole('bug-fixer', 'format-rejected', { attempt, category: 'model-format',
+                                contractVersion: ROLE_CONTRACT_VERSIONS.bugFix, elapsedMs: Date.now() - repairStarted,
+                                reason: error.message, diagnostic: merged.diagnostic });
+                            throw error;
                         }
-                        return preserveTrace(merged);
+                        return preserveTrace(merged.code!);
                     }
                     return preserveTrace(sanitizeLlmResponse(raw));
                 },
@@ -2258,13 +2265,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             env: testExecutionEnv
                         });
                     if (scope.code !== 0) {
-                        return 'Bug Fixer 修改範圍檢查無法執行：' + (scope.stderr || scope.stdout);
+                        return { reason: REPAIR_REASON_LABELS['scope-tool-error'], reasonCode: 'scope-tool-error' };
                     }
                     try {
-                        const result = JSON.parse(scope.stdout) as { valid?: boolean; reason?: string };
-                        return result.valid === true ? undefined : result.reason || 'Bug Fixer 修改超出允許範圍。';
+                        const result = JSON.parse(scope.stdout) as { valid?: boolean; reasonCode?: string };
+                        const reasonCode = repairReasonCode(result.reasonCode);
+                        return result.valid === true ? undefined : { reason: REPAIR_REASON_LABELS[reasonCode], reasonCode };
                     } catch {
-                        return 'Bug Fixer 修改範圍檢查回傳無效資料。';
+                        return { reason: REPAIR_REASON_LABELS['scope-result-invalid'], reasonCode: 'scope-result-invalid' };
                     }
                 },
                 execute: async (code) => {
@@ -2337,7 +2345,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         } catch (tierErr: any) {
             throwIfExecutionCancelled();
             if (tierErr instanceof AnalysisStageError) { throw tierErr; }
-            recordRole('writer', 'tier-failed', { tier: currentTier, reason: tierErr.message, raw: rawCode });
+            if (tierErr instanceof RepairResponseError) {
+                recordRole('bug-fixer', 'tier-failed', { tier: currentTier, category: 'model-format',
+                    reason: tierErr.message, reasonCodes: tierErr.diagnostic.reasonCodes });
+                recordRole('repair-routing', 'selected', { action: currentTier > 1 ? 'tier-fallback' : 'stop-tier-fallback',
+                    fromTier: currentTier, toTier: currentTier > 1 ? currentTier - 1 : currentTier });
+            } else {
+                recordRole('writer', 'tier-failed', { tier: currentTier, reason: tierErr.message, raw: rawCode });
+            }
             if (currentTier > 1) {
                 const prevTier = currentTier;
                 currentTier--;
@@ -2673,8 +2688,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const evidenceValid = evidenceStillCurrent();
             const retainedScore = bestMutation && evidenceValid ? measuredMutationScore(bestMutation) : null;
             const failureCategory = isExecutionCancelled() ? 'cancelled'
-                : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
-            const failureStage = error instanceof AnalysisStageError ? error.stage : 'pipeline';
+                : error instanceof RepairResponseError ? 'model-format'
+                    : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
+            const failureStage = error instanceof RepairResponseError ? 'bug-fixer-response'
+                : error instanceof AnalysisStageError ? error.stage : 'pipeline';
             recordRole('pipeline', retainedBaseline ? 'retained-baseline' : 'failed', {
                 reason: message, category: failureCategory, retainedScore
             });
@@ -2682,7 +2699,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 terminalStatus: !evidenceValid ? 'source-changed' : failureCategory === 'cancelled' ? 'cancelled' : retainedBaseline ? 'retained-after-failure' : 'failed',
                 failure: message, failureCategory, failureStage,
                 evidenceValid,
-                diagnostic: error instanceof AnalysisStageError ? error.diagnostic : undefined,
+                diagnostic: error instanceof AnalysisStageError || error instanceof RepairResponseError ? error.diagnostic : undefined,
                 retainedScore
             });
             if (bestCode) {
@@ -2800,11 +2817,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const category = isExecutionCancelled() ? 'cancelled'
-            : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
-        const stage = error instanceof AnalysisStageError ? error.stage : 'pipeline';
+            : error instanceof RepairResponseError ? 'model-format'
+                : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
+        const stage = error instanceof RepairResponseError ? 'bug-fixer-response'
+            : error instanceof AnalysisStageError ? error.stage : 'pipeline';
         journal.knowledge({ terminalStatus: category === 'cancelled' ? 'cancelled' : 'failed',
             failure: message, failureCategory: category, failureStage: stage,
-            diagnostic: error instanceof AnalysisStageError ? error.diagnostic : undefined });
+            diagnostic: error instanceof AnalysisStageError || error instanceof RepairResponseError ? error.diagnostic : undefined });
         recordRole(stage, 'failed', { reason: message, category });
         finalReportMarkdown += `\n### 執行停止\n\n- **失敗分類**: ${category}\n- **失敗階段**: ${stage}\n\n${message}\n`;
         if (!isExecutionCancelled()) {

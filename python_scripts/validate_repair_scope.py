@@ -65,13 +65,13 @@ def failed_test_names(failure):
     return names
 
 
-def validate(previous, candidate, failure):
+def validate_detailed(previous, candidate, failure):
     previous_tree = parse(previous, 'Previous test')
     candidate_tree = parse(candidate, 'Candidate')
     if isinstance(candidate_tree, tuple):
-        return False, candidate_tree[1]
+        return False, candidate_tree[1], 'candidate-syntax'
     if isinstance(previous_tree, tuple):
-        return False, 'A malformed test file belongs to Writer, not Bug Fixer.'
+        return False, 'A malformed test file belongs to Writer, not Bug Fixer.', 'previous-syntax'
 
     previous_imports = imports(previous_tree)
     candidate_imports = imports(candidate_tree)
@@ -80,7 +80,7 @@ def validate(previous, candidate, failure):
         return False, (
             'Bug Fixer may add imports but may replace an existing import only '
             'when the latest failure is ImportError or ModuleNotFoundError.'
-        )
+        ), 'import-removal'
 
     def bound_names(nodes):
         names = set()
@@ -98,31 +98,35 @@ def validate(previous, candidate, failure):
     added_imports = [node for node in candidate_tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
                      and ast.dump(node, include_attributes=False) not in previous_imports]
     added_names = bound_names(added_imports)
-    if len(added_imports) > 3 or '*' in added_names or added_names & bound_names(previous_tree.body):
-        return False, 'Bug Fixer imports must not shadow existing bindings or exceed three statements.'
+    if len(added_imports) > 3:
+        return False, 'Bug Fixer may add at most three import statements.', 'import-limit'
+    if '*' in added_names:
+        return False, 'Bug Fixer may not add wildcard imports.', 'import-star'
+    if added_names & bound_names(previous_tree.body):
+        return False, 'Bug Fixer imports must not shadow existing bindings.', 'import-conflict'
 
     before = callable_map(previous_tree)
     after = callable_map(candidate_tree)
     removed = sorted(set(before) - set(after))
     added = sorted(set(after) - set(before))
     if removed:
-        return False, 'Bug Fixer may not remove or rename existing callables: ' + ', '.join(removed)
+        return False, 'Bug Fixer may not remove or rename existing callables: ' + ', '.join(removed), 'removed-callable'
     if added:
-        return False, 'Bug Fixer repairs existing failures and may not add new callables: ' + ', '.join(added)
+        return False, 'Bug Fixer repairs existing failures and may not add new callables: ' + ', '.join(added), 'added-callable'
 
     allowed = failed_test_names(failure)
     if len(allowed) != 1 or re.search(r'(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown|asyncSetUp|asyncTearDown)(?:Class|Module)?\b)', failure):
-        return False, 'Bug Fixer requires exactly one identified failing test method; route to Writer.'
+        return False, 'Bug Fixer requires exactly one identified failing test method; route to Writer.', 'unidentified-failure'
     matches = [name for name in before if name.rsplit('.', 1)[-1] in allowed]
     if len(matches) != 1:
-        return False, 'The failing method is absent or ambiguous; route to Writer.'
+        return False, 'The failing method is absent or ambiguous; route to Writer.', 'unidentified-failure'
     selected = matches[0]
     changed = sorted(name for name in before if before[name] != after[name])
     forbidden = [name for name in changed if name != selected]
     if forbidden:
-        return False, 'Bug Fixer changed passing or unrelated callables: ' + ', '.join(forbidden)
+        return False, 'Bug Fixer changed passing or unrelated callables: ' + ', '.join(forbidden), 'unrelated-method-change'
     if not changed:
-        return False, 'Bug Fixer produced no method change.'
+        return False, 'Bug Fixer produced no method change.', 'no-method-change'
 
     # Compare everything outside the selected body (including fixtures, class
     # attributes, decorators and signatures); adding top-level imports is the
@@ -138,21 +142,27 @@ def validate(previous, candidate, failure):
         tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
         Skeleton().visit(tree)
     if ast.dump(previous_tree, include_attributes=False) != ast.dump(candidate_tree, include_attributes=False):
-        return False, 'Bug Fixer changed setup, decorators, signatures or code outside the failing body.'
-    return True, ''
+        return False, 'Bug Fixer changed setup, decorators, signatures or code outside the failing body.', 'outside-method-change'
+    return True, '', None
+
+
+def validate(previous, candidate, failure):
+    """Keep the existing two-value API for callers; the CLI also returns a stable code."""
+    valid, reason, _ = validate_detailed(previous, candidate, failure)
+    return valid, reason
 
 
 def main():
     try:
         payload = json.load(sys.stdin)
-        valid, reason = validate(
+        valid, reason, reason_code = validate_detailed(
             str(payload.get('previous', '')),
             str(payload.get('candidate', '')),
             str(payload.get('failure', '')),
         )
-        print(json.dumps({'valid': valid, 'reason': reason}, ensure_ascii=False))
-    except Exception as error:
-        print(json.dumps({'valid': False, 'reason': f'Repair scope check failed: {error}'}, ensure_ascii=False))
+        print(json.dumps({'valid': valid, 'reason': reason, 'reasonCode': reason_code}, ensure_ascii=False))
+    except Exception:
+        print(json.dumps({'valid': False, 'reason': 'Repair scope check failed.', 'reasonCode': 'scope-tool-error'}))
 
 
 if __name__ == '__main__':

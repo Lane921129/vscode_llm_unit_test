@@ -4,6 +4,14 @@
 
 ## 2026-09-21
 
+### 修復失敗逐次診斷與報告
+
+- Bug Fixer 的格式／合併拒絕加入原因碼，區分區塊外說明、多區塊、class 包裝、方法名稱／數量、import 與缺少方法等情況；保留既有純 Python 與歷史 JSON 接受規則，不放寬 gate。
+- Python AST 修復範圍工具回傳穩定 reasonCode，分開記錄 import 衝突、超量、萬用匯入、未改方法、修改無關方法或 fixture 等問題。範圍工具錯誤不直接複製 stderr。
+- `role_events.jsonl` 即時保存每次原因、階段、輪次／修訂、角色契約、耗時與回覆／候選 hash；新增紀錄僅保存詞法統計，不保存完整 provider 回覆。`function_knowledge.json` 保留首次／最近修復失敗及原因計數，後續通用錯誤不覆蓋它們。
+- `final_report.md` 顯示中文診斷、原測試是否未修改、已驗證基線是否存在，以及後續修訂／降階／停止。格式失敗終態標為 model-format／bug-fixer-response，降階保留 Bug Fixer 來源，不再冒充 Writer 本身失敗。既有重試與降階規則不變，也不新增模型呼叫。
+- 驗證與限制：新增解析器、真實 Python AST、即時 journal、隱私與主流程回歸；獨立提交快照 Node 407／407、Python 225／225 通過，型別、lint、生產建置、Webview、密鑰掃描與差異格式檢查通過；含既有未提交功能的工作區另通過 25 項焦點回歸及生產建置。舊批次缺少的拒絕原因無法事後還原，本次沒有重新執行私有應用或真實模型。既有靜態型態／測資規劃修改保留於工作區，未納入本次提交。
+
 ### 完善計畫第二批：保留 caller 型態並統一品質判定
 
 - Python caller 先編碼完整呼叫與已證明的 constructor，再以 `probe-inputs-v1` 傳給 Trace；tuple、bytes、非字串 dict key、大整數、float／負零與 kwargs 順序不再被一般 JSON 改變。非 literal、超限及不合法輸入留作診斷，typed 欄位無效不降回舊值。
