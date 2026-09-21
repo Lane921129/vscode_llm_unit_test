@@ -1,11 +1,14 @@
 import { RepairFeedback, repairFailureKey } from '../validation/repairFeedback';
 import { TestReview } from '../roles/testReviewer';
 import { ReviewStatus } from '../roles/reviewSession';
+import { currentTargetBudget } from './targetBudget';
+import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 
 export interface CandidateExecution {
     ok: boolean;
     out: string;
     qualityGaps: string[];
+    coverage?: TargetCoverageAssessment;
 }
 
 export interface CandidatePipelineHooks {
@@ -17,6 +20,7 @@ export interface CandidatePipelineHooks {
     validateRevision?(previousCode: string, candidateCode: string, failure: string,
         role: 'writer' | 'bug-fixer'): Promise<string | undefined>;
     execute(code: string): Promise<CandidateExecution>;
+    executable?(code: string, execution: CandidateExecution): void | Promise<void>;
     event(stage: string, status: string, detail: unknown): void;
     checkCancelled(): void;
 }
@@ -40,6 +44,7 @@ export async function validateTestCandidate(
     const attemptedBugFixFailures = new Set<string>();
     for (let attempt = 0; attempt <= maxRevisions; attempt++) {
         hooks.checkCancelled();
+        currentTargetBudget()?.consumeCandidateAttempt();
         if (attempt > 0) {
             if (role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
             if (role === 'bug-fixer') {
@@ -93,6 +98,8 @@ export async function validateTestCandidate(
         }
         retainedCode = code;
         if (execution.ok) {
+            // Persist independently from review acceptance and later quality measurement.
+            await hooks.executable?.(code, execution);
             const review = hooks.reviewRequired === false ? undefined : await hooks.review(code);
             const reviewStatus: ReviewStatus = hooks.reviewRequired === false ? 'not-required' : review ? 'completed' : 'incomplete';
             hooks.checkCancelled();

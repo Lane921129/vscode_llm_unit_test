@@ -8,6 +8,8 @@ export const PYTHON_TOOLS = {
     callers: 'ast_caller_finder.py',
     trace: 'dynamic_tracer.py',
     preflight: 'module_preflight.py',
+    environment: 'environment_probe.py',
+    installer: 'package_installer.py',
     scaffold: 'mock_scaffold_generator.py',
     bindings: 'validate_test_bindings.py',
     calls: 'validate_target_calls.py',
@@ -15,7 +17,8 @@ export const PYTHON_TOOLS = {
     repairScope: 'validate_repair_scope.py',
     rescue: 'rescue_unittest.py',
     scenarios: 'scenario_inventory.py',
-    mutation: 'basic_mutation_runner.py'
+    mutation: 'basic_mutation_runner.py',
+    coverage: 'coverage_read.py'
 } as const;
 
 export function pythonToolPath(tool: keyof typeof PYTHON_TOOLS): string {

@@ -22,6 +22,9 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     let expectedMutationSeconds = 20;
     let externalEngine: 'mutatest' | 'mutmut' | undefined;
     let externalRuns = 0;
+    let failBuiltinMutation = false;
+    let mutateDuringMutation: 'source' | 'test' | undefined;
+    let changeBeforeNextRound = false;
     let externalEvidence: 'passed' | 'isolation-blocked' | 'missing' = 'passed';
     processRunner.runSpawn = (command: string, args: string[], options: any) => {
         if (externalEngine && (args[1] === 'from mutatest.cli import cli_main'
@@ -45,9 +48,19 @@ test('orchestrator carries measured quality into Writer and verifies improvement
                 ? '1 mutants\n0 survived\n' : 'TOTAL RUNS: 1\nSURVIVED: 0\n' });
         }
         if (args[0]?.endsWith('basic_mutation_runner.py')) {
+            if (failBuiltinMutation) { return Promise.reject(new Error('mutation stage timeout')); }
             mutationRuns.push({ args, timeout: options.timeout });
-            assert.equal(options.timeout, expectedMutationSeconds * 1000);
-            assert.equal(args[4], String(expectedMutationSeconds));
+            assert.equal(options.timeout, (expectedMutationSeconds + 5) * 1000);
+            assert.equal(args[3], '0', 'selected function measurement enumerates the full candidate set');
+            assert.equal(args[4], String(Math.min(5, expectedMutationSeconds)));
+            assert.equal(args[7], String(expectedMutationSeconds));
+            if (mutateDuringMutation) {
+                const changed = args[mutateDuringMutation === 'source' ? 1 : 2];
+                return originalSpawn(command, args, options).then((result: unknown) => {
+                    fs.appendFileSync(changed, '\n# changed during mutation\n');
+                    return result;
+                });
+            }
         }
         return originalSpawn(command, args, options);
     };
@@ -109,6 +122,10 @@ class Cases(unittest.TestCase):
             roles.push('reviewer'); response = reviewerAvailable ? '{"findings":[]}' : 'invalid review';
         } else if (request.system.includes('Analyst after successful')) {
             roles.push('analyst-quality'); response = '{"tasks":[]}';
+            if (changeBeforeNextRound) {
+                changeBeforeNextRound = false;
+                fs.appendFileSync(path.join(directory, 'sample.py'), '\n# source changed between rounds\n');
+            }
         } else if (request.system.includes('dependency_behaviors')) {
             roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
         } else {
@@ -191,7 +208,7 @@ class Cases(unittest.TestCase):
         const incompleteRoot = path.join(directory, 'incomplete-results');
         const incompleteOutput = path.join(incompleteRoot, fs.readdirSync(incompleteRoot)[0], 'target');
         const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
-        assert.equal(incomplete.mutationScore, 100);
+        assert.equal(incomplete.mutationScore, 100, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
         assert.equal(incomplete.reviewStatus, 'incomplete');
         assert.equal(incomplete.terminalStatus, 'execution-passed-review-incomplete');
         assert.equal(roles.filter(role => role === 'reviewer').length, 2);
@@ -199,8 +216,72 @@ class Cases(unittest.TestCase):
         assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
             && event.detail.diagnostics.includes('invalid-json')));
 
-        // External executables are replaced only at their process boundary;
-        // real coverage/target setup and production option routing still run.
+        // The first executable candidate must survive even if mutation never returns a score.
+        failBuiltinMutation = true;
+        reviewerAvailable = true;
+        writers = 1;
+        const interruptedRoot = path.join(directory, 'first-mutation-timeout');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: interruptedRoot });
+        const interruptedOutput = path.join(interruptedRoot, fs.readdirSync(interruptedRoot)[0], 'target');
+        const interrupted = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(interrupted.terminalStatus, 'retained-after-failure');
+        assert.equal(interrupted.mutationScore, null);
+        assert.equal(interrupted.reviewStatus, 'completed');
+        assert.equal(interrupted.mutationStatus, 'incomplete');
+        const checkpoint = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'executable_baseline.json'), 'utf8'));
+        assert.equal(interrupted.acceptedCodeHash, checkpoint.codeHash);
+        assert.equal(fs.readFileSync(path.join(interruptedOutput, 'loop1_test.py'), 'utf8'), checkpoint.code);
+        assert.ok(fs.existsSync(path.join(interruptedOutput, checkpoint.testFile)));
+        assert.match(fs.readFileSync(path.join(interruptedOutput, 'final_report.md'), 'utf8'), /尚未完成有效測量/);
+        failBuiltinMutation = false;
+        for (const changed of ['source', 'test'] as const) {
+            mutateDuringMutation = changed;
+            writers = 1;
+            const sourceFile = path.join(directory, 'sample.py');
+            const originalSource = fs.readFileSync(sourceFile, 'utf8');
+            const changedRoot = path.join(directory, 'changed-' + changed);
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: sourceFile, funcName: 'target', promptStrategy: 'tier1',
+                maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: changedRoot });
+            const changedOutput = path.join(changedRoot, fs.readdirSync(changedRoot)[0], 'target');
+            const changedKnowledge = JSON.parse(fs.readFileSync(path.join(changedOutput, 'function_knowledge.json'), 'utf8'));
+            const saved = JSON.parse(fs.readFileSync(path.join(changedOutput, 'executable_baseline.json'), 'utf8'));
+            assert.equal(changedKnowledge.mutationScore, null);
+            assert.equal(fs.existsSync(path.join(changedOutput, 'quality_baseline.json')), false);
+            assert.equal(fs.readFileSync(path.join(changedOutput, 'loop1_test.py'), 'utf8'), saved.code);
+            if (changed === 'source') {
+                assert.equal(changedKnowledge.terminalStatus, 'source-changed');
+                assert.equal(changedKnowledge.evidenceValid, false);
+                assert.equal(changedKnowledge.coverage, null);
+            } else { assert.equal(changedKnowledge.failureStage, 'candidate-changed'); }
+            fs.writeFileSync(sourceFile, originalSource, 'utf8');
+        }
+        mutateDuringMutation = undefined;
+
+        // A previously measured baseline becomes historical when the next round sees changed source.
+        writers = 0;
+        changeBeforeNextRound = true;
+        const betweenSource = path.join(directory, 'sample.py');
+        const beforeBetweenChange = fs.readFileSync(betweenSource, 'utf8');
+        const betweenRoot = path.join(directory, 'changed-between-rounds');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: betweenSource, funcName: 'target', promptStrategy: 'tier1',
+            maxLoops: 2, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: betweenRoot });
+        const betweenOutput = path.join(betweenRoot, fs.readdirSync(betweenRoot)[0], 'target');
+        const betweenKnowledge = JSON.parse(fs.readFileSync(path.join(betweenOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(changeBeforeNextRound, false, 'fixture changes source after measurement and before the next Writer');
+        assert.equal(writers, 1);
+        assert.equal(betweenKnowledge.terminalStatus, 'source-changed');
+        assert.equal(betweenKnowledge.evidenceValid, false);
+        assert.equal(betweenKnowledge.mutationScore, null);
+        assert.equal(betweenKnowledge.coverage, null);
+        assert.equal(betweenKnowledge.historicalBaseline.artifactOnly, true);
+        assert.ok(fs.existsSync(path.join(betweenOutput, 'quality_baseline.json')));
+        fs.writeFileSync(betweenSource, beforeBetweenChange, 'utf8');
+
+        // Available module-scope engines must not substitute for a selected function measurement.
         reviewerAvailable = true;
         expectedMutationSeconds = 25;
         for (const engine of ['mutatest', 'mutmut'] as const) {
@@ -210,22 +291,14 @@ class Cases(unittest.TestCase):
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
                 filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
                 maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
+            const scopeRoot = path.join(directory, engine + '-results');
+            const scopeOutput = path.join(scopeRoot, fs.readdirSync(scopeRoot)[0], 'target');
+            const measured = JSON.parse(fs.readFileSync(path.join(scopeOutput, 'loop1_mutation.json'), 'utf8'));
+            assert.equal(measured.engine, 'builtin');
+            assert.equal(measured.targetScope.kind, 'function');
+            assert.equal(measured.targetScope.qualifiedName, 'target');
         }
-        assert.equal(externalRuns, 2);
-        for (const evidence of ['missing', 'isolation-blocked'] as const) {
-            externalEvidence = evidence;
-            externalEngine = 'mutmut';
-            utilities.detectMutationEngine = () => 'mutmut';
-            writers = 1;
-            const resultRoot = path.join(directory, `external-${evidence}`);
-            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-                filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
-                maxLoops: 1, mutpyTimeout: expectedMutationSeconds, timeoutSeconds: 60, outputPath: resultRoot });
-            const resultFolder = path.join(resultRoot, fs.readdirSync(resultRoot)[0], 'target');
-            const failed = JSON.parse(fs.readFileSync(path.join(resultFolder, 'function_knowledge.json'), 'utf8'));
-            assert.equal(failed.failureStage, 'mutation-isolation');
-            assert.notEqual(failed.terminalStatus, 'passed');
-        }
+        assert.equal(externalRuns, 0, 'module engines cannot certify function scope');
         externalEvidence = 'passed';
         externalEngine = undefined;
         utilities.detectMutationEngine = () => null;

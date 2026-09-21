@@ -157,8 +157,8 @@ export function getReviewEvidence(
         `Target source (read-only):\n${focusedSource(_sourceCode)}`,
         `Source setup and verified observations (read-only; same setup only):\n${JSON.stringify({
             constructor: _astContext?.class_context || null, imports: _astContext?.file_imports || [],
-            globals: _astContext?.referenced_globals || [], dependencies: _astContext?.dependencyContexts || [],
-            observations: _astContext?.traceResult || null
+            globals: _astContext?.referenced_globals || [], dependencies: dependencyContextsForPrompt(_astContext?.dependencyContexts),
+            observations: observationsForPrompt(_astContext?.traceResult)
         })}`,
         'Every finding must quote TEST_FILE; these constraints cannot be quoted as evidence.'
     ].join('\n');
@@ -183,7 +183,7 @@ function formatRepairSetup(code: string, astContext?: any, method?: TestMethodFr
     }
     return JSON.stringify({ testClass: lines[0] || null, fixtures, constructor: astContext?.class_context || null,
         imports: astContext?.file_imports || [], globals: astContext?.referenced_globals || [],
-        dependencies: astContext?.dependencyContexts || [], observations: astContext?.traceResult || null });
+        dependencies: dependencyContextsForPrompt(astContext?.dependencyContexts), observations: observationsForPrompt(astContext?.traceResult) });
 }
 
 function parseReplacement(raw: string): BugFixReplacement | undefined {
@@ -257,3 +257,4 @@ function parsePythonReplacement(raw: string, method: string): BugFixReplacement 
     if (imports.length > 3 || !imports.every(line => SAFE_IMPORT.test(line))) { return undefined; }
     return { method, replacement: lines.slice(start).join('\n'), imports };
 }
+import { dependencyContextsForPrompt, observationsForPrompt } from '../pipeline/evidenceContracts';

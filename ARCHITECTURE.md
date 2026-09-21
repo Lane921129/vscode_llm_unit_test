@@ -2,19 +2,22 @@
 
 先看本頁，再依「想改什麼」打開對應檔案。角色提示詞只有一份正式實作，集中在 `src/roles/`。
 
+本頁描述目前工作區已接線的路徑，不表示 [完整完善計畫](docs/專案完善計畫_2026_09_21.md) 已全部完成。第一批 P0、Trace 觀測、突變／coverage 與總預算仍在整合驗收；完成範圍、未關閉問題與正式測試結果以 [實作與驗收追蹤](docs/完善實作進度_2026_09_21.md) 為準。
+
 ## 為什麼有 TypeScript 和 Python？
 
 - `src/`：在 VS Code 中執行，負責介面、模型請求、角色交接與報告。
 - `python_scripts/`：由指定的 Python 虛擬環境執行，負責 Python AST、受控行為探測與測試工具。
 - `src/roles/`：屬於 `src/` 的子目錄，放模型角色的提示詞與回應解析；它不是第三套執行系統。
 
-兩種語言透過子程序參數／標準輸入傳遞資料。Python 分析工具回傳 JSON；unittest 與 coverage 回傳執行報告。TypeScript 決定結果能否進入下一階段。
+兩種語言透過子程序參數／標準輸入傳遞資料。Python 分析工具回傳 JSON，unittest 保留執行報告；正式 target coverage 與 mutation 以結構化證據交給 TypeScript 驗證，不能從顯示用百分比推定成功。
 
 ## 主流程
 
 ```mermaid
 flowchart TD
-    UI[使用者選取函式] --> Journal[先建立執行紀錄與進度報告]
+    UI[使用者選取函式] --> Budget[建立本目標共用總預算]
+    Budget --> Journal[先建立執行紀錄與進度報告]
     Journal --> Static[所選目標 AST 靜態事實]
     Static --> Preflight[正規模組匯入與 coverage 環境預檢]
     Preflight -->|失敗| Report[保存基線、證據與報告]
@@ -25,20 +28,37 @@ flowchart TD
     SupplementalProbe --> Bundle[合併 Writer 證據包]
     Bundle --> Writer[Writer 撰寫測試]
     Writer --> Structure[結構與證據檢查]
-    Structure --> Validation[實際執行驗證]
-    Validation -->|執行通過| Reviewer[Reviewer 審查]
+    Structure --> Validation[受控 unittest 與原生目標 coverage]
+    Validation -->|執行通過| Checkpoint[立即保存可執行基線]
+    Checkpoint --> Reviewer[Reviewer 審查]
     Reviewer -->|具體審查問題| Writer
     Structure -->|結構問題| Writer
     Validation -->|唯一定位的一個方法失敗| Fixer[Bug Fixer 修復]
     Validation -->|多方法、匯入或 fixture 問題| Writer
     Fixer --> Structure
-    Reviewer -->|審查完成或明示未完成| Quality[覆蓋與突變測量]
-    Quality -->|仍有缺口| QualityAnalyst[品質分析師提出下一輪任務]
+    Reviewer -->|審查完成或明示未完成| Quality[完整所選範圍突變測量]
+    Quality -->|證據完整且不退步| QualityCheckpoint[提交同候選最佳品質基線]
+    Quality -->|失敗或證據不足| Report
+    QualityCheckpoint -->|仍有缺口且預算足夠| QualityAnalyst[品質分析師提出下一輪任務]
     QualityAnalyst --> Writer
-    Quality -->|達標或達停止條件| Report
+    QualityCheckpoint -->|達標或達停止條件| Report
 ```
 
 Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執行，但不因此宣稱品質達標。所有模型建議都是待驗證假設。
+
+Trace 現在由 `trace_case_worker.py` 每案建立新 Python 程序，`trace_value_codec.py` 保存 target 與 constructor 呼叫前後的有限型態快照。`behavior-observations-v2` 保留 run／case ID、來源、耗時、returned／raised／blocked／setup_error／timeout／not_started／worker_error 等逐案狀態，JSONL 可恢復已完成觀測。`behaviorObservations.ts` 驗證 tagged schema、容量、唯一 ID 與 outcome 配對；cycle、shared-reference、未知物件及截斷值只算不可重播診斷。合併初始／補充觀測時保留 kwargs 順序，相同呼叫的矛盾結果不可作精確斷言。完整快照留在產物；`observationsForPrompt` 提供斷言事實與案例識別，避免把重複序列化資料塞進角色提示。
+
+此 codec 處理 Python worker 邊界的值保存；caller AST → TypeScript → Python 的全程 typed 傳輸與型態導向產值仍未完成。不得把「能保存 tuple／bytes 等型態」等同於「已能替所有型態產生有效測資」。
+
+`runtime_policy.py` 是 Trace、預檢與正式 runner 共用的執行政策；mutation 經正式 runner 套用。它已取代分散的執行防護，但晚啟動 thread、codec hook 與 linecache audit 邊界仍在本輪修補驗收，不能據此宣稱全部安全邊界已驗證。
+
+`target_invocation.py` 以 canonical source、qualified target 與 code 身分觀測本 candidate 是否真正進入目標。`coverage_read.py` 核對來源／測試 hash、testRunId 與 coverage data hash，從 Coverage API／JSON 取得原生 statements、executed／missing lines 與 branch arcs，再限定 target body。不同路徑的同名檔案不能互認；docstring、多行語句與單行函式以實際資料處理。缺欄位、scope 不明、分支資料未知或過期 invocation 不能通過。舊 coverage 文字 parser 僅供相容讀取，正式流程不以它計分。目前 invocation 主要觀測 runner 所在 thread，thread-only 目標尚未取得完整證明。
+
+`CandidateCheckpointStore` 分開保存 executable 與 quality 基線。通過執行 gate 的候選先存成按 code hash 命名的不可變檔案；只有本候選的完整有效 mutation 才可提交 quality checkpoint。首輪審查／突變失敗仍能開啟可執行測試，未知分數保持 null。rollback 同步還原同版本的測試、案例、執行、coverage、mutation、Tier 與 review 狀態；來源或已解析相依改變時保存歷史成果但使當前證據失效。
+
+`mutationResult.ts` 驗證 `MutationRun` 的來源／測試 hash、operator/scope version、candidateSetId、候選 ID、計數與完成狀態。內建引擎先建立所選函式 body 的完整有效集合，排除 noop／重複／不可編譯變更；正式函式路徑選測全集。TIMEOUT／ERROR／NOT_RUN 不得算 killed，部分測量不可假裝完整，零候選為 N/A；達標使用精確計數而非四捨五入百分比。外部 module-scope 或無法證實的結果不能替代函式分數；真實外部引擎版本矩陣與完整環境身分契約仍待驗收／擴充。
+
+`TargetBudget` 透過每目標的 async context 共用總時限、logical requests、transport attempts、估計 input tokens 及 candidate attempts。角色、Tier、格式補正、候選修訂與傳輸重試不能重新取得一份預算，子程序亦受剩餘總時間限制。預設為 10 分鐘、20 次 logical requests、40 次 transport attempts、200,000 估計 input tokens、20 次候選嘗試；這是資源上限，不是付費 tokens 用量或品質達標承諾。能力導向路由與完整 RetryPolicy 拆分仍保留在後續計畫。
 
 正式 unittest／coverage、獨立 Trace baseline 及內建突變試驗透過 `python_scripts/generated_test_runner.py` 執行。這個程序內 guard 阻擋未 mock 的檔案、網路、shell 與非隔離 SQLite，允許 import／traceback 所需工具讀取與獨立記憶體資料庫。安全例外遭吞掉仍不算通過；mutant 隔離錯誤列為 ERROR，整輪不計分。外部引擎使用同一 runner 並回寫每次開始／結束與隔離狀態；紀錄缺少、未完成或違規均拒絕分數，避免安全阻擋被引擎算成 killed。此 guard 補強 AST gate，不是惡意原生程式的作業系統 sandbox。
 
@@ -78,7 +98,14 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 | 需求 | 正式入口 | 下一個閱讀位置 |
 |---|---|---|
 | 看完整執行流程 | [orchestrator.ts](src/orchestrator.ts) 的 `executeSingleFileAnalysis` | [候選狀態機](src/pipeline/testCandidatePipeline.ts) |
+| 準備 Python／查安裝界線 | [pythonEnvironmentController.ts](src/environment/pythonEnvironmentController.ts) | [pythonEnvironmentSetup.ts](src/environment/pythonEnvironmentSetup.ts)、[environment_probe.py](python_scripts/environment_probe.py) |
 | 查生成前的環境阻擋 | [modulePreflight.ts](src/pipeline/modulePreflight.ts) | [module_preflight.py](python_scripts/module_preflight.py) |
+| 查逐案輸入與 Trace 契約 | [behaviorObservations.ts](src/pipeline/behaviorObservations.ts) | [trace_case_worker.py](python_scripts/trace_case_worker.py)、[trace_value_codec.py](python_scripts/trace_value_codec.py) |
+| 查共用執行政策 | [runtime_policy.py](python_scripts/runtime_policy.py) | Trace、preflight、generated runner 的 guard 入口 |
+| 查首輪成果保存與回滾 | [candidateCheckpoint.ts](src/pipeline/candidateCheckpoint.ts) | [qualityRegression.ts](src/pipeline/qualityRegression.ts) |
+| 查原生 target coverage | [targetCoverage.ts](src/mutation/targetCoverage.ts) | [coverage_read.py](python_scripts/coverage_read.py)、[target_invocation.py](python_scripts/target_invocation.py) |
+| 查完整突變結果與候選集合 | [mutationResult.ts](src/mutation/mutationResult.ts) | [basic_mutation_runner.py](python_scripts/basic_mutation_runner.py) |
+| 查總時限與重試成本 | [targetBudget.ts](src/pipeline/targetBudget.ts) | [processRunner.ts](src/utils/processRunner.ts)、主控 `requestBudgeted` |
 | 查類別、property 與 import 契約 | [targetContract.ts](src/pipeline/targetContract.ts) | Writer、Reviewer 與 Bug Fixer 的 User Prompt |
 | 看五個角色及其契約 | [roles/README.md](src/roles/README.md) | 各角色的提示詞與 parser |
 | 改測試生成規則如何選取 | [testRuleDispatcher.ts](src/pipeline/testRuleDispatcher.ts) | [測試生成規則庫](src/prompts/testRuleLibrary.ts) |
@@ -91,7 +118,7 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 
 `src/prompts/` 只保留共用的測試生成規則、提示詳略與範例，不再放五個角色的轉發檔。`src/roles/legacy/` 只保留舊分流格式支援，不在正式流程內。
 
-## 一次執行的四份結果
+## 一次執行的主要結果
 
 | 檔案 | 用途 |
 |---|---|
@@ -99,8 +126,15 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 | `run_manifest.json` | 執行識別、來源版本與模型名稱 |
 | `role_events.jsonl` | 各角色原始版本、拒絕原因與測量證據 |
 | `function_knowledge.json` | 當前接受的基線、分析假設、受控行為觀測、規則選擇與待驗證任務 |
+| `executable_<codeHash>.py`、`executable_baseline.json` | 已通過執行的不可變候選與其 review／coverage 等證據，mutation 未測為 null |
+| `quality_baseline.json` | 綁定同一測試與有效完整 MutationRun 的最佳品質快照 |
+| `trace_<id>.jsonl` | 探測規劃、逐案開始／結束與中斷恢復紀錄 |
+| `invocation_<testRunId>.json`、`coverage_<testRunId>.json` | 本次候選的精確目標進入證據與原生 coverage 資料 |
+| `loop<n>_mutation.json` | 該輪 scope、候選集合、逐 mutant 終態、計數與測量完成狀態 |
 
 來源或已解析相依變更後，舊證據不能直接沿用。探針資格也綁定探針契約版本與不含憑證的端點識別；過期只代表需要重新驗證，不會自動升格成新的通過紀錄。
+
+環境準備接續 `src/environment/` 的既有流程。明確 Python 設定優先，未設定時優先探索專案／工作區 `.venv`；無 requirements 時缺模組只採明確 package mapping，不直接猜同名 pip 套件。安裝只發生在使用者啟動的環境準備流程，與分析／資格測試互斥。完整 dependency fingerprint、其他 lockfile adapter 與環境支援矩陣仍未完成。
 
 相依來源由預檢程序已載入的 `sys.modules`、模組 origin 與函式定義身分解析；只讀所選來源樹內已確認的 Python 檔案。這讓巢狀專案、relative import 與 namespace package 不必猜測批次根目錄，未知或 re-export 仍明示未解析。
 
@@ -130,3 +164,11 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 保留候選的 `reviewStatus` 為 `completed`、`incomplete` 或 deterministic 專用 `not-required`，會隨 rollback 同步還原。工具滿分但審查未完成的終態為 `execution-passed-review-incomplete`。scorecard 查核 journal／manifest 的 runId、來源 hash 與保留測試 hash，採該版本的分數，拒絕未完成審查、stub、running、失敗與未解決品質缺口；不拼接不同輪次最高分。
 
 同模組 helper 檢索由 `ast_extractor.py` 執行，與既有跨檔相依合併供分析角色和 Writer 使用。來源碼是 setup/path 語境，無執行時不得成為 oracle。`src/prompts/compactWriterContext.ts` 負責小模型完整證據與可省略 context 的排序，`verifiedWriterExamples.ts` 提供經回歸執行的中性範例；`promptBudget.ts` 統一 M/B 參數量、輸入預算與 Ollama context 設定。所有正式角色請求均先檢查完整提示預算，並記錄估計 tokens 與 logical request 耗時。Reviewer 拒絕帶穩定 diagnostics，完成 gate 維持不變。實作範圍與實驗室驗收見 [Writer 檢索與模型相容性](docs/Writer檢索與模型相容性_2026_09_17.md)。
+
+## 尚未實作與尚待驗收的界線
+
+本輪沒有完成型態樹、全程 typed caller、型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、多步狀態案例、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／快取，以及逐筆輸入 UI／設定遷移。Writer 仍使用現有完整 Python fence 契約，不能把新增 checkpoint 或 codec 說成已完成增量生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
+
+共用版本化 `QualityPolicy` 亦未交付；正式 strict100 與 fixture manifest 的不同門檻尚未統一為明確政策欄位。現有 gate 不降低，N/A、未知、未完成審查與未完成測量不因此升格通過。固定模型 A/B、完整 corpus／保留評估集，以及外部引擎的真實支援環境驗收均未執行。
+
+CI workflow 已設定 Windows／Ubuntu 與 Python 3.12／3.13 矩陣；設定存在不代表遠端工作已成功。本輪本機 Node 392／Python 200 項、型別、lint、生產 build、Webview 及 secret scan 均通過；遠端 CI 與模型／外部引擎實驗仍待驗收，詳見實作追蹤文件。

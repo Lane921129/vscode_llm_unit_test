@@ -1,4 +1,4 @@
-import { summarizeObservationPhase, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
+import { observationsForPrompt, summarizeObservationPhase, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { estimatePromptTokens } from './promptBudget';
 import { matchingWriterExamples } from './verifiedWriterExamples';
@@ -27,19 +27,19 @@ export function buildCompactWriterContext(input: {
             imports: context.file_imports || [], globals: context.referenced_globals || [],
             callers: context.callerContexts || [], conditions: context.condition_facts || []
         }),
-        'FIXTURE CHECK: Before choosing expected values, arrange every required constructor input and the object state needed by this case. '
-            + 'Keep the target real. Patch a proven dependency at its use point and configure every return layer actually used by the target; a bare MagicMock is not a concrete row, string, number, or timestamp. '
-            + 'Declare all test imports. Do not add speculative invalid-input exceptions just to increase case count. '
-            + 'For a later quality task, add one distinguishable input/state/mock configuration and preserve passing tests; first verify its actual behavior.',
+        'FIXTURE CHECK: Arrange required constructor inputs and per-case state. '
+            + 'Keep the target real. Patch proven dependencies at use points and configure each consumed return layer; a bare MagicMock is not a concrete row, string, number, or timestamp. '
+            + 'Declare all test imports. Invalid-input exceptions require evidence. '
+            + 'Later tasks add one input/state/mock configuration, verify its behavior, and preserve passing tests.',
         // The caller-partitioned AST trace is authoritative here. Using the
         // bundle's merged trace would leak another caller's assertion oracle.
         'VERIFIED OBSERVATIONS (exact call/setup only; blocked or unassertable entries are diagnostics):\n'
-            + JSON.stringify(context.traceResult || null),
+            + JSON.stringify(observationsForPrompt(context.traceResult)),
         'Observations marked uncontrolled-ambient-read are diagnostic values, never fixed expected values or exception facts. '
             + 'Control the clock/entropy at the target use point with an explicit mock, or inject a fixed dependency/input before asserting. '
             + 'Do not copy the observed timestamp/random value into assertions.',
         'VERIFIED DEPENDENCY OBSERVATIONS (never substitute for target results):\n'
-            + JSON.stringify(dependencies.filter(dep => dep.traceResult).map(dep => ({ name: dep.name, observations: dep.traceResult }))),
+            + JSON.stringify(dependencies.filter(dep => dep.traceResult).map(dep => ({ name: dep.name, observations: observationsForPrompt(dep.traceResult) }))),
         'SELECTED RULES (construction constraints, not output facts):\n'
             + input.evidence.ruleSelection.selectedRules.map(rule => `[${rule.ruleId}] ${rule.title}\n${rule.guidance.join('\n')}`).join('\n\n'),
         ...(input.focus ? ['CURRENT TESTS AND NEXT TASK (preserve passing methods; proposed tasks are hypotheses):\n' + input.focus] : []),

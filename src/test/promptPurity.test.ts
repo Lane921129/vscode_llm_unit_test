@@ -13,7 +13,7 @@ import {
     AnalysisEvidenceV2,
     SemanticAnalysis
 } from '../roles/semanticAnalyzer';
-import { compactSemanticGuidanceForBudget, getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getTier4SelfRepairPrompt, getUserPrompt } from '../roles/unittestWriter';
+import { compactSemanticGuidanceForBudget, getTier1EvidenceBoundSystemPrompt, getTier3UserPrompt, getUserPrompt } from '../roles/unittestWriter';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 
@@ -285,9 +285,10 @@ test('Tier 4 repair prompt does not require habitual None or empty-input tests',
     assert.doesNotMatch(writerSource, /Cover all edge cases: None, empty, boundary values, all exception paths/);
 });
 
-test('Tier 4 self-repair uses the same focused one-method interface as Bug Fixer', () => {
-    const prompt = getTier4SelfRepairPrompt(
-        'assertion failed', 'import unittest', 'compute', ['value'], 'def compute(value):\n    return value', {
+test('active Bug Fixer prompt preserves evidence and requests the focused Python method contract', () => {
+    const prompt = getBugFixerUserPrompt(
+        'import unittest\nclass Cases(unittest.TestCase):\n    def test_compute(self):\n        self.assertEqual(compute(3), 6)',
+        'FAIL: test_compute (Cases.test_compute)', 'compute', ['value'], 'def compute(value):\n    return value', {
             file_imports: [{ kind: 'import', module: 'math' }],
             referenced_globals: [{ name: 'LIMIT', code: 'LIMIT = 3' }],
             traceResult: { examples: [{ args: ['3'], result: '6' }] }
@@ -299,8 +300,9 @@ test('Tier 4 self-repair uses the same focused one-method interface as Bug Fixer
     assert.match(prompt, /LIMIT = 3/);
     assert.match(prompt, /observations/);
     assert.doesNotMatch(prompt, /Available module imports|VERIFIED REAL EXECUTION TRACE|Float Precision/);
-    assert.match(prompt, /TIER 4 SELF-REPAIR INSTRUCTION/);
-    assert.match(prompt, /V3 JSON method-replacement interface/);
+    assert.match(prompt, /Failing method: test_compute/);
+    assert.match(prompt, /Return one Python fence/);
+    assert.doesNotMatch(prompt, /V3 JSON method-replacement interface/);
 });
 
 test('writer prompt preserves the canonical package import path from AST context', () => {
@@ -534,11 +536,4 @@ test('semantic strategy labels model-proposed inputs as candidates rather than f
     assert.match(context, /Candidate normal inputs/);
     assert.match(context, /assertRaises requires an explicit source raise or verified error/);
     assert.doesNotMatch(context, /use these exact values in test cases/);
-});
-
-test('getTier1UserPrompt correctly formats empty string return value without syntax error', () => {
-    const { getTier1UserPrompt } = require('../roles/unittestWriter');
-    const prompt = getTier1UserPrompt('test_func()', '');
-    assert.ok(prompt.includes('self.assertEqual(result, "")'));
-    assert.ok(!prompt.includes('self.assertEqual(result, )'));
 });

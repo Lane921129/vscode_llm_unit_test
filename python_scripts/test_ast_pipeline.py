@@ -15,6 +15,13 @@ from complexity_assessor import assess_complexity
 
 
 class AstPipelineTests(unittest.TestCase):
+    @staticmethod
+    def observation_values(result):
+        """Compare behavior while allowing the additive v2 provenance fields."""
+        metadata = {'case_id', 'source', 'input_before', 'input_after', 'inputs_mutated'}
+        return [{key: value for key, value in record.items() if key not in metadata}
+                for record in result['examples']]
+
     def run_script(self, script_name, *args):
         completed = subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / script_name), *map(str, args)],
@@ -910,7 +917,8 @@ def add_record(value):
             result = trace_function(str(target), 'double', [{'args': [3], 'kwargs': {}}])
 
         self.assertIsNone(result['load_error'])
-        self.assertEqual(result['examples'], [
+        self.assertEqual([{key: record[key] for key in ('args', 'result', 'result_type')}
+                          for record in result['examples']], [
             {'args': ['3'], 'result': '6', 'result_type': 'int'}
         ])
 
@@ -1000,7 +1008,7 @@ def echo(value):
 
         self.assertFalse(written.exists())
         self.assertIn('Dynamic trace safety gate blocked', result['load_error'])
-        self.assertIn('Path.write_text', result['blocked_operations'][0])
+        self.assertIn('file write', result['blocked_operations'][0])
 
     def test_dynamic_tracer_blocks_network_and_process_operations(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1019,7 +1027,7 @@ def echo(value):
             process_result = trace_function(str(target), 'run_command')
 
         self.assertIn('network connection', network_result['blocked_operations'][0])
-        self.assertIn('subprocess.run', process_result['blocked_operations'][0])
+        self.assertIn('shell / subprocess', process_result['blocked_operations'][0])
 
     def test_dynamic_tracer_loads_a_package_module_with_relative_imports(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1081,7 +1089,8 @@ def echo(value):
             target.write_text(source, encoding='utf-8')
             result = trace_function(str(target), 'render', [{'args': ['x'], 'kwargs': {}}])
 
-        self.assertIn('Cannot safely instantiate class', result['load_error'])
+        self.assertIsNone(result['load_error'])
+        self.assertEqual(result['cases'][0]['status'], 'setup_error')
         self.assertEqual(result['examples'], [])
         self.assertEqual(result['errors'], [])
 
@@ -1257,7 +1266,7 @@ class TestService(unittest.TestCase):
             result = trace_function(str(target), 'multiply', [{'args': [3], 'kwargs': {'factor': 2}}])
 
         self.assertIsNone(result['load_error'])
-        self.assertEqual(result['examples'], [{
+        self.assertEqual(self.observation_values(result), [{
             'args': ['3'], 'kwargs': {'factor': '2'}, 'result': '6', 'result_type': 'int'
         }])
 
@@ -1285,7 +1294,7 @@ class TestService(unittest.TestCase):
         self.assertIsNotNone(ast_data['property_context']['getter'])
         self.assertIsNotNone(ast_data['property_context']['setter'])
         self.assertIsNone(trace['load_error'])
-        self.assertEqual(trace['examples'], [{'args': [], 'result': 'True', 'result_type': 'bool'}])
+        self.assertEqual(self.observation_values(trace), [{'args': [], 'result': 'True', 'result_type': 'bool'}])
 
     def test_dynamic_tracer_supports_standard_library_cached_property(self):
         source = '''from functools import cached_property
@@ -1303,7 +1312,7 @@ class Settings:
 
         self.assertEqual(ast_data['method_kind'], 'property')
         self.assertIsNone(trace['load_error'])
-        self.assertEqual(trace['examples'], [{'args': [], 'result': "'ready'", 'result_type': 'str'}])
+        self.assertEqual(self.observation_values(trace), [{'args': [], 'result': "'ready'", 'result_type': 'str'}])
 
     def test_dynamic_tracer_uses_literal_annotation_values_as_safe_probes(self):
         source = '''from typing import Literal
@@ -1339,11 +1348,11 @@ def render(stage: Literal["draft", "published"]):
         self.assertIsNone(result['load_error'])
         self.assertIn(
             {'args': ["'test_value'", "'first'"], 'result': "'first-route'", 'result_type': 'str'},
-            result['examples']
+            self.observation_values(result)
         )
         self.assertIn(
             {'args': ["'test_value'", "'second'"], 'result': "'second-route'", 'result_type': 'str'},
-            result['examples']
+            self.observation_values(result)
         )
         self.assertTrue(any(error['exception'] == 'ValueError' for error in result['errors']))
 
@@ -1377,7 +1386,7 @@ def render(stage: Literal["draft", "published"]):
         self.assertIsNone(result['load_error'])
         self.assertIn(
             {'args': ["'enabled'", "'strict'"], 'result': "'selected'", 'result_type': 'str'},
-            result['examples']
+            self.observation_values(result)
         )
 
     def test_dynamic_tracer_ignores_nested_callable_conditions_when_deriving_inputs(self):
@@ -1414,11 +1423,11 @@ def render(stage: Literal["draft", "published"]):
         self.assertIsNone(result['load_error'])
         self.assertIn(
             {'args': ['4', "'test_value'"], 'result': "'large'", 'result_type': 'str'},
-            result['examples']
+            self.observation_values(result)
         )
         self.assertIn(
             {'args': ['1', "'fast'"], 'result': "'known'", 'result_type': 'str'},
-            result['examples']
+            self.observation_values(result)
         )
 
     def test_dynamic_tracer_uses_relative_numeric_probes_for_derived_thresholds(self):
@@ -1709,7 +1718,7 @@ class TestAdvance(unittest.TestCase):
         kinds = {mutant['kind']: mutant['status'] for mutant in result['mutants']}
         self.assertEqual(kinds['loop_condition_negation'], 'KILLED')
         self.assertEqual(kinds['conditional_expression_negation'], 'KILLED')
-        self.assertEqual(kinds['augmented_assignment'], 'KILLED')
+        self.assertEqual(kinds['augmented_assignment'], 'TIMEOUT')
 
     def test_builtin_mutation_runner_keeps_candidate_indexes_aligned_after_unsupported_operator(self):
         source = '''def increment(value, exponent):
@@ -1918,6 +1927,150 @@ class TestCheckoutOrder(unittest.TestCase):
             observed.append(booleans)
 
         self.assertEqual(observed, [['KILLED', 'KILLED']] * 3)
+
+
+class MutationReliabilityTests(unittest.TestCase):
+    def measure(self, source, test_body, **options):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source_path, test_path = root / 'sample.py', root / 'test_sample.py'
+            source_path.write_text(source, encoding='utf-8')
+            test_path.write_text('import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
+                                 '    def test_target(self):\n        ' + test_body + '\n', encoding='utf-8')
+            return run_mutation_trials(source_path, test_path, target_function='target', **options)
+
+    def test_noop_return_none_does_not_create_an_unkillable_candidate(self):
+        result = self.measure('def target():\n    return None\n', 'self.assertIsNone(target())')
+        self.assertEqual(result['status'], 'no-candidates')
+        self.assertEqual(result['excluded']['noop'], 1)
+        self.assertEqual(result['counts']['available'], 0)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertTrue(result['baseline_passed'])
+
+    def test_limited_candidate_set_is_explicitly_partial_even_when_all_selected_are_killed(self):
+        values = tuple(range(40))
+        result = self.measure(f'def target():\n    return {values!r}\n',
+                              f'self.assertEqual(target(), {values!r})', max_mutations=2)
+        self.assertEqual(result['counts']['selected'], 2)
+        self.assertGreater(result['counts']['available'], 30)
+        self.assertEqual(result['counts']['killed'], 2)
+        self.assertEqual(result['counts']['notRun'], 0)
+        self.assertEqual(result['status'], 'partial')
+        self.assertTrue(result['scoreAvailable'])
+
+    def test_chained_comparison_ids_distinguish_positions_and_do_not_depend_on_tests(self):
+        from unittest.mock import patch
+        success = subprocess.CompletedProcess([], 0, '', '')
+        with patch('basic_mutation_runner.subprocess.run', return_value=success):
+            first = self.measure('def target(value):\n    return 0 < value < 10\n', 'self.assertTrue(target(1))')
+            second = self.measure('def target(value):\n    return 0 < value < 10\n', 'self.assertTrue(target(2))')
+        comparisons = [item for item in first['mutants'] if item['kind'] == 'compare']
+        self.assertEqual(len(comparisons), 2)
+        self.assertNotEqual(comparisons[0]['id'], comparisons[1]['id'])
+        self.assertEqual([item['id'] for item in first['mutants']], [item['id'] for item in second['mutants']])
+        self.assertEqual(first['candidateSetId'], second['candidateSetId'])
+        self.assertNotEqual(first['testHash'], second['testHash'])
+
+    def test_function_scope_excludes_decorators_defaults_annotations_and_other_callables(self):
+        source = '''from typing import Literal
+def tag(mark):
+    return lambda function: function
+class Other:
+    def target(self, value=44): return value + 55
+@tag(99)
+def target(value: Literal[7] = 7) -> Literal[8]:
+    def helper(unused=100):
+        return 200
+    class Nested:
+        def target(self): return 300
+    return value + 1
+'''
+        result = self.measure(source, 'self.assertEqual(target(7), 8)', max_mutations=0)
+        body_line = source.splitlines().index('    return value + 1') + 1
+        self.assertEqual(result['counts']['available'], 3)
+        self.assertTrue(all(item['line'] == body_line for item in result['mutants']))
+        self.assertEqual(result['counts']['killed'], 3)
+        self.assertEqual(result['scopeVersion'], 'selected-function-body-v1')
+        self.assertEqual(result['operatorSetVersion'], 'builtin-ast-v1')
+        self.assertEqual(result['targetScope']['startLine'], 8)
+
+    def test_single_line_function_mutates_body_but_not_default_literal(self):
+        result = self.measure('def target(value=12): return value + 1\n',
+                              'self.assertEqual(target(5), 6)', max_mutations=0)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['counts']['available'], 3)
+        self.assertTrue(all(item['line'] == 1 for item in result['mutants']))
+        self.assertFalse(any(item['from'] == '12' for item in result['mutants']))
+
+    def test_candidate_universe_is_independent_of_sampling_and_names_operator_scope_versions(self):
+        import hashlib
+        source = 'def target(value):\n    return value + 1\n'
+        full = self.measure(source, 'self.assertEqual(target(1), 2)', max_mutations=0)
+        sample = self.measure(source, 'self.assertEqual(target(2), 3)', max_mutations=1)
+        self.assertEqual(full['candidateSetId'], sample['candidateSetId'])
+        self.assertEqual(len(sample['candidateIds']), full['counts']['available'])
+        self.assertEqual(full['candidateSetId'], hashlib.sha256('\n'.join(sorted(full['candidateIds'])).encode('ascii')).hexdigest())
+        candidate = full['mutants'][0]
+        metadata = {key: candidate[key] for key in ['kind', 'line', 'column', 'position', 'from', 'to']}
+        identity = json.dumps([full['operatorSetVersion'], full['scopeVersion'], full['sourceHash'], 'target', metadata],
+                              sort_keys=True, separators=(',', ':'))
+        self.assertEqual(candidate['id'], hashlib.sha256(identity.encode('utf-8')).hexdigest())
+
+    def test_zero_candidate_limit_selects_the_full_scope(self):
+        result = self.measure('def target():\n    return (1, 2, 3)\n', 'self.assertEqual(target(), (1, 2, 3))', max_mutations=0)
+        self.assertGreater(result['counts']['available'], 1)
+        self.assertEqual(result['counts']['selected'], result['counts']['available'])
+        self.assertEqual(result['counts']['executed'], result['counts']['available'])
+        self.assertEqual(result['status'], 'complete')
+
+    def test_mutant_timeout_is_not_a_kill_or_a_quality_score(self):
+        from unittest.mock import patch
+        success = subprocess.CompletedProcess([], 0, '', '')
+        with patch('basic_mutation_runner.subprocess.run', side_effect=[success, subprocess.TimeoutExpired('trial', 1)]):
+            result = self.measure('def target():\n    return True\n', 'self.assertTrue(target())', max_mutations=1)
+        self.assertEqual(result['mutants'][0]['status'], 'TIMEOUT')
+        self.assertEqual(result['counts']['timeout'], 1)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertEqual(result['status'], 'partial')
+        self.assertFalse(result['scoreAvailable'])
+
+    def test_unexpected_runner_exit_is_a_tool_error(self):
+        from unittest.mock import patch
+        success = subprocess.CompletedProcess([], 0, '', '')
+        invalid_runner = subprocess.CompletedProcess([], 2, '', 'runner arguments invalid')
+        with patch('basic_mutation_runner.subprocess.run', side_effect=[success, invalid_runner]):
+            result = self.measure('def target():\n    return True\n', 'self.assertTrue(target())', max_mutations=1)
+        self.assertEqual(result['mutants'][0]['status'], 'ERROR')
+        self.assertEqual(result['counts']['error'], 1)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['scoreAvailable'])
+
+    def test_result_hashes_preserve_original_crlf_bytes(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source_path, test_path = root / 'sample.py', root / 'test_sample.py'
+            source = b'def target():\r\n    return None\r\n'
+            tests = b'import unittest\r\nfrom sample import target\r\nclass Cases(unittest.TestCase):\r\n    def test_target(self): self.assertIsNone(target())\r\n'
+            source_path.write_bytes(source)
+            test_path.write_bytes(tests)
+            result = run_mutation_trials(source_path, test_path, target_function='target')
+        self.assertEqual(result['sourceHash'], hashlib.sha256(source).hexdigest())
+        self.assertEqual(result['testHash'], hashlib.sha256(tests).hexdigest())
+
+    def test_stage_budget_preserves_not_run_records_after_baseline(self):
+        from unittest.mock import patch
+        success = subprocess.CompletedProcess([], 0, '', '')
+        with patch('basic_mutation_runner.subprocess.run', return_value=success), \
+                patch('basic_mutation_runner.time.monotonic', side_effect=[0, 0, 0, 0, 0, 2]):
+            result = self.measure('def target():\n    return True\n', 'self.assertTrue(target())', stage_timeout_seconds=1)
+        self.assertTrue(result['baseline_passed'])
+        self.assertEqual(result['counts']['executed'], 0)
+        self.assertEqual(result['counts']['notRun'], result['counts']['selected'])
+        self.assertTrue(all(item['status'] == 'NOT_RUN' for item in result['mutants']))
+        self.assertEqual(result['status'], 'partial')
+        self.assertFalse(result['scoreAvailable'])
 
 
 if __name__ == '__main__':

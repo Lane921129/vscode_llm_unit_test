@@ -148,6 +148,13 @@
 - 已知環境預檢失敗可依 interpreter、來源雜湊、模組與穩定匯入根快取；session output 目錄等暫時路徑不得使同一環境障礙重新啟動子程序。來源或匯入環境變更後必須產生新 cache key。
 - 合併已驗證 Trace 與模型測試前，Trace 產物必須先通過相同的結構／安全 gate，再在獨立 Python unittest 程序通過；失敗時停止合併並保留診斷，不交模型反覆修訂，不能讓同一份候選測試掩蓋 Trace 基線問題。async／generator 使用明確標準庫 import，不使用動態 `__import__`。
 - 每輪基線綁定同一版測試、案例識別、執行輸出、覆蓋與存活變異體；回滾時全部同步還原。原候選必須保留。
+- 可執行基線在成功執行後、審查與突變之前立即保存為獨立不可變快照；未測突變為 null，不得補成 0 或 100。完整品質基線另綁同一版 MutationRun，來源／相依改變後舊產物只供歷史閱讀，必須明示 evidenceValid=false。
+- Dynamic Trace 以新程序逐案執行，建構子與目標呼叫前後分開快照；未知物件、共享參照、循環與超出容量的值不得藉 repr／deepcopy hook 重建。blocked、setup_error、timeout 與 not_started 保留逐筆狀態，不能混入例外 oracle。
+- Trace／預檢／正式 unittest／mutation 共用版本化 runtime policy；所有違規持續記錄，即使被目標捕捉亦不得通過。只保留必要 import／traceback／async plumbing 例外，不准任意一般讀檔或 loopback。
+- 正式 coverage 使用原生 statement／branch 與來源實體核對；目標呼叫證據綁本次 source/test/run 與 coverage hash。單行定義被匯入不等於目標執行，舊文字 parser 僅作歷史相容。
+- 正式突變以 qualified function body 範圍、完整候選集合與精確計數驗收；工具錯誤、timeout、未測候選及未知外部格式不得當 killed 或完整通過。百分比只作顯示，抽樣 100% 不等於完整集合 100%。
+- 同一目標共用 wall-clock、logical request、transport attempt、估算輸入 tokens 及 candidate 預算。Tier／格式／傳輸重試不重設；每次實際傳送重計輸入估算，預算耗盡保留成果並明示未完成。
+- caller 探索排除具有本工具版本化 run manifest 的產物目錄，不以生成測試再次製造來源呼叫事實。完整快照保存於 artifact，角色 prompt 只投影斷言所需事實，不丟失安全／不可斷言標記。
 - 跨輪案例識別不可依 loop 檔名；純更名只能在測試 AST 與設定指紋一致時對應，不得猜測任意重寫的語意等價。
 - 來源或已解析相依的版本變更後停止沿用舊證據。函式紀錄區分來源結構、已驗證執行與待驗證假設，禁止自動把舊執行資料當成新版本的事實。
 - 連續三輪沒有改善已測量的缺口時停止相同策略重試並明示品質未達標；最後一輪結束後不再呼叫無後續用途的品質分析。結果目錄維持時分命名，同分鐘既有紀錄不可默默覆寫。

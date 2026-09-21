@@ -2,6 +2,20 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-09-21
+
+### 完善計畫第一階段：保存真實輸入、隔離案例與核對品質證據
+
+- 接續既有 Python 環境準備功能，整合 interpreter 選擇、環境檢查、明確套件映射與 UI；不再由 import 名猜測安裝套件，也不以別的 interpreter 取代使用者明確設定。既有 requirements 的版本限制保留。
+- Trace 改為逐案例新程序，保存建構子與目標呼叫前後的型態快照、輸入來源、唯一案例 ID 與執行狀態。有限 codec 不呼叫自訂 repr／deepcopy／metaclass descriptor，循環、共享參照及截斷值不能建立精確斷言。逐筆 JSONL 可在逾時後恢復已完成案例，未知、受阻擋、setup 失敗及未開始的案例分開保存。
+- Trace、預檢、正式 unittest 及突變共用 runtime policy，記錄被捕捉的違規，限制一般檔案／網路／子程序／共享 SQLite。標準 `threading.Thread` 納入執行完成與失敗判定，直接底層 `_thread` 啟動明確阻擋；來源讀取例外限於必要 import／traceback。這是執行防護，並非作業系統層級沙箱。
+- 正式 coverage 讀取原生行／分支資料，使用 source、test、run 與 coverage hash 核對限定目標在主／新標準執行緒的實際呼叫；匯入單行函式不算執行函式。同名其他函式不能代替目標證據。Trace 合併與 Python 斷言比對保留 kwargs 順序，不將不同呼叫順序錯當同一事實。
+- 內建 mutation 只測所選函式本體，排除 decorator、default 與巢狀 callable，移除無效／重複／無變化候選；正式流程量測完整集合。結果綁定來源、測試、scope、operator 與 candidate-set 版本；TIMEOUT、ERROR、未測與無候選不補成通過分數。外部格式僅接受已驗證契約，模組範圍不能替代函式範圍。
+- 成功執行後先保存不可變 executable 基線，再進行審查及 mutation；完整 quality 基線另存。首次 mutation 失敗仍保留測試、coverage 與審查狀態。來源或測試在測量途中改變會使該輪證據失效；跨輪來源變更不再顯示舊分數為目前有效。
+- 同一目標共用時間、模型邏輯請求、實際傳輸、估算輸入 token 與候選次數預算；重試與 Tier 降階不重設。保留既有品質 gate，刪除六個無正式呼叫點的舊 export；角色 prompt 僅投影必要斷言事實，完整快照仍保存在產物，caller 搜尋排除本工具產物。
+- 加入完整計畫與實作追蹤文件；CI 設定 Ubuntu／Windows × Python 3.12／3.13，使用工作區 `.venv`。本機 Windows／Python 3.13.2 最終完整驗證：Node 392、Python 200 全部通過；型別、ESLint、生產建置、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式檢查通過。遠端 CI 尚未驗證。
+- 已知限制：第一階段不是整份完善計畫完成。型態樹、caller 的型態保真傳輸、受限制 setup、缺口導向 Trace、增量 Writer、共用 QualityPolicy、逐筆 UI 及完整主控拆分尚待後續實作；未重新執行私有應用或真實 LLM，不能把中性 fixture／固定模型回覆通過當成模型能力或實驗室整批通過。
+
 ## 2026-09-20
 
 ### 完整批次重分析、正式執行隔離與角色回覆修復

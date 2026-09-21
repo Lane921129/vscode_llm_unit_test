@@ -8,13 +8,16 @@ when available.
 
 import ast
 import copy
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -47,25 +50,32 @@ BOOLEAN_OPERATOR_REPLACEMENTS = {
 
 CALLABLE_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 NO_PATTERN_MUTATION = object()
+OPERATOR_SET_VERSION = 'builtin-ast-v1'
+FUNCTION_SCOPE_VERSION = 'selected-function-body-v1'
+MODULE_SCOPE_VERSION = 'module-ast-v1'
 
 
 def mutation_scope_walk(scope):
-    """Walk a selected function without charging its nested callables to it.
+    """Walk only the selected function body, excluding nested callable scopes.
 
-    When the user selected one function/method, mutations inside a locally
-    declared helper or nested class are a different callable's responsibility.
+    Decorators, defaults and annotations execute outside this body scope.
+    Nested helpers and classes remain separate callable responsibilities.
     Module-wide analysis intentionally keeps its existing full-tree behaviour.
     """
     exclude_nested_callables = isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
 
     def visit(node):
+        if exclude_nested_callables and isinstance(node, CALLABLE_SCOPE_NODES):
+            return
         yield node
         for child in ast.iter_child_nodes(node):
-            if exclude_nested_callables and isinstance(child, CALLABLE_SCOPE_NODES):
-                continue
             yield from visit(child)
 
-    yield from visit(scope)
+    if exclude_nested_callables:
+        for statement in scope.body:
+            yield from visit(statement)
+    else:
+        yield from visit(scope)
 
 
 def pattern_literal_replacement(node):
@@ -415,46 +425,118 @@ def trial_environment(temp_root, source_file):
 
 
 def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
-                        target_function=None, target_class=None):
+                        target_function=None, target_class=None, stage_timeout_seconds=None):
+    """Measure selected mutants without treating incomplete execution as a kill.
+
+    ``total``/``errors`` remain legacy display fields. Consumers must use the
+    versioned counts and status: the candidate limit is not the full universe.
+    """
+    if type(max_mutations) is not int or max_mutations < 0:
+        raise ValueError('max_mutations must be a non-negative integer (zero selects all candidates)')
+    for label, value in [('timeout_seconds', timeout_seconds), ('stage_timeout_seconds', stage_timeout_seconds)]:
+        if value is None and label == 'timeout_seconds':
+            raise ValueError('timeout_seconds must be a finite positive number')
+        if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
+            raise ValueError(f'{label} must be a finite positive number')
+    started = time.monotonic()
+    deadline = started + stage_timeout_seconds if stage_timeout_seconds is not None else None
     source_file = Path(source_path).resolve()
     test_file = Path(test_path).resolve()
-    tree = ast.parse(source_file.read_text(encoding='utf-8'), filename=str(source_file))
+    original_source = source_file.read_bytes().decode('utf-8')
+    original_test_bytes = test_file.read_bytes()
+    source_hash = hashlib.sha256(original_source.encode('utf-8')).hexdigest()
+    tree = ast.parse(original_source, filename=str(source_file))
     scope = find_target_scope(tree, target_function, target_class)
-    if target_function and scope is None:
-        return {
-            'engine': 'builtin',
-            'total': 0,
-            'killed': 0,
-            'survived': 0,
-            'errors': 0,
-            'mutants': [],
-            'scope_found': False,
-            'scope': f'{target_class + "." if target_class else ""}{target_function}',
-        }
-    candidates = mutation_candidates(tree, scope)[:max_mutations]
+    scope_name = (target_function if target_function and '.' in target_function
+                  else f'{target_class + "." if target_class else ""}{target_function or "module"}')
     result = {
+        'schemaVersion': 1,
         'engine': 'builtin',
-        'total': len(candidates),
+        'operatorSetVersion': OPERATOR_SET_VERSION,
+        'scopeVersion': FUNCTION_SCOPE_VERSION if target_function else MODULE_SCOPE_VERSION,
+        'candidateSetId': None,
+        'candidateIds': [],
+        'status': 'failed',
+        'sourceHash': source_hash,
+        'testHash': hashlib.sha256(original_test_bytes).hexdigest(),
+        'targetScope': {'kind': 'function' if target_function else 'module', 'qualifiedName': scope_name},
+        'sourcePath': str(source_file),
+        'timeoutSeconds': timeout_seconds,
+        'stageTimeoutSeconds': stage_timeout_seconds,
+        'counts': dict(available=0, selected=0, executed=0, notRun=0, killed=0, survived=0, timeout=0, error=0),
+        'excluded': dict(noop=0, duplicate=0, invalid=0),
+        'scoreAvailable': False,
+        'total': 0,
         'killed': 0,
         'survived': 0,
         'errors': 0,
         'mutants': [],
-        'scope_found': True,
-        'scope': f'{target_class + "." if target_class else ""}{target_function or "module"}',
+        'scope_found': scope is not None,
+        'scope': scope_name,
         'baseline_passed': False,
+        'baselineStatus': 'not-run',
     }
+    if scope is None:
+        result['diagnostic'] = 'Selected mutation scope was not found'
+        return result
+    body_start = scope.body[0].lineno if target_function and scope.body else getattr(scope, 'lineno', 1)
+    result['targetScope'].update(startLine=body_start, endLine=getattr(scope, 'end_lineno', len(original_source.splitlines())))
+    candidates = []
+    original_ast = ast.dump(tree, include_attributes=False)
+    seen_variants = set()
+    for index, candidate in enumerate(mutation_candidates(tree, scope)):
+        if deadline is not None and time.monotonic() >= deadline:
+            result['counts']['available'] = None
+            result['diagnostic'] = 'Stage budget exhausted while enumerating mutation candidates; universe is unknown'
+            return result
+        variant = apply_mutation(tree, index, target_function, target_class)
+        ast.fix_missing_locations(variant)
+        variant_ast = ast.dump(variant, include_attributes=False)
+        if variant_ast == original_ast:
+            result['excluded']['noop'] += 1
+            continue
+        if variant_ast in seen_variants:
+            result['excluded']['duplicate'] += 1
+            continue
+        try:
+            compile(variant, str(source_file), 'exec')
+        except (SyntaxError, TypeError, ValueError):
+            result['excluded']['invalid'] += 1
+            continue
+        seen_variants.add(variant_ast)
+        identity = json.dumps([OPERATOR_SET_VERSION, result['scopeVersion'], source_hash, scope_name, candidate], sort_keys=True, separators=(',', ':'))
+        candidates.append(({**candidate, 'id': hashlib.sha256(identity.encode('utf-8')).hexdigest()}, ast.unparse(variant) + '\n'))
+    result['counts']['available'] = len(candidates)
+    result['candidateIds'] = [candidate['id'] for candidate, _ in candidates]
+    result['candidateSetId'] = hashlib.sha256('\n'.join(sorted(result['candidateIds'])).encode('ascii')).hexdigest()
+    candidates = candidates[:max_mutations] if max_mutations else candidates
+    result['total'] = result['counts']['selected'] = result['counts']['notRun'] = len(candidates)
+
+    def trial_timeout():
+        if deadline is None:
+            return timeout_seconds
+        return max(0.001, min(timeout_seconds, deadline - time.monotonic()))
+
+    def budget_exhausted():
+        return deadline is not None and time.monotonic() >= deadline
 
     with tempfile.TemporaryDirectory(prefix='llm_unit_mutation_') as temp_dir:
         temp_root = Path(temp_dir)
-        original_source = source_file.read_text(encoding='utf-8')
+        snapshot_dir = temp_root / 'test_snapshot'
+        snapshot_dir.mkdir()
+        snapshot_test = snapshot_dir / test_file.name
+        snapshot_test.write_bytes(original_test_bytes)
         # Run the unmodified target in exactly the same isolated import layout
         # used for every mutant. A failing baseline is infrastructure/test
         # failure, never evidence that every mutant was killed.
         baseline_root = temp_root / 'baseline'
-        baseline_test = prepare_trial_directory(source_file, test_file, baseline_root, original_source)
+        baseline_test = prepare_trial_directory(source_file, snapshot_test, baseline_root, original_source)
         baseline_environment = trial_environment(baseline_root, source_file)
 
         try:
+            if budget_exhausted():
+                result['baseline_output'] = 'Stage budget exhausted before baseline'
+                return result
             baseline = subprocess.run(
                 [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem],
                 cwd=baseline_root,
@@ -463,12 +545,13 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=timeout_seconds,
+                timeout=trial_timeout(),
             )
             if baseline.returncode:
                 result.update({
                     'total': 0,
                     'baseline_passed': False,
+                    'baselineStatus': 'error' if baseline.returncode == 86 else 'failed',
                     'baseline_output': (baseline.stdout + baseline.stderr).strip()[-500:],
                     'mutants': [],
                 })
@@ -477,6 +560,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             result.update({
                 'total': 0,
                 'baseline_passed': False,
+                'baselineStatus': 'timeout',
                 'baseline_output': f'Baseline timed out after {timeout_seconds}s: {error}',
                 'mutants': [],
             })
@@ -485,24 +569,21 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             result.update({
                 'total': 0,
                 'baseline_passed': False,
+                'baselineStatus': 'error',
                 'baseline_output': str(error),
                 'mutants': [],
             })
             return result
 
         result['baseline_passed'] = True
+        result['baselineStatus'] = 'passed'
+        result['mutants'] = [{**candidate, 'status': 'NOT_RUN', 'output': ''} for candidate, _ in candidates]
 
-        for index, candidate in enumerate(candidates):
-            mutant_tree = apply_mutation(
-                tree,
-                index,
-                target_function,
-                target_class
-            )
-            ast.fix_missing_locations(mutant_tree)
-            mutant_source = ast.unparse(mutant_tree) + '\n'
+        for index, (candidate, mutant_source) in enumerate(candidates):
+            if budget_exhausted():
+                break
             mutant_root = temp_root / f'mutant_{index:04d}'
-            mutant_test = prepare_trial_directory(source_file, test_file, mutant_root, mutant_source)
+            mutant_test = prepare_trial_directory(source_file, snapshot_test, mutant_root, mutant_source)
             mutant_environment = trial_environment(mutant_root, source_file)
 
             try:
@@ -514,43 +595,42 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                     text=True,
                     encoding='utf-8',
                     errors='replace',
-                    timeout=timeout_seconds,
+                    timeout=trial_timeout(),
                 )
                 # A forbidden external operation is missing test isolation,
                 # never proof that an assertion killed the mutant.
-                status = 'ERROR' if completed.returncode == 86 else 'KILLED' if completed.returncode else 'SURVIVED'
+                status = 'SURVIVED' if completed.returncode == 0 else 'KILLED' if completed.returncode == 1 else 'ERROR'
                 output = (completed.stdout + completed.stderr).strip()[-500:]
             except subprocess.TimeoutExpired as error:
-                # This timeout happened while exercising one mutated copy.
-                # A mutant that makes a formerly terminating test hang is a
-                # detected behavioral change, so mutation testing counts it
-                # as killed rather than an infrastructure error.
-                status = 'KILLED'
-                output = f'Killed by timeout after {timeout_seconds}s: {error}'
+                status = 'TIMEOUT'
+                output = f'Mutant timed out (per-trial limit {timeout_seconds}s; shared stage budget applies): {error}'
             except OSError as error:
                 status = 'ERROR'
                 output = str(error)
 
             record = {**candidate, 'status': status, 'output': output}
-            result['mutants'].append(record)
-            if status == 'KILLED':
-                result['killed'] += 1
-            elif status == 'SURVIVED':
-                result['survived'] += 1
-            else:
-                result['errors'] += 1
+            result['mutants'][index] = record
+            result['counts']['executed'] += 1
+            result['counts']['notRun'] -= 1
+            result['counts'][{'KILLED': 'killed', 'SURVIVED': 'survived', 'TIMEOUT': 'timeout', 'ERROR': 'error'}[status]] += 1
+    counts = result['counts']
+    result.update(killed=counts['killed'], survived=counts['survived'], errors=counts['error'])
+    result['scoreAvailable'] = bool(counts['selected'] and counts['notRun'] == 0 and counts['error'] == 0 and counts['timeout'] == 0)
+    result['status'] = ('failed' if counts['error'] else 'no-candidates' if counts['available'] == 0
+                        else 'complete' if result['scoreAvailable'] and counts['selected'] == counts['available'] else 'partial')
     return result
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class]'}))
+        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class] [stage_timeout_seconds]'}))
         sys.exit(2)
     maximum = int(sys.argv[3]) if len(sys.argv) >= 4 else 30
-    timeout = int(sys.argv[4]) if len(sys.argv) >= 5 else 10
+    timeout = float(sys.argv[4]) if len(sys.argv) >= 5 else 10
     function_name = sys.argv[5] if len(sys.argv) >= 6 and sys.argv[5] else None
     class_name = sys.argv[6] if len(sys.argv) >= 7 and sys.argv[6] else None
+    stage_timeout = float(sys.argv[7]) if len(sys.argv) >= 8 else None
     print(json.dumps(
-        run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name),
+        run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name, stage_timeout),
         ensure_ascii=True
     ))

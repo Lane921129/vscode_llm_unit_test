@@ -1,48 +1,7 @@
 import { getBaseFewShotExamples, getDynamicFewShotExamples, getMutationOperatorHints, formatFewShotForPrompt } from '../prompts/fewShotExamples';
 import { formatWriterEvidenceBundleForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
-import { getBugFixerUserPrompt } from './bugFixer';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
-
-// ─────────────────────────────────────────────────────────────
-// Tier 1：填空法 Prompt（2–3B 極小模型）
-// 每次只問 AI 填寫一個斷言行，Prompt 上限 ~80 tokens
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Tier 1 System Prompt：告知模型只需補全一行斷言，不要輸出其他內容
- */
-export function getTier1SystemPrompt(): string {
-    return `Complete ONE assertion line. Output ONLY the completed line. No explanation. No other code.`;
-}
-
-/**
- * Tier 1 User Prompt：給定函式呼叫與真實回傳值，讓 AI 補全斷言
- * @param funcCall  已產生的函式呼叫字串，e.g. "func('sample', 'mode_a')"
- * @param returnVal 真實回傳值的 repr，e.g. "{'valid': True, 'type': 'user'}"
- * @param isError   若為 True，表示這個輸入會 raise，需要填 assertRaises
- * @param errorType 例外類型，e.g. "ValueError"
- */
-export function getTier1UserPrompt(
-    funcCall: string,
-    returnVal: string,
-    isError: boolean = false,
-    errorType: string = 'Exception'
-): string {
-    if (isError) {
-        return `Target call \`${funcCall}\` raises ${errorType}("${returnVal}").
-Complete: with self.assertRaises(${errorType}):
-              ${funcCall}`;
-    }
-    const valRepr = returnVal === ''
-        ? '""'
-        : ((returnVal.startsWith('"') || returnVal.startsWith("'") || returnVal.startsWith("{") || returnVal.startsWith("[") || returnVal === 'True' || returnVal === 'False' || returnVal === 'None' || !isNaN(Number(returnVal)))
-            ? returnVal
-            : JSON.stringify(returnVal));
-    return `Target call: \`result = ${funcCall}\`
-Exact Return Value: ${valRepr}
-Complete ONE line: self.assertEqual(result, ${valRepr})`;
-}
 
 /**
  * Tier 1 is intentionally small, but it is still an LLM judgement step: the
@@ -119,51 +78,6 @@ export function getTier3UserPrompt(
     prompt += `Test scaffold (setup guidance, not an assertion oracle):\n\`\`\`python\n${scaffold}\n\`\`\`\n\nReturn the complete unittest file now:`;
     return prompt;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Tier 4：全自主 + Self-repair（100B+/Cloud）
-// ─────────────────────────────────────────────────────────────
-
-export function getTier4SystemPrompt(): string {
-    return `You are an expert Python unit test engineer. Write a complete, production-quality unittest.TestCase.
-
-Output format:
-\`\`\`python
-(complete unittest file)
-\`\`\`
-
-Output only that single Python code fence. Do not include analysis, reasoning, headings, or other prose.
-
-Guidelines:
-- Use absolute imports (e.g. from module_name import target_function).
-- Use unittest.mock (patch, MagicMock) for all external dependencies.
-- Cover branches, boundaries, and exception paths only when source code, selected test-generation rule cards, or verified execution facts support them. Do not add None or empty-input tests merely by habit.
-- Every test method name must start with test_.
-- Do NOT copy the source code.`;
-}
-
-export function getTier4SelfRepairPrompt(
-    stderr: string,
-    brokenCode: string = '',
-    funcName: string = '',
-    funcArgs: string[] = [],
-    sourceCode?: string,
-    astContext?: any,
-    moduleName: string = 'module_name',
-    semanticGuidance?: string
-): string {
-    const evidenceContext = brokenCode
-        ? getBugFixerUserPrompt(
-            brokenCode, stderr, funcName, funcArgs, sourceCode, astContext, moduleName, semanticGuidance
-        )
-        : `=== PRE-VERIFICATION ERROR LOG ===\n\`\`\`text\n${stderr.substring(0, 2000)}\n\`\`\``;
-    return `${evidenceContext}
-
-TIER 4 SELF-REPAIR INSTRUCTION:
-Repair only the identified failing method. Return the same V3 JSON method-replacement interface; the runner preserves and merges all unrelated tests.`;
-}
-
-
 
 export function getSystemPrompt(
     loopCount: number,

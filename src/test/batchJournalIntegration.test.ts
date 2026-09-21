@@ -62,7 +62,7 @@ test('real batch command records grouped failures and cancellation, then passes 
         assert.deepEqual(first.manifest.discoveryFailures, [{ file: 'broken.py', stage: 'ast-discovery' }]);
         assert.deepEqual(first.manifest.environmentIssues.map((item: any) => [item.kind, item.issue, item.affectedTargets]), [
             ['missing-dependency', 'fixture_dependency_not_installed', 2],
-            ['import-side-effect', 'Path.mkdir (setup_state.py:2)', 2]
+            ['import-side-effect', 'os.mkdir (setup_state.py:2)', 2]
         ]);
         assert.ok(first.manifest.targets.every((item: any) => !item.modelRequests));
         assert.equal(fs.existsSync(path.join(root, 'must_not_exist')), false);
@@ -128,7 +128,7 @@ class Cases(unittest.TestCase):
         const clockOutput = path.join(clockRun.directory, clockTarget.reportDirectory);
         const knowledge = JSON.parse(fs.readFileSync(path.join(clockOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(clockTarget.terminalStatus, 'passed', JSON.stringify({ status: knowledge.terminalStatus,
-            failure: knowledge.lastFailure, gaps: knowledge.qualityGaps }));
+            failure: knowledge.lastFailure, diagnostic: knowledge.diagnostic, gaps: knowledge.qualityGaps }));
         assert.equal(clockRun.manifest.allTargetsPassed, true);
         assert.equal(knowledge.mutationScore, 100);
         assert.equal(knowledge.reviewStatus, 'completed');

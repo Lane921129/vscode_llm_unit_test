@@ -107,6 +107,3 @@ export function resolveTier1GenerationMode(
         ? 'llm-evidence-bound'
         : 'deterministic-fallback';
 }
-
-/** @deprecated Use canUseTierOneLlmGeneration for new callers. */
-export const canUseTierOneLlmFallback = canUseTierOneLlmGeneration;

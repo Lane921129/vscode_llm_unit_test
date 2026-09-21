@@ -13,7 +13,8 @@ import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/mode
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, retryTransientProviderRequest } from '../llm/connectionTimeout';
-import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { configuredPythonForResource } from '../environment/pythonEnvironmentController';
+import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -88,6 +89,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const savedProjPath = this.lastFolder('project', config.get<string>('projectPath', ''));
                     const savedPath = this.lastFolder('output', config.get<string>('outputPath', ''));
                     const savedBatchPath = this.lastFolder('batch');
+                    this.webview?.postMessage({ command: 'pythonEnvironmentSelection',
+                        python: configuredPythonForResource(savedProjPath, savedProjPath) });
 
                     // Restore the explicit batch choice before the Webview's
                     // project-path fallback can fill the batch field.
@@ -220,8 +223,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'getFunctions': {
+                    this.webview?.postMessage({ command: 'pythonEnvironmentSelection',
+                        python: configuredPythonForResource(message.filePath, this.lastFolder('project')) });
                     const funcs = await this.findPythonFunctions(message.filePath);
                     this.webview?.postMessage({ command: 'setFunctions', funcs });
+                    break;
+                }
+
+                case 'preparePythonEnvironment': {
+                    await vscode.commands.executeCommand('llm-unit-test.preparePythonEnvironment', {
+                        filePath: typeof message.filePath === 'string' ? message.filePath : undefined,
+                        projectRoot: typeof message.projectRoot === 'string' ? message.projectRoot : undefined
+                    });
                     break;
                 }
 
@@ -318,7 +331,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'testConnection': {
-                    vscode.window.withProgress({
+                    const releasePython = pythonEnvironmentActivity.acquire('use');
+                    if (!releasePython) {
+                        vscode.window.showInformationMessage('Python 環境準備中，請等待完成後再測試模型連線。');
+                        break;
+                    }
+                    try { await vscode.window.withProgress({
                         location: vscode.ProgressLocation.Notification,
                         title: "正在測試 API 連線...",
                         cancellable: false
@@ -331,9 +349,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     init,
                                     timeoutMs
                                 );
-                            const configuredPython = vscode.workspace.getConfiguration('llmUnitTest').get<string>('pythonPath', '');
-                            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-                            const pythonExecutable = resolvePythonExecutable(configuredPython, workspaceRoot);
+                            const projectRoot = message.projectRoot || this.lastFolder('project');
+                            const pythonExecutable = configuredPythonForResource(message.filePath || projectRoot, projectRoot);
                             const isolatedProbeExecutor = (code: string) => runIsolatedProbe(
                                 code, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, pythonExecutable
                             );
@@ -599,7 +616,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             vscode.window.showErrorMessage(`❌ 連線失敗: ${error.message}`);
                             this.webview?.postMessage({ command: 'appendLog', text: `[錯誤] 連線測試失敗: ${error.message}` });
                         }
-                    });
+                    }); } finally { releasePython(); }
                     break;
                 }
 
@@ -672,10 +689,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {
-        const configuredPython = vscode.workspace.getConfiguration('llmUnitTest').get<string>('pythonPath', '');
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const infos = await extractFunctionsWithAst(filePath, resolvePythonExecutable(configuredPython, workspaceRoot));
-        return infos.map(f => f.fullName);
+        const releasePython = pythonEnvironmentActivity.acquire('use');
+        if (!releasePython) { return []; }
+        try {
+            const infos = await extractFunctionsWithAst(filePath, configuredPythonForResource(filePath, this.lastFolder('project')));
+            return infos.map(f => f.fullName);
+        } finally { releasePython(); }
     }
 
     private async fetchLocalModels(): Promise<string[]> {

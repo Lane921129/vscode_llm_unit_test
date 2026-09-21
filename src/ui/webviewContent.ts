@@ -286,6 +286,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             
             <label style="margin-top:8px;">${t('ui.function')}</label>
             <select id="func-select"><option value="">-- All --</option></select>
+
+            <button id="btn-prepare-env">${t('ui.prepareEnvironment')}</button>
+            <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
+            <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
             
             <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
                 <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
@@ -367,6 +371,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let lastTestedProjectPath = '';
         const resultsMap = new Map();
         let currentViewMode = 'flat';
+        let environmentBusy = false;
 
         const i18n = {
             noCoverageData: "${t('ui.noCoverageData')}",
@@ -620,19 +625,36 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     const ckeys = Object.keys(msg.keys);
                     document.getElementById('custom-api-select').innerHTML = '<option value="">-- Select --</option>' + ckeys.map(k => '<option value="' + k + '">' + k + '</option>').join('');
                     break;
+                case 'pythonEnvironmentSelection':
+                    document.getElementById('python-environment-status').value = '${t('ui.currentPython')}' + msg.python;
+                    break;
+                case 'environmentPreparation':
+                    environmentBusy = !!msg.busy;
+                    document.getElementById('python-environment-status').value = msg.text;
+                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                        document.getElementById(id).disabled = environmentBusy;
+                    }
+                    break;
+                case 'environmentPreparationFinished':
+                    environmentBusy = false;
+                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                        document.getElementById(id).disabled = false;
+                    }
+                    break;
                 case 'analysisFinished':
                     const runBtn = document.getElementById('btn-run');
                     const batchRunBtn = document.getElementById('btn-batch-run');
                     if (runBtn) {
-                        runBtn.disabled = false;
+                        runBtn.disabled = environmentBusy;
                         runBtn.innerText = i18n.runBtn;
                     }
                     if (batchRunBtn) {
-                        batchRunBtn.disabled = false;
+                        batchRunBtn.disabled = environmentBusy;
                         batchRunBtn.innerText = i18n.batchRunBtn;
                     }
                     const abortBtn = document.getElementById('btn-abort');
                     if (abortBtn) abortBtn.style.display = 'none';
+                    document.getElementById('btn-prepare-env').disabled = environmentBusy;
                     break;
             }
         });
@@ -721,22 +743,30 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return { envType, modelName, cloudKeyName: envType === 'cloud' ? document.getElementById('api-key-select').value : undefined };
         };
 
+        document.getElementById('btn-prepare-env').onclick = () => {
+            vscode.postMessage({ command: 'preparePythonEnvironment',
+                filePath: document.getElementById('file-select').value,
+                projectRoot: document.getElementById('project-path').value });
+        };
+
+        const environmentSelection = () => ({ filePath: document.getElementById('file-select').value,
+            projectRoot: document.getElementById('project-path').value });
         document.getElementById('btn-test-cloud').onclick = () => {
             const cloudKeyName = document.getElementById('api-key-select').value;
             if(!cloudKeyName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Cloud setting.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'cloud', cloudKeyName });
+            vscode.postMessage({ command: 'testConnection', envType: 'cloud', cloudKeyName, ...environmentSelection() });
         };
         document.getElementById('btn-test-local').onclick = () => {
             const modelName = document.getElementById('model-select').value;
             if(!modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Local model.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName });
+            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName, ...environmentSelection() });
         };
         document.getElementById('btn-test-custom').onclick = () => {
             const customUrl = document.getElementById('custom-url').value;
             const modelName = document.getElementById('custom-model').value;
             const customKey = document.getElementById('custom-key').value;
             if(!customUrl || !modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please provide Custom API URL and Model Name.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'custom', customUrl, modelName, customKey });
+            vscode.postMessage({ command: 'testConnection', envType: 'custom', customUrl, modelName, customKey, ...environmentSelection() });
         };
 
         function getCommonExecutionOptions() {
@@ -753,6 +783,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
 
         function setRunningState(isBatch) {
+            document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-run').disabled = true;
             document.getElementById('btn-batch-run').disabled = true;
             if (isBatch) {

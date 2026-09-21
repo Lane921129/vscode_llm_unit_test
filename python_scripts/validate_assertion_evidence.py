@@ -13,10 +13,11 @@ def literal(node):
 
 
 def signature(args, keywords):
-    # Preserve types and literal spelling semantics (including whitespace in strings).
+    # Preserve types, literal spelling and keyword insertion order. A target
+    # accepting **kwargs can observe order, so sorting would merge distinct calls.
     for node in list(args) + [value for _, value in keywords]:
         literal(node)
-    return tuple(ast.dump(node) for node in args), tuple(sorted((key, ast.dump(value)) for key, value in keywords))
+    return tuple(ast.dump(node) for node in args), tuple((key, ast.dump(value)) for key, value in keywords)
 
 
 def check(payload):

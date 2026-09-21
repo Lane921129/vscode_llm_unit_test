@@ -7,7 +7,8 @@ import os
 import sys
 import types
 from contextlib import redirect_stdout, redirect_stderr
-from dynamic_tracer import block_trace_side_effects, import_diagnostic, package_module_context
+from dynamic_tracer import TraceSafetyError, import_diagnostic, package_module_context, safe_type_name, exception_message
+from runtime_policy import POLICY_VERSION, guarded_runtime
 
 
 def resolve_loaded_dependencies(module, dependencies, source_root):
@@ -56,19 +57,19 @@ def preflight(payload):
     sys.path[:0] = roots
     sys.dont_write_bytecode = True
     try:
-        with block_trace_side_effects(), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), guarded_runtime(error_type=TraceSafetyError):
             module = importlib.import_module(module_name)
         actual = getattr(module, '__file__', None)
         if not actual or os.path.normcase(os.path.realpath(actual)) != os.path.normcase(target):
             return {'ok': False, 'category': 'environment', 'stage': 'module-resolution',
                     'reason': f'Canonical import {module_name} does not resolve to the selected source file.'}
-        return {'ok': True, 'module': module_name, 'importPaths': roots,
+        return {'ok': True, 'module': module_name, 'importPaths': roots, 'policy_version': POLICY_VERSION,
                 'dependencies': resolve_loaded_dependencies(module, payload.get('dependencies', []),
                                                             payload.get('sourceRoot') or package_root)}
     except (Exception, SystemExit) as error:
         diagnostic = import_diagnostic(error, payload.get('sourceRoot') or package_root)
         return {'ok': False, 'category': 'environment', 'stage': 'module-import',
-                'reason': f'{type(error).__name__}: {error}', 'diagnostic': diagnostic}
+                'reason': f'{safe_type_name(error)}: {exception_message(error)}', 'diagnostic': diagnostic, 'policy_version': POLICY_VERSION}
 
 
 if __name__ == '__main__':

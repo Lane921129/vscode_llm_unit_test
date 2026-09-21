@@ -273,6 +273,19 @@ def find_call_sites(func_name, project_root, target_path=None):
 
     for dirpath, dirnames, filenames in os.walk(project_root):
         dirnames[:] = [d for d in dirnames if d not in ignored_dirs]
+        # Runner artifacts are observations, never new application call-site facts.
+        # Identify our versioned manifest rather than guessing output directory names.
+        if 'run_manifest.json' in filenames:
+            try:
+                with open(os.path.join(dirpath, 'run_manifest.json'), encoding='utf-8') as manifest_file:
+                    manifest = json.loads(manifest_file.read(65536))
+                if (type(manifest) is dict and manifest.get('schemaVersion') == 2
+                        and str(manifest.get('promptVersion', '')).startswith('role-contracts-')
+                        and 'runId' in manifest and 'sourceHash' in manifest):
+                    dirnames[:] = []
+                    continue
+            except (OSError, ValueError):
+                pass
         for filename in filenames:
             if not filename.endswith('.py'):
                 continue

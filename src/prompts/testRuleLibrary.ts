@@ -429,9 +429,3 @@ export function formatTestRuleCardsForPrompt(cards: TestGenerationRuleCard[]): s
     }
     return out;
 }
-
-export function getTestRuleLibrarySummaryForPrompt(): string {
-    return TEST_RULE_LIBRARY.map(rule =>
-        `  - "${rule.id}": ${rule.trigger_hint}`
-    ).join('\n');
-}

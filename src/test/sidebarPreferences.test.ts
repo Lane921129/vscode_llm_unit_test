@@ -107,6 +107,18 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     receive({ data: { command: 'setBatchPath', path: '/batch' } });
     receive({ data: { command: 'setProjectPath', path: '/project' } });
     assert.equal(elements.get('batch-path').value, '/batch');
+    elements.get('btn-prepare-env').onclick();
+    assert.equal(messages.at(-1).command, 'preparePythonEnvironment');
+    assert.equal(messages.at(-1).filePath, '/project/target.py');
+    assert.equal(messages.at(-1).projectRoot, '/project');
+    receive({ data: { command: 'environmentPreparation', busy: true, text: 'Checking environment' } });
+    assert.equal(elements.get('btn-run').disabled, true);
+    assert.equal(elements.get('btn-prepare-env').disabled, true);
+    assert.equal(elements.get('python-environment-status').value, 'Checking environment');
+    receive({ data: { command: 'analysisFinished' } });
+    assert.equal(elements.get('btn-run').disabled, true);
+    receive({ data: { command: 'environmentPreparationFinished' } });
+    assert.equal(elements.get('btn-run').disabled, false);
     // Keep the second run's project identical so this test needs no dashboard DOM.
     elements.get('batch-path').value = '/project';
     for (const empty of [false, true]) {

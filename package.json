@@ -54,6 +54,10 @@
       {
         "command": "llm-unit-test.abortTest",
         "title": "中止突變測試"
+      },
+      {
+        "command": "llm-unit-test.preparePythonEnvironment",
+        "title": "檢查並補齊 Python 測試環境"
       }
     ],
     "configuration": {
@@ -103,7 +107,26 @@
         "llmUnitTest.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Optional Python interpreter. When empty, the workspace .venv interpreter is used if available; otherwise PATH python is used for AST, trace, coverage, and mutation commands"
+          "description": "測試使用的 Python。可用「檢查並補齊 Python 測試環境」尋找相依完整的既有環境並保存完整路徑；AST、模型資格、Trace、coverage 與突變測試共用此設定。留空時沿用專案／工作區 .venv，否則使用 PATH python。"
+        },
+        "llmUnitTest.packageMappings": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+          "description": "沒有 requirements 時，明確指定 import 名稱對應的 pip 套件名稱，例如 PIL → Pillow。未宣告的模組會停止並提示補充映射，不會猜測或自動安裝同名套件。"
+        },
+        "llmUnitTest.targetBudget": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "timeoutMs": { "type": "integer", "minimum": 1, "default": 600000 },
+            "logicalRequests": { "type": "integer", "minimum": 0, "default": 20 },
+            "transportAttempts": { "type": "integer", "minimum": 0, "default": 40 },
+            "estimatedInputTokens": { "type": "integer", "minimum": 0, "default": 200000 },
+            "candidateAttempts": { "type": "integer", "minimum": 0, "default": 20 }
+          },
+          "description": "每個目標共用的總預算；角色、策略切換與重試不會重設。輸入 tokens 是每次傳送的估算，不是供應商實際計費；耗盡時保留已驗證成果並標示未完成。"
         }
       }
     }

@@ -2,6 +2,7 @@
 export type ExecutionFailureCategory =
     | 'cancelled'
     | 'timeout'
+    | 'budget'
     | 'model-api'
     | 'model-format'
     | 'ast-trace'
@@ -33,7 +34,8 @@ export function classifyExecutionFailure(message: string): ExecutionFailureCateg
     if (normalized.includes('使用者強制中止') || normalized.includes('cancelled')) {
         return 'cancelled';
     }
-    if (/超時|逾時|\btimeout\b|timed out/.test(normalized)) {
+    if (normalized.includes('目標分析預算已耗盡')) { return 'budget'; }
+    if (/超時|逾時|目標分析總時限已耗盡|\btimeout\b|timed out/.test(normalized)) {
         return 'timeout';
     }
     if (/this operation was aborted|^aborterror\b/m.test(normalized)) { return 'unknown'; }

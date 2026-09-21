@@ -11,6 +11,9 @@ import {
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
 import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
+import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
+import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget } from './pipeline/targetBudget';
+import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObservations } from './pipeline/behaviorObservations';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { BatchJournal } from './pipeline/batchJournal';
@@ -42,13 +45,17 @@ import { canUseDeterministicTierOne, canUseModelAuthoredRepair, canUseTierOneLlm
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
-import { assessTargetCoverage } from './mutation/targetCoverage';
+import { assessTargetCoverageEvidence, TargetCoverageAssessment } from './mutation/targetCoverage';
 import { formatReportProvenance, ReportProvenance } from './utils/reportProvenance';
 import { buildStubSmokeAssertion } from './tier/stubSmokeAssertion';
 import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stubClassifier';
 import { buildStubTestPlan } from './tier/stubTestPlan';
-import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable, resolvePythonExecutable } from './utils/pythonTestEnvironment';
+import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
+import { configuredPythonForResource, PythonEnvironmentController } from './environment/pythonEnvironmentController';
+import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
 import { buildExternalMutationExecution, externalIsolationVerified } from './mutation/mutationExecution';
+import { MutationRun, MutationContext, parseBuiltinMutationRun, parseExternalMutationRun,
+    mutationScore as measuredMutationScore, mutationMeetsThreshold } from './mutation/mutationResult';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
@@ -60,6 +67,8 @@ import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/sup
 import { traceSubsetForCaller } from './tier/callerTracePartition';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { runSpawn } from './utils/processRunner';
 import { ExecutionManager, currentExecution, runInExecution, isExecutionCancelled, throwIfExecutionCancelled } from './pipeline/executionContext';
 
@@ -190,8 +199,15 @@ async function runAnalysisSession<T extends object>(
     sidebar: MutationViewProvider,
     operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView) => Promise<void>
 ): Promise<void> {
+    const releasePython = pythonEnvironmentActivity.acquire('use');
+    if (!releasePython) {
+        await vscode.window.showInformationMessage('Python 環境準備中，請等待完成後再開始測試。');
+        void sidebar.webview?.postMessage({ command: 'analysisFinished' });
+        return;
+    }
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles });
     if (!execution) {
+        releasePython();
         await vscode.window.showInformationMessage('已有分析執行中，請等待完成或先中止。');
         return;
     }
@@ -207,6 +223,7 @@ async function runAnalysisSession<T extends object>(
         catch (error: any) {
             if (!execution.cancelled) { log(`[錯誤] 測試執行發生異常: ${error?.message ?? error}`); }
         } finally {
+            releasePython();
             if (analysisRuns.finish(execution)) {
                 void sidebar.webview?.postMessage({ command: 'analysisFinished' });
             }
@@ -261,12 +278,6 @@ interface AnalysisParams {
     /** Internal batch inventory; never serialized with provider credentials. */
     batchJournal?: BatchJournal;
     batchTargetId?: number;
-}
-
-function configuredPythonExecutable(): string {
-    const configured = vscode.workspace?.getConfiguration?.('llmUnitTest')?.get<string>('pythonPath', '');
-    const workspaceRoot = vscode.workspace?.workspaceFolders?.[0]?.uri.fsPath;
-    return resolvePythonExecutable(configured, workspaceRoot);
 }
 
 interface CallerContext {
@@ -346,6 +357,11 @@ export function activate(context: vscode.ExtensionContext) {
         context.globalState.get<unknown>(MODEL_PROFILE_STORE_KEY)
     );
     const sidebarProvider = new MutationViewProvider(context.secrets, context.globalState);
+    const environmentController = new PythonEnvironmentController(context.globalState,
+        message => { void sidebarProvider.webview?.postMessage(message); });
+    context.subscriptions.push(environmentController, vscode.commands.registerCommand(
+        'llm-unit-test.preparePythonEnvironment', (params?: { filePath?: string; projectRoot?: string }) =>
+            environmentController.prepare(params?.filePath, params?.projectRoot)));
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(MutationViewProvider.viewType, sidebarProvider)
     );
@@ -357,7 +373,7 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            const paramsWithPython = { ...params, pythonExecutable: configuredPythonExecutable() };
+            const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.filePath) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 if (runParams.funcName) {
                     await executeSingleFileAnalysis(runParams, log, view);
@@ -390,7 +406,7 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            const paramsWithPython = { ...params, pythonExecutable: configuredPythonExecutable() };
+            const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.batchPath, params.batchPath) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 const projectName = path.basename(runParams.batchPath);
                 const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,
@@ -544,7 +560,6 @@ async function findCallerContexts(
     }
 }
 
-type ObservationExample = BehaviorObservation;
 type BehaviorProbeResult = BehaviorObservations;
 
 /**
@@ -556,7 +571,8 @@ async function runBehaviorProbe(
     funcName: string,
     callerArgs?: CallerContext[],
     pythonExecutable: string = 'python',
-    supplementalInputs: SupplementalProbeInput[] = []
+    supplementalInputs: SupplementalProbeInput[] = [],
+    progressDirectory?: string
 ): Promise<BehaviorProbeResult | null> {
     const pythonScript = pythonToolPath('trace');
     const baseArgs = [pythonScript, filePath, funcName];
@@ -565,6 +581,7 @@ async function runBehaviorProbe(
         kwargs: Record<string, unknown>;
         constructor_args?: unknown[] | null;
         constructor_kwargs?: Record<string, unknown> | null;
+        source?: { kind: 'caller_literals'; file: string; caller: string };
     }> = [];
     if (callerArgs && callerArgs.length > 0) {
         literalInputs = callerArgs
@@ -573,29 +590,41 @@ async function runBehaviorProbe(
                 args: ctx.trace_args,
                 kwargs: ctx.trace_kwargs || {},
                 constructor_args: ctx.trace_constructor_args,
-                constructor_kwargs: ctx.trace_constructor_kwargs || {}
+                constructor_kwargs: ctx.trace_constructor_kwargs || {},
+                source: { kind: 'caller_literals', file: ctx.caller_file, caller: ctx.caller_func }
             }));
     }
-    const suppliedInputs = [...literalInputs, ...supplementalInputs].filter(input =>
+    const suppliedInputs = [...literalInputs, ...supplementalInputs.map(input => ({ ...input, source: { kind: 'semantic_guided' as const } }))].filter(input =>
         Array.isArray(input.args) && input.kwargs !== null && typeof input.kwargs === 'object'
     );
     const uniqueInputs = suppliedInputs.filter((input, index) =>
         suppliedInputs.findIndex(candidate => JSON.stringify(candidate) === JSON.stringify(input)) === index
     );
     try {
-        const runProbe = async (inputs?: typeof literalInputs): Promise<BehaviorProbeResult> => {
-            const args = [...baseArgs];
-            if (inputs && inputs.length > 0) {args.push(JSON.stringify(inputs));}
-            const { stdout } = await runSpawn(pythonExecutable, args, {
-                env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-                timeout: 15000
-            });
-            return JSON.parse(stdout.trim()) as BehaviorProbeResult;
+        const runProbe = async (inputs?: typeof uniqueInputs): Promise<BehaviorProbeResult> => {
+            const progressPath = path.join(progressDirectory || os.tmpdir(), `trace_${randomUUID()}.jsonl`);
+            const args = [...baseArgs, JSON.stringify(inputs?.length ? inputs : null), JSON.stringify({
+                total_timeout_seconds: 12, case_timeout_seconds: 2, progress_path: progressPath
+            })];
+            try {
+                const run = await runSpawn(pythonExecutable, args, {
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 20000
+                });
+                if (run.code !== 0) { throw new Error('Trace worker process failed'); }
+                return parseBehaviorObservations(run.stdout.trim(), funcName);
+            } catch (error) {
+                const recovered = fs.existsSync(progressPath) ? recoverBehaviorProgress(fs.readFileSync(progressPath, 'utf8'),
+                    funcName, error instanceof Error ? error.message : 'Trace interrupted') : undefined;
+                if (recovered) { return recovered; }
+                throw error;
+            } finally {
+                if (!progressDirectory && fs.existsSync(progressPath)) { fs.unlinkSync(progressPath); }
+            }
         };
         const initial = await runProbe(uniqueInputs);
         if (shouldRetryTraceWithoutCallerInputs(initial, uniqueInputs.length)) {
             const retry = await runProbe();
-            return { ...retry, input_source: 'source_guided_retry' };
+            return { ...mergeBehaviorObservations(initial, retry), input_source: 'source_guided_retry' };
         }
         return {
             ...initial,
@@ -614,23 +643,7 @@ function mergeBehaviorProbeResults(
     initial: BehaviorProbeResult | undefined,
     additional: BehaviorProbeResult
 ): BehaviorProbeResult {
-    if (!initial || initial.load_error) {return additional;}
-    if (additional.load_error) {return initial;}
-    const mergeItems = (left: ObservationExample[], right: ObservationExample[]) => {
-        const seen = new Set<string>();
-        return [...left, ...right].filter(item => {
-            const key = JSON.stringify(item);
-            if (seen.has(key)) {return false;}
-            seen.add(key);
-            return true;
-        });
-    };
-    return {
-        ...additional,
-        examples: mergeItems(initial.examples, additional.examples),
-        errors: mergeItems(initial.errors, additional.errors),
-        input_source: 'semantic_guided'
-    };
+    return mergeBehaviorObservations(initial, additional);
 }
 
 // 所有角色共用同一條請求佇列；即使呼叫端誤觸並行，小模型仍只處理一個提示詞。
@@ -725,10 +738,13 @@ async function requestLlmApiUnlocked(
     }, remainingTimeoutMs);
     try {
         const send = (request?: GoogleGenerateContentRequest) => retryTransientProviderRequest(
-            () => fetch(request?.url || apiUrl, {
+            () => {
+                currentTargetBudget()?.consumeTransportAttempt(estimateTokens(contractedSystemPrompt + '\n' + userPrompt));
+                return fetch(request?.url || apiUrl, {
                 method: 'POST', headers: request?.headers || headers,
                 body: JSON.stringify(request?.body || bodyData), signal: controller.signal
-            }),
+                });
+            },
             {
                 maxAttempts: GENERATION_RETRY_MAX_ATTEMPTS,
                 isCancelled: () => controller.signal.aborted
@@ -824,18 +840,6 @@ function sanitizeLlmResponse(rawCode: string): string {
     if (emojiLoopMatch) { return ''; }
 
     return cleanCodeBlock(extractPythonTestCode(cleanCode));
-}
-
-interface BasicMutationResult {
-    total: number;
-    killed: number;
-    survived: number;
-    errors: number;
-    mutants: Array<{ line: number; column: number; from: string; to: string; status: string }>;
-    scope_found?: boolean;
-    scope?: string;
-    baseline_passed?: boolean;
-    baseline_output?: string;
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
@@ -939,17 +943,12 @@ async function rescueToUnittest(rawCode: string, srcFilePath: string, funcName: 
     return (JSON.parse(result.stdout) as { code: string }).code;
 }
 
-interface RetainedCoverage {
-    coverageText: string;
-    missingLines: string;
-    selectedTarget?: { qualifiedName: string; executableLines: number[]; missingLines: number[]; branchesCovered: boolean };
-}
+type RetainedCoverage = CandidateCoverage;
 
-function extractCoverage(output: string, targetFile: string, lines: number[], qualifiedName: string): RetainedCoverage {
-    const assessment = assessTargetCoverage(output, targetFile, lines);
-    return { coverageText: assessment.coverageText, missingLines: assessment.missingLines,
+function extractCoverage(assessment: TargetCoverageAssessment, qualifiedName: string): RetainedCoverage {
+    return { assessment, coverageText: assessment.coverageText, missingLines: assessment.missingLines,
         ...(assessment.missingTargetLines && assessment.targetBranchesCovered !== undefined ? {
-            selectedTarget: { qualifiedName, executableLines: [...new Set(lines)].sort((a, b) => a - b),
+            selectedTarget: { qualifiedName, executableLines: assessment.executableTargetLines || [],
                 missingLines: assessment.missingTargetLines, branchesCovered: assessment.targetBranchesCovered }
         } : {}) };
 }
@@ -1045,7 +1044,8 @@ async function resolveAstAndDependencies(
     projectRoot: string,
     pythonExecutable: string,
     log: (text: string) => void,
-    beforeBehavior: (context: AstContext) => Promise<PreflightResult>
+    beforeBehavior: (context: AstContext) => Promise<PreflightResult>,
+    progressDirectory?: string
 ): Promise<AstContext | null> {
     log(`[AST] 正在解析函式 \`${funcName}\` 的結構與依賴...`);
     const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
@@ -1079,7 +1079,7 @@ async function resolveAstAndDependencies(
                         depAst.callerContexts = callers;
                         log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
                     }
-                    const dependencyTrace = await runBehaviorProbe(depFilePath, dep.name, callers, pythonExecutable);
+                    const dependencyTrace = await runBehaviorProbe(depFilePath, dep.name, callers, pythonExecutable, [], progressDirectory);
                     if (dependencyTrace && !dependencyTrace.load_error) {
                         depAst.traceResult = dependencyTrace;
                         log(`[行為探測] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
@@ -1102,7 +1102,7 @@ async function resolveAstAndDependencies(
     }
 
     log(`[行為探測] 正在受控執行函式以取得輸入輸出觀測...`);
-    const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable);
+    const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable, [], progressDirectory);
     if (traceResult) { astContext.traceResult = traceResult; }
     if (traceResult && !traceResult.load_error) {
         astContext.traceResult = traceResult;
@@ -1120,12 +1120,21 @@ async function resolveAstAndDependencies(
 }
 
 async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
+    const configured = vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('targetBudget', {});
+    const limits = configured && typeof configured === 'object' && !Array.isArray(configured)
+        ? configured as Partial<TargetBudgetLimits> : {};
+    return runWithTargetBudget(new TargetBudget(limits), () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider));
+}
+
+async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
     params = { ...params, ...normalizeExecutionSettings(params) };
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
         ?? { current: currentModelProfile, stored: storedModelProfiles };
     let currentLoop = 1;
     let mutationScore = 0;
+    let mutationComplete = false;
+    let bestMutation: MutationRun | undefined;
     // Rollback 保底：記錄歷史最高分的測試檔，防止後輪 LLM 改壞舊測試
     let bestScore = -1;
     let bestCode = '';
@@ -1274,6 +1283,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     }
 
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName);
+    const checkpoints = new CandidateCheckpointStore(sessionDir, journal.sourceHash, params.funcName || 'file');
     const recordRole = (stage: string, status: string, detail: unknown) => {
         journal.record(currentLoop, stage, status, detail);
         log(`[${stage}] ${status}`);
@@ -1298,9 +1308,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 '完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。', metrics);
         }
         const started = Date.now();
+        currentTargetBudget()?.consumeModelRequest();
         recordRole('model-request', 'requested', metrics);
         try {
-            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow }, system, prompt, requestLog, format, sharedDeadlineAt);
+            const deadline = Math.min(sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(requestParams.timeoutSeconds),
+                currentTargetBudget()?.deadlineAt ?? Infinity);
+            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow }, system, prompt, requestLog, format, deadline);
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
             return response;
         } catch (error) {
@@ -1336,7 +1349,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             projectRoot,
             pythonExecutable,
             log,
-            checkEnvironment
+            checkEnvironment,
+            sessionDir
         );
         if (astContext && !astContext.error) {
             targetFuncName = astContext.name || targetFuncName;
@@ -1460,9 +1474,21 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     if (coverageProbe.code !== 0) {
         throw new AnalysisStageError('environment', 'coverage-preflight', coverageRequiredMessage(pythonExecutable));
     }
-    const evidenceStillCurrent = () => evidenceHash(fs.readFileSync(params.filePath, 'utf8')) === journal.sourceHash
-        && (astContext?.sourceVersions || []).every(version => fs.existsSync(version.file)
-            && evidenceHash(fs.readFileSync(version.file, 'utf8')) === version.hash);
+    const evidenceStillCurrent = () => {
+        try {
+            return evidenceHash(fs.readFileSync(params.filePath, 'utf8')) === journal.sourceHash
+                && (astContext?.sourceVersions || []).every(version => fs.existsSync(version.file)
+                    && evidenceHash(fs.readFileSync(version.file, 'utf8')) === version.hash);
+        } catch { return false; }
+    };
+    const invalidateSourceEvidence = () => {
+        const retained = checkpoints.quality || checkpoints.executable;
+        journal.knowledge({ terminalStatus: 'source-changed', evidenceValid: false,
+            mutationScore: null, mutationStatus: 'invalidated', coverage: null, retainedScore: null,
+            historicalBaseline: retained ? { codeHash: retained.codeHash,
+                sourceHash: retained.sourceHash, artifactOnly: true } : null });
+        finalReportMarkdown += '\n> 來源或相依版本已改變；保留檔案僅供歷史查看，舊覆蓋與突變結果不適用於目前來源。\n';
+    };
     const targetSourceHash = evidenceHash(astContext?.code || initialSource);
     let semanticPlan: SemanticAnalysis | undefined;
     let semanticPlanContract: SemanticPlanV2 | undefined;
@@ -1580,7 +1606,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 params.funcName,
                 astContext.callerContexts,
                 pythonExecutable,
-                supplementalInputs
+                supplementalInputs,
+                sessionDir
             );
             if (supplementalObservations) {
                 supplementalTargetObservations = supplementalObservations;
@@ -1653,7 +1680,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         ? `[測試生成規則] 分析完成後選取：${deterministicRuleIds.join(', ') || '無'}。`
         : `[測試生成規則] 模型尚未驗證；使用 AST 確定性規則：${deterministicRuleIds.join(', ') || '無'}。`);
 
-    while (currentLoop <= params.maxLoops && (mutationScore < 100 || qualityGaps.length > 0)) {
+    while (currentLoop <= params.maxLoops && (!mutationComplete || qualityGaps.length > 0)) {
 
         if (isExecutionCancelled()) {
             log(`[系統] ⚠️ 測試已由使用者強制中止。`);
@@ -1669,12 +1696,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             targetCode = fs.readFileSync(params.filePath, 'utf-8');
             if (!evidenceStillCurrent()) {
                 recordRole('source', 'changed', { reason: '來源版本已改變；停止沿用舊行為觀測與品質證據。' });
-                journal.knowledge({ terminalStatus: 'source-changed', evidenceValid: false });
+                invalidateSourceEvidence();
+                sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName,
+                    file: displayFile, func: params.funcName || '', score: 'N/A', coverage: null,
+                    reason: '來源已變更；舊成果僅供歷史查看，需重新分析' });
                 break;
             }
         } catch {
             log('[錯誤] 讀取檔案失敗');
-            return;
+            invalidateSourceEvidence();
+            sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName,
+                file: displayFile, func: params.funcName || '', score: 'N/A', coverage: null,
+                reason: '無法核對來源；舊成果僅供歷史查看，需重新分析' });
+            break;
         }
 
         // 測試結果全部放入 sessionDir
@@ -1719,6 +1753,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
         let loopCoverage: RetainedCoverage | null = null;
+        let loopAssessment: TargetCoverageAssessment = { available: false, coverageText: 'N/A', missingLines: '未知' };
         let loopExecution = '';
         qualityGaps = [];
         try {
@@ -2122,10 +2157,29 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 return inventories.get(hash)!;
             };
             let baselineScenarios = bestScenarios.length ? bestScenarios : bestCode ? await inventory(bestCode) : [];
+            const checkpointExecutable = (code: string, execution: string, gaps: string[],
+                status: ReviewStatus, warnings: string[], assessment: TargetCoverageAssessment) => {
+                if (!evidenceStillCurrent()) {
+                    throw new AnalysisStageError('validation', 'source-changed', '來源或相依版本改變，停止保存舊執行證據。');
+                }
+                const snapshot = checkpoints.saveExecutable({ code, execution,
+                    coverage: extractCoverage(assessment, params.funcName || targetFuncName),
+                    scenarios: acceptedScenarios, qualityGaps: gaps, measuredQualityGaps: gaps,
+                    reviewStatus: status, reviewWarnings: warnings, tier: currentTier,
+                    dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })) || [] });
+                journal.knowledge({ executableBaseline: { path: 'executable_baseline.json', testFile: snapshot.testFile,
+                    codeHash: snapshot.codeHash, reviewStatus: snapshot.reviewStatus, mutationStatus: snapshot.mutationStatus } });
+                recordRole('executable-baseline', 'checkpointed', { codeHash: snapshot.codeHash,
+                    testFile: snapshot.testFile, reviewStatus: snapshot.reviewStatus, mutationScore: null });
+                fs.writeFileSync(existingReport, finalReportMarkdown
+                    + `\n### 已保存可執行測試\n\n- 測試：${snapshot.testFile}\n- 審查狀態：${status}\n- 本候選突變：尚未測量\n`, 'utf8');
+            };
             const accepted = await validateTestCandidate(finalCode, {
                 reviewRequired: mayUseModelAuthoredTests,
                 checkCancelled: throwIfExecutionCancelled,
                 event: recordRole,
+                executable: (code, execution) => checkpointExecutable(code, execution.out, execution.qualityGaps,
+                    mayUseModelAuthoredTests ? 'incomplete' : 'not-required', [], execution.coverage || loopAssessment),
                 validate: async (code) => {
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
@@ -2225,11 +2279,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 execute: async (code) => {
                     throwIfExecutionCancelled();
                     if (!evidenceStillCurrent()) {
-                        throw new Error('來源版本已改變，停止使用舊證據。');
+                        throw new AnalysisStageError('validation', 'source-changed', '來源版本已改變，停止使用舊證據。');
                     }
                     fs.writeFileSync(testPath, code, 'utf8');
+                    const testRunId = randomUUID();
+                    const testHash = evidenceHash(code);
+                    const invocationFile = path.join(testDir, `invocation_${testRunId}.json`);
+                    const executionArguments = [...generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
+                        '--target-file', params.filePath, '--target-name', params.funcName || targetFuncName,
+                        '--target-evidence', invocationFile, '--target-run-id', testRunId, '--target-test-file', testPath];
                     const run = await runSpawn(pythonExecutable,
-                        generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
+                        executionArguments,
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
                     const scenarios = await inventory(code);
                     let out = normalizeScenarioOutput(`${run.stdout}${run.stderr}`.trim(), scenarios, baselineScenarios);
@@ -2243,7 +2303,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
                     out += '\n' + coverage.stdout + coverage.stderr;
                     if (coverage.code !== 0) { throw new Error('Coverage 工具執行失敗：' + out); }
-                    const assessment = assessTargetCoverage(out, params.filePath, astContext?.executable_lines || []);
+                    const nativeCoverage = await runSpawn(pythonExecutable, ['-B', pythonToolPath('coverage'),
+                        params.filePath, params.funcName || targetFuncName, '--invocation-evidence', invocationFile,
+                        '--expected-run-id', testRunId, '--expected-test-hash', testHash],
+                    { cwd: testDir, env: testExecutionEnv, timeout: 10000 });
+                    const assessment = assessTargetCoverageEvidence(nativeCoverage.stdout, params.filePath,
+                        params.funcName || targetFuncName, journal.sourceHash, { testRunId, testHash });
+                    fs.writeFileSync(path.join(testDir, `coverage_${testRunId}.json`), nativeCoverage.stdout, 'utf8');
                     const gaps: string[] = [];
                     if (!assessment.available) { gaps.push('Coverage 無法辨識目標模組；目標覆蓋狀態未知。'); }
                     if (assessment.targetFullyCovered === undefined) { gaps.push('目標行覆蓋狀態未知。'); }
@@ -2252,16 +2318,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                     if (assessment.missingTargetLines?.length) { gaps.push('目標未覆蓋行：' + assessment.missingTargetLines.join(', ')); }
                     if (assessment.missingTargetBranches?.length) { gaps.push('目標未覆蓋分支：' + assessment.missingTargetBranches.join(', ')); }
                     recordRole('coverage', 'measured', assessment);
-                    return { ok: true, out, qualityGaps: gaps };
+                    return { ok: true, out, qualityGaps: gaps, coverage: assessment };
                 }
             }, 2, bestCode ? { code: bestCode, output: bestExecution } : undefined);
             finalCode = accepted.code;
             loopExecution = accepted.execution.out;
-            loopCoverage = extractCoverage(loopExecution, params.filePath, astContext?.executable_lines || [], params.funcName || targetFuncName);
+            loopAssessment = accepted.execution.coverage || loopAssessment;
+            loopCoverage = extractCoverage(loopAssessment, params.funcName || targetFuncName);
             qualityGaps = accepted.qualityIssues;
             reviewWarnings = accepted.reviewWarnings;
             reviewStatus = accepted.reviewStatus;
             measuredQualityGaps = accepted.execution.qualityGaps;
+            checkpointExecutable(finalCode, loopExecution, measuredQualityGaps, reviewStatus, reviewWarnings, loopAssessment);
             recordRole('validation', 'accepted', {
                 codeHash: evidenceHash(finalCode), qualityGaps, reviewWarnings, reviewStatus
             });
@@ -2293,8 +2361,11 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
 
             // 動態偵測 mutation engine；無外部工具時使用安全的 AST 後備引擎。
-            let engine: 'mutatest' | 'mutmut' | 'builtin' = 'mutatest';
+            let engine: 'mutatest' | 'mutmut' | 'builtin' = params.funcName ? 'builtin' : 'mutatest';
             let pyVer = '';
+            // Native adapters currently certify module scope only. Selected functions
+            // must use the engine that can prove the exact qualified scope.
+            if (!params.funcName) {
             try {
                 // 取得 Python 版本
                 const { stdout: pyVerRaw } = await runSpawn(pythonExecutable, ['--version'], {
@@ -2338,6 +2409,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 engine = 'builtin';
                 log(`[系統] 無法取得 Python 版本或外部突變工具狀態，使用內建 AST 基本突變引擎。`);
             }
+            }
 
             log(`[${engine}] 正在建構突變測試指令...`);
             const mutationTimeoutSeconds = normalizeExecutionSettings(params).mutpyTimeout;
@@ -2345,12 +2417,20 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
             if (isExecutionCancelled()) {throw new Error("使用者強制中止");}
 
-            let builtinMutation: BasicMutationResult | null = null;
+            let mutationRun: MutationRun;
             let noMutationCandidates = false;
             let mutpyResult: string;
+            const measuredCandidate = checkpoints.executable;
+            if (!measuredCandidate || evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
+                throw new AnalysisStageError('validation', 'candidate-changed', '測試檔已改變，不能沿用先前執行結果進行突變測量。');
+            }
+            const mutationContext: MutationContext = { sourcePath: params.filePath,
+                sourceHash: journal.sourceHash, testHash: measuredCandidate.codeHash,
+                targetScope: { kind: params.funcName ? 'function' : 'module', qualifiedName: params.funcName || 'module' },
+                stageTimeoutSeconds: mutationTimeoutSeconds };
             if (engine === 'builtin') {
                 const fallbackScript = pythonToolPath('mutation');
-                const perMutationTimeout = mutationTimeoutSeconds;
+                const perMutationTimeout = Math.min(5, mutationTimeoutSeconds);
                 const selectedClassName = (astContext?.class_name as string | undefined);
                 const fallbackRun = await runSpawn(
                     pythonExecutable,
@@ -2358,37 +2438,19 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                         fallbackScript,
                         params.filePath,
                         testPath,
-                        '30',
+                        '0',
                         String(perMutationTimeout),
                         targetFuncName || '',
-                        selectedClassName || ''
+                        selectedClassName || '',
+                        String(mutationTimeoutSeconds)
                     ],
-                    { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: mutationTimeoutSeconds * 1000 }
+                    { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: (mutationTimeoutSeconds + 5) * 1000 }
                 );
                 if (fallbackRun.code !== 0) {
                     throw new Error(`內建 AST 突變引擎執行失敗：${(fallbackRun.stderr || fallbackRun.stdout).slice(0, 500)}`);
                 }
-                try {
-                    builtinMutation = JSON.parse(fallbackRun.stdout) as BasicMutationResult;
-                if (!builtinMutation || typeof builtinMutation.total !== 'number') {
-                    throw new Error('輸出格式不完整');
-                }
-                } catch (error: any) {
-                    throw new Error(`內建 AST 突變引擎輸出無法解析：${error.message || error}`);
-                }
-                if (builtinMutation.scope_found === false) {
-                    throw new Error(`找不到選定的突變範圍：${builtinMutation.scope || params.funcName || '未知函式'}`);
-                }
-                if (builtinMutation.baseline_passed === false) {
-                    throw new Error(
-                        `內建 AST 突變引擎的隔離 baseline 測試失敗，拒絕產生不可信突變分數：${(builtinMutation.baseline_output || '').slice(0, 300)}`
-                    );
-                }
-                if (builtinMutation.errors > 0) {
-                    throw new AnalysisStageError('mutation', 'mutation-execution',
-                        '突變執行發生隔離或工具錯誤；未將這些錯誤計為 killed，也不產生品質分數。');
-                }
-                mutpyResult = JSON.stringify(builtinMutation, null, 2);
+                mutationRun = parseBuiltinMutationRun(fallbackRun.stdout, mutationContext);
+                mutpyResult = JSON.stringify(mutationRun, null, 2);
             } else {
                 const targetDir = path.dirname(params.filePath);
                 const parentDir = path.dirname(targetDir);
@@ -2425,6 +2487,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 } else {
                     mutpyResult = externalRun.stdout || externalRun.stderr || '無輸出內容';
                 }
+                const nativeReport = `${reportDir}.rst`;
+                mutationRun = parseExternalMutationRun(engine,
+                    engine === 'mutatest' && fs.existsSync(nativeReport) ? fs.readFileSync(nativeReport, 'utf8') : mutpyResult,
+                    externalRun.code, { ...mutationContext, baselinePassed: true, isolationVerified: true });
+            }
+
+            fs.writeFileSync(path.join(sessionDir, `loop${currentLoop}_mutation.json`), JSON.stringify(mutationRun, null, 2), 'utf8');
+            if (!['complete', 'no-candidates'].includes(mutationRun.status)) {
+                journal.knowledge({ latestMutation: mutationRun });
+                throw new AnalysisStageError('mutation', 'mutation-execution',
+                    `突變測量尚未完整或結果無效（${mutationRun.status}）；不宣稱完整品質分數。`, mutationRun);
             }
 
             log(`[${engine}] 突變分析執行完畢！正在解析報告與分數...`);
@@ -2444,64 +2517,26 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
             
             let reasonStr = "";
-            if (engine === 'builtin' && builtinMutation) {
-                const total = builtinMutation.total;
-                const survived = builtinMutation.survived;
-                noMutationCandidates = total === 0;
-                mutationScore = noMutationCandidates ? 0 : Math.round((builtinMutation.killed / total) * 100);
-                const scopeLabel = builtinMutation.scope || '選定範圍';
-                const scopeStatus = builtinMutation.scope_found === false ? '未找到' : scopeLabel;
-                if (noMutationCandidates) {
-                    reasonStr = 'N/A - 選定範圍沒有此引擎可產生的突變點';
-                    log(`[分析] 內建 AST 突變引擎在範圍 ${scopeStatus} 找不到可產生的突變點，分數標示為 N/A，不重複執行。`);
-                    finalReportMarkdown += `- **突變分數**: N/A（內建 AST 基本引擎，範圍：${scopeStatus}，沒有可產生的突變點）\n`;
-                } else {
-                    log(`[分析] 內建 AST 突變分數：${mutationScore}% (Scope: ${scopeStatus}, Total: ${total}, Killed: ${builtinMutation.killed}, Survived: ${survived}, Errors: ${builtinMutation.errors})`);
-                    finalReportMarkdown += `- **突變分數**: ${mutationScore}%（內建 AST 基本引擎，範圍：${scopeStatus}）\n`;
-                }
-            } else if (engine === 'mutmut') {
-                const totalMatch = mutpyResult.match(/(\d+)\s+mutants/i);
-                const survivedMatch = mutpyResult.match(/(\d+)\s+survived/i);
-                if (totalMatch || mutpyResult.includes('mutmut')) {
-                    const total = totalMatch ? parseInt(totalMatch[1]) : 0;
-                    const survived = survivedMatch ? parseInt(survivedMatch[1]) : 0;
-                    mutationScore = total === 0 ? 0 : Math.round(((total - survived) / total) * 100);
-                    log(`[分析] 本輪突變分數：${mutationScore}% (Total: ${total}, Survived: ${survived})`);
-                    finalReportMarkdown += `- **突變分數**: ${mutationScore}%\n`;
-                } else {
-                    log(`[錯誤] 無法解析突變分數！可能 mutmut 執行失敗。`);
-                    reasonStr = "解析失敗";
-                    finalReportMarkdown += `- **突變分數**: 解析失敗\n`;
-                }
-            } else {
-                const totalMatch = mutpyResult.match(/TOTAL RUNS: (\d+)/);
-                const survivedMatch = mutpyResult.match(/SURVIVED: (\d+)/);
-                if (totalMatch) {
-                    const total = parseInt(totalMatch[1]);
-                    const survived = survivedMatch ? parseInt(survivedMatch[1]) : 0;
-                    mutationScore = total === 0 ? 0 : Math.round(((total - survived) / total) * 100);
-                    log(`[分析] 本輪突變分數：${mutationScore}% (Total: ${total}, Survived: ${survived})`);
-                    finalReportMarkdown += `- **突變分數**: ${mutationScore}%\n`;
-                } else {
-                    log(`[錯誤] 無法解析突變分數！可能 mutatest 執行失敗。`);
-                    reasonStr = "解析失敗";
-                    finalReportMarkdown += `- **突變分數**: 解析失敗\n`;
-                }
-            }
-
-            survivedMutants = engine === 'builtin' && builtinMutation
-                ? builtinMutation.mutants
-                    .filter(mutant => mutant.status === 'SURVIVED')
-                    .map(mutant => `- line ${mutant.line}, column ${mutant.column}: mutation from ${mutant.from} to ${mutant.to}`)
-                    .join('\n')
-                : engine === 'mutmut' ? parseMutmutSurvived(mutpyResult) : parseMutatestSurvived(mutpyResult);
+            noMutationCandidates = mutationRun.status === "no-candidates";
+            mutationScore = measuredMutationScore(mutationRun) ?? 0;
+            mutationComplete = mutationMeetsThreshold(mutationRun);
+            const counts = mutationRun.counts;
+            const scopeLabel = mutationRun.targetScope.qualifiedName;
+            finalReportMarkdown += `- **突變範圍**: ${scopeLabel}（${engine}）\n`
+                + `- **突變集合**: 已選 ${counts.selected}／可用 ${counts.available ?? "未知"}；已測 ${counts.executed}；未測 ${counts.notRun}\n`
+                + `- **突變結果**: killed ${counts.killed}、survived ${counts.survived}、timeout ${counts.timeout}、error ${counts.error}\n`
+                + `- **突變分數**: ${noMutationCandidates ? "N/A（沒有可用候選）" : mutationScore + "%"}\n`;
+            if (noMutationCandidates) { reasonStr = "N/A - 選定範圍沒有可用突變候選"; }
+            survivedMutants = mutationRun.mutants.filter(mutant => mutant.status === "SURVIVED")
+                .map(mutant => `- id ${mutant.id}, line ${mutant.line}, column ${mutant.column}, position ${mutant.position}, kind ${mutant.kind}: mutation from ${mutant.from} to ${mutant.to}`)
+                .join("\n");
             if (survivedMutants) {
                 log(`[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n${survivedMutants}`);
                 reasonStr = survivedMutants.split('\n')[0] + (survivedMutants.split('\n').length > 1 ? "..." : "");
                 finalReportMarkdown += `#### 存活的變異體\n\`\`\`text\n${survivedMutants}\n\`\`\`\n`;
             } else {
                 log(`[分析] 本輪無存活變異體，或分析結果已達最優。`);
-                if (mutationScore >= 100) {reasonStr = "通過";}
+                if (mutationComplete) {reasonStr = "通過";}
                 finalReportMarkdown += `- **存活變異體**: 無\n`;
             }
 
@@ -2509,16 +2544,28 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             const survivorIds = survivedMutants.split('\n').filter(Boolean);
             const oldSurvivorIds = bestSurvivors.split('\n').filter(Boolean);
             const reintroduced = Boolean(bestCode) && survivorIds.some(id => !oldSurvivorIds.includes(id));
-            const measuredCoverage = assessTargetCoverage(loopExecution, params.filePath, astContext?.executable_lines || []);
+            const measuredCoverage = loopAssessment;
             const coverageComparison = bestCode ? compareCoverageQuality(
-                assessTargetCoverage(bestExecution, params.filePath, astContext?.executable_lines || []), measuredCoverage) : undefined;
+                bestCoverage!.assessment!, measuredCoverage) : undefined;
             const lostQuality = coverageComparison?.regressed === true;
-            if (!evidenceStillCurrent()) { throw new Error('來源或相依版本改變，捨棄本輪品質證據。'); }
-            recordRole('mutation', 'measured', { code: fs.readFileSync(testPath, 'utf8'),
+            if (bestMutation && (mutationRun.sourceHash !== bestMutation.sourceHash
+                || mutationRun.operatorSetVersion !== bestMutation.operatorSetVersion
+                || mutationRun.scopeVersion !== bestMutation.scopeVersion
+                || mutationRun.candidateSetId !== bestMutation.candidateSetId)) {
+                throw new AnalysisStageError('mutation', 'mutation-candidate-set',
+                    '突變候選集合或範圍版本改變，不能與既有品質基線直接比較。');
+            }
+            if (!evidenceStillCurrent()) { throw new AnalysisStageError('validation', 'source-changed', '來源或相依版本改變，捨棄本輪品質證據。'); }
+            if (evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
+                throw new AnalysisStageError('validation', 'candidate-changed', '測試檔在突變期間改變；保留先前已驗證快照。');
+            }
+            recordRole('mutation', 'measured', { code: measuredCandidate.code,
                 score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps });
-            if (!noMutationCandidates && !reintroduced && !lostQuality && mutationScore >= bestScore) {
+            if (!reintroduced && !lostQuality && mutationScore >= bestScore) {
+                // Validate identities and persist the full snapshot before publishing any best* state.
+                const qualitySnapshot = checkpoints.saveQuality(measuredCandidate, mutationRun);
                 bestScore = mutationScore;
-                bestCode = fs.readFileSync(testPath, 'utf8');
+                bestCode = qualitySnapshot.code;
                 bestTestPath = testPath;
                 bestSurvivors = survivedMutants;
                 bestExecution = loopExecution;
@@ -2529,6 +2576,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 bestReviewStatus = reviewStatus;
                 bestCoverage = loopCoverage;
                 bestTier = currentTier;
+                bestMutation = mutationRun;
                 recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
                     survivors: survivorIds, qualityGaps });
             } else if (bestCode) {
@@ -2537,9 +2585,13 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 throwIfExecutionCancelled();
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore;
+                mutationRun = bestMutation!;
+                mutationComplete = mutationMeetsThreshold(mutationRun);
+                noMutationCandidates = mutationRun.status === 'no-candidates';
                 survivedMutants = bestSurvivors;
                 loopExecution = bestExecution;
                 loopCoverage = bestCoverage;
+                loopAssessment = bestCoverage!.assessment!;
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
                 reviewStatus = bestReviewStatus;
@@ -2560,6 +2612,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
                 survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
                 reviewWarnings, reviewStatus,
+                mutation: mutationRun, qualityBaseline: { path: 'quality_baseline.json', codeHash: checkpoints.quality?.codeHash },
                 nextTasks: qualityStrategyHints(survivedMutants), taskStatus: 'hypotheses-require-execution' });
             // 每次接受可執行基準後立刻保存報告，後續角色或品質步驟失敗也不會遺失成果。
             finalReportMarkdown += `\n- **Reviewer status**: ${reviewStatus}\n`;
@@ -2606,18 +2659,18 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             }
 
             if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), coverageGapIds(
-                assessTargetCoverage(loopExecution, params.filePath, astContext?.executable_lines || [])))) {
+                loopAssessment))) {
                 recordRole('analyst-quality', 'stagnated', { reason: '連續 3 輪沒有減少已測量缺口；保留基線並停止。' });
                 finalReportMarkdown += '> 品質尚未達標：連續 3 輪沒有進步，停止相同策略重試。\n';
                 journal.knowledge({ terminalStatus: 'stagnated' });
                 break;
             }
-            if (noMutationCandidates) {
+            if (noMutationCandidates && measuredQualityGaps.length === 0) {
                 log(`[優化] 本輪沒有可評分的突變點，停止重複迴圈。`);
                 journal.knowledge({ terminalStatus: 'no-mutation-candidates' });
                 break;
             }
-            if (mutationScore >= 100 && measuredQualityGaps.length === 0) {
+            if (mutationComplete && measuredQualityGaps.length === 0) {
                 log(`[優化] 突變分數已達到 100%，且目標 Coverage 完整；已保存成功基準。`);
                 journal.knowledge({ terminalStatus: reviewStatus === 'incomplete' ? 'execution-passed-review-incomplete' : 'passed' });
                 break;
@@ -2631,34 +2684,63 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error && error.stack ? error.stack : '';
-            const retainedBaseline = Boolean(bestCode);
+            const executable = checkpoints.executable;
+            const retainedBaseline = Boolean(bestCode || executable);
+            const evidenceValid = evidenceStillCurrent();
+            const retainedScore = bestMutation && evidenceValid ? measuredMutationScore(bestMutation) : null;
             const failureCategory = isExecutionCancelled() ? 'cancelled'
                 : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
             const failureStage = error instanceof AnalysisStageError ? error.stage : 'pipeline';
             recordRole('pipeline', retainedBaseline ? 'retained-baseline' : 'failed', {
-                reason: message, category: failureCategory, retainedScore: retainedBaseline ? bestScore : undefined
+                reason: message, category: failureCategory, retainedScore
             });
             journal.knowledge({
-                terminalStatus: failureCategory === 'cancelled' ? 'cancelled' : retainedBaseline ? 'retained-after-failure' : 'failed',
+                terminalStatus: !evidenceValid ? 'source-changed' : failureCategory === 'cancelled' ? 'cancelled' : retainedBaseline ? 'retained-after-failure' : 'failed',
                 failure: message, failureCategory, failureStage,
+                evidenceValid,
                 diagnostic: error instanceof AnalysisStageError ? error.diagnostic : undefined,
-                retainedScore: retainedBaseline ? bestScore : undefined
+                retainedScore
             });
             if (bestCode) {
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore;
                 loopExecution = bestExecution;
                 loopCoverage = bestCoverage;
+                loopAssessment = bestCoverage!.assessment!;
                 survivedMutants = bestSurvivors;
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
                 reviewStatus = bestReviewStatus;
+            } else if (executable) {
+                fs.writeFileSync(testPath, executable.code, 'utf8');
+                loopExecution = executable.execution;
+                loopCoverage = executable.coverage;
+                loopAssessment = executable.coverage.assessment || loopAssessment;
+                survivedMutants = '';
+                qualityGaps = [...executable.qualityGaps];
+                measuredQualityGaps = [...executable.measuredQualityGaps];
+                reviewWarnings = [...executable.reviewWarnings];
+                reviewStatus = executable.reviewStatus;
+                acceptedScenarios = [...executable.scenarios];
+                journal.knowledge({ acceptedTest: executable.testFile, acceptedCodeHash: executable.codeHash,
+                    resolvedTier: executable.tier, scenarios: executable.scenarios, execution: executable.execution,
+                    coverage: executable.coverage, qualityGaps, reviewWarnings, reviewStatus,
+                    mutationScore: null, mutationStatus: 'incomplete', survivors: null });
+            }
+            if (!evidenceValid) {
+                invalidateSourceEvidence();
             }
             if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
             finalReportMarkdown += retainedBaseline
-                ? `\n### 後續步驟中斷；已保留成功基準（第 ${currentLoop} 輪）\n\n`
+                ? `\n### 後續步驟中斷；已保留可執行基準（第 ${currentLoop} 輪）\n\n`
                 : `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
             finalReportMarkdown += `- **失敗分類**: ${failureCategory}\n\n`;
+            if (retainedBaseline && retainedScore === null) {
+                const unavailableReason = !evidenceValid ? '來源已變更，舊證據失效'
+                    : bestMutation?.status === 'no-candidates' ? '沒有可用候選' : '尚未完成有效測量';
+                finalReportMarkdown += `- **突變分數**: N/A（${unavailableReason}）\n`
+                    + `- **保留測試**: ${(checkpoints.quality || executable)!.testFile}\n- **Reviewer status**: ${reviewStatus}\n\n`;
+            }
             finalReportMarkdown += `**錯誤訊息**: ${message}\n\n`;
             if (stack && stack !== message) {
                 finalReportMarkdown += `**錯誤堆疊**:\n\`\`\`\n${stack}\n\`\`\`\n\n`;
@@ -2673,10 +2755,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
                 fileName: displayName,
                 file: displayFile,
                 func: params.funcName || '',
-                score: retainedBaseline ? `${bestScore}%` : '失敗',
-                coverage: retainedBaseline ? bestCoverage?.coverageText ?? null : null,
-                reason: retainedBaseline
-                    ? `已保留 ${bestScore}% 基準；後續步驟失敗`
+                score: retainedScore !== null ? `${retainedScore}%` : retainedBaseline ? 'N/A' : '失敗',
+                coverage: retainedBaseline && evidenceValid ? loopCoverage?.coverageText ?? null : null,
+                reason: !evidenceValid ? '來源已變更；舊成果僅供歷史查看，需重新分析' : retainedBaseline
+                    ? retainedScore !== null ? `已保留 ${retainedScore}% 基準；後續步驟失敗` : '已保留可執行測試；突變品質尚未完成'
                     : message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
             });
             break;
@@ -2687,8 +2769,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
             try {
                 const sys = getQualityAnalystSystemPrompt();
-                const focus = selectQualityFocus(assessTargetCoverage(loopExecution, params.filePath,
-                    astContext?.executable_lines || []), survivedMutants.split('\n').filter(Boolean), currentLoop);
+                const focus = selectQualityFocus(loopAssessment, survivedMutants.split('\n').filter(Boolean), currentLoop);
                 if (focus) {
                     const tasks = await requestFocusedQualityTask({ focus,
                         context: `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
@@ -2749,6 +2830,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         }
         log(`[${stage}] ${message}`);
     } finally {
+        journal.knowledge({ targetBudget: currentTargetBudget()?.snapshot() });
         fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
     }
 }
