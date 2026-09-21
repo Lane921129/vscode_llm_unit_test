@@ -4,7 +4,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EnvironmentInspection, findRequirementFiles, preparePythonEnvironment, PythonEnvironmentActivity,
-    SetupCommand, SetupRunner, setupEnvironment } from '../environment/pythonEnvironmentSetup';
+    SetupCommand, SetupRunner, setupEnvironment, runSetupCommand } from '../environment/pythonEnvironmentSetup';
+import { DependencyInventory, inventoryReport, isDependencyInventory } from '../environment/dependencyInventory';
 
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-setup-'));
@@ -203,4 +204,88 @@ test('installation destinations are cleared and environment activity cannot over
     second(); const setup = activity.acquire('setup')!;
     assert.equal(activity.acquire('use'), undefined); assert.equal(activity.acquire('setup'), undefined);
     setup(); assert.ok(activity.acquire('use'));
+});
+
+function inventory(missing: string[] = [], complete = true): DependencyInventory {
+    return { schemaVersion: 'dependency-inventory-v1', filesScanned: 2, excludedDirectories: 1,
+        dynamicImports: 0, complete, missing, optionalMissing: [], issues: complete ? [] : [{ file: 'broken.py', reason: 'source-parse-error' }],
+        imports: missing.map(module => ({ module, kind: 'external', availability: 'missing',
+            references: [{ file: 'nested/source.py', line: 2, context: 'required' }] })) };
+}
+
+test('folder setup reports every missing import, selects root requirements and verifies the whole scope after installation', async () => {
+    const f = fixture();
+    try {
+        const requirements = path.join(f.root, 'requirements.txt'); fs.writeFileSync(requirements, 'neutral_alpha\nneutral_beta\n');
+        const reports: DependencyInventory[] = [];
+        let installed = false;
+        const h = harness(command => {
+            const payload = JSON.parse(command.input!);
+            assert.equal(payload.scanRoot, f.root); assert.equal(payload.file, undefined);
+            assert.deepEqual(payload.excludedPaths, [path.join(f.root, 'results')]);
+            return { ...ready(f.python), status: installed ? 'ready' : 'missing', missing: installed ? undefined : 'neutral_alpha',
+                inventory: inventory(installed ? [] : ['neutral_alpha', 'neutral_beta']) };
+        }, command => { assert.deepEqual(command.args.slice(-2), ['-r', requirements]); installed = true; });
+        const result = await preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder',
+            excludedPaths: [path.join(f.root, 'results')], inventory: scan => reports.push(scan) }, h.runner);
+        assert.deepEqual(reports[0].missing, ['neutral_alpha', 'neutral_beta']);
+        assert.deepEqual(result.inventory?.missing, []);
+        assert.equal(h.installations().length, 1);
+        assert.equal(result.requirements, requirements);
+    } finally { f.dispose(); }
+});
+
+test('partial or malformed scans cannot install or mark an environment ready; partial diagnostics survive', async () => {
+    const f = fixture();
+    try {
+        let report: DependencyInventory | undefined;
+        const h = harness(() => ({ ...ready(f.python), status: 'import-error', inventory: inventory(['neutral_alpha'], false) }));
+        await assert.rejects(preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder', inventory: scan => { report = scan; } }, h.runner), /掃描不完整/);
+        assert.equal(report?.issues[0].reason, 'source-parse-error');
+        assert.equal(h.installations().length, 0);
+        for (const value of [{ ...ready(f.python), inventory: inventory(['neutral_alpha']) }, ready(f.python),
+            { ...ready(f.python), inventory: { ...inventory(), imports: [{ module: 'bad' }] } }]) {
+            const malformed = harness(() => value as EnvironmentInspection);
+            await assert.rejects(preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder' }, malformed.runner));
+            assert.equal(malformed.installations().length, 0);
+        }
+    } finally { f.dispose(); }
+});
+
+test('folder mapping fallback installs distinct required dependencies only and retains all missing names on failure', async () => {
+    const f = fixture();
+    try {
+        const missing = ['neutral_alpha', 'neutral_beta'];
+        const h = harness(() => ({ ...ready(f.python), status: missing.length ? 'missing' : 'ready', missing: missing[0],
+            inventory: { ...inventory([...missing]), optionalMissing: ['neutral_optional'] } }), () => { missing.shift(); });
+        const result = await preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder' }, h.runner);
+        assert.deepEqual(result.installed, ['neutral_alpha', 'neutral_beta']);
+        assert.deepEqual(result.inventory?.optionalMissing, ['neutral_optional']);
+        const reports: DependencyInventory[] = [];
+        const failed = harness(() => ({ ...ready(f.python), status: 'missing', missing: 'neutral_alpha', inventory: inventory(['neutral_alpha', 'neutral_beta']) }));
+        await assert.rejects(preparePythonEnvironment({ ...f.options, file: f.root, scope: 'folder',
+            packageName: undefined, inventory: scan => reports.push(scan) }, failed.runner), /packageMappings/);
+        assert.deepEqual(reports.at(-1)?.missing, ['neutral_alpha', 'neutral_beta']);
+        assert.equal(failed.installations().length, 0);
+    } finally { f.dispose(); }
+});
+
+test('inventory report lists provenance, unresolved imports and limitations without rendering source paths as HTML', () => {
+    const scan = inventory(['neutral_alpha']);
+    scan.imports[0].references[0].file = '<script>|unsafe.py';
+    assert.equal(isDependencyInventory(scan), true);
+    const report = inventoryReport(scan, ['original_missing']);
+    assert.match(report, /original_missing/); assert.match(report, /neutral_alpha/);
+    assert.match(report, /&#60;script&#62;&#124;unsafe.py:2/);
+    assert.doesNotMatch(report, /<script>/);
+    assert.match(report, /不執行專案或外部套件/);
+    assert.match(report, /正式測試預檢/);
+});
+
+test('large scan output preserves UTF-8 paths across process chunks and supports more than the installer output cap', async () => {
+    const result = await runSetupCommand({ executable: process.execPath, cwd: os.tmpdir(), env: process.env,
+        stdoutLimit: 256000, timeoutMs: 10000, args: ['-e',
+            "const b=Buffer.from('測試.py'); process.stdout.write(b.subarray(0,2)); setTimeout(()=>{process.stdout.write(b.subarray(2)); process.stdout.write('x'.repeat(70000));},30);"] });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '測試.py' + 'x'.repeat(70000));
 });

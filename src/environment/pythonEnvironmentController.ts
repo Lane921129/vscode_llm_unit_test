@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { preparePythonEnvironment, PythonCandidate, pythonEnvironmentActivity, EnvironmentSetupError } from './pythonEnvironmentSetup';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { pythonToolPath } from '../pipeline/pythonTools';
+import { DependencyInventory, inventoryReport, inventorySummary } from './dependencyInventory';
 
 interface PythonApi {
     environments?: {
@@ -92,23 +93,55 @@ export class PythonEnvironmentController {
             return;
         }
         this.controller = new AbortController();
+        let latestInventory: DependencyInventory | undefined;
+        let initialMissing: string[] | undefined;
+        let outcome = '環境準備尚未完成。';
         try {
+            const preferredProject = projectRoot || vscode.workspace.getConfiguration('llmUnitTest',
+                filePath ? vscode.Uri.file(filePath) : undefined).get<string>('projectPath', '');
+            const previousScope = this.state.get<string>('llmUnitTest.lastEnvironmentScope.v1', 'project');
+            const scopes = [
+                { label: '整個專案', description: '掃描目前專案的所有 Python import', scope: 'project' },
+                { label: '選擇資料夾', description: '掃描所選資料夾及其子目錄', scope: 'folder' },
+                { label: '單一 Python 檔案', description: '保留原有的隔離載入與相依檢查', scope: 'file' }
+            ].sort((a, b) => Number(b.scope === previousScope) - Number(a.scope === previousScope));
+            const selection = await vscode.window.showQuickPick(scopes, { title: '選擇 Python 相依檢查範圍' });
+            if (!selection) { return; }
+            const scope = selection.scope === 'file' ? 'file' : 'folder';
+            if (selection.scope === 'project') {
+                const folders = vscode.workspace.workspaceFolders || [];
+                let root = preferredProject;
+                if (!root && folders.length === 1) { root = folders[0].uri.fsPath; }
+                if (!root && folders.length > 1) {
+                    const previous = this.state.get<string>('llmUnitTest.lastEnvironmentProject.v1');
+                    root = (await vscode.window.showQuickPick(folders.map(folder => ({ label: path.basename(folder.uri.fsPath),
+                        description: folder.uri.fsPath })).sort((a, b) => Number(b.description === previous) - Number(a.description === previous)),
+                    { title: '選擇要檢查相依的專案' }))?.description || '';
+                    if (!root) { return; }
+                }
+                filePath = root;
+            } else if (scope === 'folder') { filePath = undefined; }
+            const selectionKey = 'llmUnitTest.lastEnvironment' + (selection.scope === 'project' ? 'Project' : scope === 'folder' ? 'Folder' : 'File') + '.v1';
             if (!filePath) {
-                const previous = this.state.get<string>('llmUnitTest.lastEnvironmentFile.v1');
-                const choice = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false,
-                    canSelectMany: false, filters: { Python: ['py'] }, openLabel: '選擇要檢查相依的 Python 檔案',
-                    defaultUri: previous ? vscode.Uri.file(previous) : undefined });
+                const previous = this.state.get<string>(selectionKey) || preferredProject;
+                const choice = await vscode.window.showOpenDialog({ canSelectFiles: scope === 'file', canSelectFolders: scope === 'folder',
+                    canSelectMany: false, filters: scope === 'file' ? { Python: ['py'] } : undefined,
+                    openLabel: scope === 'file' ? '選擇要檢查相依的 Python 檔案' : '選擇要掃描相依的資料夾',
+                    defaultUri: previous && fs.existsSync(previous) ? vscode.Uri.file(previous) : undefined });
                 if (!choice?.[0]) { return; }
                 filePath = choice[0].fsPath;
             }
-            await this.state.update('llmUnitTest.lastEnvironmentFile.v1', filePath);
+            await this.state.update(selectionKey, filePath);
+            await this.state.update('llmUnitTest.lastEnvironmentScope.v1', selection.scope);
             const resource = vscode.Uri.file(filePath);
             const containingWorkspace = vscode.workspace.getWorkspaceFolder?.(resource);
             const config = vscode.workspace.getConfiguration('llmUnitTest', resource);
-            projectRoot = projectRoot || config.get<string>('projectPath', '') || containingWorkspace?.uri.fsPath || path.dirname(filePath);
+            const fallbackRoot = scope === 'folder' ? filePath : path.dirname(filePath);
+            projectRoot = selection.scope === 'project' ? filePath
+                : projectRoot || config.get<string>('projectPath', '') || containingWorkspace?.uri.fsPath || fallbackRoot;
             // A remembered/selected folder from another project cannot control this target's search.
             const relative = path.relative(projectRoot, filePath);
-            if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) { projectRoot = path.dirname(filePath); }
+            if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) { projectRoot = fallbackRoot; }
             const targetFile = filePath;
             const root = projectRoot;
             this.publish({ command: 'environmentPreparation', busy: true, text: '正在尋找可沿用的 Python 環境…' });
@@ -119,6 +152,8 @@ export class PythonEnvironmentController {
                 try {
                     const candidates = await discoverPythonCandidates(resource, root);
                     const result = await preparePythonEnvironment({ projectRoot: root, file: targetFile, candidates,
+                        scope, excludedPaths: [config.get<string>('outputPath', '')].filter(Boolean).map(value => path.resolve(root, value)),
+                        inventory: scan => { latestInventory = scan; initialMissing ??= [...scan.missing]; },
                         toolRequirements: path.resolve(path.dirname(pythonToolPath('ast')), '..', 'requirements.txt'),
                         signal: this.controller!.signal,
                         progress: text => { progress.report({ message: text }); this.publish({ command: 'appendLog', text: '[環境] ' + text }); },
@@ -135,14 +170,18 @@ export class PythonEnvironmentController {
                             return Object.prototype.hasOwnProperty.call(mappings, missing) ? mappings[missing] : undefined;
                         }
                     });
-                    if (this.controller!.signal.aborted) { return; }
+                    if (this.controller!.signal.aborted) { outcome = '環境準備已取消，未保存 Python 設定。'; return; }
                     const target = containingWorkspace ? vscode.ConfigurationTarget.WorkspaceFolder
                         : vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
                     await config.update('pythonPath', result.python, target);
                     if (result.requirements) { await this.state.update('llmUnitTest.lastRequirements.v1.' + root, result.requirements); }
+                    outcome = '靜態相依與測試工具檢查完成，已保存 Python；正式模組載入尚待測試預檢。';
                     this.publish({ command: 'environmentPreparation', busy: false,
-                        text: '所選檔案的匯入與測試工具檢查通過。Python：' + result.python });
-                    await vscode.window.showInformationMessage(result.installed.length
+                        text: (result.inventory ? inventorySummary(result.inventory) + ' 正式載入仍待測試預檢。'
+                            : '所選檔案的匯入與測試工具檢查通過。') + 'Python：' + result.python });
+                    void vscode.window.showInformationMessage(result.inventory
+                        ? '相依掃描完成，已保存 Python。詳細結果已開啟；正式測試仍會檢查模組載入與執行限制。'
+                        : result.installed.length
                         ? '已補齊相依並保存 Python，現在可以重新測試。'
                         : '已找到相依完整的 Python，未安裝套件；已保存供後續測試使用。');
                 } finally { subscription.dispose(); }
@@ -150,13 +189,23 @@ export class PythonEnvironmentController {
         } catch (error) {
             const message = error instanceof EnvironmentSetupError ? '[' + error.stage + '] ' + error.message
                 : '環境準備未完成，請確認檔案、Python 與設定寫入權限。';
+            outcome = message;
             this.publish({ command: 'environmentPreparation', busy: false, text: message });
             this.publish({ command: 'appendLog', text: '[環境] ' + message });
-            await vscode.window.showWarningMessage(message);
+            void vscode.window.showWarningMessage(message);
         } finally {
             this.controller = undefined;
             release();
             this.publish({ command: 'environmentPreparationFinished' });
+            if (latestInventory) {
+                try {
+                    const document = await vscode.workspace.openTextDocument({ language: 'markdown',
+                        content: inventoryReport(latestInventory, initialMissing, outcome) });
+                    await vscode.window.showTextDocument(document, { preview: false });
+                } catch {
+                    this.publish({ command: 'appendLog', text: '[環境] 無法開啟相依報告；' + inventorySummary(latestInventory) });
+                }
+            }
         }
     }
 }

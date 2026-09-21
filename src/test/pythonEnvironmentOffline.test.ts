@@ -50,7 +50,10 @@ test('offline real pip installs one neutral missing dependency into an existing 
             toolRequirements: path.resolve(__dirname, '../../requirements.txt'),
             packageName: async (missing: string) => missing === 'neutral_environment_fixture'
                 ? 'neutral_environment_fixture' : undefined };
-        const first = await preparePythonEnvironment(options, runner);
+        fs.writeFileSync(path.join(root, 'second.py'), 'def later():\n    import neutral_environment_fixture\n');
+        const first = await preparePythonEnvironment({ ...options, file: root, scope: 'folder' }, runner);
+        assert.equal(first.inventory?.filesScanned, 2);
+        assert.deepEqual(first.inventory?.missing, []);
         assert.equal(first.python.toLowerCase(), python.toLowerCase());
         assert.deepEqual(first.installed, ['neutral_environment_fixture']);
         assert.equal(installed.length, 1);

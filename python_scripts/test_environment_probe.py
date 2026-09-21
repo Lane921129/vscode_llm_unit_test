@@ -5,6 +5,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from python_scripts import dependency_inventory
 
 
 TOOLS = Path(__file__).resolve().parent
@@ -79,6 +82,118 @@ class EnvironmentProbeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('pip ', result.stdout)
         self.assertFalse((self.root / 'hijacked').exists())
+
+    def scan(self):
+        result = subprocess.run([sys.executable, '-B', str(TOOLS / 'environment_probe.py')],
+                                input=json.dumps({'scanRoot': str(self.root), 'sourceRoot': str(self.root)}),
+                                text=True, encoding='utf-8', capture_output=True, cwd=self.root, timeout=20,
+                                env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def write(self, relative, source):
+        file = self.root / relative
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(source, encoding='utf-8')
+
+    def test_folder_collects_all_files_and_nested_imports_without_executing_source(self):
+        self.write('first.py', "import neutral_missing_alpha\nraise RuntimeError('PRIVATE_SOURCE')\n")
+        self.write('nested/second.py', 'def target():\n    import neutral_missing_beta.child\n')
+        self.write('effect.py', "from pathlib import Path\nPath('should_not_exist').touch()\n")
+        value = self.scan()
+        self.assertEqual(value['status'], 'missing')
+        self.assertEqual(value['inventory']['missing'], ['neutral_missing_alpha', 'neutral_missing_beta'])
+        self.assertEqual(value['inventory']['filesScanned'], 3)
+        item = next(item for item in value['inventory']['imports'] if item['module'].endswith('.child'))
+        self.assertEqual(item['references'], [{'file': 'nested/second.py', 'line': 2, 'context': 'required'}])
+        self.assertNotIn('PRIVATE_SOURCE', json.dumps(value))
+        self.assertFalse((self.root / 'should_not_exist').exists())
+
+    def test_local_namespace_src_relative_and_stdlib_are_not_pip_candidates(self):
+        self.write('src/package/helper.py', '')
+        self.write('entry.py', 'import package.helper\nimport os\nfrom json import loads\n')
+        self.write('src/package/entry.py', 'from .helper import value\n')
+        value = self.scan()['inventory']
+        self.assertEqual(value['missing'], [])
+        self.assertEqual(next(item for item in value['imports'] if item['module'] == 'package.helper')['kind'], 'local')
+        self.assertEqual(next(item for item in value['imports'] if item['module'] == 'os')['kind'], 'stdlib')
+
+    def test_inventory_does_not_import_installed_package_or_submodule(self):
+        self.write('sample.py', 'import coverage.nonexistent_submodule\n')
+        with patch('importlib.machinery.PathFinder.find_spec', return_value=object()) as lookup:
+            value = dependency_inventory.inventory(self.root)
+        lookup.assert_called_once_with('coverage')
+        self.assertEqual(value['imports'][0]['availability'], 'available')
+        self.assertEqual(value['missing'], [])
+
+    def test_conditional_optional_and_type_only_dependencies_are_reported_separately(self):
+        self.write('sample.py', '''from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import neutral_typing
+if True:
+    import neutral_conditional
+try:
+    import neutral_optional
+except ImportError:
+    import neutral_fallback
+import neutral_required
+def nested():
+    import neutral_required
+''')
+        value = self.scan()['inventory']
+        self.assertEqual(value['missing'], ['neutral_required'])
+        self.assertEqual(value['optionalMissing'], ['neutral_conditional', 'neutral_fallback', 'neutral_optional', 'neutral_typing'])
+        self.assertEqual(len(next(item for item in value['imports'] if item['module'] == 'neutral_required')['references']), 2)
+
+    def test_excludes_environments_generated_artifacts_and_configured_output(self):
+        self.write('sample.py', 'import math\n')
+        for directory in ('.venv', 'node_modules', '__pycache__', 'build', 'custom_environment', 'result/run', 'configured_output'):
+            self.write(directory + '/sample.py', 'import neutral_unwanted\n')
+        (self.root / 'custom_environment/pyvenv.cfg').write_text('home = neutral\n')
+        (self.root / 'result/run/run_manifest.json').write_text(json.dumps({'schemaVersion': 2, 'runId': 'neutral',
+                                                                        'sourceHash': 'neutral', 'promptVersion': 'role-contracts-v1'}))
+        value = dependency_inventory.inventory(self.root, excluded_paths=[self.root / 'configured_output'])
+        self.assertEqual(value['filesScanned'], 1)
+        self.assertEqual(value['missing'], [])
+        self.assertEqual(value['excludedDirectories'], 7)
+
+    def test_bad_source_is_partial_inventory_and_never_ready(self):
+        self.write('valid.py', 'import neutral_missing\n')
+        self.write('broken.py', 'def invalid(PRIVATE_SOURCE:\n')
+        result = self.scan()
+        self.assertEqual(result['status'], 'import-error')
+        self.assertFalse(result['inventory']['complete'])
+        self.assertEqual(result['inventory']['issues'], [{'file': 'broken.py', 'reason': 'source-parse-error'}])
+        self.assertNotIn('PRIVATE_SOURCE', json.dumps(result))
+
+    def test_scan_limits_fail_closed_and_empty_scope_is_not_success(self):
+        self.assertFalse(dependency_inventory.inventory(self.root)['complete'])
+        self.write('a.py', 'import alpha\n')
+        self.write('b.py', 'import beta\n')
+        with patch.object(dependency_inventory, 'MAX_FILES', 1):
+            value = dependency_inventory.inventory(self.root)
+        self.assertFalse(value['complete'])
+        self.assertEqual(value['issues'][0]['reason'], 'scan-limit')
+        with patch.object(dependency_inventory, 'MAX_FILE_BYTES', 1):
+            self.assertFalse(dependency_inventory.inventory(self.root)['complete'])
+
+    def test_declared_source_encoding_and_dynamic_limitations(self):
+        (self.root / 'sample.py').write_bytes(b'# coding: latin-1\n# caf\xe9\nimport math\n__import__(name)\n')
+        value = self.scan()['inventory']
+        self.assertTrue(value['complete'])
+        self.assertEqual(value['dynamicImports'], 1)
+
+    def test_linked_directory_outside_scope_is_not_scanned(self):
+        self.write('sample.py', 'import math\n')
+        with tempfile.TemporaryDirectory() as external:
+            Path(external, 'sample.py').write_text('import neutral_outside\n')
+            try:
+                (self.root / 'linked').symlink_to(external, target_is_directory=True)
+            except OSError:
+                self.skipTest('Symlinks unavailable for current user')
+            value = dependency_inventory.inventory(self.root)
+            self.assertEqual(value['missing'], [])
+            self.assertEqual(value['excludedDirectories'], 1)
 
 
 if __name__ == '__main__':

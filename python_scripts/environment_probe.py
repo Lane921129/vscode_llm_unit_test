@@ -48,6 +48,12 @@ def inspect_environment(payload):
         coverage = False
     result = {'python': sys.executable, 'version': list(sys.version_info[:3]),
               'virtual': sys.prefix != sys.base_prefix, 'coverage': coverage}
+    if payload.get('scanRoot'):
+        from dependency_inventory import inventory
+        scan = inventory(payload['scanRoot'], payload.get('sourceRoot'), payload.get('excludedPaths', []))
+        status = 'import-error' if not scan['complete'] else 'missing' if scan['missing'] else 'ready'
+        return dict(result, status=status, inventory=scan,
+                    missing=next(iter(scan['missing']), None), stage='dependency-scan')
     if not payload.get('file'):
         return dict(result, status='interpreter-only')
     try:
