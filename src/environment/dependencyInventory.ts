@@ -1,7 +1,7 @@
 export interface DependencyInventory {
     schemaVersion: 'dependency-inventory-v1';
     filesScanned: number; excludedDirectories: number; complete: boolean; dynamicImports: number;
-    imports: { module: string; kind: 'external' | 'stdlib' | 'local';
+    imports: { module: string; kind: 'external' | 'stdlib' | 'local' | 'unresolved-local';
         availability: 'available' | 'missing' | 'unknown' | 'not-checked';
         references: { file: string; line: number; context: 'required' | 'optional' | 'typing' | 'conditional' }[] }[];
     issues: { file: string; reason: string }[];
@@ -21,7 +21,7 @@ export function isDependencyInventory(value: unknown): value is DependencyInvent
         && Array.isArray(scan.issues) && scan.issues.length <= 10100
         && scan.issues.every(issue => issue && text(issue.file) && text(issue.reason))
         && Array.isArray(scan.imports) && scan.imports.length <= 10000
-        && scan.imports.every(item => item && text(item.module) && ['external', 'stdlib', 'local'].includes(item.kind)
+        && scan.imports.every(item => item && text(item.module) && ['external', 'stdlib', 'local', 'unresolved-local'].includes(item.kind)
             && ['available', 'missing', 'unknown', 'not-checked'].includes(item.availability)
             && Array.isArray(item.references) && item.references.length <= 10000 && item.references.length > 0
             && item.references.every(ref => ref && text(ref.file) && count(ref.line) && ref.line > 0
@@ -36,7 +36,7 @@ export function inventorySummary(scan: DependencyInventory): string {
 /** Only module identifiers, project-relative references and stable diagnostic codes. */
 export function inventoryReport(scan: DependencyInventory, initialMissing: string[] = [], outcome = '僅完成靜態相依盤點。'): string {
     const cell = (value: string) => value.replace(/[&<>|`\r\n]/g, char => `&#${char.charCodeAt(0)};`);
-    const kinds = { external: '外部套件', stdlib: '標準庫', local: '專案模組' };
+    const kinds = { external: '外部套件', stdlib: '標準庫', local: '專案模組', 'unresolved-local': '本地匯入待確認' };
     const statuses = { available: '可找到頂層套件', missing: '缺少', unknown: '無法判定', 'not-checked': '未驗證載入' };
     const contexts = { required: '必要', optional: '可選', typing: '型別檢查', conditional: '條件分支' };
     return ['# Python 相依掃描', '', cell(outcome), '', inventorySummary(scan), '',
@@ -45,7 +45,8 @@ export function inventoryReport(scan: DependencyInventory, initialMissing: strin
         `目前必要套件缺少：${scan.missing.map(cell).join('、') || '無'}。`,
         `條件／可選／型別套件缺少：${scan.optionalMissing.map(cell).join('、') || '無'}；列入報告，不自動補裝。`,
         `略過 ${scan.excludedDirectories} 個環境、建置、輸出或連結目錄；發現 ${scan.dynamicImports} 處常見動態 import 呼叫。計算得出的或別名動態 import 無法完整靜態辨識。`, '',
-        ...scan.issues.map(issue => `- ${cell(issue.file)}：${cell(issue.reason)}`), '',
+        ...scan.issues.map(issue => `- ${cell(issue.file)}：${issue.reason === 'local-import-root-unresolved'
+            ? '附近有同名本地模組，但匯入根尚未確認；請選擇對應子專案或修正測試載入路徑，不會補裝同名外部套件。' : cell(issue.reason)}`), '',
         '| Import | 分類 | 檢查結果 | 使用位置（所選範圍相對路徑） |', '| --- | --- | --- | --- |',
         ...scan.imports.map(item => `| ${cell(item.module)} | ${kinds[item.kind]} | ${statuses[item.availability]} | `
             + item.references.map(ref => `${cell(ref.file)}:${ref.line}（${contexts[ref.context]}）`).join('<br>') + ' |'), '',

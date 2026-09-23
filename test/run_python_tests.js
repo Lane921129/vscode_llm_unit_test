@@ -23,6 +23,7 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_assertion_evidence.py',
         'python_scripts/test_quality_policy.py',
         'python_scripts/test_runtime_policy.py',
+        'python_scripts/test_import_fixtures.py',
         'python_scripts/test_caller_artifacts.py',
         'python_scripts/test_writer_retrieval.py',
         'python_scripts/test_fixture_corpus.py',

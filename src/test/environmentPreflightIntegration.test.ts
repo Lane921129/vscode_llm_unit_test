@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { clearPreflightFailureCache, preflightFailureCacheSize } from '../pipeline/modulePreflight';
 
-test('missing target dependency stops before all model roles and preserves diagnostics on each retry', async () => {
+test('missing target dependency preserves declared import setup and diagnostics before model roles on each retry', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-integration-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module');
@@ -22,7 +22,8 @@ test('missing target dependency stops before all model roles and preserves diagn
             }, showInformationMessage: async () => {}, showTextDocument: async () => {}
         },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
-            getConfiguration: () => ({ get: () => python }), openTextDocument: async () => ({}) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'importFixtures' ? [{ file: 'sample.py', mkdir: true }] : fallback }), openTextDocument: async () => ({}) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } }, env: { openExternal: async () => true }, Uri: { file: (file: string) => file }
@@ -32,7 +33,7 @@ test('missing target dependency stops before all model roles and preserves diagn
     };
     globalThis.fetch = async () => { modelCalls++; throw new Error('Must not request a model before import preflight passes'); };
     try {
-        const source = 'import fixture_dependency_not_installed\ndef target(value):\n    return value + 1\n';
+        const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\nimport fixture_dependency_not_installed\ndef target(value):\n    return value + 1\n';
         fs.writeFileSync(path.join(directory, 'sample.py'), source);
         const { activate } = require('../orchestrator');
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
@@ -53,6 +54,11 @@ test('missing target dependency stops before all model roles and preserves diagn
             assert.equal(knowledge.failureCategory, 'environment');
             assert.equal(knowledge.failureStage, 'module-import');
             assert.equal(knowledge.diagnostic.missing_module, 'fixture_dependency_not_installed');
+            const fixtures = JSON.parse(fs.readFileSync(path.join(run, 'import_fixtures.json'), 'utf8'));
+            assert.equal(knowledge.importFixtureId, fixtures.id);
+            assert.equal(knowledge.diagnostic.importFixtures.id, fixtures.id);
+            assert.deepEqual(knowledge.diagnostic.importFixtures.operations,
+                [{ file: 'sample.py', operation: 'pathlib.Path.mkdir', line: 2 }]);
             assert.equal(knowledge.initialTargetObservations, null);
             assert.match(knowledge.sourceStructure, /return value \+ 1/);
             assert.match(fs.readFileSync(path.join(run, 'final_report.md'), 'utf8'), /fixture_dependency_not_installed/);
@@ -61,6 +67,7 @@ test('missing target dependency stops before all model roles and preserves diagn
             assert.doesNotMatch(events, /"stage":"behavior-probe"/);
         }
         assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), source);
+        assert.equal(fs.existsSync(path.join(directory, 'must_not_exist')), false);
     } finally {
         clearPreflightFailureCache();
         globalThis.fetch = originalFetch;

@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { killProcessTree } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { inferTargetImportModule } from '../utils/dependencyResolver';
+import { importFixtureEnvironment } from '../pipeline/importFixtures';
 import { DependencyInventory, inventorySummary, isDependencyInventory } from './dependencyInventory';
 import { createPythonInstallationPlan, installationPlanFilesUnchanged, PythonInstallationPlan,
     PythonInstallationDecision, validateInstallationMappings } from './pythonInstallationPlan';
@@ -22,7 +23,7 @@ export type SetupRunner = (command: SetupCommand) => Promise<{ code: number | nu
 export const runSetupCommand: SetupRunner = command => new Promise((resolve, reject) => {
     if (command.signal?.aborted) { reject(new Error('cancelled')); return; }
     const proc = spawn(command.executable, command.args, {
-        cwd: command.cwd, env: command.env, shell: false, windowsHide: true,
+        cwd: command.cwd, env: importFixtureEnvironment(command.env), shell: false, windowsHide: true,
         detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
     });
     let stdout = '', stderr = '', stopped = false;
@@ -99,7 +100,7 @@ export async function inspectPython(candidate: PythonCandidate, projectRoot: str
     } catch { return undefined; }
 }
 
-function installationFailure(stage: string, output: { code: number | null; stdout: string; stderr: string }): void {
+function installationFailure(stage: string, output: { code: number | null; stdout: string; stderr: string }, packageName?: string): void {
     if (output.code === 0) { return; }
     const diagnostic = output.stdout + output.stderr;
     const reason = output.code === null ? '執行逾時或被中止。'
@@ -110,15 +111,32 @@ function installationFailure(stage: string, output: { code: number | null; stdou
         : /ConnectionError|ConnectTimeout|ProxyError|SSLError|CERTIFICATE_VERIFY_FAILED|Temporary failure|Connection refused/i.test(diagnostic) ? '無法連線至套件來源，請檢查網路、代理伺服器或憑證設定。'
         : stage === 'check' ? '已安裝套件的相依不完整或版本不相容。'
         : '套件安裝未完成，請檢查相依清單、套件名稱與建置需求。';
-    throw new EnvironmentSetupError(stage, reason + ' 尚未標示環境就緒。');
+    const conflicts = stage === 'check' ? dependencyConflictSummary(diagnostic) : '';
+    throw new EnvironmentSetupError(stage, (packageName ? '安裝項目 ' + packageName + '：' : '')
+        + reason + (conflicts ? ' ' + conflicts : '') + ' 尚未標示環境就緒。');
+}
+
+/** Only package/version tokens from known pip check lines, never arbitrary output or URLs. */
+export function dependencyConflictSummary(output: string): string {
+    const safe = /^[A-Za-z0-9_.+!,<>=~* -]+$/;
+    const summaries: string[] = [];
+    for (const line of output.split(/\r?\n/)) {
+        const conflict = /^([\w.-]+) ([\w.+!-]+) has requirement ([A-Za-z0-9_.+!,<>=~* -]+), but you have ([\w.-]+) ([\w.+!-]+)\.$/.exec(line.trim());
+        const missing = /^([\w.-]+) ([\w.+!-]+) requires ([\w.-]+), which is not installed\.$/.exec(line.trim());
+        if (conflict && conflict.slice(1).every(value => value.length <= 160 && safe.test(value))) {
+            summaries.push(`${conflict[1]} ${conflict[2]} 需要 ${conflict[3]}，目前為 ${conflict[4]} ${conflict[5]}。`);
+        } else if (missing) { summaries.push(`${missing[1]} ${missing[2]} 缺少 ${missing[3]}。`); }
+        if (summaries.length >= 5) { break; }
+    }
+    return summaries.join(' ');
 }
 
 function requireImportable(value: EnvironmentInspection): void {
     if (value.inventory && !value.inventory.complete) {
-        throw new EnvironmentSetupError('dependency-scan', '相依掃描不完整，請先處理報告中的語法、讀取或容量問題；未標示環境就緒。');
+        throw new EnvironmentSetupError('dependency-scan', '相依掃描不完整，請先處理報告中的本地匯入、語法、讀取或容量問題；本地模組不會當成外部套件補裝。未標示環境就緒。');
     }
     if (value.status === 'ready' || value.status === 'missing') { return; }
-    const message = value.status === 'blocked' ? '模組載入副作用被隔離規則攔下；需要調整原應用初始化，安裝套件無法解決。'
+    const message = value.status === 'blocked' ? '模組載入副作用被隔離規則攔下；請在測試工具設定 importFixtures，明確模擬初始化相依。安裝套件無法解決，不需要修改受測原檔。'
         : value.status === 'local-or-submodule' ? '找不到專案模組或已安裝套件的子模組；請檢查來源路徑、套件版本與 import，不會把它當成新的外部套件安裝。'
         : value.status === 'stdlib' ? 'Python 標準庫不完整或版本不相容，請檢查原應用需要的 Python 版本。'
         : '模組匯入失敗，但不是可確認的缺套件錯誤；請查看正式預檢報告。';
@@ -184,7 +202,7 @@ export async function preparePythonEnvironment(options: {
             args: ['-B', pythonToolPath('installer'), 'install', '--no-input', '--disable-pip-version-check', ...args],
             cwd, env: setupEnvironment(process.env), signal: options.signal });
         cancelled();
-        installationFailure('install', output);
+        installationFailure('install', output, args.length === 1 ? args[0] : 'requirements');
     };
     let requirements: string | undefined;
     const approve = async (current: EnvironmentInspection) => {
@@ -280,12 +298,10 @@ export async function preparePythonEnvironment(options: {
         installed.push('test-tools');
     }
     progress('正在確認相依版本與最終匯入結果…');
-    if (installed.length) {
-        const check = await runner({ executable: python, args: ['-m', 'pip', 'check'],
-            cwd: os.tmpdir(), env: setupEnvironment(process.env), timeoutMs: 30000, signal: options.signal });
-        cancelled();
-        installationFailure('check', check);
-    }
+    const check = await runner({ executable: python, args: ['-m', 'pip', 'check'],
+        cwd: os.tmpdir(), env: setupEnvironment(process.env), timeoutMs: 30000, signal: options.signal });
+    cancelled();
+    installationFailure('check', check);
     const final = await inspect({ executable: python });
     cancelled();
     if (final) { report(final); }

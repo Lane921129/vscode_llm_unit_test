@@ -20,6 +20,7 @@ import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { BatchJournal } from './pipeline/batchJournal';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
+import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
 import {
     BehaviorObservation,
     BehaviorObservations,
@@ -1110,7 +1111,14 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const configured = vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('targetBudget', {});
     const limits = configured && typeof configured === 'object' && !Array.isArray(configured)
         ? configured as Partial<TargetBudgetLimits> : {};
-    return runWithTargetBudget(new TargetBudget(limits), () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider));
+    const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri?.file?.(params.filePath));
+    const requestedRoot = (params as AnalysisParams & { batchPath?: string }).batchPath
+        || config.get<string>('projectPath', '') || path.dirname(params.filePath);
+    const relative = path.relative(requestedRoot, params.filePath);
+    const root = relative.startsWith('..') || path.isAbsolute(relative) ? path.dirname(params.filePath) : requestedRoot;
+    const fixtures = createImportFixturePlan(root, config.get<unknown>('importFixtures', []));
+    return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(limits),
+        () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider)));
 }
 
 async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
@@ -1271,6 +1279,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
     const qualityPolicy = createStrictQualityPolicy();
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName, qualityPolicy);
+    const importFixtures = currentImportFixtures();
+    if (importFixtures) {
+        fs.writeFileSync(path.join(sessionDir, 'import_fixtures.json'), JSON.stringify(importFixtures, null, 2), 'utf8');
+        journal.knowledge({ importFixtureId: importFixtures.id, importFixtureContract: 'import-fixtures-v1' });
+        finalReportMarkdown += `\n- **匯入測試設定**: ${importFixtures.id}（import_fixtures.json）。初始化外部操作使用明確 mock；未驗證真實目錄建立、設定檔或介面啟動。\n`;
+    }
     const checkpoints = new CandidateCheckpointStore(sessionDir, journal.sourceHash, params.funcName || 'file', {
         policy: qualityPolicy, sourcePath: params.filePath,
         targetScope: { kind: params.funcName ? 'function' : 'module', qualifiedName: params.funcName || 'module' }
@@ -1288,6 +1302,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
         sharedDeadlineAt?: number
     ): Promise<string> => {
+        if (importFixtures) {
+            prompt += '\n\n[Import test setup] The original module runs under the saved import-fixtures-v1 contract. '
+                + 'Declared module-level external initialization is mocked. Observations apply only under that setup; '
+                + 'do not claim real filesystem, configuration-file, or GUI startup behavior was tested. '
+                + 'Function execution retains the normal isolation policy and requires its own explicit dependency mocks.';
+        }
         const contractedSystem = addOutputContract(system, format);
         const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
@@ -1328,7 +1348,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         preflight = await preflightTargetModule(pythonExecutable, params.filePath, module,
             [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir,
             context?.dependencies || [], projectRoot);
-        recordRole('environment', 'passed', { module: preflight.module });
+        recordRole('environment', 'passed', { module: preflight.module, importFixtures: preflight.importFixtures });
         return preflight;
     };
     if (params.funcName) {
@@ -2367,11 +2387,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
 
             // 動態偵測 mutation engine；無外部工具時使用安全的 AST 後備引擎。
-            let engine: 'mutatest' | 'mutmut' | 'builtin' = params.funcName ? 'builtin' : 'mutatest';
+            let engine: 'mutatest' | 'mutmut' | 'builtin' = params.funcName || importFixtures ? 'builtin' : 'mutatest';
             let pyVer = '';
             // Native adapters currently certify module scope only. Selected functions
             // must use the engine that can prove the exact qualified scope.
-            if (!params.funcName) {
+            if (!params.funcName && !importFixtures) {
             try {
                 // 取得 Python 版本
                 const { stdout: pyVerRaw } = await runSpawn(pythonExecutable, ['--version'], {

@@ -7,6 +7,7 @@ guard is not an OS sandbox for hostile native extensions.
 from contextlib import contextmanager, ExitStack
 import ast
 import importlib._bootstrap_external
+import importlib.metadata
 import linecache
 import os
 import sqlite3
@@ -15,8 +16,11 @@ import threading
 import tokenize
 import traceback
 import types
+import sysconfig
+from pathlib import Path
 from unittest.mock import patch
 from trace_value_codec import type_field
+from import_fixtures import ImportFixtures
 
 POLICY_VERSION = 'python-execution-policy-v1'
 ISOLATION_EXIT_CODE = 86
@@ -40,6 +44,48 @@ for _owner in (traceback.FrameSummary, traceback.StackSummary, traceback.Traceba
         if type(_value) is types.FunctionType:
             _TRACEBACK_CODES.add(_value.__code__)
 _AST_PARSE_CODE = ast.parse.__code__
+_METADATA_READ_CODE = importlib.metadata.PathDistribution.read_text.__code__
+_METADATA_ZIP_CODE = importlib.metadata.FastPath.zip_children.__code__
+_METADATA_FILES = None
+_STDLIB_ARCHIVES = {os.path.normcase(os.path.realpath(str(base / f'python{sys.version_info.major}{sys.version_info.minor}.zip')))
+                    for base in (Path(sys.base_prefix), Path(sysconfig.get_path('stdlib')).parent)}
+
+
+def _prepare_metadata_reads():
+    """Only standard metadata in this interpreter's installed package directories."""
+    global _METADATA_FILES
+    if _METADATA_FILES is not None:
+        return
+    permitted = set()
+    for directory in {sysconfig.get_path('purelib'), sysconfig.get_path('platlib')}:
+        if not directory:
+            continue
+        root = Path(directory).resolve()
+        for pattern in ('*.dist-info', '*.egg-info'):
+            for metadata in root.glob(pattern):
+                if metadata.is_symlink() or not metadata.is_dir():
+                    continue
+                for name in ('METADATA', 'PKG-INFO', 'entry_points.txt', 'top_level.txt', 'WHEEL', 'RECORD'):
+                    file = (metadata / name).resolve()
+                    if file.is_relative_to(root):
+                        permitted.add(os.path.normcase(str(file)))
+    _METADATA_FILES = permitted
+
+
+def _package_metadata_read(filename, frame):
+    if not isinstance(filename, (str, bytes, os.PathLike)):
+        return False
+    filename = os.path.normcase(os.path.realpath(os.fsdecode(filename)))
+    owner = _METADATA_ZIP_CODE if filename in _STDLIB_ARCHIVES else _METADATA_READ_CODE
+    if filename not in (_METADATA_FILES or ()) and filename not in _STDLIB_ARCHIVES:
+        return False
+    for _ in range(12):
+        if frame is None:
+            break
+        if frame.f_code is owner:
+            return True
+        frame = frame.f_back
+    return False
 
 
 class RuntimePolicyError(RuntimeError):
@@ -94,6 +140,8 @@ def _import_or_traceback_read(filename):
         frame = frame.f_back
     if not frame:
         return False
+    if _package_metadata_read(filename, frame):
+        return True
     if filename == '<unknown>' and frame.f_code is _AST_PARSE_CODE:
         caller = frame.f_back
         return bool(caller and caller.f_code in _TRACEBACK_CODES)
@@ -179,6 +227,8 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
     global _active
     if _active is not None:
         raise RuntimeError('Nested execution policy guards are unsupported')
+    _prepare_metadata_reads()
+    fixtures = ImportFixtures()
     violations = []
     background_failures = []
     initial_threads = set(_CURRENT_FRAMES())
@@ -209,6 +259,7 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
                 for name in ('setprofile', 'setprofile_all_threads'):
                     if hasattr(threading, name):
                         stack.enter_context(patch.object(threading, name, block_profile_replacement))
+            stack.enter_context(fixtures)
             try:
                 yield violations
             finally:

@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { currentExecution } from '../pipeline/executionContext';
 import { currentTargetBudget } from '../pipeline/targetBudget';
+import { importFixtureEnvironment } from '../pipeline/importFixtures';
 
 /** Kill only the child tree owned by this runner. */
 export function killProcessTree(proc: ChildProcess): Promise<void> {
@@ -39,7 +40,7 @@ export function runSpawn(
         const timeout = Math.min(requestedTimeout, remaining);
         const limitedByTarget = Boolean(budget) && remaining <= requestedTimeout;
         const proc = spawn(command, args, {
-            cwd: options.cwd, env: options.env ?? process.env,
+            cwd: options.cwd, env: importFixtureEnvironment(options.env ?? process.env),
             detached: process.platform !== 'win32', shell: false, windowsHide: true
         });
         let stdout = '';

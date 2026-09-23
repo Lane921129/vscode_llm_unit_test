@@ -11,6 +11,7 @@ import sys
 import unittest
 from uuid import uuid4
 from target_invocation import TargetInvocationTracker
+from import_fixtures import evidence as import_fixture_evidence
 from runtime_policy import ISOLATION_EXIT_CODE, ISOLATION_MARKER, POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, guarded_runtime
 
 
@@ -52,7 +53,8 @@ def main(argv=None):
     def record(event, **detail):
         if args.violation_report:
             with open(args.violation_report, 'a', encoding='utf-8') as report:
-                report.write(json.dumps({'runId': run_id, 'event': event, 'policyVersion': POLICY_VERSION, **detail}) + '\n')
+                report.write(json.dumps({'runId': run_id, 'event': event, 'policyVersion': POLICY_VERSION,
+                                         'importFixtures': import_fixture_evidence(), **detail}) + '\n')
 
     # An engine that fails to invoke/finish its guarded runner cannot certify
     # isolation merely because no violation file appeared.

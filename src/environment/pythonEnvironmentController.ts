@@ -7,6 +7,7 @@ import { pythonToolPath } from '../pipeline/pythonTools';
 import { DependencyInventory, inventoryReport, inventorySummary } from './dependencyInventory';
 import { installationPlanReport, PythonInstallationPlan } from './pythonInstallationPlan';
 import { confirmPythonInstallation } from './pythonInstallationPreview';
+import { createImportFixturePlan, withImportFixtures } from '../pipeline/importFixtures';
 
 interface PythonApi {
     environments?: {
@@ -159,7 +160,8 @@ export class PythonEnvironmentController {
                 if (token.isCancellationRequested) { this.controller?.abort(); }
                 try {
                     const candidates = await discoverPythonCandidates(resource, root);
-                    const result = await preparePythonEnvironment({ projectRoot: root, file: targetFile, candidates,
+                    const fixtures = scope === 'file' ? createImportFixturePlan(root, config.get<unknown>('importFixtures', [])) : null;
+                    const result = await withImportFixtures(fixtures, () => preparePythonEnvironment({ projectRoot: root, file: targetFile, candidates,
                         scope, excludedPaths: [config.get<string>('outputPath', '')].filter(Boolean).map(value => path.resolve(root, value)),
                         inventory: scan => { latestInventory = scan; initialMissing ??= [...scan.missing]; },
                         confirmInstall: async plan => {
@@ -188,7 +190,7 @@ export class PythonEnvironmentController {
                             const mappings = config.get<Record<string, string>>('packageMappings', {});
                             return Object.prototype.hasOwnProperty.call(mappings, missing) ? mappings[missing] : undefined;
                         }
-                    });
+                    }));
                     if (this.controller!.signal.aborted) { outcome = '環境準備已取消，未保存 Python 設定。'; return; }
                     await config.update('pythonPath', result.python, configurationTarget);
                     if (result.requirements) { await this.state.update('llmUnitTest.lastRequirements.v1.' + root, result.requirements); }

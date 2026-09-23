@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EnvironmentInspection, findRequirementFiles, preparePythonEnvironment, PythonEnvironmentActivity,
-    SetupCommand, SetupRunner, setupEnvironment, runSetupCommand } from '../environment/pythonEnvironmentSetup';
+    SetupCommand, SetupRunner, setupEnvironment, runSetupCommand, dependencyConflictSummary } from '../environment/pythonEnvironmentSetup';
 import { DependencyInventory, inventoryReport, isDependencyInventory } from '../environment/dependencyInventory';
 import { PythonInstallationDecision, PythonInstallationPlan } from '../environment/pythonInstallationPlan';
 
@@ -36,6 +36,22 @@ function harness(inspect: (command: SetupCommand) => EnvironmentInspection,
     return { commands, runner, installations: () => commands.filter(command => command.args.includes('install')) };
 }
 
+test('reused environments still fail on existing conflicts and report only safe dependency tokens', async () => {
+    const f = fixture();
+    try {
+        const h = harness(() => ready(f.python));
+        await assert.rejects(preparePythonEnvironment(f.options, command => command.args.includes('check')
+            ? Promise.resolve({ code: 1, stdout: 'mutatest 3.1.0 has requirement coverage<6.0,>=4.4, but you have coverage 7.16.1.\nPRIVATE_RESPONSE https://token:secret@example.invalid', stderr: '' })
+            : h.runner(command)), error => {
+                assert.match(String(error), /mutatest 3.1.0.*coverage<6.0,>=4.4.*coverage 7.16.1/);
+                assert.doesNotMatch(String(error), /PRIVATE_RESPONSE|secret|example.invalid/);
+                return true;
+            });
+        assert.equal(h.installations().length, 0);
+        assert.equal(dependencyConflictSummary('https://token:secret@example.invalid'), '');
+    } finally { f.dispose(); }
+});
+
 test('finds an already-working user interpreter before installing anything into the first candidate', async () => {
     const f = fixture();
     try {
@@ -46,7 +62,7 @@ test('finds an already-working user interpreter before installing anything into 
         assert.equal(result.python, other);
         assert.deepEqual(result.installed, []);
         assert.equal(h.installations().length, 0);
-        assert.equal(h.commands.some(command => command.args.includes('check')), false);
+        assert.equal(h.commands.some(command => command.args.includes('check')), true);
         assert.equal(fs.existsSync(path.join(f.root, '.venv')), false);
     } finally { f.dispose(); }
 });

@@ -98,7 +98,7 @@ class Cases(unittest.TestCase):
             showInformationMessage: async () => {}, showTextDocument: async () => {}
         },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
-            getConfiguration: () => ({ get: () => python }), openTextDocument: async () => ({}) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }), openTextDocument: async () => ({}) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } },

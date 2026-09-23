@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from import_fixtures import mutation_environment, read_plan as import_fixture_plan
 
 
 COMPARISON_REPLACEMENTS = {
@@ -414,14 +415,14 @@ def trial_environment(temp_root, source_file):
         str(source_file.parent.parent),
         os.environ.get('PYTHONPATH', ''),
     ])
-    return {
+    return mutation_environment({
         **os.environ,
         'PYTHONPATH': python_path,
         'PYTHONIOENCODING': 'utf-8',
         # A mutation trial must execute its .py source, never bytecode left by
         # the baseline or another mutant.
         'PYTHONDONTWRITEBYTECODE': '1',
-    }
+    }, temp_root, source_file)
 
 
 def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
@@ -451,6 +452,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                   else f'{target_class + "." if target_class else ""}{target_function or "module"}')
     result = {
         'schemaVersion': 1,
+        'importFixtureId': (import_fixture_plan() or {}).get('id'),
         'engine': 'builtin',
         'operatorSetVersion': OPERATOR_SET_VERSION,
         'scopeVersion': FUNCTION_SCOPE_VERSION if target_function else MODULE_SCOPE_VERSION,

@@ -41,6 +41,8 @@
 
 ## 測試生成安全
 
+- 使用者可透過 `llmUnitTest.importFixtures` 明確宣告匯入前測試設定；禁止修改受測原檔或刪除初始化 AST 來取得通過。只有綁定來源雜湊之模組頂層外部操作可被替換，一般函式執行仍受原隔離規則限制。預檢、Trace、unittest／coverage 與突變 baseline／mutant 必須共用同一份設定；來源變更拒絕舊設定，報告保留設定 ID 及實際 mock 證據。使用 fixture 時僅採已支援該契約的內建突變引擎；不可宣稱真實目錄、正式設定或 GUI 啟動已驗證。
+
 - 正式 unittest、coverage 與突變試驗必須使用 `generated_test_runner.py` 的執行防護；沒有明確 mock 的檔案／網路／shell 與非隔離 SQLite 操作須失敗，遭吞掉的安全例外也不能算通過。工具載入／traceback 的必要來源讀取與 coverage 自身寫檔須和應用執行分開。
 - 突變觸發隔離阻擋時列為執行錯誤，不得算成 killed；內建／外部引擎都必須拒絕含這類錯誤的品質分數。獨立 `:memory:` SQLite 可用，共享 URI、ATTACH／VACUUM INTO、extension loading 與替換隔離 authorizer 不可用。
 

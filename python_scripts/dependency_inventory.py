@@ -157,8 +157,10 @@ def inventory(scan_root, project_root=None, excluded_paths=()):
                 continue
             result['dynamicImports'] += visitor.dynamic_calls
             roots = [source.parent, project, project / 'src']
+            plain_ancestors = []
             ancestor = source.parent
             while ancestor != project and ancestor.is_relative_to(project):
+                plain_ancestors.append(ancestor)
                 if (ancestor / '__init__.py').is_file():
                     roots.append(ancestor.parent)
                 ancestor = ancestor.parent
@@ -171,6 +173,9 @@ def inventory(scan_root, project_root=None, excluded_paths=()):
                 local = module.startswith('.') or any((base / (top + '.py')).is_file() or
                                                        (base / top).is_dir() for base in roots)
                 kind = 'local' if local else 'stdlib' if top in getattr(sys, 'stdlib_module_names', sys.builtin_module_names) else 'external'
+                if kind == 'external' and any((base / (top + '.py')).is_file() or (base / top).is_dir()
+                                             for base in plain_ancestors):
+                    kind = 'unresolved-local'
                 key = (module, kind)
                 record = records.setdefault(key, {'module': module, 'kind': kind, 'references': []})
                 record['references'].append({'file': relative, 'line': line, 'context': context})
@@ -200,6 +205,9 @@ def finish(result, records):
                 result['issues'].append({'file': record['references'][0]['file'], 'reason': 'package-lookup-failed'})
         else:
             record['availability'] = 'not-checked'
+            if record['kind'] == 'unresolved-local':
+                result['complete'] = False
+                result['issues'].append({'file': record['references'][0]['file'], 'reason': 'local-import-root-unresolved'})
         result['imports'].append(record)
     result['missing'] = sorted(set(result['missing']))
     result['optionalMissing'] = sorted(set(result['optionalMissing']) - set(result['missing']))

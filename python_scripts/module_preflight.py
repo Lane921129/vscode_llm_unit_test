@@ -9,6 +9,7 @@ import types
 from contextlib import redirect_stdout, redirect_stderr
 from dynamic_tracer import TraceSafetyError, import_diagnostic, package_module_context, safe_type_name, exception_message
 from runtime_policy import POLICY_VERSION, guarded_runtime
+from import_fixtures import evidence as import_fixture_evidence
 
 
 def resolve_loaded_dependencies(module, dependencies, source_root):
@@ -64,11 +65,13 @@ def preflight(payload):
             return {'ok': False, 'category': 'environment', 'stage': 'module-resolution',
                     'reason': f'Canonical import {module_name} does not resolve to the selected source file.'}
         return {'ok': True, 'module': module_name, 'importPaths': roots, 'policy_version': POLICY_VERSION,
+                'importFixtures': import_fixture_evidence(),
                 'dependencies': resolve_loaded_dependencies(module, payload.get('dependencies', []),
                                                             payload.get('sourceRoot') or package_root)}
     except (Exception, SystemExit) as error:
         diagnostic = import_diagnostic(error, payload.get('sourceRoot') or package_root)
         return {'ok': False, 'category': 'environment', 'stage': 'module-import',
+                'importFixtures': import_fixture_evidence(),
                 'reason': f'{safe_type_name(error)}: {exception_message(error)}', 'diagnostic': diagnostic, 'policy_version': POLICY_VERSION}
 
 

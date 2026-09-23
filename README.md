@@ -182,6 +182,8 @@ npm run compile
 
 接著以 VS Code 開啟此資料夾，按 `F5` 啟動 Extension Development Host。
 
+匯入受測模組時若會建立目錄、讀取設定或啟動 GUI，請使用工具端的 [匯入測試設定](docs/匯入測試設定_2026_09_23.md)，保持受測原檔不變。此文件包含車輛管理與爬蟲設定，以及實驗室 Python 相依衝突的處理步驟。
+
 ### 使用步驟
 
 1. 在 VS Code 活動列開啟 **Mutation Test Analysis**。

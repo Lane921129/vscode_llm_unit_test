@@ -6,6 +6,7 @@ import { currentExecution, ExecutionContext, throwIfExecutionCancelled } from '.
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { currentImportFixtures } from './importFixtures';
 
 export interface ResolvedDependency {
     module: string; name: string; level?: number; file?: string; resolvedModule?: string; reason?: string;
@@ -16,6 +17,7 @@ export interface PreflightResult {
     module: string;
     importPaths: string[];
     dependencies?: ResolvedDependency[];
+    importFixtures?: { id: string; operations: Array<{ file: string; operation: string; line: number }> };
 }
 
 interface PreflightCache {
@@ -45,6 +47,7 @@ function preflightKey(python: string, file: string, module: string, importPaths:
         importPaths: [...new Set(importPaths.map(item => path.resolve(item)).filter(item => item !== path.resolve(cwd)))],
         inheritedPythonPath: process.env.PYTHONPATH || '',
         executableSearchPath: process.env.PATH || '',
+        importFixtures: currentImportFixtures()?.id || null,
         source: createHash('sha256').update(source).digest('hex')
     })).digest('hex');
 }
@@ -96,7 +99,8 @@ async function executePreflight(python: string, file: string, module: string, im
         const value = JSON.parse(result.stdout);
         if (value.ok !== true) {
             const error = new AnalysisStageError('environment', value.stage || 'module-preflight',
-                `被測模組尚不可在隔離環境載入：${value.reason || 'unknown'}`, value.diagnostic);
+                `被測模組尚不可在隔離環境載入：${value.reason || 'unknown'}`,
+                value.importFixtures ? { ...value.diagnostic, importFixtures: value.importFixtures } : value.diagnostic);
             if (value.stage === 'module-import' || value.stage === 'module-resolution') {
                 cache?.failures.set(key, error);
             }

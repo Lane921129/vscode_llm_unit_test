@@ -118,6 +118,15 @@ class EnvironmentProbeTests(unittest.TestCase):
         self.assertEqual(next(item for item in value['imports'] if item['module'] == 'package.helper')['kind'], 'local')
         self.assertEqual(next(item for item in value['imports'] if item['module'] == 'os')['kind'], 'stdlib')
 
+    def test_plain_ancestor_module_is_unresolved_local_instead_of_a_pip_candidate(self):
+        self.write('application/neutral_store.py', 'def target(): return 1\n')
+        self.write('application/archive/entry.py', 'import neutral_store\nimport neutral_absent\n')
+        value = self.scan()['inventory']
+        self.assertFalse(value['complete'])
+        self.assertEqual(value['missing'], ['neutral_absent'])
+        self.assertEqual(next(item for item in value['imports'] if item['module'] == 'neutral_store')['kind'], 'unresolved-local')
+        self.assertTrue(any(issue['reason'] == 'local-import-root-unresolved' for issue in value['issues']))
+
     def test_inventory_does_not_import_installed_package_or_submodule(self):
         self.write('sample.py', 'import coverage.nonexistent_submodule\n')
         with patch('importlib.machinery.PathFinder.find_spec', return_value=object()) as lookup:

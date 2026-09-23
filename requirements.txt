@@ -5,7 +5,7 @@
 # HTTP and deliberately need no Python SDK.
 
 # mutatest 3.x requires coverage < 6. Native mutmut does not support Windows;
-# use WSL for mutation testing on Windows with Python 3.12+.
+# Windows/Python 3.12+ uses the built-in AST mutation runner; native mutmut needs WSL.
 mutatest>=3.1.0; python_version < "3.12"
 coverage>=4.4,<6; python_version < "3.12"
 mutmut>=3.5.0; python_version >= "3.12" and platform_system != "Windows"

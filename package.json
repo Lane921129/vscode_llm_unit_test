@@ -115,6 +115,23 @@
           "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
           "description": "沒有 requirements 時，優先使用這裡的 import → pip 套件名稱，例如 PIL → Pillow。未設定者在安裝清單帶入同名候選，確認後才嘗試 pip 安裝並重新檢查；也可在清單修改名稱並保存對應。"
         },
+        "llmUnitTest.importFixtures": {
+          "type": "array",
+          "default": [],
+          "maxItems": 64,
+          "description": "匯入前測試設定。只模擬指定來源檔在模組初始化期間的外部操作，不修改受測原檔；預檢、Trace、測試及內建突變共用設定。file 相對於受測專案目錄。設定檔內容僅填測試資料，勿填憑證。",
+          "items": {
+            "type": "object",
+            "required": ["file"],
+            "additionalProperties": false,
+            "properties": {
+              "file": { "type": "string", "description": "受測根目錄內的相對 Python 檔案路徑。" },
+              "mkdir": { "type": "boolean", "default": false, "description": "只模擬此檔案模組頂層的 Path.mkdir。" },
+              "configFiles": { "type": "object", "additionalProperties": { "type": "string" }, "description": "同目錄 ini 檔名到測試內容的對應，供 ConfigParser.read 使用。" },
+              "entryPoints": { "type": "array", "items": { "type": "string" }, "description": "在此檔案模組頂層模擬為返回 None 的外部啟動函式，例如 flet.app。" }
+            }
+          }
+        },
         "llmUnitTest.targetBudget": {
           "type": "object",
           "default": {},
