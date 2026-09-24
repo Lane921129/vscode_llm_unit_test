@@ -18,6 +18,7 @@ import { buildProbeInputs, TypedProbeInputsV1 } from './pipeline/probeInputs';
 import { createStrictQualityPolicy } from './pipeline/qualityPolicy';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
+import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
@@ -591,7 +592,7 @@ async function runBehaviorProbe(
     const suppliedInputs = buildProbeInputs(callerArgs || [], supplementalInputs);
     try {
         const runProbe = async (inputs: TypedProbeInputsV1 | null = null): Promise<BehaviorProbeResult> => {
-            const progressPath = path.join(progressDirectory || os.tmpdir(), `trace_${randomUUID()}.jsonl`);
+            const [progressPath] = reserveArtifactFiles(progressDirectory || os.tmpdir(), ['trace'], 'jsonl');
             const args = [...baseArgs, JSON.stringify(inputs), JSON.stringify({
                 total_timeout_seconds: 12, case_timeout_seconds: 2, progress_path: progressPath
             })];
@@ -2311,7 +2312,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     fs.writeFileSync(testPath, code, 'utf8');
                     const testRunId = randomUUID();
                     const testHash = evidenceHash(code);
-                    const invocationFile = path.join(testDir, `invocation_${testRunId}.json`);
+                    const [invocationFile, coverageFile] = reserveArtifactFiles(testDir, ['invocation', 'coverage'], 'json');
                     const executionArguments = [...generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
                         '--target-file', params.filePath, '--target-name', params.funcName || targetFuncName,
                         '--target-evidence', invocationFile, '--target-run-id', testRunId, '--target-test-file', testPath];
@@ -2336,7 +2337,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     { cwd: testDir, env: testExecutionEnv, timeout: 10000 });
                     const assessment = assessTargetCoverageEvidence(nativeCoverage.stdout, params.filePath,
                         params.funcName || targetFuncName, journal.sourceHash, { testRunId, testHash });
-                    fs.writeFileSync(path.join(testDir, `coverage_${testRunId}.json`), nativeCoverage.stdout, 'utf8');
+                    fs.writeFileSync(coverageFile, nativeCoverage.stdout, 'utf8');
                     const gaps: string[] = [];
                     if (!assessment.available) { gaps.push('Coverage 無法辨識目標模組；目標覆蓋狀態未知。'); }
                     if (assessment.targetFullyCovered === undefined) { gaps.push('目標行覆蓋狀態未知。'); }

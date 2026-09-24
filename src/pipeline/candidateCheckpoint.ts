@@ -73,7 +73,9 @@ export class CandidateCheckpointStore {
 
     saveExecutable(candidate: ExecutableCandidate): ExecutableCheckpoint {
         const codeHash = evidenceHash(candidate.code);
-        const testFile = `executable_${codeHash}.py`;
+        // The full hash is retained and verified below; a short-name collision
+        // must fail closed instead of replacing an existing candidate.
+        const testFile = `exec_${codeHash.slice(0, 16)}.py`;
         const snapshot = freezeCopy<ExecutableCheckpoint>({ ...candidate,
             schemaVersion: 'executable-baseline-v1', sourceHash: this.sourceHash,
             target: this.target, codeHash, testFile, mutationStatus: 'not-measured', mutationScore: null,

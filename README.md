@@ -95,6 +95,10 @@ For a traceable function such as `increment(value)`, Tier 1 executes safe inputs
 
 ## Quality checks and results
 
+New results use a shallow directory layout with bounded names. `target.json` retains the exact source and qualified target, while `batch_manifest.json` maps every target to its report directory. Coverage, invocation and Trace filenames use short sequences; full execution IDs and hashes remain inside the evidence. Very long output roots are rejected with a request to choose a shorter directory.
+
+For existing results that Windows Explorer cannot ZIP, use the standard-library export helper, then copy the single ZIP over RDP. It preserves source bytes and relative paths, verifies every archived file, and reports missing source reports. See [結果匯出與短路徑](docs/結果匯出與短路徑.md).
+
 Run the same core checks locally as CI:
 
 ```bash

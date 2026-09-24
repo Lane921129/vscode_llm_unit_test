@@ -44,6 +44,9 @@ test('checkpoint retains immutable versions and rejects corrupted artifacts', ()
         const store = new CandidateCheckpointStore(directory, 'source-v1', 'target');
         const input = candidate();
         const first = store.saveExecutable(input);
+        assert.match(first.testFile, /^exec_[a-f0-9]{16}\.py$/);
+        assert.equal(first.codeHash.length, 64);
+        assert.equal(store.saveExecutable(input).testFile, first.testFile);
         input.scenarios[0].id = 'changed';
         input.qualityGaps.push('new');
         assert.equal(first.scenarios[0].id, 'Cases.test_keep');

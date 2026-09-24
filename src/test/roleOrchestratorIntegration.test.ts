@@ -149,8 +149,19 @@ class Cases(unittest.TestCase):
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
-        const roots = fs.readdirSync(path.join(directory, 'results'));
-        const output = path.join(directory, 'results', roots[0], 'target');
+        const outputFor = (root: string, target = 'target'): string => {
+            const matches = fs.readdirSync(root, { withFileTypes: true }).filter(item => item.isDirectory()).flatMap(run => {
+                const parent = path.join(root, run.name);
+                return fs.readdirSync(parent, { withFileTypes: true }).filter(item => item.isDirectory())
+                    .map(item => path.join(parent, item.name)).filter(folder => {
+                        const location = JSON.parse(fs.readFileSync(path.join(folder, 'target.json'), 'utf8'));
+                        return location.target === target;
+                    });
+            });
+            assert.equal(matches.length, 1, 'one result location must identify the requested target');
+            return matches[0];
+        };
+        const output = outputFor(path.join(directory, 'results'));
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
@@ -206,7 +217,7 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: path.join(directory, 'incomplete-results') });
         const incompleteRoot = path.join(directory, 'incomplete-results');
-        const incompleteOutput = path.join(incompleteRoot, fs.readdirSync(incompleteRoot)[0], 'target');
+        const incompleteOutput = outputFor(incompleteRoot);
         const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(incomplete.mutationScore, 100, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
         assert.equal(incomplete.reviewStatus, 'incomplete');
@@ -224,7 +235,7 @@ class Cases(unittest.TestCase):
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: interruptedRoot });
-        const interruptedOutput = path.join(interruptedRoot, fs.readdirSync(interruptedRoot)[0], 'target');
+        const interruptedOutput = outputFor(interruptedRoot);
         const interrupted = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(interrupted.terminalStatus, 'retained-after-failure');
         assert.equal(interrupted.mutationScore, null);
@@ -245,7 +256,7 @@ class Cases(unittest.TestCase):
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
                 filePath: sourceFile, funcName: 'target', promptStrategy: 'tier1',
                 maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: changedRoot });
-            const changedOutput = path.join(changedRoot, fs.readdirSync(changedRoot)[0], 'target');
+            const changedOutput = outputFor(changedRoot);
             const changedKnowledge = JSON.parse(fs.readFileSync(path.join(changedOutput, 'function_knowledge.json'), 'utf8'));
             const saved = JSON.parse(fs.readFileSync(path.join(changedOutput, 'executable_baseline.json'), 'utf8'));
             assert.equal(changedKnowledge.mutationScore, null);
@@ -269,7 +280,7 @@ class Cases(unittest.TestCase):
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: betweenSource, funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 2, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: betweenRoot });
-        const betweenOutput = path.join(betweenRoot, fs.readdirSync(betweenRoot)[0], 'target');
+        const betweenOutput = outputFor(betweenRoot);
         const betweenKnowledge = JSON.parse(fs.readFileSync(path.join(betweenOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(changeBeforeNextRound, false, 'fixture changes source after measurement and before the next Writer');
         assert.equal(writers, 1);
@@ -292,7 +303,7 @@ class Cases(unittest.TestCase):
                 filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
                 maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
             const scopeRoot = path.join(directory, engine + '-results');
-            const scopeOutput = path.join(scopeRoot, fs.readdirSync(scopeRoot)[0], 'target');
+            const scopeOutput = outputFor(scopeRoot);
             const measured = JSON.parse(fs.readFileSync(path.join(scopeOutput, 'loop1_mutation.json'), 'utf8'));
             assert.equal(measured.engine, 'builtin');
             assert.equal(measured.targetScope.kind, 'function');
@@ -311,7 +322,7 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'oversize-results') });
         const oversizeRoot = path.join(directory, 'oversize-results');
-        const oversizeOutput = path.join(oversizeRoot, fs.readdirSync(oversizeRoot)[0], 'target');
+        const oversizeOutput = outputFor(oversizeRoot);
         const oversizeEvents = fs.readFileSync(path.join(oversizeOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.ok(oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
         assert.ok(!oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'requested'));
@@ -326,7 +337,7 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier3',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'service-failure') });
         const serviceRoot = path.join(directory, 'service-failure');
-        const serviceOutput = path.join(serviceRoot, fs.readdirSync(serviceRoot)[0], 'target');
+        const serviceOutput = outputFor(serviceRoot);
         const serviceJournal = fs.readFileSync(path.join(serviceOutput, 'role_events.jsonl'), 'utf8');
         assert.doesNotMatch(serviceJournal, /PROVIDER_BODY_MUST_REMAIN_PRIVATE/);
         const serviceEvents = serviceJournal.trim().split('\n').map(line => JSON.parse(line));
@@ -344,7 +355,7 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier3',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
         const scaffoldRoot = path.join(directory, 'scaffold-results');
-        const scaffoldOutput = path.join(scaffoldRoot, fs.readdirSync(scaffoldRoot)[0], 'target');
+        const scaffoldOutput = outputFor(scaffoldRoot);
         const scaffoldKnowledge = JSON.parse(fs.readFileSync(path.join(scaffoldOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(scaffoldKnowledge.terminalStatus, 'passed', scaffoldKnowledge.failure);
         assert.equal(scaffoldKnowledge.resolvedTier, 3);
@@ -411,7 +422,7 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'partial.py'), funcName: 'Widget.normalize', promptStrategy: 'tier1',
             maxLoops: 2, timeoutSeconds: 60, outputPath: path.join(directory, 'partial-results') });
         const partialRoot = path.join(directory, 'partial-results');
-        const partialOutput = path.join(partialRoot, fs.readdirSync(partialRoot)[0], 'Widget.normalize');
+        const partialOutput = outputFor(partialRoot, 'Widget.normalize');
         const partialKnowledge = JSON.parse(fs.readFileSync(path.join(partialOutput, 'function_knowledge.json'), 'utf8'));
         const partialEvents = fs.readFileSync(path.join(partialOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         const accepted = partialEvents.filter(event => event.stage === 'baseline' && event.status === 'accepted');
@@ -443,7 +454,7 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'bad-runner-baseline') });
         const badRoot = path.join(directory, 'bad-runner-baseline');
-        const badOutput = path.join(badRoot, fs.readdirSync(badRoot)[0], 'target');
+        const badOutput = outputFor(badRoot);
         const badKnowledge = JSON.parse(fs.readFileSync(path.join(badOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(badKnowledge.failureStage, 'trace-baseline');
         assert.deepEqual(roles, ['analyst-planning', 'writer'], 'runner-owned failure never consumes model repair or review');
@@ -473,7 +484,7 @@ class Cases(unittest.TestCase):
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
                 filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier2',
                 maxLoops: 1, timeoutSeconds: 60, outputPath: repairRoot });
-            const repairOutput = path.join(repairRoot, fs.readdirSync(repairRoot)[0], 'target');
+            const repairOutput = outputFor(repairRoot);
             const eventText = fs.readFileSync(path.join(repairOutput, 'role_events.jsonl'), 'utf8');
             const repairEvents = eventText.trim().split('\n').map(line => JSON.parse(line));
             const repairKnowledge = JSON.parse(fs.readFileSync(path.join(repairOutput, 'function_knowledge.json'), 'utf8'));
