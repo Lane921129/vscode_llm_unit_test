@@ -69,6 +69,7 @@ import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepa
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
+import { planCallerPartitions } from './tier/callerPartitionPlan';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1777,8 +1778,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 sanitizedCode = "";
                 rawCode = "";
 
-                const callerContextsCount = astContext?.callerContexts?.length || 0;
-                const useDivideAndConquer = (currentTier === 2) && (evalStrategy === 'small') && (callerContextsCount > 1) && (!survivedMutants);
+                const callerPlan = planCallerPartitions(astContext?.callerContexts || []);
+                const callerContextsCount = callerPlan.callers.length;
+                const useDivideAndConquer = (currentTier === 2) && (evalStrategy === 'small')
+                    && callerPlan.mode === 'partitioned' && (!survivedMutants);
+                if (currentTier === 2 && evalStrategy === 'small' && !survivedMutants) {
+                    const { callers: _callers, ...detail } = callerPlan;
+                    recordRole('caller-partition', 'planned', detail);
+                    log(`[分治規劃] ${callerPlan.totalCallers} 個呼叫站、${callerPlan.distinctInputs} 組已知輸入：${useDivideAndConquer ? '按不同輸入分組' : '使用單次生成，保留完整語境'}。`);
+                }
 
                 // ─── Tier 1：LLM 證據導向生成；未驗證 Auto 才使用確定性備援 ───
                 if (currentTier === 1 && !survivedMutants) {
@@ -1886,8 +1894,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 log(`[分治合流] 💡 偵測到 ${callerContextsCount} 個呼叫站，開啟分治合流模式（單一小 Task 多次請求，避免失焦與失憶）...`);
                 const subSnippets: string[] = [];
 
-                for (let cIdx = 0; cIdx < astContext.callerContexts.length; cIdx++) {
-                    const ctx = astContext.callerContexts[cIdx];
+                for (let cIdx = 0; cIdx < callerPlan.callers.length; cIdx++) {
+                    const ctx = callerPlan.callers[cIdx];
                     log(`[分治合流] 正在生成第 ${cIdx + 1}/${callerContextsCount} 個呼叫點測試: \`${ctx.caller_file}\` -> \`${ctx.caller_func}()\``);
 
                     // 打造微型 AST／行為觀測 context：子任務只能看到本 caller

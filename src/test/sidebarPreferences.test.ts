@@ -108,10 +108,13 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     assert.equal(elements.get('mutpy-timeout').value, String(DEFAULT_MUTATION_TIMEOUT_SECONDS));
     elements.get('env-type').value = 'local';
     elements.get('model-select').value = 'fixture-model';
-    elements.get('file-select').value = '/project/target.py';
+    // The legacy batch history must not override the selected project for all.
     receive({ data: { command: 'setBatchPath', path: '/batch' } });
     receive({ data: { command: 'setProjectPath', path: '/project' } });
-    assert.equal(elements.get('batch-path').value, '/batch');
+    assert.equal(elements.has('batch-path'), false);
+    assert.equal(elements.get('file-select').value, '');
+    assert.equal(elements.get('func-select').disabled, true);
+    elements.get('file-select').value = '/project/target.py';
     elements.get('btn-prepare-env').onclick();
     assert.equal(messages.at(-1).command, 'prepareProjectEnvironment');
     assert.equal(messages.at(-1).filePath, undefined);
@@ -133,18 +136,45 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     assert.equal(elements.get('btn-run').disabled, true);
     receive({ data: { command: 'environmentPreparationFinished' } });
     assert.equal(elements.get('btn-run').disabled, false);
-    // Keep the second run's project identical so this test needs no dashboard DOM.
-    elements.get('batch-path').value = '/project';
+    elements.get('func-select').value = 'stale_function';
+    elements.get('file-select').onchange({ target: { value: '/project/target.py' } });
+    assert.equal(elements.get('func-select').value, '');
+    assert.equal(messages.at(-1).command, 'getFunctions');
+    receive({ data: { command: 'setFunctions', filePath: '/old/target.py', funcs: ['wrong'] } });
+    assert.equal(elements.get('func-select').disabled, true);
+    receive({ data: { command: 'setFunctions', filePath: '/project/target.py', funcs: ['target'] } });
+    assert.equal(elements.get('func-select').disabled, false);
     for (const empty of [false, true]) {
         if (empty) { elements.get('max-loop').value = ''; elements.get('mutpy-timeout').value = ''; }
-        for (const id of ['btn-run', 'btn-batch-run']) {
-            elements.get(id).onclick();
+        for (const file of ['/project/target.py', '']) {
+            elements.get('file-select').value = file;
+            elements.get('file-select').onchange({ target: { value: file } });
+            elements.get('btn-run').onclick();
             const message = messages.at(-1);
+            assert.equal(message.command, file ? 'startAnalysis' : 'startBatchAnalysis');
+            if (!file) {
+                assert.equal(message.batchPath, '/project');
+                assert.equal(message.filePath, undefined);
+                assert.equal(message.funcName, undefined);
+            } else { assert.equal(message.filePath, file); }
             assert.equal(message.maxLoops, DEFAULT_MAX_LOOPS);
             assert.equal(message.mutpyTimeout, DEFAULT_MUTATION_TIMEOUT_SECONDS);
             assert.equal(message.timeoutSeconds, 60);
+            const count = messages.length;
+            elements.get('btn-run').onclick();
+            assert.equal(messages.length, count, 'running analysis prevents duplicate start');
+            receive({ data: { command: 'analysisFinished' } });
         }
     }
+    elements.get('file-select').value = '/project/target.py';
+    receive({ data: { command: 'setFiles', projectPath: '/previous-project', files: [] } });
+    assert.equal(elements.get('file-select').value, '/project/target.py', 'stale project scans cannot replace the selected scope');
+    receive({ data: { command: 'setFiles', projectPath: '/project', files: [{ path: '/project/a.py', name: 'a.py' }] } });
+    assert.equal(elements.get('file-select').value, '');
+    assert.equal(elements.get('func-select').disabled, true);
+    elements.get('project-path').value = '';
+    elements.get('btn-run').onclick();
+    assert.equal(messages.at(-1).command, 'appendLog');
 });
 
 test('backend commands use the same defaults for missing/invalid limits and preserve explicit overrides', () => {

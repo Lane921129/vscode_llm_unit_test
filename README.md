@@ -21,7 +21,7 @@
 | Tier | Best for | Core approach |
 |---|---|---|
 | 1 | Traceable code; qualified or manually selected models | LLM selects evidence-bound test organization from source/AST/Trace/Skill Cards; Auto with an unprobed model uses a labelled deterministic Trace fallback. |
-| 2 | Several clear call sites | Uses constrained, divide-and-conquer LLM generation when helpful. |
+| 2 | Several clear call sites | Groups identical replayable inputs and splits only 2–4 distinct groups. Unknown inputs or larger groups use the standard full-context generation path. |
 | 3 | External dependencies | Supplies a Mock Scaffold and verified constructor setup. |
 | 4 | Complex code and survived mutants | Uses full context, reviewer validation, and bounded self-repair. |
 
@@ -57,9 +57,13 @@ Then open this folder in VS Code and press `F5` to launch an Extension Developme
 2. Choose a project directory and a separate output directory.
 3. Choose Local, Cloud, or Custom API.
 4. Configure a model and press **Test Connection**.
-5. Select a Python file and a top-level function or direct `Class.method`.
+5. Leave the file selection at **all (entire project)** to test the selected project, or choose a Python file and optionally a top-level function or direct `Class.method`. A file's function selection defaults to `all`.
 6. Select Auto or a Tier, then run the analysis.
 7. Open the completed function card in the coverage dashboard to view its `final_report.md`.
+
+All scopes use the same run button. File labels include their project-relative path so backup copies can be distinguished. Entire-project analysis follows the existing discovery rules and can include backup directories; select a file or a narrower project when those copies are outside the intended scope.
+
+Starting analysis does not install packages. **Check this project's dependencies** lists missing packages for explicit confirmation before installation and checks the environment again afterward. Dependency conflicts, incompatible APIs and import-time side effects need their specific diagnostics addressed. Configure [import fixtures](docs/匯入測試設定_2026_09_23.md) in the testing workspace to isolate supported initialization without editing the tested source.
 
 For a traceable function such as `increment(value)`, Tier 1 executes safe inputs and uses the observed behavior as its assertion oracle. When LLM generation is permitted, the model decides which supported behaviors and source branches to organize into tests; it may not invent assertions. For an instance method, it only reuses constructor arguments that were verified from a safe call site; it never invents a required constructor dependency.
 

@@ -92,8 +92,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     this.webview?.postMessage({ command: 'pythonEnvironmentSelection',
                         python: configuredPythonForResource(savedProjPath, savedProjPath) });
 
-                    // Restore the explicit batch choice before the Webview's
-                    // project-path fallback can fill the batch field.
+                    // Retain the legacy message for older views. The current
+                    // unified all selection always uses savedProjPath.
                     if (savedBatchPath) {
                         this.webview?.postMessage({ command: 'setBatchPath', path: savedBatchPath });
                     }
@@ -104,7 +104,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         this.webview?.postMessage({ command: 'setOutputPath', path: savedPath });
                     }
                     const files = await this.findPythonFiles(savedProjPath);
-                    this.webview?.postMessage({ command: 'setFiles', files });
+                    this.webview?.postMessage({ command: 'setFiles', projectPath: savedProjPath, files });
 
                     // Background fetch for local models
                     this.fetchLocalModels().then(models => {
@@ -168,7 +168,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                         // 重新掃描並更新檔案列表
                         const files = await this.findPythonFiles(projectPath);
-                        this.webview?.postMessage({ command: 'setFiles', files });
+                        this.webview?.postMessage({ command: 'setFiles', projectPath, files });
                         
                         if (files.length === 0) {
                             vscode.window.showWarningMessage('在選擇的資料夾中沒有找到任何 .py 檔案。');
@@ -226,7 +226,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     this.webview?.postMessage({ command: 'pythonEnvironmentSelection',
                         python: configuredPythonForResource(message.filePath, this.lastFolder('project')) });
                     const funcs = await this.findPythonFunctions(message.filePath);
-                    this.webview?.postMessage({ command: 'setFunctions', funcs });
+                    this.webview?.postMessage({ command: 'setFunctions', filePath: message.filePath, funcs });
                     break;
                 }
 
@@ -670,7 +670,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     if (dirent.isDirectory()) {
                                         dirQueue.push(fullPath);
                                     } else if (file.endsWith('.py')) {
-                                        files.push({ name: file, path: fullPath });
+                                        files.push({ name: path.relative(rootPath, fullPath), path: fullPath });
                                     }
                                 }
                             })
@@ -688,7 +688,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         } catch (e) {
             console.error('掃描專案檔案失敗', e);
         }
-        return files;
+        return files.sort((left, right) => left.name.localeCompare(right.name));
     }
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {

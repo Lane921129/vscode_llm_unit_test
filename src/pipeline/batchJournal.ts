@@ -206,7 +206,7 @@ export class BatchJournal {
             '## 環境障礙', '', '| 分類 | 共同原因 | 受影響目標 |', '| --- | --- | ---: |',
             ...environmentIssues.map(issue => `| ${issue.kind} | ${safe(issue.issue)} | ${issue.affectedTargets} |`), '',
             '缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。',
-            '匯入副作用：把目錄／檔案／資料庫初始化移到明確啟動階段或隔離測試入口，保留安全防護。', '',
+            '匯入副作用：在測試工具設定 llmUnitTest.importFixtures，明確模擬初始化相依，保持受測原檔不變。安裝套件不能解決目錄建立等副作用；API 不相容須核對原專案版本宣告。', '',
             '## 未完成與略過', '',
             ...this.discoveryFailures.map(item => `- 無法掃描 ${safe(item.file)}：${safe(item.stage)}`),
             ...this.targets.filter(t => t.state !== 'finished').map(t => `- ${safe(t.file)} :: ${safe(t.target)}：${t.terminalStatus || t.state}`),

@@ -288,10 +288,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         <summary>${t('ui.testTarget')}</summary>
         <div class="content">
             <label>${t('ui.file')}</label>
-            <select id="file-select"><option value="">-- ${t('ui.file')} --</option></select>
+            <select id="file-select"><option value="">${t('ui.allFiles')}</option></select>
             
             <label style="margin-top:8px;">${t('ui.function')}</label>
-            <select id="func-select"><option value="">-- All --</option></select>
+            <select id="func-select" disabled><option value="">all</option></select>
 
             
             <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
@@ -299,14 +299,6 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">${t('ui.abortBtn')}</button>
             </div>
 
-            <hr style="width: 100%; border: 1px solid var(--vscode-editorGroup-border); margin: 15px 0 5px 0;">
-            <label>📁 ${t('ui.batchScope')}</label>
-            <div class="flex-row">
-                <input type="text" id="batch-path" readonly placeholder="Workspace">
-                <button id="btn-browse-batch" style="width:40px; flex-shrink:0;">...</button>
-            </div>
-            
-            <button id="btn-batch-run" style="margin-top:10px; width:100%;">▶️ Batch Run</button>
         </div>
     </details>
 
@@ -379,7 +371,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         const i18n = {
             noCoverageData: "${t('ui.noCoverageData')}",
             runBtn: "${t('ui.runBtn')}",
-            batchRunBtn: "▶️ Batch Run"
+            allFiles: "${t('ui.allFiles')}"
         };
 
         vscode.postMessage({ command: 'getInitialData' });
@@ -582,10 +574,23 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     document.getElementById('new-key-value').value = '';
                     document.getElementById('api-key-select').value = msg.keyName || '';
                     break;
-                case 'setFiles': document.getElementById('file-select').innerHTML = '<option value="">-- Select File --</option>' + msg.files.map(f => \`<option value="\${f.path}">\${f.name}</option>\`).join(''); break;
-                case 'setFunctions': document.getElementById('func-select').innerHTML = '<option value="">-- All --</option>' + msg.funcs.map(f => \`<option value="\${f}">\${f}()</option>\`).join(''); break;
-                case 'setProjectPath': document.getElementById('project-path').value = msg.path; if (!document.getElementById('batch-path').value) document.getElementById('batch-path').value = msg.path; break;
-                case 'setBatchPath': document.getElementById('batch-path').value = msg.path; break;
+                case 'setFiles':
+                    if (msg.projectPath !== document.getElementById('project-path').value) break;
+                    document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>' + msg.files.map(f => \`<option value="\${escapeHtml(f.path)}">\${escapeHtml(f.name)}</option>\`).join('');
+                    document.getElementById('file-select').value = '';
+                    resetFunctionSelection();
+                    break;
+                case 'setFunctions':
+                    if (!msg.filePath || msg.filePath !== document.getElementById('file-select').value) break;
+                    document.getElementById('func-select').innerHTML = '<option value="">all</option>' + msg.funcs.map(f => \`<option value="\${escapeHtml(f)}">\${escapeHtml(f)}()</option>\`).join('');
+                    document.getElementById('func-select').disabled = false;
+                    break;
+                case 'setProjectPath':
+                    document.getElementById('project-path').value = msg.path;
+                    document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>';
+                    document.getElementById('file-select').value = '';
+                    resetFunctionSelection();
+                    break;
                 case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
                 case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
                 case 'updateCoverage': {
@@ -634,26 +639,21 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
-                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = environmentBusy;
                     }
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
-                    for (const id of ['btn-run', 'btn-batch-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = false;
                     }
                     break;
                 case 'analysisFinished':
                     const runBtn = document.getElementById('btn-run');
-                    const batchRunBtn = document.getElementById('btn-batch-run');
                     if (runBtn) {
                         runBtn.disabled = environmentBusy;
                         runBtn.innerText = i18n.runBtn;
-                    }
-                    if (batchRunBtn) {
-                        batchRunBtn.disabled = environmentBusy;
-                        batchRunBtn.innerText = i18n.batchRunBtn;
                     }
                     const abortBtn = document.getElementById('btn-abort');
                     if (abortBtn) abortBtn.style.display = 'none';
@@ -685,9 +685,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
         document.getElementById('btn-browse-out').onclick = () => vscode.postMessage({ command: 'browseFolder' });
-        document.getElementById('btn-browse-batch').onclick = () => vscode.postMessage({ command: 'browseBatchFolder' });
-        
+        function resetFunctionSelection() {
+            const functions = document.getElementById('func-select');
+            functions.innerHTML = '<option value="">all</option>';
+            functions.value = '';
+            functions.disabled = true;
+        }
         document.getElementById('file-select').onchange = (e) => { 
+            resetFunctionSelection();
             if(e.target.value) vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
         };
 
@@ -795,25 +800,22 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-prepare-env-scope').disabled = true;
             document.getElementById('btn-run').disabled = true;
-            document.getElementById('btn-batch-run').disabled = true;
-            if (isBatch) {
-                document.getElementById('btn-batch-run').innerText = '⏳ Batch Testing...';
-            } else {
-                document.getElementById('btn-run').innerText = '⏳ Testing...';
-            }
+            document.getElementById('btn-run').innerText = isBatch ? '⏳ Testing all...' : '⏳ Testing...';
             document.getElementById('btn-abort').style.display = 'block';
         }
 
         document.getElementById('btn-run').onclick = () => {
             const { envType, modelName, cloudKeyName } = getStartParams();
             const filePath = document.getElementById('file-select').value;
+            const batchPath = document.getElementById('project-path').value;
             
-            if(!envType || !modelName || !filePath || (envType === 'cloud' && !cloudKeyName)) {
-                vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and File.' });
+            if(environmentBusy || document.getElementById('btn-run').disabled) return;
+            if(!envType || !modelName || (!filePath && !batchPath) || (envType === 'cloud' && !cloudKeyName)) {
+                vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
                 return;
             }
 
-            setRunningState(false);
+            setRunningState(!filePath);
 
             const currentProj = document.getElementById('project-path').value;
             if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
@@ -821,6 +823,15 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 renderDashboard();
             }
             lastTestedProjectPath = currentProj;
+
+            if (!filePath) {
+                vscode.postMessage({
+                    command: 'startBatchAnalysis',
+                    envType, modelName, cloudKeyName, batchPath,
+                    ...getCommonExecutionOptions()
+                });
+                return;
+            }
 
             vscode.postMessage({
                 command: 'startAnalysis',
@@ -830,30 +841,6 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             });
         };
 
-        document.getElementById('btn-batch-run').onclick = () => {
-            const { envType, modelName, cloudKeyName } = getStartParams();
-            let batchPath = document.getElementById('batch-path').value || document.getElementById('project-path').value;
-            
-            if(!envType || !modelName || !batchPath || (envType === 'cloud' && !cloudKeyName)) {
-                vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Batch Path.' });
-                return;
-            }
-
-            setRunningState(true);
-
-            const currentProj = batchPath;
-            if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
-                resultsMap.clear();
-                renderDashboard();
-            }
-            lastTestedProjectPath = currentProj;
-
-            vscode.postMessage({
-                command: 'startBatchAnalysis',
-                envType, modelName, cloudKeyName, batchPath,
-                ...getCommonExecutionOptions()
-            });
-        };
     </script>
 </body>
 </html>`;

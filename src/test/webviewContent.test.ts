@@ -26,7 +26,10 @@ test('startAnalysis and startBatchAnalysis include cloudKeyName in payload', () 
 
     assert.ok(html.includes("const { envType, modelName, cloudKeyName } = getStartParams();"));
     assert.ok(html.includes("command: 'startAnalysis',\n                envType, modelName, cloudKeyName, filePath,"));
-    assert.ok(html.includes("command: 'startBatchAnalysis',\n                envType, modelName, cloudKeyName, batchPath,"));
+    assert.match(html, /command: 'startBatchAnalysis',\s+envType, modelName, cloudKeyName, batchPath,/);
+    assert.ok(!html.includes('id="btn-batch-run"'));
+    assert.ok(!html.includes('id="batch-path"'));
+    assert.ok(html.includes('<option value="">ui.allFiles</option>'));
 });
 
 test('test settings do not expose an unsupported concurrency control', () => {

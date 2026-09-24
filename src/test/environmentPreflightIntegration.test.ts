@@ -68,6 +68,19 @@ test('missing target dependency preserves declared import setup and diagnostics 
         }
         assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), source);
         assert.equal(fs.existsSync(path.join(directory, 'must_not_exist')), false);
+        // A source-scope ambiguity must stop before asking a model to repair tests.
+        const duplicate = 'def target(value): return value + 1\ndef target(value): return value + 2\n';
+        fs.writeFileSync(params.filePath, duplicate);
+        const duplicateOutput = path.join(directory, 'duplicate-results');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ ...params, outputPath: duplicateOutput });
+        assert.equal(modelCalls, 0);
+        const duplicateRoot = path.join(duplicateOutput, fs.readdirSync(duplicateOutput)[0]);
+        const duplicateRun = path.join(duplicateRoot, fs.readdirSync(duplicateRoot)[0]);
+        const duplicateKnowledge = JSON.parse(fs.readFileSync(path.join(duplicateRun, 'function_knowledge.json'), 'utf8'));
+        assert.equal(duplicateKnowledge.failureCategory, 'ast-trace');
+        assert.equal(duplicateKnowledge.failureStage, 'static-analysis');
+        assert.match(duplicateKnowledge.failure, /no unique executable source definition/);
+        assert.equal(fs.readFileSync(params.filePath, 'utf8'), duplicate);
     } finally {
         clearPreflightFailureCache();
         globalThis.fetch = originalFetch;

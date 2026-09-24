@@ -786,6 +786,17 @@ def extract_info(filepath, func_name):
             source = f.read()
         lines = source.split('\n')
         tree = ast.parse(source, filename=filepath)
+        # Match the runner's source identity before Trace or model work. A
+        # duplicate definition cannot be repaired by rewriting generated tests.
+        if '.' in func_name or any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                  and node.name == func_name for node in tree.body):
+            from target_invocation import selected_node
+            try:
+                selected_node(source, func_name)
+            except ValueError:
+                print(json.dumps({'error': 'Selected target has no unique executable source definition: ' + func_name,
+                                  'reason_code': 'target-scope-unresolved'}, ensure_ascii=False))
+                return
         local_classes = {
             node.name: node for node in tree.body
             if isinstance(node, ast.ClassDef)
