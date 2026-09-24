@@ -262,6 +262,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <button id="btn-prepare-env" style="flex:1;">${t('ui.prepareProjectEnvironment')}</button>
                 <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
             </div>
+            <button id="btn-import-setup">檢查模組載入／初始化設定</button>
             <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
             <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
             
@@ -406,25 +407,22 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
-        function getScoreBadge(score, coverage) {
-            const scoreNum = parseFloat(score);
-            const scoreColor = score === '失敗' ? '#c75050'
-                : score === '測試中' ? '#1f6feb'
-                : isNaN(scoreNum) ? '#888'
-                : scoreNum >= 80 ? '#2ea043'
-                : scoreNum >= 50 ? '#d29922'
-                : '#c75050';
+        function getScoreBadge(score, coverage, outcome) {
+            const colors = { passed: '#2ea043', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
+            const state = outcome || { label: '尚未判定完整通過', kind: 'pending' };
+            const outcomeBadge = '<span style="background:' + (colors[state.kind] || colors.pending) + '; color:#fff; padding:2px 7px; border-radius:4px;">' + escapeHtml(state.label) + '</span>';
+            const scoreColor = '#555';
 
             const scoreTitle = score === '測試中' ? '狀態: 測試中 (正在執行突變測試與分析)'
                 : score === '失敗' ? '狀態: 執行中斷或驗證失敗'
-                : '🧬 突變分數 (Mutation Score): ' + score + ' (測試殺死變異體的百分比，越高越能抓出潛在 Bug)';
+                : '突變量測: ' + score + '；此分數不代表最終通過，請看最終狀態。';
             const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;" title="' + escapeHtml(scoreTitle) + '">🧬 ' + escapeHtml(score) + '</span>';
 
             const covTitle = '📊 行覆蓋率 (Line Coverage): ' + (coverage || 'N/A') + ' (測試所涵蓋執行的原始程式碼行數比例)';
             const covBadge = coverage
                 ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
                 : '';
-            return '<div class="result-badges">' + scoreBadge + covBadge + '</div>';
+            return '<div class="result-badges">' + outcomeBadge + scoreBadge + covBadge + '</div>';
         }
 
         function toggleItemCheck(id, checked) {
@@ -480,7 +478,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             header.appendChild(titleBox);
 
             const badgesDiv = document.createElement('div');
-            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage);
+            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome);
             header.appendChild(badgesDiv);
             card.appendChild(header);
 
@@ -614,9 +612,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         score: msg.score,
                         coverage: msg.coverage,
                         reason: msg.reason,
+                        outcome: msg.score === '測試中' ? undefined : resultsMap.get(fileName)?.outcome,
                         reportPath: msg.reportPath !== undefined ? msg.reportPath : resultsMap.get(fileName)?.reportPath || '',
                         checked: resultsMap.get(fileName)?.checked || false
                     });
+                    renderDashboard();
+                    break;
+                }
+                case 'updateOutcome': {
+                    const old = resultsMap.get(msg.fileName) || { id: msg.fileName, fileName: msg.fileName,
+                        file: msg.file, func: msg.func, score: 'N/A', coverage: null, checked: false };
+                    resultsMap.set(msg.fileName, { ...old, outcome: msg.outcome, reportPath: msg.reportPath });
                     renderDashboard();
                     break;
                 }
@@ -639,13 +645,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
-                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = environmentBusy;
                     }
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
-                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = false;
                     }
                     break;
@@ -659,6 +665,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     if (abortBtn) abortBtn.style.display = 'none';
                     document.getElementById('btn-prepare-env').disabled = environmentBusy;
                     document.getElementById('btn-prepare-env-scope').disabled = environmentBusy;
+                    document.getElementById('btn-import-setup').disabled = environmentBusy;
                     break;
             }
         });
@@ -752,6 +759,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return { envType, modelName, cloudKeyName: envType === 'cloud' ? document.getElementById('api-key-select').value : undefined };
         };
 
+        document.getElementById('btn-import-setup').onclick = () => {
+            const projectRoot = document.getElementById('project-path').value;
+            if (!projectRoot) { alert('請先選擇受測專案資料夾'); return; }
+            vscode.postMessage({ command: 'prepareImportSetup', projectRoot, outputPath: document.getElementById('output-path').value });
+        };
         document.getElementById('btn-prepare-env').onclick = () => {
             const projectRoot = document.getElementById('project-path').value;
             vscode.postMessage(projectRoot ? { command: 'prepareProjectEnvironment', projectRoot }
@@ -799,6 +811,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         function setRunningState(isBatch) {
             document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-prepare-env-scope').disabled = true;
+            document.getElementById('btn-import-setup').disabled = true;
             document.getElementById('btn-run').disabled = true;
             document.getElementById('btn-run').innerText = isBatch ? '⏳ Testing all...' : '⏳ Testing...';
             document.getElementById('btn-abort').style.display = 'block';

@@ -20,10 +20,13 @@ const storage = new AsyncLocalStorage<ImportFixturePlan | null>();
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 
 /** Only declarative test inputs; never rewrite a target or execute a setup script. */
-export function createImportFixturePlan(root: string, input: unknown): ImportFixturePlan | null {
+export function createImportFixturePlan(root: string, input: unknown, boundRoot = ''): ImportFixturePlan | null {
     if (!Array.isArray(input) || input.length > 64) { throw new Error('匯入測試設定必須是最多 64 筆的清單。'); }
     if (!input.length) { return null; }
     root = fs.realpathSync(root);
+    if (boundRoot && fs.realpathSync(boundRoot) !== root) {
+        throw new Error('匯入測試設定綁定另一個受測根目錄；請切回原專案，或使用「檢查模組載入／初始化設定」為此專案重新設定。');
+    }
     const seen = new Set<string>();
     const rules = input.map((value: unknown) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error('匯入測試設定格式錯誤。'); }

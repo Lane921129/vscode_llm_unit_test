@@ -160,7 +160,7 @@ export class PythonEnvironmentController {
                 if (token.isCancellationRequested) { this.controller?.abort(); }
                 try {
                     const candidates = await discoverPythonCandidates(resource, root);
-                    const fixtures = scope === 'file' ? createImportFixturePlan(root, config.get<unknown>('importFixtures', [])) : null;
+                    const fixtures = scope === 'file' ? createImportFixturePlan(root, config.get<unknown>('importFixtures', []), config.get<string>('importFixtureRoot', '')) : null;
                     const result = await withImportFixtures(fixtures, () => preparePythonEnvironment({ projectRoot: root, file: targetFile, candidates,
                         scope, excludedPaths: [config.get<string>('outputPath', '')].filter(Boolean).map(value => path.resolve(root, value)),
                         inventory: scan => { latestInventory = scan; initialMissing ??= [...scan.missing]; },

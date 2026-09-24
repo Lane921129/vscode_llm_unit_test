@@ -16,6 +16,7 @@ export class AnalysisJournal {
     private repairFailureCounts: Record<string, number> = {};
     readonly runId = randomUUID();
     readonly sourceHash: string;
+    snapshot(): Record<string, unknown> { return { ...this.knowledgeState }; }
     constructor(private readonly directory: string, source: string, target: string, model: string,
         qualityPolicy?: QualityPolicySnapshot) {
         this.sourceHash = evidenceHash(source);

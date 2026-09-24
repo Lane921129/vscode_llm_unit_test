@@ -15,6 +15,7 @@
 - Uses AST/Trace evidence-bound Skill Cards for async code, generators, mappings, floating-point values, database isolation, and mocking. No domain-specific vocabulary is hard-coded.
 - Validates generated tests before scoring: target invocation, assertions, Python structure, safe mocking, isolated I/O, runtime execution, coverage, and mutation baseline.
 - Writes `final_report.md` so failures identify the responsible stage: model, AST, trace, validation, coverage, or mutation tool.
+- Shows the final outcome separately from coverage and mutation scores. Batch runs check module loading before model requests; blocked imports open a diagnosis before continuing. Use **檢查模組載入／初始化設定** for a source-bound setup preview and guarded recheck; see [匯入測試設定](docs/匯入測試設定_2026_09_23.md).
 
 ## How the four Tiers work
 

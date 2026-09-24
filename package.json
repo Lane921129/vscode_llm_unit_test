@@ -58,11 +58,20 @@
       {
         "command": "llm-unit-test.preparePythonEnvironment",
         "title": "檢查並補齊 Python 測試環境"
+      },
+      {
+        "command": "llm-unit-test.prepareImportSetup",
+        "title": "檢查模組載入／初始化設定"
       }
     ],
     "configuration": {
       "title": "LLM 自動化測試設定",
       "properties": {
+        "llmUnitTest.importFixtureRoot": {
+          "type": "string",
+          "default": "",
+          "description": "匯入初始化替身綁定的受測根目錄；設定精靈會保存，切換受測專案時不得套用到同名檔案。"
+        },
         "llmUnitTest.projectPath": {
           "type": "string",
           "default": "",

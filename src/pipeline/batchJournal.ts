@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { evidenceHash } from './analysisJournal';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
+import { describeImportIssue } from '../environment/importDiagnostics';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -13,7 +14,8 @@ interface BatchTarget {
     modelRequests?: number; environment?: EnvironmentIssue;
 }
 interface EnvironmentIssue {
-    kind: 'missing-dependency' | 'import-side-effect' | 'module-resolution' | 'other';
+    kind: 'missing-dependency' | 'import-side-effect' | 'dependency-api' | 'module-resolution' | 'other';
+    issue?: string; advice?: string;
     missingModule?: string; operation?: string; origin?: { file: string; line: number };
 }
 
@@ -69,6 +71,7 @@ export class BatchJournal {
     private readonly startedAt = new Date().toISOString();
     private status = 'discovering';
     private finishedAt?: string;
+    private blockedModules = 0;
     private readonly targets: BatchTarget[] = [];
     private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
     private readonly files: string[] = [];
@@ -93,6 +96,7 @@ export class BatchJournal {
         this.discoveryFailures.push({ file: this.relative(file), stage }); this.save();
     }
     start(): void { this.status = 'running'; this.save(); }
+    preflight(blockedModules: number): void { this.blockedModules = blockedModules; this.save(); }
     begin(id: number): void { this.targets[id].state = 'running'; this.save(); }
     attach(id: number, directory: string): void {
         const relative = path.relative(this.directory, directory);
@@ -135,16 +139,9 @@ export class BatchJournal {
                 target.stage = knowledge.failureStage;
                 if (target.category === 'environment') {
                     const diagnostic = knowledge.diagnostic || {};
-                    const origin = diagnostic.origin;
-                    target.environment = diagnostic.exception_type === 'ModuleNotFoundError' && typeof diagnostic.missing_module === 'string'
-                        ? { kind: 'missing-dependency', missingModule: diagnostic.missing_module }
-                        : diagnostic.exception_type === 'TraceSafetyError' && typeof diagnostic.blocked_operation === 'string'
-                            ? { kind: 'import-side-effect', operation: diagnostic.blocked_operation }
-                            : { kind: target.stage === 'module-resolution' ? 'module-resolution' : 'other' };
-                    if (origin && typeof origin.file === 'string' && !path.isAbsolute(origin.file)
-                        && !origin.file.split(/[\\/]/).includes('..') && Number.isInteger(origin.line) && origin.line > 0) {
-                        target.environment.origin = origin;
-                    }
+                    target.environment = describeImportIssue(diagnostic, target.stage || 'environment');
+                    if (target.environment.kind === 'missing-dependency') { target.environment.missingModule = target.environment.issue; }
+                    if (target.environment.kind === 'import-side-effect') { target.environment.operation = target.environment.issue; }
                 }
                 const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                 if (events.some(event => event.runId !== knowledge.runId || event.sourceHash !== knowledge.sourceHash)) {
@@ -168,19 +165,27 @@ export class BatchJournal {
             ? 'incomplete' : status;
         this.finishedAt = new Date().toISOString(); this.save();
     }
+    summary(): string {
+        const passed = this.targets.filter(t => t.terminalStatus === 'passed').length;
+        const blocked = this.targets.filter(t => t.category === 'environment').length;
+        const failed = this.targets.filter(t => t.category !== 'environment'
+            && ['failed', 'retained-after-failure', 'source-changed'].includes(t.terminalStatus || '')).length;
+        const skipped = this.targets.filter(t => ['dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'no-mutation-candidates'].includes(t.terminalStatus || '')).length;
+        return `共 ${this.targets.length} 個目標；完整通過 ${passed}、環境受阻 ${blocked}、失敗 ${failed}、略過／未評分 ${skipped}、未完成 ${this.targets.length - passed - blocked - failed - skipped}`;
+    }
     private save(): void {
         const counts: Record<string, number> = {};
-        const groups = new Map<string, { kind: string; issue: string; affectedTargets: number; files: Set<string> }>();
+        const groups = new Map<string, { kind: string; issue: string; advice?: string; affectedTargets: number; files: Set<string> }>();
         for (const target of this.targets) {
             const status = target.terminalStatus || target.state;
             counts[status] = (counts[status] || 0) + 1;
             const environment = target.environment;
             if (environment) {
                 const origin = environment.origin;
-                const issue = environment.missingModule || (environment.operation
-                    ? `${environment.operation}${origin ? ` (${origin.file}:${origin.line})` : ''}` : target.stage || 'environment');
+                const issue = (environment.issue || environment.missingModule || environment.operation || target.stage || 'environment')
+                    + (origin && environment.kind !== 'missing-dependency' ? ` (${origin.file}:${origin.line})` : '');
                 const key = `${environment.kind}/${issue}`;
-                const group = groups.get(key) || { kind: environment.kind, issue, affectedTargets: 0, files: new Set<string>() };
+                const group = groups.get(key) || { kind: environment.kind, issue, advice: environment.advice, affectedTargets: 0, files: new Set<string>() };
                 group.affectedTargets++; group.files.add(target.file); groups.set(key, group);
             }
         }
@@ -189,6 +194,7 @@ export class BatchJournal {
         const passed = counts.passed || 0;
         const manifest = { schemaVersion: 1, batchId: this.id, startedAt: this.startedAt, finishedAt: this.finishedAt,
             status: this.status, complete, allTargetsPassed: complete && this.targets.length > 0 && passed === this.targets.length,
+            preflightBlockedModules: this.blockedModules,
             model: this.identity.model, buildTimestamp: this.identity.buildTimestamp,
             pythonExecutable: this.identity.python, roleContracts: ROLE_CONTRACT_VERSIONS,
             discoveredFiles: this.files, discoveryFailures: this.discoveryFailures,
@@ -198,13 +204,15 @@ export class BatchJournal {
         fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');
         fs.renameSync(temporary, path.join(this.directory, 'batch_manifest.json'));
         const safe = (value: string) => value.replace(/[|\r\n]/g, ' ');
-        const report = ['# 批次執行摘要', '', `- 狀態：${this.status}（執行完成不代表測試通過）`,
+        const report = ['# 批次執行摘要', '', `## ${manifest.allTargetsPassed ? '完整通過' : '未全部通過'}`, '', this.summary(), '',
+            `- 狀態：${this.status}（執行完成不代表測試通過）`,
+            ...(this.blockedModules ? [`- 前置預檢有 ${this.blockedModules} 個模組受阻：[原因與處理方式](preflight/import_check.md)。未開始的目標保持未完成。`] : []),
             `- 預期目標：${this.targets.length}；已有終態：${manifest.finishedTargets}；完整通過：${passed}`,
             `- 模型：${safe(this.identity.model)}；建置：${safe(this.identity.buildTimestamp)}`,
             `- Python：${safe(this.identity.python)}`, '', '| 目標狀態 | 數量 |', '| --- | ---: |',
             ...Object.entries(counts).map(([status, count]) => `| ${status} | ${count} |`), '',
-            '## 環境障礙', '', '| 分類 | 共同原因 | 受影響目標 |', '| --- | --- | ---: |',
-            ...environmentIssues.map(issue => `| ${issue.kind} | ${safe(issue.issue)} | ${issue.affectedTargets} |`), '',
+            '## 環境障礙', '', '| 分類 | 共同原因 | 受影響目標 | 處理方式 |', '| --- | --- | ---: | --- |',
+            ...environmentIssues.map(issue => `| ${issue.kind} | ${safe(issue.issue)} | ${issue.affectedTargets} | ${safe(issue.advice || '')} |`), '',
             '缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。',
             '匯入副作用：在測試工具設定 llmUnitTest.importFixtures，明確模擬初始化相依，保持受測原檔不變。安裝套件不能解決目錄建立等副作用；API 不相容須核對原專案版本宣告。', '',
             '## 未完成與略過', '',

@@ -20,6 +20,7 @@ import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
+import { presentOutcome, stageLabel, withOutcomeHeader } from './pipeline/resultPresentation';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
 import {
@@ -56,6 +57,9 @@ import { hasDummyFunctionNameMarker, isStructurallyInertStub } from './tier/stub
 import { buildStubTestPlan } from './tier/stubTestPlan';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
 import { configuredPythonForResource, PythonEnvironmentController } from './environment/pythonEnvironmentController';
+import { ImportSetupController } from './environment/importSetupController';
+import { inspectProjectImports, ImportCheckTarget } from './environment/projectImportCheck';
+import { ImportFixtureRule } from './pipeline/importFixtures';
 import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
 import { buildExternalMutationExecution, externalIsolationVerified } from './mutation/mutationExecution';
 import { MutationRun, MutationContext, parseBuiltinMutationRun, parseExternalMutationRun,
@@ -366,6 +370,9 @@ export function activate(context: vscode.ExtensionContext) {
     const sidebarProvider = new MutationViewProvider(context.secrets, context.globalState);
     const environmentController = new PythonEnvironmentController(context.globalState,
         message => { void sidebarProvider.webview?.postMessage(message); });
+    const importSetup = new ImportSetupController(message => { void sidebarProvider.webview?.postMessage(message); });
+    context.subscriptions.push(importSetup, vscode.commands.registerCommand('llm-unit-test.prepareImportSetup',
+        (params?: { projectRoot?: string; outputPath?: string }) => importSetup.prepare(params?.projectRoot, params?.outputPath)));
     context.subscriptions.push(environmentController, vscode.commands.registerCommand(
         'llm-unit-test.preparePythonEnvironment', (params?: { filePath?: string; projectRoot?: string }) =>
             environmentController.prepare(params?.filePath, params?.projectRoot)));
@@ -434,6 +441,7 @@ export function activate(context: vscode.ExtensionContext) {
                         throw new Error('批次來源掃描未完成，請檢查資料夾是否存在及讀取權限。');
                     }
                     const tasks: Array<() => Promise<void>> = [];
+                    const importTargets: ImportCheckTarget[] = [];
                     for (const file of files) {
                         throwIfExecutionCancelled();
                         let funcs;
@@ -445,6 +453,8 @@ export function activate(context: vscode.ExtensionContext) {
                             continue;
                         }
                         batch.discover(file, funcs.map(func => func.fullName));
+                        const importTarget = funcs.find(func => !hasDummyFunctionNameMarker(func.fullName));
+                        if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
                         for (const func of funcs) {
                             const id = tasks.length;
                             tasks.push(async () => {
@@ -460,12 +470,31 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
                     batch.start();
+                    const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(runParams.batchPath));
+                    const importCheck = await inspectProjectImports(runParams.batchPath, runParams.pythonExecutable, importTargets,
+                        path.join(batchDirectory, 'preflight'), config.get<ImportFixtureRule[]>('importFixtures', []), log,
+                        config.get<string>('importFixtureRoot', ''));
+                    const blockedModules = importCheck.rows.filter(row => row.status === 'blocked').length;
+                    batch.preflight(blockedModules);
+                    if (blockedModules) {
+                        const report = path.join(importCheck.directory, 'import_check.md');
+                        await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(report), { preview: true });
+                        const choice = await vscode.window.showWarningMessage(
+                            `${blockedModules} 個模組載入受阻；尚未呼叫模型。可先用「檢查模組載入／初始化設定」處理，或繼續並保留受阻目標的失敗。`,
+                            { modal: true }, '繼續測試並記錄失敗');
+                        throwIfExecutionCancelled();
+                        if (choice !== '繼續測試並記錄失敗') { log('[系統] 已在模型請求前停止；修復環境後請重新開始。'); return; }
+                    }
                     log(`[系統] 批次掃描完成：${tasks.length} 個函式，將逐一分析與測試。`);
                     await runSequentially(tasks, log);
                     outcome = 'completed';
                 } finally {
                     batch.finish(isExecutionCancelled() ? 'cancelled' : outcome);
+                    log(`[批次結果] ${batch.summary()}`);
                     log(`[系統] 批次狀態與環境問題摘要：${path.join(batchDirectory, 'batch_summary.md')}（執行結束不代表全部通過）`);
+                    if (!isExecutionCancelled()) {
+                        await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(path.join(batchDirectory, 'batch_summary.md')), { preview: true });
+                    }
                 }
             });
         }
@@ -1118,7 +1147,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         || config.get<string>('projectPath', '') || path.dirname(params.filePath);
     const relative = path.relative(requestedRoot, params.filePath);
     const root = relative.startsWith('..') || path.isAbsolute(relative) ? path.dirname(params.filePath) : requestedRoot;
-    const fixtures = createImportFixturePlan(root, config.get<unknown>('importFixtures', []));
+    const fixtures = createImportFixturePlan(root, config.get<unknown>('importFixtures', []), config.get<string>('importFixtureRoot', ''));
     return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(limits),
         () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider)));
 }
@@ -1273,7 +1302,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += `- **測試狀態**: 已略過（Dummy／雜訊函式）\n`;
         finalReportMarkdown += `- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n`;
         throwIfExecutionCancelled();
-        fs.writeFileSync(existingReport, finalReportMarkdown, 'utf-8');
+        fs.writeFileSync(existingReport, withOutcomeHeader(finalReportMarkdown, { terminalStatus: 'dummy-skipped' }), 'utf-8');
+        sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
+            func: params.funcName || '', reportPath: existingReport, outcome: presentOutcome({ terminalStatus: 'dummy-skipped' }) });
         if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.dummy(params.batchTargetId); }
         log(`[快速通道] ✅ Dummy 函式 ${params.funcName} 已略過；結果已寫入 ${existingReport}`);
         return;
@@ -1281,6 +1312,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
     const qualityPolicy = createStrictQualityPolicy();
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName, qualityPolicy);
+    const writeReport = (body = finalReportMarkdown) => fs.writeFileSync(existingReport, withOutcomeHeader(body, journal.snapshot()), 'utf8');
     const importFixtures = currentImportFixtures();
     if (importFixtures) {
         fs.writeFileSync(path.join(sessionDir, 'import_fixtures.json'), JSON.stringify(importFixtures, null, 2), 'utf8');
@@ -1293,10 +1325,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     });
     const recordRole = (stage: string, status: string, detail: unknown) => {
         const diagnosticReport = journal.record(currentLoop, stage, status, detail);
-        log(`[${stage}] ${status}`);
-        finalReportMarkdown += `- **角色事件**: ${stage} / ${status}（完整證據：role_events.jsonl）\n`;
+        log(`[${stage}] ${stageLabel(status)}`);
+        finalReportMarkdown += `- **角色事件**: ${stage} / ${stageLabel(status)}（完整證據：role_events.jsonl）\n`;
         finalReportMarkdown += diagnosticReport + (stage === 'repair-routing' ? formatRepairRouting(detail) : '');
-        fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+        writeReport();
     };
     const requestBudgeted = async (
         requestParams: AnalysisParams, system: string, prompt: string,
@@ -1418,7 +1450,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const reason = `類別 ${className} 的建構子需要 ${requiredConstructorParams.join(', ')}，但找不到可驗證的 caller literal 設定。`;
             finalReportMarkdown += `## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：${reason} 未產生測試，也未呼叫 LLM。\n`;
             throwIfExecutionCancelled();
-            fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
+            writeReport();
             log(`[快速通道] ⏭️ ${reason} 已安全略過。`);
             journal.knowledge({ terminalStatus: 'stub-skipped', reason });
             return;
@@ -1461,7 +1493,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += `\`\`\`python\n${smokeTest}\n\`\`\`\n`;
 
         throwIfExecutionCancelled();
-        fs.writeFileSync(path.join(sessionDir, 'final_report.md'), finalReportMarkdown, 'utf-8');
+        writeReport();
         log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
         journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false });
         // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
@@ -2193,8 +2225,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     codeHash: snapshot.codeHash, reviewStatus: snapshot.reviewStatus, mutationStatus: snapshot.mutationStatus } });
                 recordRole('executable-baseline', 'checkpointed', { codeHash: snapshot.codeHash,
                     testFile: snapshot.testFile, reviewStatus: snapshot.reviewStatus, mutationScore: null });
-                fs.writeFileSync(existingReport, finalReportMarkdown
-                    + `\n### 已保存可執行測試\n\n- 測試：${snapshot.testFile}\n- 審查狀態：${status}\n- 本候選突變：尚未測量\n`, 'utf8');
+                writeReport(finalReportMarkdown
+                    + `\n### 已保存可執行測試\n\n- 測試：${snapshot.testFile}\n- 審查狀態：${status}\n- 本候選突變：尚未測量\n`);
             };
             const accepted = await validateTestCandidate(finalCode, {
                 reviewRequired: mayUseModelAuthoredTests,
@@ -2655,7 +2687,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             // 每次接受可執行基準後立刻保存報告，後續角色或品質步驟失敗也不會遺失成果。
             finalReportMarkdown += `\n- **Reviewer status**: ${reviewStatus}\n`;
             // Checkpoint every accepted executable baseline before any later quality work.
-            fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+            writeReport();
             recordRole('report', 'checkpointed', {
                 score: noMutationCandidates ? null : mutationScore,
                 targetCoverageComplete: measuredQualityGaps.length === 0,
@@ -2779,7 +2811,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (rawCode) {
                 finalReportMarkdown += `**AI 實際輸出內容（前 500 字元）**:\n\`\`\`\n${rawCode.substring(0, 500)}\n\`\`\`\n\n`;
             }
-            fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+            writeReport();
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
                 fileName: displayName,
@@ -2832,7 +2864,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
 
     const finalReportPath = path.join(sessionDir, `final_report.md`);
-    fs.writeFileSync(finalReportPath, finalReportMarkdown, 'utf8');
+    writeReport();
     sidebarProvider.webview?.postMessage({
         command: 'attachResultReport',
         fileName: displayName,
@@ -2840,9 +2872,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     });
     log(`[系統] 分析結束！測試檔與最終報告已儲存至:\n${sessionDir}`);
     
-    const doc = await vscode.workspace.openTextDocument(finalReportPath);
-    throwIfExecutionCancelled();
-    await vscode.window.showTextDocument(doc, { preview: false });
+    if (!params.batchJournal) {
+        const doc = await vscode.workspace.openTextDocument(finalReportPath);
+        throwIfExecutionCancelled();
+        await vscode.window.showTextDocument(doc, { preview: false });
+    }
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const category = isExecutionCancelled() ? 'cancelled'
@@ -2862,8 +2896,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         log(`[${stage}] ${message}`);
     } finally {
+        if (journal.snapshot().terminalStatus === 'running') {
+            journal.knowledge({ terminalStatus: isExecutionCancelled() ? 'cancelled' : 'incomplete' });
+        }
         journal.knowledge({ targetBudget: currentTargetBudget()?.snapshot() });
-        fs.writeFileSync(existingReport, finalReportMarkdown, 'utf8');
+        writeReport();
+        sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
+            func: params.funcName || '', reportPath: existingReport, outcome: presentOutcome(journal.snapshot()) });
     }
 }
 

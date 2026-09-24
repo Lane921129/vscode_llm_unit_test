@@ -70,6 +70,16 @@ def preflight(payload):
                                                             payload.get('sourceRoot') or package_root)}
     except (Exception, SystemExit) as error:
         diagnostic = import_diagnostic(error, payload.get('sourceRoot') or package_root)
+        # Read built-in exception slots and module dictionaries, not arbitrary getters.
+        if (isinstance(error, AttributeError)
+                and 'name' in AttributeError.__dict__ and 'obj' in AttributeError.__dict__):
+            name = AttributeError.__dict__['name'].__get__(error)
+            owner = AttributeError.__dict__['obj'].__get__(error)
+            if type(owner) is types.ModuleType and type(name) is str and name.isidentifier():
+                namespace = vars(owner)
+                module = namespace.get('__name__')
+                if type(module) is str and all(part.isidentifier() for part in module.split('.')):
+                    diagnostic['dependency_api'] = {'module': module, 'attribute': name}
         return {'ok': False, 'category': 'environment', 'stage': 'module-import',
                 'importFixtures': import_fixture_evidence(),
                 'reason': f'{safe_type_name(error)}: {exception_message(error)}', 'diagnostic': diagnostic, 'policy_version': POLICY_VERSION}

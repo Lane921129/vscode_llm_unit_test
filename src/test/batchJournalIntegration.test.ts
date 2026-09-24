@@ -30,7 +30,8 @@ test('real batch command records grouped failures and cancellation, then passes 
                 }
                 return true;
             } }; return { dispose() {} };
-        }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
+        }, showInformationMessage: async () => {}, showTextDocument: async () => {},
+        showWarningMessage: async () => '繼續測試並記錄失敗' },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }],
             getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }), openTextDocument: async () => ({}) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
