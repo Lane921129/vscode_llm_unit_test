@@ -8,6 +8,46 @@ import { createImportFixturePlan } from '../pipeline/importFixtures';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
 
+test('after mkdir setup the next import exception is persisted with its type, message and source position', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-detail-'));
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    try {
+        const file = path.join(root, 'sample.py');
+        const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\n'
+            + 'raise ValueError("invalid setup mode")\ndef target():\n    return 1\n';
+        fs.writeFileSync(file, source);
+        const targets = [{ file, target: 'target' }];
+        const first = await inspectProjectImports(root, python, targets, path.join(root, 'r1'), []);
+        assert.equal(first.rows[0].issue?.kind, 'import-side-effect');
+        const second = await inspectProjectImports(root, python, targets, path.join(root, 'r2'), first.proposedRules);
+        const saved = JSON.parse(fs.readFileSync(path.join(root, 'r2/import_check.json'), 'utf8'));
+        assert.equal(saved.blocked, 1);
+        assert.ok(saved.fixtureId, 'setup applied but loading is still blocked');
+        assert.deepEqual(saved.rows[0].diagnostic, { exceptionType: 'ValueError', message: 'invalid setup mode' });
+        assert.deepEqual(saved.rows[0].issue.origin, { file: 'sample.py', line: 3 });
+        const report = fs.readFileSync(path.join(root, 'r2/import_check.md'), 'utf8');
+        assert.match(report, /逐模組診斷/);
+        assert.match(report, /例外：ValueError/);
+        assert.match(report, /原因：invalid setup mode/);
+        assert.match(report, /位置：sample.py:3/);
+        assert.equal(second.proposedPlan, null, 'unknown exceptions must not cause a guessed fixture');
+        assert.equal(fs.readFileSync(file, 'utf8'), source);
+        assert.equal(fs.existsSync(path.join(root, 'r2/must_not_exist')), false);
+
+        fs.writeFileSync(file, 'raise AttributeError("module \'example_vendor\' has no attribute \'launch\'")\ndef target():\n    return 1\n');
+        const api = await inspectProjectImports(root, python, targets, path.join(root, 'r3'), []);
+        assert.equal(api.rows[0].issue?.issue, 'example_vendor.launch');
+        assert.equal(api.proposedPlan, null);
+        fs.writeFileSync(file, 'raise RuntimeError("password=private-value")\ndef target():\n    return 1\n');
+        await inspectProjectImports(root, python, targets, path.join(root, 'r4'), []);
+        for (const name of ['import_check.json', 'import_check.md']) {
+            const text = fs.readFileSync(path.join(root, 'r4', name), 'utf8');
+            assert.equal(text.includes('private-value'), false);
+            assert.match(text, /RuntimeError/);
+        }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('shared import initialization is diagnosed, previewed and rechecked without source edits or invented APIs', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-setup-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));

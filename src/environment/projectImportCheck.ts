@@ -8,10 +8,13 @@ import { preflightTargetModule } from '../pipeline/modulePreflight';
 import { createImportFixturePlan, ImportFixturePlan, ImportFixtureRule, withImportFixtures } from '../pipeline/importFixtures';
 import { throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
-import { describeImportIssue, ImportIssue } from './importDiagnostics';
+import { describeImportIssue, ImportExceptionSummary, ImportIssue, summarizeImportException } from './importDiagnostics';
 
 export interface ImportCheckTarget { file: string; target: string }
-export interface ImportCheckRow { file: string; status: 'loaded' | 'blocked'; issue?: ImportIssue; stage?: string }
+export interface ImportCheckRow {
+    file: string; status: 'loaded' | 'blocked'; issue?: ImportIssue; stage?: string;
+    diagnostic?: ImportExceptionSummary;
+}
 export interface ImportCheck {
     root: string; python: string; directory: string; rows: ImportCheckRow[];
     proposedRules: ImportFixtureRule[]; proposedPlan: ImportFixturePlan | null;
@@ -31,12 +34,22 @@ export async function inspectProjectImports(root: string, python: string, target
         fs.writeFileSync(path.join(directory, 'import_check.json'), JSON.stringify({ schemaVersion: 'project-import-check-v1',
             root, python, fixtureId: plan?.id || null, rows: result.rows, blocked: blocked.length,
             note: 'Module loading only; not test execution or full project readiness.' }, null, 2));
-        const cell = (text: string) => text.replace(/[|\r\n]/g, ' ');
+        const cell = (text: string) => text.replace(/[\r\n]/g, ' ').replace(/[\\`*_[\]<>|]/g, '\\$&');
+        const details = blocked.flatMap((row, index) => [
+            `### ${index + 1}. 受阻模組`, '',
+            `    來源：${row.file.replace(/[\r\n]/g, ' ')}`,
+            `    階段：${row.stage || 'unknown'}`,
+            `    例外：${row.diagnostic?.exceptionType || '未取得結構化例外'}`,
+            `    原因：${row.diagnostic?.message || row.issue?.issue || '未取得具體訊息'}`,
+            ...(row.issue?.origin ? [`    位置：${row.issue.origin.file}:${row.issue.origin.line}`] : []), '',
+            cell(row.issue?.advice || '請核對直譯器及預檢工具是否正常執行。'), ''
+        ]);
         fs.writeFileSync(path.join(directory, 'import_check.md'), ['# 模組載入預檢', '',
             `受測根目錄：${root}`, `Python：${python}`, '',
             `已檢查 ${result.rows.length} 個模組；載入受阻 ${blocked.length} 個。載入成功不代表函式測試通過。`, '',
-            '| 模組 | 預檢結果 | 原因 | 處理方式 |', '| --- | --- | --- | --- |',
-            ...result.rows.map(row => `| ${cell(row.file)} | ${row.status === 'loaded' ? '可載入，尚未測試' : '受阻／未完成'} | ${cell(row.issue?.issue || '')} | ${cell(row.issue?.advice || '')} |`), '',
+            '| 模組 | 預檢結果 | 原因 | 來源位置 | 處理方式 |', '| --- | --- | --- | --- | --- |',
+            ...result.rows.map(row => `| ${cell(row.file)} | ${row.status === 'loaded' ? '可載入，尚未測試' : '受阻／未完成'} | ${cell(row.issue?.issue || '')} | ${cell(row.issue?.origin ? `${row.issue.origin.file}:${row.issue.origin.line}` : '')} | ${cell(row.issue?.advice || '')} |`), '',
+            ...(blocked.length ? ['## 逐模組診斷', '', ...details] : []),
             '設定只模擬明確宣告的初始化，不修改受測原檔，也不假造缺少的套件或 API。',
             '所有建議均須預覽後確認；套用後重新檢查，可能發現下一個原先被遮住的障礙。', ''].join('\n'));
     };
@@ -67,7 +80,9 @@ export async function inspectProjectImports(root: string, python: string, target
                 throwIfExecutionCancelled();
                 row.status = 'blocked';
                 row.stage = error instanceof AnalysisStageError ? error.stage : 'module-preflight';
-                row.issue = describeImportIssue(error instanceof AnalysisStageError ? error.diagnostic : undefined, row.stage);
+                const diagnostic = error instanceof AnalysisStageError ? error.diagnostic : undefined;
+                row.issue = describeImportIssue(diagnostic, row.stage);
+                row.diagnostic = summarizeImportException(diagnostic);
                 const origin = row.issue.origin;
                 if (row.issue.kind === 'import-side-effect' && row.issue.issue === 'os.mkdir' && origin) {
                     const candidate = fs.realpathSync(path.join(root, origin.file));
