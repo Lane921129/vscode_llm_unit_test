@@ -4,6 +4,7 @@ Original modules execute unchanged. A retained alias stops mocking when its
 caller is no longer a declared module body, even while the guard is active.
 """
 from contextlib import ExitStack
+import ast
 import builtins
 import configparser
 import hashlib
@@ -78,12 +79,21 @@ class ImportFixtures:
                 raise ValueError('Import fixture source changed; rebuild the test setup')
             configs = rule.get('configFiles', {})
             entries = rule.get('entryPoints', [])
+            entry_lines = rule.get('entryPointLines', {})
+            approved_source = rule.get('entryPointSourceHash')
             if (type(rule.get('mkdir', False)) is not bool or not isinstance(configs, dict) or len(configs) > 8
                     or any(not isinstance(name, str) or not re.fullmatch(r'[\w.-]+\.ini', name, re.I)
                            or not isinstance(value, str) or len(value) > 65536 for name, value in configs.items())
                     or not isinstance(entries, list) or len(entries) > 8
-                    or any(not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+', name) for name in entries)):
+                    or any(not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+', name) for name in entries)
+                    or not isinstance(entry_lines, dict) or len(entry_lines) > 8
+                    or any(name not in entries or not isinstance(lines, list) or not 1 <= len(lines) <= 32
+                           or any(type(line) is not int or line < 1 for line in lines) for name, lines in entry_lines.items())
+                    or approved_source is not None and (not entry_lines or not isinstance(approved_source, str)
+                                                        or not re.fullmatch(r'[a-f0-9]{64}', approved_source))):
                 raise ValueError('Invalid import fixture operation')
+            if approved_source is not None and not rule.get('resolvedFile') and approved_source != rule.get('sourceHash'):
+                raise ValueError('Startup fixture source approval expired')
             self.rules[filename] = rule
         _last_evidence = {'id': self.plan['id'], 'operations': self.operations}
 
@@ -134,7 +144,8 @@ class ImportFixtures:
                     def entry_mock(*args, **kwargs):
                         frame = sys._getframe(1)
                         rule = self.match(frame)
-                        if rule and name in rule.get('entryPoints', []):
+                        allowed_lines = rule.get('entryPointLines', {}).get(name) if rule else None
+                        if rule and name in rule.get('entryPoints', []) and (allowed_lines is None or frame.f_lineno in allowed_lines):
                             if signature:
                                 signature.bind(*args, **kwargs)
                             self.record(rule, name, frame)
@@ -226,6 +237,29 @@ class ImportFixtures:
         self.stack.__exit__(*exc)
 
 
+def _rebase_entry_lines(original, candidate, rule):
+    """AST unparse moves lines; preserve the same unchanged top-level call identity."""
+    if hashlib.sha256(original.read_bytes()).hexdigest() != rule['sourceHash']:
+        raise ValueError('Startup fixture source changed before mutation')
+    old = ast.parse(original.read_bytes()).body
+    new = ast.parse(candidate.read_bytes()).body
+    mapped = {}
+    for operation, lines in rule['entryPointLines'].items():
+        mapped[operation] = []
+        for line in lines:
+            owners = [node for node in old if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                      and node.lineno <= line <= node.end_lineno]
+            if len(owners) != 1:
+                raise ValueError('Startup fixture call has no unique source position')
+            shape = ast.dump(owners[0], include_attributes=False)
+            before = [node for node in old if ast.dump(node, include_attributes=False) == shape]
+            after = [node for node in new if ast.dump(node, include_attributes=False) == shape]
+            if len(before) != len(after):
+                raise ValueError('Startup fixture call changed in mutation copy')
+            mapped[operation].append(after[before.index(owners[0])].value.lineno)
+    return mapped
+
+
 def mutation_environment(environment, trial_root, source_file):
     """Bind the same logical setup to verified package copies and the mutant."""
     plan = read_plan(environment)
@@ -247,6 +281,9 @@ def mutation_environment(environment, trial_root, source_file):
             if original != source_file and digest != rule['sourceHash']:
                 continue
             seen.add(str(candidate))
-            extra.append(dict(rule, resolvedFile=str(candidate), sourceHash=digest))
+            copy = dict(rule, resolvedFile=str(candidate), sourceHash=digest)
+            if rule.get('entryPointLines') and digest != rule['sourceHash']:
+                copy['entryPointLines'] = _rebase_entry_lines(original, candidate, rule)
+            extra.append(copy)
     plan['rules'].extend(extra)
     return {**environment, ENVIRONMENT_KEY: json.dumps(plan, ensure_ascii=True)}

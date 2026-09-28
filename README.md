@@ -16,6 +16,7 @@
 - Validates generated tests before scoring: target invocation, assertions, Python structure, safe mocking, isolated I/O, runtime execution, coverage, and mutation baseline.
 - Writes `final_report.md` so failures identify the responsible stage: model, AST, trace, validation, coverage, or mutation tool.
 - Shows the final outcome separately from coverage and mutation scores. Batch runs check module loading before model requests; blocked imports open a diagnosis before continuing. Use **檢查模組載入／初始化設定** for a source-bound setup preview and guarded recheck; see [匯入測試設定](docs/匯入測試設定_2026_09_23.md).
+- Proposes import initialization mocks from observed policy violations and verified call identities, without a framework whitelist. External entry proposals bind the source version and call line; confirmation and a fresh guarded check are required. Missing dependencies, APIs and application callbacks remain diagnostic failures.
 
 ## How the four Tiers work
 

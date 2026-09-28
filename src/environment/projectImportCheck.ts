@@ -9,15 +9,18 @@ import { createImportFixturePlan, ImportFixturePlan, ImportFixtureRule, withImpo
 import { throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { describeImportIssue, ImportExceptionSummary, ImportIssue, summarizeImportException } from './importDiagnostics';
+import { ImportInitializationCandidate, readInitializationCandidate } from './importSetupProposal';
 
 export interface ImportCheckTarget { file: string; target: string }
 export interface ImportCheckRow {
     file: string; status: 'loaded' | 'blocked'; issue?: ImportIssue; stage?: string;
     diagnostic?: ImportExceptionSummary;
+    suggestion?: ImportInitializationCandidate;
 }
 export interface ImportCheck {
     root: string; python: string; directory: string; rows: ImportCheckRow[];
     proposedRules: ImportFixtureRule[]; proposedPlan: ImportFixturePlan | null;
+    proposals: ImportInitializationCandidate[];
 }
 const sourceHash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
@@ -26,7 +29,7 @@ export async function inspectProjectImports(root: string, python: string, target
     rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = ''): Promise<ImportCheck> {
     root = fs.realpathSync(root);
     const plan = createImportFixturePlan(root, rules, boundRoot);
-    const result: ImportCheck = { root, python, directory, rows: [], proposedRules: structuredClone(rules), proposedPlan: null };
+    const result: ImportCheck = { root, python, directory, rows: [], proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
     const proposedHashes = new Map<string, string>();
     fs.mkdirSync(directory, { recursive: true });
     const save = () => {
@@ -41,7 +44,10 @@ export async function inspectProjectImports(root: string, python: string, target
             `    階段：${row.stage || 'unknown'}`,
             `    例外：${row.diagnostic?.exceptionType || '未取得結構化例外'}`,
             `    原因：${row.diagnostic?.message || row.issue?.issue || '未取得具體訊息'}`,
-            ...(row.issue?.origin ? [`    位置：${row.issue.origin.file}:${row.issue.origin.line}`] : []), '',
+            ...(row.issue?.origin ? [`    位置：${row.issue.origin.file}:${row.issue.origin.line}`] : []),
+            ...(row.suggestion ? [`    可預覽替身：${row.suggestion.operation}（${row.suggestion.file}:${row.suggestion.line}）`,
+                '    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。',
+                '    影響：略過此初始化呼叫；不驗證其真實副作用，須確認測試不依賴它建立的狀態。'] : []), '',
             cell(row.issue?.advice || '請核對直譯器及預檢工具是否正常執行。'), ''
         ]);
         fs.writeFileSync(path.join(directory, 'import_check.md'), ['# 模組載入預檢', '',
@@ -83,17 +89,25 @@ export async function inspectProjectImports(root: string, python: string, target
                 const diagnostic = error instanceof AnalysisStageError ? error.diagnostic : undefined;
                 row.issue = describeImportIssue(diagnostic, row.stage);
                 row.diagnostic = summarizeImportException(diagnostic);
-                const origin = row.issue.origin;
-                if (row.issue.kind === 'import-side-effect' && row.issue.issue === 'os.mkdir' && origin) {
-                    const candidate = fs.realpathSync(path.join(root, origin.file));
-                    const within = path.relative(root, candidate);
-                    if (!within.startsWith('..') && !path.isAbsolute(within) && within.endsWith('.py')) {
-                        const existing = result.proposedRules.find(rule => fs.realpathSync(path.join(root, rule.file)) === candidate);
-                        if (!existing?.mkdir) {
-                            if (existing) { existing.mkdir = true; }
-                            else { result.proposedRules.push({ file: within.replace(/\\/g, '/'), mkdir: true }); }
-                            proposedHashes.set(candidate, sourceHash(candidate));
+                const proposal = readInitializationCandidate(root, diagnostic);
+                if (proposal) {
+                    row.suggestion = proposal;
+                    const candidate = fs.realpathSync(path.join(root, proposal.file));
+                    let existing = result.proposedRules.find(rule => fs.realpathSync(path.join(root, rule.file)) === candidate);
+                    const lines = existing?.entryPointLines?.[proposal.operation];
+                    const needed = proposal.kind === 'mkdir' ? !existing?.mkdir
+                        : !existing?.entryPoints?.includes(proposal.operation) || !!lines && !lines.includes(proposal.line);
+                    if (needed) {
+                        if (!existing) { existing = { file: proposal.file }; result.proposedRules.push(existing); }
+                        if (proposal.kind === 'mkdir') { existing.mkdir = true; }
+                        else {
+                            existing.entryPoints = [...new Set([...(existing.entryPoints || []), proposal.operation])];
+                            existing.entryPointLines = { ...existing.entryPointLines,
+                                [proposal.operation]: [...new Set([...(lines || []), proposal.line])].sort((a, b) => a - b) };
+                            existing.entryPointSourceHash = proposal.sourceHash;
                         }
+                        result.proposals.push(proposal);
+                        proposedHashes.set(candidate, proposal.sourceHash);
                     }
                 }
             }

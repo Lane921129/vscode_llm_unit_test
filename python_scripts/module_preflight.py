@@ -10,6 +10,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from dynamic_tracer import TraceSafetyError, import_diagnostic, package_module_context, safe_type_name, exception_message
 from runtime_policy import POLICY_VERSION, guarded_runtime
 from import_fixtures import evidence as import_fixture_evidence
+from import_setup_advisor import advise_blocked_initialization
 
 
 def resolve_loaded_dependencies(module, dependencies, source_root):
@@ -70,6 +71,10 @@ def preflight(payload):
                                                             payload.get('sourceRoot') or package_root)}
     except (Exception, SystemExit) as error:
         diagnostic = import_diagnostic(error, payload.get('sourceRoot') or package_root)
+        if isinstance(error, TraceSafetyError):
+            candidate = advise_blocked_initialization(error, payload.get('sourceRoot') or package_root)
+            if candidate:
+                diagnostic['initialization_candidate'] = candidate
         # Read built-in exception slots and module dictionaries, not arbitrary getters.
         if (isinstance(error, AttributeError)
                 and 'name' in AttributeError.__dict__ and 'obj' in AttributeError.__dict__):

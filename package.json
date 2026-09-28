@@ -137,7 +137,9 @@
               "file": { "type": "string", "description": "受測根目錄內的相對 Python 檔案路徑。" },
               "mkdir": { "type": "boolean", "default": false, "description": "只模擬此檔案模組頂層的 Path.mkdir。" },
               "configFiles": { "type": "object", "additionalProperties": { "type": "string" }, "description": "同目錄 ini 檔名到測試內容的對應，供 ConfigParser.read 使用。" },
-              "entryPoints": { "type": "array", "items": { "type": "string" }, "description": "在此檔案模組頂層模擬為返回 None 的外部啟動函式，例如 flet.app。" }
+              "entryPoints": { "type": "array", "items": { "type": "string" }, "description": "在此檔案模組頂層模擬為返回 None 的外部初始化函式。可由實測阻擋自動提出建議，預覽確認後套用。" },
+              "entryPointLines": { "type": "object", "maxProperties": 8, "additionalProperties": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "integer", "minimum": 1 } }, "description": "自動建議綁定的入口名稱與來源行號；只模擬這些行的頂層呼叫，保留其他呼叫。" },
+              "entryPointSourceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "自動產生的初始化入口來源版本；來源變更後必須重新預覽確認，不可沿用舊行號設定。" }
             }
           }
         },

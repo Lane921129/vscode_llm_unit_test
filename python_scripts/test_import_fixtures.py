@@ -12,6 +12,66 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class ImportFixtureTests(unittest.TestCase):
+    def test_line_bound_entry_preserves_later_calls_and_rebases_through_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, dependency = base / 'app', base / 'external'
+            root.mkdir(); dependency.mkdir()
+            (dependency / 'neutral_runtime.py').write_text(
+                'from pathlib import Path\ndef launch(mode):\n'
+                '    if mode == "start": Path("no_directory").mkdir()\n'
+                '    return 7\n', encoding='utf-8')
+            file = root / 'neutral.py'
+            source = ('import neutral_runtime\n\n\nneutral_runtime.launch("start")\n'
+                      'state = neutral_runtime.launch("read")\nassert state == 7\n\n\n'
+                      'def target(value):\n    return value + 1\n')
+            file.write_text(source, encoding='utf-8')
+            plan = self.plan(root, [{'file': 'neutral.py', 'entryPoints': ['neutral_runtime.launch'],
+                                    'entryPointLines': {'neutral_runtime.launch': [4]},
+                                    'entryPointSourceHash': hashlib.sha256(file.read_bytes()).hexdigest()}])
+            payload = {'file': str(file), 'module': 'neutral', 'sourceRoot': str(root),
+                       'importPaths': [str(root), str(dependency)]}
+            checked = self.run_tool('module_preflight.py', root, plan, payload=payload, extra_paths=[dependency])
+            loaded = json.loads(checked.stdout)
+            self.assertTrue(loaded['ok'], loaded)
+            self.assertEqual(loaded['importFixtures']['operations'], [
+                {'file': 'neutral.py', 'operation': 'neutral_runtime.launch', 'line': 4}])
+            trace = self.run_tool('dynamic_tracer.py', root, plan, [file, 'target', '[[2]]'], extra_paths=[dependency])
+            facts = json.loads(trace.stdout)
+            self.assertTrue(any(item['result'] == '3' for item in facts['examples']), facts)
+            test = root / 'test_neutral.py'
+            test.write_text('import unittest\nfrom neutral import target\nclass Cases(unittest.TestCase):\n'
+                            '    def test_value(self): self.assertEqual(target(2), 3)\n', encoding='utf-8')
+            run = self.run_tool('generated_test_runner.py', root, plan, ['test_neutral', '--coverage-source', root], extra_paths=[dependency])
+            self.assertEqual(run.returncode, 0, run.stderr)
+            mutation = self.run_tool('basic_mutation_runner.py', root, plan, [file, test, '0', '10', 'target'], extra_paths=[dependency])
+            self.assertEqual(mutation.returncode, 0, mutation.stderr)
+            result = json.loads(mutation.stdout)
+            self.assertTrue(result['baseline_passed'], result)
+            self.assertTrue(result['scoreAvailable'], result)
+            self.assertGreater(result['counts']['killed'], 0, result)
+            self.assertEqual(result['counts']['error'], 0, result)
+            self.assertEqual(file.read_text(encoding='utf-8'), source)
+            self.assertFalse((root / 'no_directory').exists())
+
+    def test_line_bound_entry_does_not_hide_a_later_blocked_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, dependency = base / 'app', base / 'external'
+            root.mkdir(); dependency.mkdir()
+            (dependency / 'neutral_runtime.py').write_text(
+                'from pathlib import Path\ndef launch():\n    Path("no_directory").mkdir()\n', encoding='utf-8')
+            file = root / 'neutral.py'
+            file.write_text('import neutral_runtime\nneutral_runtime.launch()\nresult = neutral_runtime.launch()\n', encoding='utf-8')
+            plan = self.plan(root, [{'file': 'neutral.py', 'entryPoints': ['neutral_runtime.launch'],
+                                    'entryPointLines': {'neutral_runtime.launch': [2]}}])
+            payload = {'file': str(file), 'module': 'neutral', 'sourceRoot': str(root),
+                       'importPaths': [str(root), str(dependency)]}
+            loaded = json.loads(self.run_tool('module_preflight.py', root, plan, payload=payload, extra_paths=[dependency]).stdout)
+            self.assertFalse(loaded['ok'])
+            self.assertNotIn('initialization_candidate', loaded['diagnostic'])
+            self.assertEqual(loaded['importFixtures']['operations'][0]['line'], 2)
+
     def plan(self, root, rules):
         return {'schemaVersion': 'import-fixtures-v1', 'id': 'a' * 64, 'root': str(root), 'rules': [
             {**rule, 'sourceHash': hashlib.sha256((root / rule['file']).read_bytes()).hexdigest()}

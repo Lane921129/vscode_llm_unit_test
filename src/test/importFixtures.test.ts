@@ -26,5 +26,9 @@ test('import setup binds source content, isolates concurrent runs and reaches wo
         assert.throws(() => createImportFixturePlan(root, [{ file: '../sample.py', mkdir: true }]));
         assert.throws(() => createImportFixturePlan(root, [{ file: 'sample.py', entryPoints: ['invalid expression()'] }]));
         assert.throws(() => createImportFixturePlan(root, [{ file: 'sample.py', configFiles: { '../outside.ini': '' } }]));
+        assert.throws(() => createImportFixturePlan(root, [{ file: 'sample.py', entryPointLines: { 'vendor.start': [1] } }]));
+        for (const lines of [[], [0], [1.5], ['1']]) {
+            assert.throws(() => createImportFixturePlan(root, [{ file: 'sample.py', entryPoints: ['vendor.start'], entryPointLines: { 'vendor.start': lines } }]));
+        }
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

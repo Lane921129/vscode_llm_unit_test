@@ -7,7 +7,7 @@ import { configuredPythonForResource } from './pythonEnvironmentController';
 import { extractFunctionsWithAst, findPythonFilesInDir } from '../utils/utils';
 import { ExecutionContext, runInExecution, throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { createBatchDirectory } from '../pipeline/analysisOutput';
-import { createImportFixturePlan, ImportFixtureRule } from '../pipeline/importFixtures';
+import { createImportFixturePlan, ImportFixtureRule, refreshEntryPointApprovals } from '../pipeline/importFixtures';
 import { inspectProjectImports, ImportCheckTarget, verifyImportProposal } from './projectImportCheck';
 import { hasDummyFunctionNameMarker } from '../tier/stubClassifier';
 
@@ -35,7 +35,7 @@ export class ImportSetupController {
                 const directory = createBatchDirectory(outputPath || config.get<string>('outputPath', '') || os.tmpdir(),
                     new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16), 'import_check');
                 const rules = config.get<ImportFixtureRule[]>('importFixtures', []);
-                createImportFixturePlan(root, rules, config.get<string>('importFixtureRoot', ''));
+                refreshEntryPointApprovals(root, rules, config.get<string>('importFixtureRoot', ''));
                 const excluded = [directory, ...(outputPath && path.resolve(outputPath) !== path.resolve(root) ? [outputPath] : [])];
                 const files = await findPythonFilesInDir(root, true, excluded, true);
                 const targets: ImportCheckTarget[] = [];
@@ -47,17 +47,24 @@ export class ImportSetupController {
                 }
                 for (let attempt = 0; attempt < 8; attempt++) {
                     const readConfig = () => vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(root));
-                    const activeRules = readConfig().get<ImportFixtureRule[]>('importFixtures', []);
+                    const savedRules = readConfig().get<ImportFixtureRule[]>('importFixtures', []);
                     const boundRoot = readConfig().get<string>('importFixtureRoot', '');
+                    const refreshed = refreshEntryPointApprovals(root, savedRules, boundRoot);
+                    const activeRules = refreshed.rules;
                     const check = await inspectProjectImports(root, python, targets,
                         path.join(directory, String(attempt + 1)), activeRules, text => this.publish({ command: 'appendLog', text }), boundRoot);
                     const blocked = check.rows.filter(row => row.status === 'blocked').length;
                     message = `模組預檢：${check.rows.length} 個模組，${blocked} 個受阻；尚未執行函式測試。`;
                     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(path.join(check.directory, 'import_check.md')), { preview: true });
+                    if (refreshed.expired.length && !check.proposedPlan) {
+                        check.proposedPlan = createImportFixturePlan(root, check.proposedRules);
+                    }
                     if (!check.proposedPlan) { break; }
                     const preview = path.join(check.directory, 'setup_proposal.json');
                     fs.writeFileSync(preview, JSON.stringify({
-                        note: '只模擬列出來源的模組頂層 Path.mkdir，不建立真實目錄；其他操作仍隔離。套用後重新預檢。',
+                        note: '模擬列出來源的頂層目錄建立或指定行號的外部初始化呼叫；不執行其副作用或 callback。請確認測試不依賴被略過初始化建立的狀態。其他操作仍隔離，套用後重新預檢。',
+                        evidence: check.proposals,
+                        expiredEntryPointSources: refreshed.expired,
                         'llmUnitTest.importFixtureRoot': check.root,
                         'llmUnitTest.importFixtures': check.proposedRules,
                         sourceHashes: check.proposedPlan.rules.map(rule => ({ file: rule.file, sourceHash: rule.sourceHash }))
@@ -69,7 +76,7 @@ export class ImportSetupController {
                     throwIfExecutionCancelled();
                     if (approved !== '套用此清單並重新檢查') { message += ' 未套用初始化替身。'; break; }
                     verifyImportProposal(check);
-                    if (JSON.stringify(readConfig().get('importFixtures', [])) !== JSON.stringify(activeRules)
+                    if (JSON.stringify(readConfig().get('importFixtures', [])) !== JSON.stringify(savedRules)
                         || readConfig().get('importFixtureRoot', '') !== boundRoot) { throw new Error('設定在預覽期間改變；請重新檢查。'); }
                     // Global tool settings avoid writing .vscode files into the tested project.
                     await config.update('importFixtureRoot', check.root, vscode.ConfigurationTarget.Global);
