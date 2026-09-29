@@ -82,7 +82,7 @@ test('budget pressure drops whole optional snippets and examples before required
 test('feature retrieval selects at most two matching neutral examples and none for a pure function', () => {
     assert.deepEqual(matchingWriterExamples({}), []);
     assert.equal(matchingWriterExamples({ is_async: true })[0].id, 'async-boundary-v1');
-    assert.equal(matchingWriterExamples({ calls: ['db.connect'], file_imports: [{ module: 'sqlite3', alias: 'db' }] })[0].id, 'sqlite-context-v1');
+    assert.equal(matchingWriterExamples({ calls: ['db.connect'], file_imports: [{ module: 'sqlite3', alias: 'db' }] })[0].id, 'patch-scope-v1');
     assert.deepEqual(matchingWriterExamples({ calls: ['len'], file_imports: [{ module: 'sqlite3' }] }), []);
     assert.deepEqual(matchingWriterExamples({ class_name: 'C', method_kind: 'static' }), []);
     assert.equal(matchingWriterExamples({ is_async: true, class_name: 'C', calls: ['read'] }).length, 2);

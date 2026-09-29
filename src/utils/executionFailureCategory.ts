@@ -56,7 +56,7 @@ export function classifyExecutionFailure(message: string): ExecutionFailureCateg
         if (/assertraises\([^)]*\).*例外事實依據/.test(normalized)) { return 'validation'; }
         return 'ast-trace';
     }
-    if (normalized.includes('模型輸出') || normalized.includes('unittest 格式') || normalized.includes('程式碼內容為空') || normalized.includes('原始碼而非測試碼')) {
+    if (normalized.includes('模型輸出') || normalized.includes('ai 輸出格式') || normalized.includes('unittest 格式') || normalized.includes('程式碼內容為空') || normalized.includes('原始碼而非測試碼')) {
         return 'model-format';
     }
     if (/\bhttp(?: error| status)?\s*[:=]?\s*[45]\d\d\b|api 請求|\b(?:econnrefused|econnreset)\b|fetch failed|socket hang up/.test(normalized)) {

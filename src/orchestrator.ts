@@ -405,11 +405,14 @@ export function activate(context: vscode.ExtensionContext) {
                     return;
                 }
                 log(`[系統] 全檔案掃描：${funcs.length} 個函式，將逐一分析與測試。`);
-                await runSequentially(funcs.map(func => async () => {
+                const processed = await runSequentially(funcs.map(func => async () => {
                     throwIfExecutionCancelled();
                     await executeSingleFileAnalysis({ ...runParams, funcName: func.fullName }, log, view);
+                    return true;
                 }), log);
-                log('[系統] 全檔案掃描與測試執行完畢。');
+                throwIfExecutionCancelled();
+                const blocked = processed.filter(result => result === undefined).length;
+                log(`[系統] 全檔案流程結束：${funcs.length} 個目標，${blocked} 個流程錯誤／受阻。各函式是否通過以結果卡與報告為準。`);
             });
         }
     );
@@ -1157,6 +1160,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const relative = path.relative(requestedRoot, params.filePath);
     const root = relative.startsWith('..') || path.isAbsolute(relative) ? path.dirname(params.filePath) : requestedRoot;
     const fixtures = createImportFixturePlan(root, config.get<unknown>('importFixtures', []), config.get<string>('importFixtureRoot', ''));
+    if (!fixtures && config.get<ImportFixtureRule[]>('importFixtures', []).length) {
+        log('[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。');
+    }
     return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(limits),
         () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider)));
 }
@@ -1490,6 +1496,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRole('bug-fixer', 'format-rejected', { attempt, category: 'model-format', diagnostic: merged.diagnostic });
                         throw new RepairResponseError(merged.diagnostic);
                     }
+                    if (merged.normalization) { recordRole('bug-fixer', 'format-normalized', { attempt, ...merged.normalization }); }
                     return merged.code!;
                 },
                 validateRevision: async (previous, candidate, failure, role) => {
@@ -2359,7 +2366,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             const raw = await requestBudgeted(params, sys, prompt, log, 'review-json', 'reviewer');
                             const { review: result, diagnostics } = parseTestReviewDetailed(raw, code, true, {
                                 target: params.funcName || targetFuncName,
-                                methodKind: astContext?.method_kind || (astContext?.class_name ? 'instance' : 'module')
+                                methodKind: astContext?.method_kind || (astContext?.class_name ? 'instance' : 'module'),
+                                module: targetImportModule,
+                                dependencyUsePoints: (astContext?.calls || []).map((name: string) => `${targetImportModule}.${name}`)
                             });
                             recordRole('reviewer', result ? 'parsed' : 'invalid-response', {
                                 contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, raw, result, diagnostics
@@ -2408,6 +2417,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 reason: error.message, diagnostic: merged.diagnostic });
                             throw error;
                         }
+                        if (merged.normalization) { recordRole('bug-fixer', 'format-normalized', { attempt, ...merged.normalization }); }
                         return preserveTrace(merged.code!);
                     }
                     return preserveTrace(sanitizeLlmResponse(raw));

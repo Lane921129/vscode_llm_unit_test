@@ -68,7 +68,13 @@ test('shared import initialization is diagnosed, previewed and rechecked without
         assert.equal(second.rows[0].status, 'loaded');
         assert.equal(fs.readFileSync(path.join(app, 'config.py'), 'utf8'), source);
         assert.equal(fs.existsSync(path.join(root, 'r2/must_not_exist')), false);
-        assert.throws(() => createImportFixturePlan(app, [{ file: 'config.py', mkdir: true }], root), /另一個受測根目錄/);
+        assert.equal(createImportFixturePlan(app, [{ file: 'config.py', mkdir: true }], root), null);
+        const switched = await inspectProjectImports(app, python,
+            targets, path.join(root, 'switched'),
+            [{ file: 'obsolete.py', mkdir: true }], undefined, root);
+        assert.equal(switched.rows[0].status, 'blocked', 'switching roots cannot borrow an old mkdir approval');
+        assert.equal(switched.rows[0].issue?.kind, 'import-side-effect');
+        assert.ok(switched.proposedRules.every(rule => rule.file !== 'obsolete.py'));
         fs.appendFileSync(path.join(app, 'config.py'), '# changed\n');
         assert.throws(() => verifyImportProposal(first), /過期|變更/);
 

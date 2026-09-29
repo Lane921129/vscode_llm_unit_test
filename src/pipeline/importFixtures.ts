@@ -21,14 +21,31 @@ export interface ImportFixturePlan {
 const storage = new AsyncLocalStorage<ImportFixturePlan | null>();
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 
+/** Saved approvals belong to exactly one root. Switching projects must neither
+ * apply those approvals nor prevent an unrelated project from running unmocked.
+ * A removed old project is still unrelated; it need not exist to be ignored.
+ */
+export function selectImportFixtureRules(root: string, input: unknown, boundRoot = ''): ImportFixtureRule[] {
+    const canonical = (value: string) => {
+        let resolved: string;
+        try { resolved = fs.realpathSync(value); }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; }
+            resolved = path.resolve(value);
+        }
+        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    };
+    if (boundRoot && canonical(root) !== canonical(boundRoot)) { return []; }
+    if (!Array.isArray(input) || input.length > 64) { throw new Error('匯入測試設定必須是最多 64 筆的清單。'); }
+    return input;
+}
+
 /** Only declarative test inputs; never rewrite a target or execute a setup script. */
 export function createImportFixturePlan(root: string, input: unknown, boundRoot = ''): ImportFixturePlan | null {
+    input = selectImportFixtureRules(root, input, boundRoot);
     if (!Array.isArray(input) || input.length > 64) { throw new Error('匯入測試設定必須是最多 64 筆的清單。'); }
     if (!input.length) { return null; }
     root = fs.realpathSync(root);
-    if (boundRoot && fs.realpathSync(boundRoot) !== root) {
-        throw new Error('匯入測試設定綁定另一個受測根目錄；請切回原專案，或使用「檢查模組載入／初始化設定」為此專案重新設定。');
-    }
     const seen = new Set<string>();
     const rules = input.map((value: unknown) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error('匯入測試設定格式錯誤。'); }
@@ -84,7 +101,7 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
 export function refreshEntryPointApprovals(root: string, input: ImportFixtureRule[], boundRoot = ''):
     { rules: ImportFixtureRule[]; expired: string[] } {
     if (!Array.isArray(input)) { throw new Error('匯入測試設定必須是清單。'); }
-    const rules = structuredClone(input), expired: string[] = [];
+    const rules = structuredClone(selectImportFixtureRules(root, input, boundRoot)), expired: string[] = [];
     for (const rule of rules) {
         if (!rule || typeof rule !== 'object' || rule.entryPointSourceHash === undefined) { continue; }
         const expected = rule.entryPointSourceHash;

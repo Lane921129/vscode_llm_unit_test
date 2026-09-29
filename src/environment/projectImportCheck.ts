@@ -5,7 +5,7 @@ import { runSpawn } from '../utils/processRunner';
 import { inferTargetImportModule } from '../utils/dependencyResolver';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { preflightTargetModule } from '../pipeline/modulePreflight';
-import { createImportFixturePlan, ImportFixturePlan, ImportFixtureRule, withImportFixtures } from '../pipeline/importFixtures';
+import { createImportFixturePlan, ImportFixturePlan, ImportFixtureRule, selectImportFixtureRules, withImportFixtures } from '../pipeline/importFixtures';
 import { throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { describeImportIssue, ImportExceptionSummary, ImportIssue, summarizeImportException } from './importDiagnostics';
@@ -28,6 +28,9 @@ const sourceHash = (file: string) => createHash('sha256').update(fs.readFileSync
 export async function inspectProjectImports(root: string, python: string, targets: ImportCheckTarget[], directory: string,
     rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = ''): Promise<ImportCheck> {
     root = fs.realpathSync(root);
+    const selectedRules = selectImportFixtureRules(root, rules, boundRoot);
+    if (rules.length && !selectedRules.length) { log('[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。'); }
+    rules = selectedRules;
     const plan = createImportFixturePlan(root, rules, boundRoot);
     const result: ImportCheck = { root, python, directory, rows: [], proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
     const proposedHashes = new Map<string, string>();

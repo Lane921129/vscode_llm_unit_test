@@ -12,6 +12,30 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class PipelineReliabilityTests(unittest.TestCase):
+    def test_child_mock_configuration_does_not_hide_later_parent_assertion(self):
+        context = {'module': 'sample', 'target': 'target', 'source': 'def target():\n    return connect()\n',
+                   'requireMockBehavior': True}
+        def candidate(setup, assertion='dep.assert_called_once()'):
+            return ('import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
+                    'class Cases(unittest.TestCase):\n    def test_value(self):\n'
+                    '        with patch("sample.connect") as dep:\n'
+                    + textwrap.indent(setup + '\ntarget()\n' + assertion, '            '))
+        arrangement = 'dep.return_value.cursor().fetchone.return_value = ("controlled",)'
+        self.assertTrue(validate_bindings(candidate(arrangement), context)['valid'])
+        for setup, assertion in [
+            (arrangement, 'dep.return_value.cursor.assert_called_once()'),
+            ('child = dep.return_value.cursor\n' + arrangement, 'child.assert_called_once()'),
+            ('alias = dep\n' + arrangement, 'alias.return_value.cursor.assert_called_once()'),
+            ('dep().cursor.return_value = 1', 'dep.assert_called_once()'),
+            ('dep.return_value = object()\n' + arrangement, 'dep.assert_called_once()'),
+            ('dep.return_value.cursor.side_effect = object\n' + arrangement, 'dep.assert_called_once()'),
+            ('dep.return_value.cursor(unknown()).fetchone.return_value = 1', 'dep.assert_called_once()'),
+            ('dep.return_value.reset_mock().value = 1', 'dep.assert_called_once()'),
+            ('dep.return_value.cursor().assert_called_once = lambda: None', 'dep.return_value.cursor.assert_called_once()'),
+        ]:
+            with self.subTest(setup=setup, assertion=assertion):
+                self.assertFalse(validate_bindings(candidate(setup, assertion), context)['valid'])
+
     def test_selected_target_patches_are_rejected_even_with_ordinary_assertions(self):
         context = {'module': 'sample', 'target': 'normalize', 'className': 'Widget'}
         imports = 'from unittest.mock import patch as p\nfrom sample import Widget as W\nimport sample as m\n'

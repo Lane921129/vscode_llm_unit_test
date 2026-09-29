@@ -230,6 +230,7 @@ export function mergeBugFixReplacement(raw: string, originalCode: string, failur
 
 export function mergeBugFixReplacementDetailed(raw: string, originalCode: string, failure: string): {
     code?: string; diagnostic?: RepairDiagnostic;
+    normalization?: { outsideTextRemoved: boolean; classWrapperRemoved: boolean; responseHash: string };
 } {
     const fence = raw.trim().match(/^```(?:python|py)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
     const blocks = [...raw.matchAll(/```[^\r\n]*\r?\n[\s\S]*?\r?\n```/g)];
@@ -248,7 +249,17 @@ export function mergeBugFixReplacementDetailed(raw: string, originalCode: string
     } });
     const selected = selectedFailureMethod(originalCode, failure);
     if (!selected) { return reject('unidentified-failure'); }
-    const parsed = parsePythonReplacement(raw, selected.name) || parseReplacement(raw);
+    if (blocks.length > 1) { return reject('multiple-code-blocks'); }
+    // Normalize packaging only. Never execute outside text or choose between
+    // multiple code blocks. The merged candidate still requires the Python AST
+    // scope gate, structure/binding checks and isolated execution.
+    const singleFence = blocks.length === 1 && /^```(?:python|py)?\s*\r?\n/i.test(blocks[0][0])
+        && !raw.replace(blocks[0][0], '').includes('```') ? blocks[0][0] : undefined;
+    let normalized = singleFence || raw;
+    let classWrapperRemoved = false;
+    const wrapper = unwrapSingleMethodClass(normalized, originalCode, selected);
+    if (wrapper) { normalized = wrapper; classWrapperRemoved = true; }
+    const parsed = parsePythonReplacement(normalized, selected.name) || parseReplacement(raw);
     if (!parsed) {
         if (!raw.trim()) { return reject('empty-response'); }
         if (blocks.length > 1) { return reject('multiple-code-blocks'); }
@@ -284,7 +295,33 @@ export function mergeBugFixReplacementDetailed(raw: string, originalCode: string
         }
         lines.splice(insertAt, 0, ...missingImports);
     }
-    return { code: lines.join('\n').trimEnd() };
+    return { code: lines.join('\n').trimEnd(),
+        ...((singleFence && responseShape.hasOutsideText) || classWrapperRemoved ? {
+            normalization: { outsideTextRemoved: Boolean(singleFence && responseShape.hasOutsideText),
+                classWrapperRemoved, responseHash: repairHash(raw) }
+        } : {}) };
+}
+
+/** A wrapper containing only the requested method is harmless packaging.
+ * Fixture edits, changed class bindings, decorators and extra methods are not.
+ */
+function unwrapSingleMethodClass(raw: string, original: string, method: TestMethodFragment): string | undefined {
+    const block = raw.trim().match(/^```(?:python|py)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
+    if (!block) { return undefined; }
+    const lines = block[1].replace(/\r\n/g, '\n').split('\n');
+    const classIndex = lines.findIndex(line => /^class\s+\w+\s*\([^\n]+\):\s*$/.test(line));
+    if (classIndex < 0) { return undefined; }
+    const imports = lines.slice(0, classIndex).filter(line => line.trim());
+    if (imports.length > 3 || !imports.every(line => SAFE_IMPORT.test(line.trim()))) { return undefined; }
+    const host = original.replace(/\r\n/g, '\n').split('\n').slice(0, method.start)
+        .filter(line => /^class\s/.test(line)).at(-1);
+    if (host?.trim() !== lines[classIndex].trim()) { return undefined; }
+    const body = lines.slice(classIndex + 1);
+    while (body.length && !body[0].trim()) { body.shift(); }
+    if (!body[0]?.match(new RegExp(`^\\s+(?:async\\s+)?def\\s+${method.name}\\s*\\(`))) { return undefined; }
+    const indent = body[0].match(/^\s+/)![0].length;
+    if (body.slice(1).some(line => line.trim() && (line.match(/^\s*/)?.[0].length || 0) <= indent)) { return undefined; }
+    return '```python\n' + [...imports, ...body.map(line => line.slice(indent))].join('\n') + '\n```';
 }
 
 /** Native Python avoids asking small models to JSON-escape a method body. */

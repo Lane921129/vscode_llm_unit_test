@@ -487,7 +487,17 @@ class Cases(unittest.TestCase):
             const repairEvents = eventText.trim().split('\n').map(line => JSON.parse(line));
             const repairKnowledge = JSON.parse(fs.readFileSync(path.join(repairOutput, 'function_knowledge.json'), 'utf8'));
             const repairReport = fs.readFileSync(path.join(repairOutput, 'final_report.md'), 'utf8');
-            const reason = mode === 'format' ? 'extra-text' : 'import-conflict';
+            if (mode === 'format') {
+                assert.equal(fixerCalls, 1);
+                assert.ok(repairEvents.some(event => event.stage === 'bug-fixer' && event.status === 'format-normalized'));
+                assert.ok(repairEvents.some(event => event.stage === 'validation' && event.status === 'passed'));
+                assert.ok(repairKnowledge.executableBaseline, 'normalized repair retains a genuinely executable candidate');
+                assert.ok(['passed', 'round-limit'].includes(repairKnowledge.terminalStatus),
+                    'successful repair does not waive any remaining mutation or coverage requirement');
+                assert.ok(!eventText.includes(marker) && !repairReport.includes(marker));
+                continue;
+            }
+            const reason = 'import-conflict';
             assert.ok(fixerCalls > 0, mode);
             const rejected = repairEvents.filter(event => event.detail?.diagnostic?.reasonCodes.includes(reason));
             assert.ok(rejected.length > 0, JSON.stringify(repairEvents.map(event => [event.stage, event.status])));
@@ -499,12 +509,6 @@ class Cases(unittest.TestCase):
             assert.equal(repairKnowledge.terminalStatus, 'failed');
             assert.ok(!eventText.includes(marker) && !repairReport.includes(marker));
             assert.ok(!fs.readFileSync(path.join(repairOutput, 'loop1_test.py'), 'utf8').includes('from datetime import datetime'));
-            if (mode === 'format') {
-                assert.equal(repairKnowledge.failureCategory, 'model-format');
-                assert.equal(repairKnowledge.failureStage, 'bug-fixer-response');
-                assert.equal(repairKnowledge.repairFailureCounts[reason], fixerCalls, 'each response refusal must be journaled once');
-                assert.ok(repairEvents.some(event => event.stage === 'repair-routing' && event.detail.action === 'tier-fallback'));
-            }
         }
     } finally {
         globalThis.fetch = originalFetch;

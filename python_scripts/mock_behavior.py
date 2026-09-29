@@ -80,6 +80,7 @@ def has_mock_behavior(tree, context):
             bindings, instances, observed, manual = {}, set(), set(), set()
             blocked_paths = set()
             patch_blocked = {}
+            mock_roots, configured_children = set(), set()
             serial = 0
 
             def resolve(node):
@@ -88,8 +89,7 @@ def has_mock_behavior(tree, context):
                 origin = aliases.get(root)
                 return origin + ('.' + tail if tail else '') if origin else ''
 
-            def token(node):
-                name = dotted(node)
+            def token_name(name):
                 if name and any(name == prefix or name.startswith(prefix + '.') for prefix in blocked_paths):
                     return None
                 for prefix in sorted(bindings, key=len, reverse=True):
@@ -101,6 +101,34 @@ def has_mock_behavior(tree, context):
                             return None
                         return value
                 return None
+
+            def token(node):
+                return token_name(dotted(node))
+
+            def configuration_path(node, calls):
+                """Follow only proven Mock return chains, never arbitrary calls.
+
+                Calling a child while arranging its return value contaminates
+                that child's call history, not the parent mock's call count.
+                Keep the affected paths out of later assertion evidence.
+                """
+                if isinstance(node, ast.Name):
+                    return node.id
+                if isinstance(node, ast.Attribute):
+                    root = configuration_path(node.value, calls)
+                    return f'{root}.{node.attr}' if root else ''
+                if isinstance(node, ast.Call) and not node.args and not node.keywords:
+                    name = configuration_path(node.func, calls)
+                    if (name and token_name(name) is not None
+                            and any(name.startswith(root + '.return_value.') for root in mock_roots)
+                            and not any(part in ASSERTIONS or part in ('reset_mock', 'configure_mock', 'attach_mock')
+                                        for part in name.split('.'))
+                            and not any(name == prefix or name.startswith(prefix + '.')
+                                        for prefix in calls)
+                            and name + '.side_effect' not in bindings):
+                        calls.add(name)
+                        return name + '.return_value'
+                return ''
 
             def patch_token(call):
                 nonlocal serial
@@ -145,7 +173,8 @@ def has_mock_behavior(tree, context):
                     return False
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ASSERTIONS:
                     value = token(node.func.value)
-                    return value is not None and token(node.func) == value and value in observed and value not in manual
+                    return (value is not None and token(node.func) == value and value in observed and value not in manual
+                            and (value not in configured_children or dotted(node.func.value) in mock_roots))
                 value = token(node.func)
                 if value is not None:
                     manual.add(value)
@@ -164,6 +193,7 @@ def has_mock_behavior(tree, context):
                             name = dotted(item.optional_vars)
                             if name:
                                 bindings[name] = value
+                                mock_roots.add(name)
                             if value is not None:
                                 nested.add(value)
                         found = statements(node.body, nested) or found
@@ -178,7 +208,15 @@ def has_mock_behavior(tree, context):
                         for lhs in targets:
                             name = dotted(lhs)
                             if not name:
-                                return found
+                                calls = set()
+                                name = configuration_path(lhs, calls)
+                                if not name or not calls:
+                                    return found
+                                # The configured child may have been called by
+                                # the test itself. It cannot prove target work.
+                                configured_children.update(token_name(call) for call in calls)
+                                blocked_paths.update(calls)
+                            mock_roots.discard(name)
                             if isinstance(lhs, ast.Attribute) and isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
                                 value = token(lhs.value) or value
                             if isinstance(lhs, ast.Attribute) and lhs.attr in ASSERTIONS:
@@ -191,6 +229,7 @@ def has_mock_behavior(tree, context):
                                 blocked_paths.discard(name)
                             bindings[name] = value
                             if isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
+                                mock_roots.add(name)
                                 for keyword in rhs.keywords:
                                     if keyword.arg is None:
                                         blocked_paths.add(name)
@@ -245,6 +284,7 @@ def has_mock_behavior(tree, context):
             active = set()
             for name, value in zip(parameters, decorated):
                 bindings[name] = value
+                mock_roots.add(name)
                 if value is not None:
                     active.add(value)
             if statements(method.body, active):

@@ -14,7 +14,7 @@ export function buildCompactWriterContext(input: {
     const context = input.context || {};
     const dependencies: any[] = context.dependencyContexts || [];
     const sections = [
-        COMPACT_WRITER_VERSION,
+        COMPACT_WRITER_VERSION + ' (metadata, never an import)',
         '=== WRITER EVIDENCE BUNDLE V3 ===',
         formatTargetContract(input.module, input.name, context.args || [], context),
         `Source hash: ${input.evidence.sourceHash}`,
@@ -28,17 +28,15 @@ export function buildCompactWriterContext(input: {
             imports: context.file_imports || [], globals: context.referenced_globals || [],
             callers: (context.callerContexts || []).map(callerForPrompt), conditions: context.condition_facts || []
         }),
-        'FIXTURE CHECK: Arrange required constructor inputs and per-case state. '
-            + 'Keep the target real. Patch proven dependencies at use points and configure each consumed return layer; a bare MagicMock is not a concrete row, string, number, or timestamp. '
-            + 'Declare all test imports. Invalid-input exceptions require evidence. '
-            + 'Later tasks add one input/state/mock configuration, verify its behavior, and preserve passing tests.',
+        'FIXTURE CHECK: Arrange constructor inputs and per-case state; declare all imports. '
+            + 'Keep the target real; patch dependencies at use points. Configure concrete values at each consumed Mock layer. '
+            + 'Match actual receivers: cursor.fetchall() differs from execute().fetchall(). Dependency returns are not target returns. '
+            + 'Exceptions require evidence; preserve passing tests.',
         // The caller-partitioned AST trace is authoritative here. Using the
         // bundle's merged trace would leak another caller's assertion oracle.
         'VERIFIED OBSERVATIONS (exact call/setup only; blocked or unassertable entries are diagnostics):\n'
             + JSON.stringify(observationsForPrompt(context.traceResult)),
-        'Observations marked uncontrolled-ambient-read are diagnostic values, never fixed expected values or exception facts. '
-            + 'Control the clock/entropy at the target use point with an explicit mock, or inject a fixed dependency/input before asserting. '
-            + 'Do not copy the observed timestamp/random value into assertions.',
+        'uncontrolled-ambient-read observations cannot supply expected values or exceptions. Control clock/entropy at its use point before asserting.',
         'VERIFIED DEPENDENCY OBSERVATIONS (never substitute for target results):\n'
             + JSON.stringify(dependencies.filter(dep => dep.traceResult).map(dep => ({ name: dep.name, observations: observationsForPrompt(dep.traceResult) }))),
         'SELECTED RULES (construction constraints, not output facts):\n'

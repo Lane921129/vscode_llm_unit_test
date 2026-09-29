@@ -5,6 +5,7 @@ import { classifyExecutionFailure } from '../utils/executionFailureCategory';
 test('classifies Tier generation failures without naming a provider or model', () => {
     assert.strictEqual(classifyExecutionFailure('HTTP 503 - service unavailable'), 'model-api');
     assert.strictEqual(classifyExecutionFailure('模型輸出未通過 Python/unittest 格式驗證'), 'model-format');
+    assert.strictEqual(classifyExecutionFailure('AI 輸出格式連續兩次未通過'), 'model-format');
     assert.strictEqual(classifyExecutionFailure('Tier 1 確定性備援無法取得可驗證的動態 Trace'), 'ast-trace');
     assert.strictEqual(classifyExecutionFailure('Coverage 品質閘門不可用'), 'coverage');
     assert.strictEqual(classifyExecutionFailure('mutatest baseline failed'), 'mutation');

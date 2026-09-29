@@ -14,6 +14,8 @@ test('import setup binds source content, isolates concurrent runs and reaches wo
         const first = createImportFixturePlan(root, [{ file: 'sample.py', mkdir: true }])!;
         fs.writeFileSync(path.join(root, 'sample.py'), 'value = 2\n');
         const second = createImportFixturePlan(root, [{ file: 'sample.py', mkdir: true }])!;
+        assert.equal(createImportFixturePlan(root, [{ file: 'missing.py', mkdir: true }], path.join(root, 'old-project')), null);
+        assert.throws(() => createImportFixturePlan(root, [{ file: 'missing.py', mkdir: true }], root));
         assert.notEqual(first.id, second.id);
         const results = await Promise.all([first, second].map(plan => withImportFixtures(plan, async () => {
             const result = await runSpawn(process.execPath, ['-e', `process.stdout.write(process.env.${IMPORT_FIXTURE_ENV} || '')`], {});

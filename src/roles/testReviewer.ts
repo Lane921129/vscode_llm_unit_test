@@ -27,6 +27,8 @@ export interface TestReview {
 export interface ReviewConstraints {
     target: string;
     methodKind: string;
+    module?: string;
+    dependencyUsePoints?: string[];
 }
 
 export function numberReviewLines(tests: string): string {
@@ -50,6 +52,7 @@ For each finding copy one ID from VALID_TEST_LINE_IDS into test_line. Only execu
 REVIEW_CONTEXT contains constraints for checking the test; it is not editable evidence and is not a business specification.
 Target binding in REVIEW_CONTEXT is authoritative. Static and class methods may be called on the class; static methods do not require an instance or a mock just because they are static. Never propose changing the target's binding/decorators.
 Never replace or mock the selected target itself. Mock only an identified dependency at its use point. Logging/printing is not a replacement for a behavioral assertion.
+Patching a helper called by the target is not patching the target. Compare the complete patch path with the exact selected target before alleging target replacement. Importing unittest.mock.patch alone is not a setup error or evidence that anything was patched.
 Unassertable observations (including uncontrolled-ambient-read) cannot justify fixed expected values or exceptions. An explicit same-test clock/entropy mock at the correct use point may supply controlled behavior; a captured timestamp/random value alone cannot.
 Do not invent requirements or expected values. Omit uncertain claims; an empty findings array is allowed. These tests have passed isolated execution; report remaining proven defects, not hypothetical execution failures.
 Each finding requires a reason identifying the violated constraint and an action describing the specific test change. Generic requests such as "focused correction" are invalid. Never request edits to the target implementation. If evidence is insufficient, omit the finding.
@@ -147,6 +150,11 @@ function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRej
             const category = finding.category as keyof typeof REVIEW_CATEGORIES;
             if (!add(item, REVIEW_CATEGORIES[category], index)) { return undefined; }
             issues[issues.length - 1].category = category;
+            if (category === 'setup-error'
+                && /^\s*from unittest\.mock import patch(?: as \w+)?\s*$/.test(issues[issues.length - 1].evidence)
+                && /patch|mock/i.test(issues[issues.length - 1].reason)) {
+                return reject('unrelated-test-line');
+            }
             if (['target-binding', 'mock-isolation', 'assertion-evidence'].includes(category)
                 && /^\s*(?:import unittest\s*$|from unittest(?:\.mock)? import\b)/.test(issues[issues.length - 1].evidence)) {
                 return reject('unrelated-test-line');
@@ -230,6 +238,15 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
     const leaf = context.target.split('.').pop()!;
     const subject = `(?:\\b${escape(context.target)}\\b|\\b${escape(leaf)}\\b|(?:selected |target |tested |被測|目標)(?:function|method|implementation|函式|方法|實作)|\\btarget\\b)`;
     for (const issue of review.issues) {
+        // A literal dependency patch cannot be evidence of replacing the
+        // selected target. Reject the whole review, never turn it into approval.
+        const patch = issue.evidence.match(/\bpatch\(\s*(['"])([\w.]+)\1/);
+        const targetPath = context.module ? `${context.module}.${context.target}` : undefined;
+        if (issue.category === 'target-binding' && patch && targetPath
+            && patch[2] !== targetPath && !targetPath.startsWith(patch[2] + '.')
+            && context.dependencyUsePoints?.includes(patch[2])) {
+            codes.add('target-binding-contradiction');
+        }
         const action = issue.action;
         // Only affirmative instructions; removing a bad patch must remain actionable.
         for (const rawClause of action.split(/[;。\n]|\.(?:\s|$)/)) {

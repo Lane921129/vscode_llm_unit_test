@@ -9,6 +9,7 @@ export function formatTargetContract(module: string, name: string, args: string[
     const invocation = kind === 'property' ? callable : `${callable}(${args.join(', ')})`;
     return [
         `Target import: from ${module} import ${owner || leaf}`,
+        `Target module: ${module}; prompt IDs and example_target are not target imports.`,
         `Target qualified name: ${owner ? owner + '.' : ''}${leaf}`,
         `Target binding: ${kind}${context?.is_async ? ' (await required)' : ''}`,
         `Target signature: ${invocation}`,

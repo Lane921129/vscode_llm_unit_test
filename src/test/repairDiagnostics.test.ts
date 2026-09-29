@@ -18,8 +18,6 @@ const fence = (text: string) => '```python\n' + text + '\n```';
 test('repair parser assigns concrete format reasons while retaining strict Python and legacy JSON acceptance', () => {
     const cases: Array<[string, RepairReasonCode]> = [
         ['', 'empty-response'], [method, 'missing-code-fence'],
-        ['Explanation\n' + fence(method), 'extra-text'],
-        [fence(method) + '\nExplanation', 'extra-text'],
         [fence(method) + '\n' + fence(method), 'multiple-code-blocks'],
         [fence('class Cases:\n    ' + method.replace('\n', '\n    ')), 'class-wrapper'],
         [fence('pass'), 'missing-test-method'],
@@ -50,7 +48,7 @@ test('journal saves each refusal and a safe report immediately, preserving first
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-diagnostic-'));
     try {
         const marker = 'PRIVATE_PROVIDER_CONTENT_MUST_NOT_BE_LOGGED';
-        const diagnostic = mergeBugFixReplacementDetailed(marker + '\n' + fence(method), original, failure).diagnostic!;
+        const diagnostic = mergeBugFixReplacementDetailed(marker + '\n' + fence('class Cases:\n    ' + method.replace('\n', '\n    ')), original, failure).diagnostic!;
         const journal = new AnalysisJournal(directory, 'neutral source', 'target', 'fixture-model');
         const first = journal.record(1, 'bug-fixer', 'format-rejected', { attempt: 1, diagnostic, elapsedMs: 123,
             contractVersion: 'bug-fix-v4', category: 'model-format' });

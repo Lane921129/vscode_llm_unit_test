@@ -136,7 +136,9 @@ export function matchingWriterExamples(context: {
     if (context.is_async) {
         features.push(context.selectedRuleIds?.includes('async_context_manager_testing') ? 'async-context' : 'async');
     }
-    if (usedImports.some(item => item.module === 'sqlite3')) { features.push('database'); }
+    // An imported database connector does not prove a context manager, SQL
+    // statement or fetch shape. The generic dependency patch pattern is enough;
+    // keep the executable SQLite example in the regression catalogue only.
     if (context.class_name && (!context.method_kind || context.method_kind === 'instance')) { features.push('class'); }
     if (usedImports.length || context.dependencyContexts?.length) {
         if (context.raised_exceptions?.length) { features.push('exception'); }

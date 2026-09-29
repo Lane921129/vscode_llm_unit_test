@@ -119,6 +119,18 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         assert.ok(initialized.knowledge.importFixtureId);
         assert.equal(fs.readFileSync(file, 'utf8'), initializedSource);
         assert.equal(fs.existsSync(path.join(root, 'must_not_exist')), false);
+        settings.importFixtureRoot = path.join(root, 'unrelated-removed-project');
+        const foreignRules = JSON.stringify(settings.importFixtures);
+        const unrelated = await run('unrelated-setup', good, source);
+        assert.equal(unrelated.knowledge.terminalStatus, 'execution-passed');
+        assert.equal(unrelated.knowledge.importFixtureId, undefined);
+        const stillBlocked = await run('unrelated-setup-blocked', good, initializedSource);
+        assert.equal(stillBlocked.knowledge.terminalStatus, 'failed');
+        assert.equal(fs.existsSync(path.join(root, 'must_not_exist')), false);
+        assert.equal(JSON.stringify(settings.importFixtures), foreignRules);
+        settings.importFixtureRoot = root;
+        const restored = await run('restored-setup', good, initializedSource);
+        assert.equal(restored.knowledge.importFixtureId, initialized.knowledge.importFixtureId);
         delete settings.importFixtures; delete settings.importFixtureRoot;
         const repaired = await run('repair', good.replace('target(2), 3', 'target(2), 999'), source, 'tier1',
             'def test_value(self):\n    self.assertEqual(target(2), 3)');
