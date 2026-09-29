@@ -1,4 +1,4 @@
-export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434') {
+export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'execution') {
     return `
 <!DOCTYPE html>
 <html lang="en">
@@ -244,6 +244,12 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.testConfig')}</summary>
         <div class="content">
+            <label for="validation-mode">驗證目標</label>
+            <select id="validation-mode">
+                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>執行驗證（預設）</option>
+                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>完整品質驗證</option>
+            </select>
+            <p>執行驗證會確認已產生的測試能隔離執行並呼叫真實目標；Trace、覆蓋率、突變與品質審查留待完整驗證。</p>
             <label>🧠 ${t('ui.promptStrategy')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
                 <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>Auto — 依模型自動路由</option>
@@ -273,10 +279,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             </div>
             
             <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
-                <label style="margin-top:0;">${t('ui.maxLoops')}</label>
+                <label style="margin-top:0;">${t('ui.maxLoops')}（完整品質模式）</label>
                 <input type="number" id="max-loop" value="5" min="1">
                 
-                <label>${t('ui.mutpyTimeout')}</label>
+                <label>${t('ui.mutpyTimeout')}（完整品質模式）</label>
                 <input type="number" id="mutpy-timeout" value="20" min="1" style="width:100%;">
 
                 <label>${t('ui.apiTimeout')}</label>
@@ -408,7 +414,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
 
         function getScoreBadge(score, coverage, outcome) {
-            const colors = { passed: '#2ea043', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
+            const colors = { passed: '#2ea043', executed: '#1677a6', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
             const state = outcome || { label: '尚未判定完整通過', kind: 'pending' };
             const outcomeBadge = '<span style="background:' + (colors[state.kind] || colors.pending) + '; color:#fff; padding:2px 7px; border-radius:4px;">' + escapeHtml(state.label) + '</span>';
             const scoreColor = '#555';
@@ -677,6 +683,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('prompt-strategy').onchange = (e) => {
             vscode.postMessage({ command: 'setPromptStrategy', strategy: e.target.value });
         };
+        document.getElementById('validation-mode').onchange = (e) => {
+            vscode.postMessage({ command: 'setValidationMode', mode: e.target.value });
+        };
 
         document.getElementById('btn-save-ollama-url').onclick = () => {
             const url = document.getElementById('ollama-url').value;
@@ -799,6 +808,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return {
                 ollamaUrl: document.getElementById('ollama-url').value,
                 promptStrategy: document.getElementById('prompt-strategy').value,
+                validationMode: document.getElementById('validation-mode').value,
                 maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 5,
                 mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 20,
                 timeoutSeconds: parseInt(document.getElementById('timeout-sec').value, 10) || 60,

@@ -52,6 +52,17 @@ test('reused environments still fail on existing conflicts and report only safe 
     } finally { f.dispose(); }
 });
 
+test('execution preparation does not install quality tools when application imports are available', async () => {
+    const f = fixture();
+    try {
+        const h = harness(() => ({ ...ready(f.python), coverage: false }));
+        const result = await preparePythonEnvironment({ ...f.options, requireQualityTools: false,
+            confirmInstall: async () => { throw Error('No missing runtime dependencies to approve'); } }, h.runner);
+        assert.deepEqual(result.installed, []); assert.equal(h.installations().length, 0);
+        assert.ok(h.commands.some(command => command.args.includes('check')));
+    } finally { f.dispose(); }
+});
+
 test('finds an already-working user interpreter before installing anything into the first candidate', async () => {
     const f = fixture();
     try {

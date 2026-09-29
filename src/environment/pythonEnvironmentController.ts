@@ -162,6 +162,7 @@ export class PythonEnvironmentController {
                     const candidates = await discoverPythonCandidates(resource, root);
                     const fixtures = scope === 'file' ? createImportFixturePlan(root, config.get<unknown>('importFixtures', []), config.get<string>('importFixtureRoot', '')) : null;
                     const result = await withImportFixtures(fixtures, () => preparePythonEnvironment({ projectRoot: root, file: targetFile, candidates,
+                        requireQualityTools: config.get<string>('validationMode', 'execution') === 'full',
                         scope, excludedPaths: [config.get<string>('outputPath', '')].filter(Boolean).map(value => path.resolve(root, value)),
                         inventory: scan => { latestInventory = scan; initialMissing ??= [...scan.missing]; },
                         confirmInstall: async plan => {
@@ -194,7 +195,9 @@ export class PythonEnvironmentController {
                     if (this.controller!.signal.aborted) { outcome = '環境準備已取消，未保存 Python 設定。'; return; }
                     await config.update('pythonPath', result.python, configurationTarget);
                     if (result.requirements) { await this.state.update('llmUnitTest.lastRequirements.v1.' + root, result.requirements); }
-                    outcome = '靜態相依與測試工具檢查完成，已保存 Python；正式模組載入尚待測試預檢。';
+                    outcome = config.get<string>('validationMode', 'execution') === 'full'
+                        ? '靜態相依與測試工具檢查完成，已保存 Python；正式模組載入尚待測試預檢。'
+                        : '執行驗證所需的靜態相依檢查完成，已保存 Python；完整品質工具延後，正式模組載入尚待測試預檢。';
                     this.publish({ command: 'environmentPreparation', busy: false,
                         text: (result.inventory ? inventorySummary(result.inventory) + ' 正式載入仍待測試預檢。'
                             : '所選檔案的匯入與測試工具檢查通過。') + 'Python：' + result.python });

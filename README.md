@@ -9,6 +9,9 @@
 
 ## What it does
 
+- Defaults to **execution verification**: static context → guarded module import → Writer / bounded repair → meaningful unittest validation → real target invocation and isolated execution evidence. Reports **執行驗證通過**, with full quality still unverified. Exploratory Trace, coverage, mutation and quality review are deferred. Original application files remain unchanged.
+- Select **完整品質驗證** (setting `llmUnitTest.validationMode: "full"`) to run the original complete workflow described below. The default is `"execution"`. Each run records its mode; changing the setting does not upgrade older results. See [執行驗證操作說明](docs/執行驗證模式.md).
+
 - Supports local Ollama, Google AI Studio, and OpenAI-compatible Chat Completions APIs.
 - Extracts module imports, referenced constants, class setup, constructor facts, dependency calls, and safe call-site literals using Python AST.
 - Uses Dynamic Trace as the assertion oracle for Tier 1. A qualified or manually selected model uses source, AST, Trace, and scoped Skill Cards to organize evidence-bound tests; unprobed Auto mode uses an explicitly labelled deterministic fallback.
@@ -18,7 +21,7 @@
 - Shows the final outcome separately from coverage and mutation scores. Batch runs check module loading before model requests; blocked imports open a diagnosis before continuing. Use **檢查模組載入／初始化設定** for a source-bound setup preview and guarded recheck; see [匯入測試設定](docs/匯入測試設定_2026_09_23.md).
 - Proposes import initialization mocks from observed policy violations and verified call identities, without a framework whitelist. External entry proposals bind the source version and call line; confirmation and a fresh guarded check are required. Missing dependencies, APIs and application callbacks remain diagnostic failures.
 
-## How the four Tiers work
+## How the four Tiers work in full quality verification
 
 | Tier | Best for | Core approach |
 |---|---|---|
@@ -28,6 +31,8 @@
 | 4 | Complex code and survived mutants | Uses full context, reviewer validation, and bounded self-repair. |
 
 `Auto` is conservative: an unprobed provider/model uses deterministic Tier 1 first. If you explicitly select Tier 1–4, your choice is retained, but every generated file must still pass the same structure, execution, coverage, and mutation gates.
+
+In execution verification, all enabled Writers use the same source/setup prompt and execution gates. Auto requires the selected model's Writer qualification; use **測試連線** first or explicitly select a manual Tier for best-effort generation. This mode does not use the Trace fallback or the full workflow's Tier-specific generation branches. A failed assertion, blocked operation, skipped-only suite, source change, or absent real target invocation never becomes an execution pass.
 
 ## Quick start
 

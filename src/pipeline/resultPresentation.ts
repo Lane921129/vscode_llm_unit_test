@@ -3,16 +3,21 @@ export interface OutcomeEvidence {
     failureCategory?: unknown;
     evidenceValid?: unknown;
     qualityAssessment?: { fullyPassed?: unknown };
+    validationMode?: unknown;
+    executionVerified?: unknown;
 }
-export interface OutcomePresentation { state: string; label: string; kind: 'passed' | 'failed' | 'pending' | 'skipped' }
+export interface OutcomePresentation { state: string; label: string; kind: 'passed' | 'executed' | 'failed' | 'pending' | 'skipped' }
 
 /** Scores and intermediate stage successes never certify the final outcome. */
 export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
     const state = typeof value.terminalStatus === 'string' ? value.terminalStatus : 'incomplete';
     if (value.evidenceValid === false) { return { state, label: '未通過：來源已變更，舊證據失效', kind: 'failed' }; }
     if (value.failureCategory === 'environment') { return { state, label: '未通過：匯入／環境受阻', kind: 'failed' }; }
-    if (state === 'passed' && value.qualityAssessment?.fullyPassed === true) {
+    if (state === 'passed' && value.validationMode !== 'execution' && value.qualityAssessment?.fullyPassed === true) {
         return { state, label: '完整通過', kind: 'passed' };
+    }
+    if (state === 'execution-passed' && value.validationMode === 'execution' && value.executionVerified === true) {
+        return { state, label: '執行驗證通過；完整品質尚未驗證', kind: 'executed' };
     }
     const labels: Record<string, [string, OutcomePresentation['kind']]> = {
         running: ['執行中，尚未判定', 'pending'],

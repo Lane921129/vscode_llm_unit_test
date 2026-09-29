@@ -6,6 +6,8 @@ import { evidenceHash } from './analysisJournal';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 import { describeImportIssue } from '../environment/importDiagnostics';
+import { verifyExecutionEvidence } from './executionEvidence';
+import { VerificationMode } from './verificationMode';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -76,7 +78,7 @@ export class BatchJournal {
     private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
     private readonly files: string[] = [];
     constructor(readonly directory: string, private readonly sourceRoot: string,
-        private readonly identity: { model: string; buildTimestamp: string; python: string }) {
+        private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode }) {
         this.save();
     }
     private relative(file: string): string {
@@ -117,7 +119,10 @@ export class BatchJournal {
                 if (!knowledge.runId || manifest.runId !== knowledge.runId || !knowledge.sourceHash || manifest.sourceHash !== knowledge.sourceHash
                     || manifest.target !== target.target || knowledge.target !== target.target || typeof knowledge.terminalStatus !== 'string'
                     || knowledge.terminalStatus === 'running') { throw Error('incomplete-provenance'); }
+                if ((manifest.validationMode ?? 'full') !== (this.identity.validationMode ?? 'full')
+                    || (knowledge.validationMode ?? 'full') !== (manifest.validationMode ?? 'full')) { throw Error('mode-mismatch'); }
                 if (knowledge.terminalStatus === 'passed') {
+                    if (manifest.validationMode === 'execution' || knowledge.validationMode === 'execution') { throw Error('mode-mismatch'); }
                     const hasQualityContract = [manifest, knowledge].some(artifact =>
                         ['qualityContractVersion', 'qualityPolicy', 'qualityAssessment'].some(key => Object.hasOwn(artifact, key)));
                     if (hasQualityContract) {
@@ -133,6 +138,17 @@ export class BatchJournal {
                             throw Error('incomplete-provenance');
                         }
                     }
+                }
+                if (knowledge.terminalStatus === 'execution-passed') {
+                    const baseline = JSON.parse(fs.readFileSync(path.join(directory, 'execution_baseline.json'), 'utf8'));
+                    if (manifest.validationMode !== 'execution' || knowledge.validationMode !== 'execution'
+                        || (this.identity.validationMode ?? 'full') !== 'execution'
+                        || knowledge.evidenceValid !== true || knowledge.executionVerified !== true
+                        || knowledge.executionBaseline !== 'execution_baseline.json'
+                        || knowledge.acceptedTest !== baseline.testFile || knowledge.acceptedCodeHash !== baseline.testHash
+                        || !verifyExecutionEvidence(directory, path.resolve(this.sourceRoot, target.file), baseline, {
+                            runId: manifest.runId, sourceHash: manifest.sourceHash, target: target.target
+                        })) { throw Error('incomplete-execution-provenance'); }
                 }
                 target.terminalStatus = knowledge.terminalStatus;
                 target.category = knowledge.failureCategory;
@@ -167,11 +183,12 @@ export class BatchJournal {
     }
     summary(): string {
         const passed = this.targets.filter(t => t.terminalStatus === 'passed').length;
+        const executed = this.targets.filter(t => t.terminalStatus === 'execution-passed').length;
         const blocked = this.targets.filter(t => t.category === 'environment').length;
         const failed = this.targets.filter(t => t.category !== 'environment'
             && ['failed', 'retained-after-failure', 'source-changed'].includes(t.terminalStatus || '')).length;
         const skipped = this.targets.filter(t => ['dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'no-mutation-candidates'].includes(t.terminalStatus || '')).length;
-        return `共 ${this.targets.length} 個目標；完整通過 ${passed}、環境受阻 ${blocked}、失敗 ${failed}、略過／未評分 ${skipped}、未完成 ${this.targets.length - passed - blocked - failed - skipped}`;
+        return `共 ${this.targets.length} 個目標；執行驗證通過 ${executed}、完整通過 ${passed}、環境受阻 ${blocked}、失敗 ${failed}、略過／未評分 ${skipped}、未完成 ${this.targets.length - executed - passed - blocked - failed - skipped}`;
     }
     private save(): void {
         const counts: Record<string, number> = {};
@@ -192,7 +209,11 @@ export class BatchJournal {
         const environmentIssues = [...groups.values()].map(group => ({ ...group, files: [...group.files].sort() }));
         const complete = this.status === 'completed';
         const passed = counts.passed || 0;
+        const executed = counts['execution-passed'] || 0;
+        const mode = this.identity.validationMode ?? 'full';
         const manifest = { schemaVersion: 1, batchId: this.id, startedAt: this.startedAt, finishedAt: this.finishedAt,
+            validationMode: mode,
+            allTargetsExecutionVerified: complete && this.targets.length > 0 && executed === this.targets.length,
             status: this.status, complete, allTargetsPassed: complete && this.targets.length > 0 && passed === this.targets.length,
             preflightBlockedModules: this.blockedModules,
             model: this.identity.model, buildTimestamp: this.identity.buildTimestamp,
@@ -204,7 +225,9 @@ export class BatchJournal {
         fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');
         fs.renameSync(temporary, path.join(this.directory, 'batch_manifest.json'));
         const safe = (value: string) => value.replace(/[|\r\n]/g, ' ');
-        const report = ['# 批次執行摘要', '', `## ${manifest.allTargetsPassed ? '完整通過' : '未全部通過'}`, '', this.summary(), '',
+        const report = ['# 批次執行摘要', '', `## ${manifest.allTargetsPassed ? '完整通過'
+            : manifest.allTargetsExecutionVerified ? '全部執行驗證通過；完整品質尚未驗證' : '未全部通過'}`, '', this.summary(), '',
+            `- 驗證目標：${mode === 'execution' ? '執行驗證；Trace、覆蓋率、突變與品質審查未執行' : '完整品質驗證'}`,
             `- 狀態：${this.status}（執行完成不代表測試通過）`,
             ...(this.blockedModules ? [`- 前置預檢有 ${this.blockedModules} 個模組受阻：[原因與處理方式](preflight/import_check.md)。未開始的目標保持未完成。`] : []),
             `- 預期目標：${this.targets.length}；已有終態：${manifest.finishedTargets}；完整通過：${passed}`,

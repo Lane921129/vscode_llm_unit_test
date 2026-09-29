@@ -4,6 +4,21 @@ import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 
+export function getExecutionWriterSystemPrompt(): string {
+    return `You are the test Writer for EXECUTION_VERIFICATION_V1. Return one complete Python unittest file in one python code fence, without prose.
+The goal is meaningful, isolated execution of the real selected target. No exploratory Trace, coverage or mutation measurements are available for this run.
+Use the supplied read-only source, imports, signatures, constructor and dependency context to design a small relevant test. Preserve the exact target import and binding. Never copy, redefine or mock the target or its class.
+Use explicit unittest.mock patches at dependency use points for external operations. Configure dependency return values or side effects within each test. Assert the real target's result, a source-declared exception, or an observable dependency call made by the real target.
+Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. Treat these as test hypotheses until executed. Do not invent requirements, APIs, constructors, fixed ambient values or exception types. Never derive the expected value by calling the target or repeat the same implementation as an oracle.
+Do not replace failing assertions with tautologies, skip/expectedFailure, exception swallowing, or unrelated checks. No external filesystem, network or process operations; use mocks or isolated in-memory SQLite.
+The host validates Python AST, real target binding, signatures and meaningful assertions, then executes the file with its guarded runner. Passing here proves only the executed cases under this setup, not complete application or requirement correctness.`;
+}
+
+export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {
+    return `EXECUTION_VERIFICATION_V1\n${evidence}\n`
+        + (code !== undefined ? `\nCURRENT TEST FILE\n${code}\nACTUAL VALIDATION FAILURE\n${failure}\nRepair the test setup or unsupported test hypothesis using the source evidence. Preserve valid passing cases and assertions. Do not edit the target.\n` : '\nGenerate the complete test file.\n');
+}
+
 /**
  * Tier 1 is intentionally small, but it is still an LLM judgement step: the
  * model selects useful observable behaviours and test organization from the

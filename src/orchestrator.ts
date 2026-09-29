@@ -9,6 +9,9 @@ import {
     buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
+import { verificationMode, VerificationMode } from './pipeline/verificationMode';
+import { runExecutionVerification } from './pipeline/executionVerification';
+import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './roles/unittestWriter';
 import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
@@ -266,6 +269,7 @@ function getContextBudget(profile: ModelProfile): number {
 }
 
 interface AnalysisParams {
+    validationMode?: VerificationMode;
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
     filePath: string;
@@ -387,7 +391,8 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.filePath) };
+            const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.filePath),
+                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'execution')) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 if (runParams.funcName) {
                     await executeSingleFileAnalysis(runParams, log, view);
@@ -420,14 +425,15 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand('mutation-test-view.focus');
                 return;
             }
-            const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.batchPath, params.batchPath) };
+            const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.batchPath, params.batchPath),
+                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'execution')) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 const projectName = path.basename(runParams.batchPath);
                 const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,
                     runParams.sessionDate || formatSessionDate(), projectName);
                 const batch = new BatchJournal(batchDirectory, runParams.batchPath, {
                     model: runParams.modelName, buildTimestamp: extensionBuildIdentity.buildTimestamp,
-                    python: runParams.pythonExecutable
+                    python: runParams.pythonExecutable, validationMode: runParams.validationMode
                 });
                 let outcome: 'completed' | 'cancelled' | 'failed' = 'failed';
                 try {
@@ -1064,7 +1070,8 @@ async function resolveAstAndDependencies(
     pythonExecutable: string,
     log: (text: string) => void,
     beforeBehavior: (context: AstContext) => Promise<PreflightResult>,
-    progressDirectory?: string
+    progressDirectory?: string,
+    probeBehavior = true
 ): Promise<AstContext | null> {
     log(`[AST] 正在解析函式 \`${funcName}\` 的結構與依賴...`);
     const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
@@ -1098,7 +1105,8 @@ async function resolveAstAndDependencies(
                         depAst.callerContexts = callers;
                         log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
                     }
-                    const dependencyTrace = await runBehaviorProbe(depFilePath, dep.name, callers, pythonExecutable, [], progressDirectory);
+                    const dependencyTrace = probeBehavior
+                        ? await runBehaviorProbe(depFilePath, dep.name, callers, pythonExecutable, [], progressDirectory) : undefined;
                     if (dependencyTrace && !dependencyTrace.load_error) {
                         depAst.traceResult = dependencyTrace;
                         log(`[行為探測] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
@@ -1120,6 +1128,7 @@ async function resolveAstAndDependencies(
         log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
     }
 
+    if (!probeBehavior) { return astContext; }
     log(`[行為探測] 正在受控執行函式以取得輸入輸出觀測...`);
     const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable, [], progressDirectory);
     if (traceResult) { astContext.traceResult = traceResult; }
@@ -1154,6 +1163,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 
 async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
     params = { ...params, ...normalizeExecutionSettings(params) };
+    const mode = verificationMode(params.validationMode);
+    const gateDescription = mode === 'full' ? '結構、執行、覆蓋率與突變驗證' : '結構、真實目標呼叫與隔離執行驗證';
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
         ?? { current: currentModelProfile, stored: storedModelProfiles };
@@ -1235,8 +1246,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     }
     if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
-            ? '[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。'
-            : `[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier ${userTierSetting.replace('tier', '')} 選擇繼續執行。輸出仍須通過結構、執行、覆蓋率與突變驗證。`);
+            ? mode === 'execution'
+                ? '[模型能力] 此供應商／模型尚未完成 Writer 探測；執行驗證的 Auto 需要先透過「測試連線」確認生成能力。'
+                : '[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。'
+            : `[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier ${userTierSetting.replace('tier', '')} 選擇繼續執行。輸出仍須通過${gateDescription}。`);
     }
     const resolvedTier = resolveTier(
         modelParamBillion,
@@ -1252,9 +1265,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         resolvedTier
     );
     if (qualifiedForSelectedModel === false && userTierSetting !== 'auto') {
-        log('[模型能力] 此模型尚未通過 unittest 探測；保留你的手動 Tier 選擇，並以既有結構、執行、覆蓋率與突變閘門驗證每次輸出。');
+        log(`[模型能力] 此模型尚未通過 unittest 探測；保留你的手動 Tier 選擇，並以${gateDescription}檢查每次輸出。`);
     }
-    log(`[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
+    log(mode === 'execution' ? '[系統] 執行驗證：使用來源與明確 Mock 生成測試，延後完整品質流程。'
+        : `[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {
         log('[錯誤] 找不到目標檔案路徑');
@@ -1265,7 +1279,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let tier1GenerationModeRecorded = false;
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let currentTier = resolvedTier;
-    let finalReportMarkdown = `# 突變測試與修復分析報告\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **使用的策略**: Tier ${currentTier} (${userTierSetting === 'auto' ? 'Auto 自動路由' : '使用者指定 Tier ' + currentTier})\n- **日期**: ${reportDateStr}\n\n`;
+    let finalReportMarkdown = `# ${mode === 'execution' ? '執行驗證與修復報告' : '突變測試與修復分析報告'}\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **生成方式**: ${mode === 'execution' ? '來源與明確 Mock 測試假設；採執行驗證流程' : 'Tier ' + currentTier}\n- **日期**: ${reportDateStr}\n\n`;
     finalReportMarkdown += formatReportProvenance({
         ...extensionBuildIdentity,
         modelProvider: params.envType,
@@ -1311,7 +1325,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     }
 
     const qualityPolicy = createStrictQualityPolicy();
-    const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName, qualityPolicy);
+    const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName,
+        mode === 'full' ? qualityPolicy : undefined, mode);
+    finalReportMarkdown += `- **驗證目標**: ${mode === 'execution' ? '執行驗證（Trace、覆蓋率、突變與品質審查延後）' : '完整品質驗證'}\n`;
     const writeReport = (body = finalReportMarkdown) => fs.writeFileSync(existingReport, withOutcomeHeader(body, journal.snapshot()), 'utf8');
     const importFixtures = currentImportFixtures();
     if (importFixtures) {
@@ -1396,7 +1412,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             pythonExecutable,
             log,
             checkEnvironment,
-            sessionDir
+            sessionDir,
+            mode === 'full'
         );
         if (astContext && !astContext.error) {
             targetFuncName = astContext.name || targetFuncName;
@@ -1424,6 +1441,89 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         roleQualification: roleQualification || null });
     if (!preflight) { await checkEnvironment(astContext); }
     const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
+
+    if (mode === 'execution') {
+        if (!astContext || !params.funcName) {
+            throw new AnalysisStageError('ast-trace', 'static-analysis', '執行驗證需要明確的函式目標。');
+        }
+        journal.knowledge({ traceStatus: 'deferred', coverage: null, mutationScore: null,
+            mutationStatus: 'deferred', reviewStatus: 'deferred', qualityAssessment: null });
+        if (!mayUseModelAuthoredTests) {
+            throw new AnalysisStageError('validation', 'writer-qualification',
+                'Auto 的 Writer 尚未通過此模型的生成探測。請先執行「測試連線」，或明確選擇手動 Tier；執行驗證模式不會改用 Trace 代替生成。');
+        }
+        const evidence = getReviewEvidence('', '', targetFuncName, astContext.args, astContext.code,
+            astContext, targetImportModule, undefined,
+            Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
+            + '\nCaller setup context (source literals are input hints, not output facts):\n'
+            + JSON.stringify(astContext.callerContexts || []);
+        const accepted = await runExecutionVerification({ directory: sessionDir, file: params.filePath,
+            target: params.funcName, python: pythonExecutable, env: testExecutionEnv,
+            dependencies: astContext.sourceVersions || [], journal,
+            generate: async () => sanitizeLlmResponse(await requestBudgeted(params,
+                getExecutionWriterSystemPrompt(), getExecutionWriterPrompt(evidence), log, testGenerationResponseFormat)),
+            hooks: {
+                event: recordRole,
+                validate: async code => {
+                    const result = await validateGeneratedTestCode(code, targetFuncName, targetImportModule,
+                        astContext.method_kind === 'property' ? 'property' : 'call', astContext.signature,
+                        exceptionNamesFromEvidence(astContext), astContext.class_name, pythonExecutable, testBindingContext);
+                    return result.valid ? undefined : result.reason || 'Structure validation failed';
+                },
+                repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
+                revise: async (code, failure, role, attempt) => {
+                    if (role === 'bug-fixer' && !mayUseModelAuthoredRepair) {
+                        throw new AnalysisStageError('validation', 'fixer-qualification', 'Auto 的 Bug Fixer 尚未通過資格探測；已保存失敗測試。');
+                    }
+                    const system = role === 'bug-fixer' ? getBugFixerSystemPrompt() : getExecutionWriterSystemPrompt();
+                    const prompt = role === 'bug-fixer'
+                        ? getBugFixerUserPrompt(code, failure, targetFuncName, astContext.args, astContext.code,
+                            astContext, targetImportModule, undefined,
+                            Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
+                        : getExecutionWriterPrompt(evidence, code, failure);
+                    const raw = await requestBudgeted(params, system, prompt, log,
+                        role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
+                        role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision');
+                    if (role !== 'bug-fixer') { return sanitizeLlmResponse(raw); }
+                    const merged = mergeBugFixReplacementDetailed(raw, code, failure);
+                    if (merged.diagnostic) {
+                        recordRole('bug-fixer', 'format-rejected', { attempt, category: 'model-format', diagnostic: merged.diagnostic });
+                        throw new RepairResponseError(merged.diagnostic);
+                    }
+                    return merged.code!;
+                },
+                validateRevision: async (previous, candidate, failure, role) => {
+                    if (role !== 'bug-fixer') { return undefined; }
+                    const result = await runSpawn(pythonExecutable, ['-B', pythonToolPath('repairScope')], {
+                        input: JSON.stringify({ contractVersion: ROLE_CONTRACT_VERSIONS.bugFix, previous, candidate, failure }),
+                        timeout: 5000, env: testExecutionEnv
+                    });
+                    if (result.code !== 0) { return { reason: REPAIR_REASON_LABELS['scope-tool-error'], reasonCode: 'scope-tool-error' }; }
+                    try {
+                        const value = JSON.parse(result.stdout);
+                        const reasonCode = repairReasonCode(value.reasonCode);
+                        return value.valid === true ? undefined : { reason: REPAIR_REASON_LABELS[reasonCode], reasonCode };
+                    } catch {
+                        return { reason: REPAIR_REASON_LABELS['scope-result-invalid'], reasonCode: 'scope-result-invalid' };
+                    }
+                }
+            }
+        });
+        finalReportMarkdown += `\n### 執行驗證結果\n\n- 已執行測試：[${accepted.testFile}](${accepted.testFile})\n`
+            + '- 已驗證真實目標呼叫、有效案例與隔離完成；結果綁定本次來源及測試版本。\n'
+            + '- Trace、覆蓋率、突變及品質審查：未執行；完整品質尚未驗證。\n'
+            + '- 這份結果只涵蓋已執行案例與明確 mock 設定，不代表整個應用程式或所有需求正確。\n'
+            + `\n\`\`\`text\n${journal.snapshot().execution}\n\`\`\`\n`;
+        writeReport();
+        sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName, file: displayFile,
+            func: params.funcName, score: 'N/A', coverage: null, reason: '執行驗證通過；完整品質尚未驗證', reportPath: existingReport });
+        if (!params.batchJournal) {
+            const document = await vscode.workspace.openTextDocument(existingReport);
+            throwIfExecutionCancelled();
+            await vscode.window.showTextDocument(document, { preview: false });
+        }
+        return;
+    }
 
     // ─── 優化一：Stub/Dummy 函式快速通道 ───
     // 若函式為純 Stub（pass/return None/return <literal>），跳過 LLM + 突變測試
@@ -2884,7 +2984,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
         const stage = error instanceof RepairResponseError ? 'bug-fixer-response'
             : error instanceof AnalysisStageError ? error.stage : 'pipeline';
-        journal.knowledge({ terminalStatus: category === 'cancelled' ? 'cancelled' : 'failed',
+        journal.knowledge({ terminalStatus: category === 'cancelled' ? 'cancelled' : stage === 'source-changed' ? 'source-changed' : 'failed',
             failure: message, failureCategory: category, failureStage: stage,
             diagnostic: error instanceof AnalysisStageError || error instanceof RepairResponseError ? error.diagnostic : undefined });
         recordRole(stage, 'failed', { reason: message, category });

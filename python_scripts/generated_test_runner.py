@@ -54,7 +54,10 @@ def main(argv=None):
         if args.violation_report:
             with open(args.violation_report, 'a', encoding='utf-8') as report:
                 report.write(json.dumps({'runId': run_id, 'event': event, 'policyVersion': POLICY_VERSION,
-                                         'importFixtures': import_fixture_evidence(), **detail}) + '\n')
+                                         'importFixtures': import_fixture_evidence(),
+                                         'targetRunId': args.target_run_id,
+                                         'sourceHash': tracker.source_hash if tracker else None,
+                                         'testHash': tracker.test_hash if tracker else None, **detail}) + '\n')
 
     # An engine that fails to invoke/finish its guarded runner cannot certify
     # isolation merely because no violation file appeared.
@@ -69,6 +72,7 @@ def main(argv=None):
         coverage.start()
     exit_code = 1
     violation = None
+    test_result = None
     observation = tracker.observe() if tracker else nullcontext()
     try:
         with observation:
@@ -80,6 +84,10 @@ def main(argv=None):
                         raise RuntimeError('Target invocation test identity mismatch')
                     tracker.testing = True
                 result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)
+                test_result = {'testsRun': result.testsRun, 'failures': len(result.failures),
+                               'errors': len(result.errors), 'skipped': len(result.skipped),
+                               'expectedFailures': len(result.expectedFailures),
+                               'unexpectedSuccesses': len(result.unexpectedSuccesses)}
                 exit_code = 0 if result.wasSuccessful() and result.testsRun > 0 else 1
     except TestIsolationError:
         violation = violations[0] if violations else 'external operation'
@@ -96,7 +104,7 @@ def main(argv=None):
             coverage.save()
         if tracker:
             tracker.save(args.target_evidence, 'passed' if exit_code == 0 and not violation else 'failed',
-                         coverage.get_data().data_filename() if coverage else None)
+                         coverage.get_data().data_filename() if coverage else None, test_result)
     if violation:
         print(f'{ISOLATION_MARKER}: {violation}; mock the dependency at its target use point.', file=sys.stderr)
         record('completed', status='isolation-blocked', operation=violation)

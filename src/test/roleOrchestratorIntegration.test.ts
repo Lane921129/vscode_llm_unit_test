@@ -147,7 +147,7 @@ class Cases(unittest.TestCase):
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
         const outputFor = (root: string, target = 'target'): string => {
             const matches = fs.readdirSync(root, { recursive: true }).map(String)
@@ -212,7 +212,7 @@ class Cases(unittest.TestCase):
         writers = 0;
         roles.length = 0;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 3, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: path.join(directory, 'incomplete-results') });
         const incompleteRoot = path.join(directory, 'incomplete-results');
         const incompleteOutput = outputFor(incompleteRoot);
@@ -231,7 +231,7 @@ class Cases(unittest.TestCase):
         writers = 1;
         const interruptedRoot = path.join(directory, 'first-mutation-timeout');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: interruptedRoot });
         const interruptedOutput = outputFor(interruptedRoot);
         const interrupted = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'function_knowledge.json'), 'utf8'));
@@ -252,7 +252,7 @@ class Cases(unittest.TestCase):
             const originalSource = fs.readFileSync(sourceFile, 'utf8');
             const changedRoot = path.join(directory, 'changed-' + changed);
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-                filePath: sourceFile, funcName: 'target', promptStrategy: 'tier1',
+                filePath: sourceFile, funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
                 maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: changedRoot });
             const changedOutput = outputFor(changedRoot);
             const changedKnowledge = JSON.parse(fs.readFileSync(path.join(changedOutput, 'function_knowledge.json'), 'utf8'));
@@ -276,7 +276,7 @@ class Cases(unittest.TestCase):
         const beforeBetweenChange = fs.readFileSync(betweenSource, 'utf8');
         const betweenRoot = path.join(directory, 'changed-between-rounds');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: betweenSource, funcName: 'target', promptStrategy: 'tier1',
+            filePath: betweenSource, funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 2, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: betweenRoot });
         const betweenOutput = outputFor(betweenRoot);
         const betweenKnowledge = JSON.parse(fs.readFileSync(path.join(betweenOutput, 'function_knowledge.json'), 'utf8'));
@@ -298,7 +298,7 @@ class Cases(unittest.TestCase):
             utilities.detectMutationEngine = () => engine;
             writers = 0;
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-                filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
                 maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
             const scopeRoot = path.join(directory, engine + '-results');
             const scopeOutput = outputFor(scopeRoot);
@@ -317,7 +317,7 @@ class Cases(unittest.TestCase):
             paramSize: '1B', contextLength: 128, qualificationVersion: QUALIFICATION_VERSION,
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'oversize-results') });
         const oversizeRoot = path.join(directory, 'oversize-results');
         const oversizeOutput = outputFor(oversizeRoot);
@@ -332,7 +332,7 @@ class Cases(unittest.TestCase):
         let serviceCalls = 0;
         globalThis.fetch = async () => { serviceCalls++; return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 }); };
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier3',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'service-failure') });
         const serviceRoot = path.join(directory, 'service-failure');
         const serviceOutput = outputFor(serviceRoot);
@@ -350,7 +350,7 @@ class Cases(unittest.TestCase):
         roles.length = 0;
         expectedMutationSeconds = 20;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier3',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
         const scaffoldRoot = path.join(directory, 'scaffold-results');
         const scaffoldOutput = outputFor(scaffoldRoot);
@@ -417,7 +417,7 @@ class Cases(unittest.TestCase):
             return new Response(JSON.stringify({ response }), { status: 200 });
         };
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'partial.py'), funcName: 'Widget.normalize', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'partial.py'), funcName: 'Widget.normalize', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 2, timeoutSeconds: 60, outputPath: path.join(directory, 'partial-results') });
         const partialRoot = path.join(directory, 'partial-results');
         const partialOutput = outputFor(partialRoot, 'Widget.normalize');
@@ -449,7 +449,7 @@ class Cases(unittest.TestCase):
         writers = 0;
         roles.length = 0;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'bad-runner-baseline') });
         const badRoot = path.join(directory, 'bad-runner-baseline');
         const badOutput = outputFor(badRoot);
@@ -480,7 +480,7 @@ class Cases(unittest.TestCase):
             };
             const repairRoot = path.join(directory, 'repair-' + mode);
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-                filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier2',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier2',
                 maxLoops: 1, timeoutSeconds: 60, outputPath: repairRoot });
             const repairOutput = outputFor(repairRoot);
             const eventText = fs.readFileSync(path.join(repairOutput, 'role_events.jsonl'), 'utf8');

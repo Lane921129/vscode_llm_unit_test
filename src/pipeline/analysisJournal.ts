@@ -6,6 +6,7 @@ import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import { classifyExecutionFailure } from '../utils/executionFailureCategory';
 import type { QualityPolicySnapshot } from './qualityPolicy';
 import { formatRepairDiagnostic, RepairDiagnostic } from './repairDiagnostics';
+import { VerificationMode } from './verificationMode';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -18,17 +19,17 @@ export class AnalysisJournal {
     readonly sourceHash: string;
     snapshot(): Record<string, unknown> { return { ...this.knowledgeState }; }
     constructor(private readonly directory: string, source: string, target: string, model: string,
-        qualityPolicy?: QualityPolicySnapshot) {
+        qualityPolicy?: QualityPolicySnapshot, validationMode: VerificationMode = 'full') {
         this.sourceHash = evidenceHash(source);
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
-            schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(),
+            schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(), validationMode,
             sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v7',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS,
             repairDiagnosticsVersion: 'repair-diagnostics-v1',
             ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {})
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
-        this.knowledge({ target, terminalStatus: 'running', stage: 'starting',
+        this.knowledge({ target, terminalStatus: 'running', stage: 'starting', validationMode,
             ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {}) });
     }
     record(loop: number, stage: string, status: string, detail: unknown): string {

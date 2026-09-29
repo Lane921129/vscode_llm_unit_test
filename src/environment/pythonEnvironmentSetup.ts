@@ -146,6 +146,7 @@ function requireImportable(value: EnvironmentInspection): void {
 /** Reuse a working interpreter first. Only an explicitly invoked preparation installs missing dependencies. */
 export async function preparePythonEnvironment(options: {
     projectRoot: string; file: string; candidates: PythonCandidate[]; toolRequirements: string;
+    requireQualityTools?: boolean;
     scope?: 'file' | 'folder'; excludedPaths?: string[]; inventory?: (scan: DependencyInventory) => void;
     signal?: AbortSignal; progress?: (message: string) => void;
     chooseRequirements?: (files: string[]) => Promise<string | undefined>;
@@ -158,6 +159,7 @@ export async function preparePythonEnvironment(options: {
     };
     const progress = (message: string) => { cancelled(); options.progress?.(message); };
     const scope = options.scope || 'file';
+    const needsTools = (value: EnvironmentInspection) => options.requireQualityTools !== false && !value.coverage;
     if (!fs.existsSync(options.file) || !(scope === 'folder' ? fs.statSync(options.file).isDirectory() : fs.statSync(options.file).isFile())) {
         throw new EnvironmentSetupError('target', '請先選擇有效的 Python 檔案或來源資料夾。');
     }
@@ -177,7 +179,7 @@ export async function preparePythonEnvironment(options: {
         cancelled();
         if (!value || seen.has(value.python)) { continue; }
         seen.add(value.python);
-        if (value.status === 'ready' && value.coverage) { selected = value; break; }
+        if (value.status === 'ready' && !needsTools(value)) { selected = value; break; }
         if (!selected || (value.status === 'ready' && selected.status !== 'ready')
             || (value.status === 'missing' && selected.status !== 'missing' && selected.status !== 'ready')) { selected = value; }
     }
@@ -210,7 +212,7 @@ export async function preparePythonEnvironment(options: {
             const plan = await createPythonInstallationPlan({ python, virtual: current.virtual, target: options.file,
                 projectRoot: options.projectRoot, inventory: current.inventory,
                 missing: current.status === 'missing' ? current.inventory?.missing || [current.missing || ''] : [],
-                requirements, toolRequirements: options.toolRequirements, needsTools: !current.coverage,
+                requirements, toolRequirements: options.toolRequirements, needsTools: needsTools(current),
                 packageName: async module => editedMappings.has(module) ? editedMappings.get(module) : options.packageName?.(module),
                 previouslyInstalled: installed });
             cancelled();
@@ -242,7 +244,7 @@ export async function preparePythonEnvironment(options: {
         }
         throw new EnvironmentSetupError('install-plan', '清單更新次數過多，請重新檢查；未依最後清單安裝。');
     };
-    if (selected.status === 'missing' || !selected.coverage) {
+    if (selected.status === 'missing' || needsTools(selected)) {
         const files = findRequirementFiles(options.projectRoot, options.file, scope);
         requirements = files.length === 1 ? files[0] : files.length ? await options.chooseRequirements?.(files) : undefined;
         cancelled();
@@ -289,7 +291,7 @@ export async function preparePythonEnvironment(options: {
         await install([name], options.projectRoot);
         installed.push(name);
     }
-    if (!selected.coverage) {
+    if (needsTools(selected)) {
         if (!fs.existsSync(options.toolRequirements)) { throw new EnvironmentSetupError('tools', '擴充套件的測試工具相依清單遺失，請重新安裝擴充套件。'); }
         progress('正在補齊 coverage 與突變測試工具…');
         const args = ['-r', options.toolRequirements, ...requirements ? ['-r', requirements] : []];
@@ -305,8 +307,8 @@ export async function preparePythonEnvironment(options: {
     const final = await inspect({ executable: python });
     cancelled();
     if (final) { report(final); }
-    if (!final || final.status !== 'ready' || !final.coverage) {
-        throw new EnvironmentSetupError('verify', '最終模組或 coverage 檢查未通過，環境尚未就緒。');
+    if (!final || final.status !== 'ready' || needsTools(final)) {
+        throw new EnvironmentSetupError('verify', '最終模組或所需測試工具檢查未通過，環境尚未就緒。');
     }
     return { python, requirements, installed, inventory: final.inventory };
 }

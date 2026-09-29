@@ -12,6 +12,8 @@ test('final status cannot be promoted by a high-scoring retained candidate or pa
         assert.notEqual(presentOutcome({ terminalStatus, qualityAssessment: { fullyPassed: true } }).kind, 'passed');
     }
     assert.notEqual(presentOutcome({ terminalStatus: 'passed' }).kind, 'passed');
+    assert.notEqual(presentOutcome({ terminalStatus: 'passed', validationMode: 'execution', qualityAssessment: { fullyPassed: true } }).kind, 'passed');
+    assert.notEqual(presentOutcome({ terminalStatus: 'execution-passed', validationMode: 'execution' }).kind, 'executed');
     assert.equal(presentOutcome({ terminalStatus: 'passed', qualityAssessment: { fullyPassed: true } }).kind, 'passed');
     assert.equal(presentOutcome({ terminalStatus: 'passed', evidenceValid: false, qualityAssessment: { fullyPassed: true } }).kind, 'failed');
     const body = '# Evidence\n\nRan 2 tests\nOK\ncoverage 100%';

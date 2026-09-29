@@ -102,6 +102,13 @@
           "default": "auto",
           "description": "Prompt strategy: small (strict formatting) vs large (advanced reasoning)"
         },
+        "llmUnitTest.validationMode": {
+          "type": "string",
+          "enum": ["execution", "full"],
+          "default": "execution",
+          "enumDescriptions": ["先驗證真實目標的隔離 unittest 執行；延後 Trace、覆蓋率、突變與品質審查。", "執行原有 Trace、覆蓋率、突變與品質審查，符合完整門檻才通過。"],
+          "description": "測試驗證目標。執行驗證通過只代表已執行案例通過，不代表完整品質或整個應用程式正確。"
+        },
         "llmUnitTest.ollamaBaseUrl": {
           "type": "string",
           "default": "http://127.0.0.1:11434",

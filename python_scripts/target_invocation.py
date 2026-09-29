@@ -121,7 +121,7 @@ class TargetInvocationTracker:
         filename = vars(module).get('__file__') if type(module) is types.ModuleType else None
         return isinstance(filename, str) and canonical_path(filename) == self.test_file
 
-    def save(self, destination, status, coverage_file=None):
+    def save(self, destination, status, coverage_file=None, test_result=None):
         current = file_hash(self.source_file) == self.source_hash and file_hash(self.test_file) == self.test_hash
         result = {
             'schemaVersion': 'target-invocation-v1', 'testRunId': self.test_run_id,
@@ -129,7 +129,8 @@ class TargetInvocationTracker:
             'canonicalTestFile': self.test_file, 'testHash': self.test_hash, 'targetCodeHash': self.code_hash,
             'status': status if current and self.profile_intact else 'invalidated',
             'observed': self.observed, 'profileIntact': self.profile_intact,
-            'coverageDataHash': file_hash(coverage_file) if coverage_file else None
+            'coverageDataHash': file_hash(coverage_file) if coverage_file else None,
+            'testResult': test_result
         }
         temporary = str(destination) + '.pending'
         Path(temporary).write_text(json.dumps(result), encoding='utf-8')

@@ -2,6 +2,13 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+## 目前驗收優先順序
+
+- 依使用者 2026-09-29 決定，預設以正確執行為主，速度優化延後。`validationMode=execution` 是獨立的執行驗收；`full` 保留原完整品質政策。以下要求 Trace oracle、coverage、mutation、Reviewer 與 Tier 分支的規則適用於 full，不能用來將 execution 未量測的項目補成通過。
+- execution 保留靜態語境、同環境匯入預檢、明確初始化 fixture、結構／AST／簽名／目標 binding 與斷言檢查、隔離執行及修復範圍限制。可提出來源支持的確定性關係、可達 literal 或同測試控制之 Mock 行為作為待執行測試假設；不可憑空發明需求、依賴 API、例外、環境常值，或 mock／複製受測目標。測試通過只驗證實際案例，不證明完整需求正確。
+- 模式在執行前固定並記入 manifest。只有同一版 source/test/run 的真實目標呼叫、至少一個未略過且成功的案例、完整且成功的隔離紀錄均核對後，才可標示「執行驗證通過」。空測試、全 skip／expectedFailure、匯入受阻、來源變更與缺少證據不得算通過。批次重新讀取證據；結果不得冒充完整品質通過。
+- execution 的 Auto Writer 仍須通過生成資格；未合格時提示測試連線或手動 Tier，不啟用 Trace fallback。Reviewer、覆蓋率、突變與深度 Trace 延後，未量測保存 null／deferred；full 的政策與 gate 不變。既有程式／函式兩層結果及原檔不變規則仍適用。
+
 ## 通用性與語境
 
 - `python_scripts/dynamic_tracer.py`、`python_scripts/ast_extractor.py` 與基礎提示詞不得硬編碼任何業務領域關鍵字、固定閾值或特定回傳結構。
