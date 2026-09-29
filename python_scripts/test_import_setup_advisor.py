@@ -72,6 +72,20 @@ class ImportSetupAdvisorTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertIsNone(self.candidate(result))
 
+    def test_function_local_imports_and_bindings_do_not_hide_module_entry(self):
+        for body in ['def target():\n    import math\n    driver = math\n    return driver.pi\n',
+                     'async def target():\n    import math\n    return math.pi\n',
+                     'target = lambda: (driver := None)\n']:
+            with self.subTest(body=body):
+                result = self.check('import neutral_driver as driver\n' + body + 'driver.launch()\n')
+                self.assertIsNotNone(self.candidate(result), result)
+                self.assertEqual(self.candidate(result)['operation'], 'neutral_driver.launch')
+        # Defaults execute at definition time, unlike the deferred function body.
+        (self.external / 'other_driver.py').write_text(VENDOR, encoding='utf-8')
+        source = ('import neutral_driver as driver\nimport other_driver\n'
+                  'def target(value=(driver := other_driver)): return value\ndriver.launch()\n')
+        self.assertIsNone(self.candidate(self.check(source)))
+
     def test_repeated_multiline_calls_are_proposed_one_position_at_a_time(self):
         for setup, call in [('import neutral_driver as driver', 'driver.launch'),
                             ('from neutral_driver import launch as start', 'start')]:

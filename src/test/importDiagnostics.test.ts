@@ -2,6 +2,19 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { describeImportIssue, summarizeImportException } from '../environment/importDiagnostics';
 
+test('runtime policy labels with spaces retain initialization diagnostics without copying arbitrary text', () => {
+    for (const operation of ['network connection', 'file read', 'shell / subprocess', 'os.mkdir']) {
+        const issue = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: operation,
+            origin: { file: 'main.py', line: 2322 } }, 'module-import');
+        assert.equal(issue.kind, 'import-side-effect');
+        assert.equal(issue.issue, operation);
+        assert.match(issue.advice, /初始化設定/);
+    }
+    for (const operation of ['network connection\n', 'file read password=private-value', 'https://example.invalid']) {
+        assert.equal(describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: operation }, 'module-import').kind, 'other');
+    }
+});
+
 test('missing module APIs remain identifiable when AttributeError has no name/obj metadata', () => {
     const message = "module 'example_vendor' has no attribute 'launch'";
     assert.equal(describeImportIssue({ exception_type: 'AttributeError', message }, 'module-import').issue, 'example_vendor.launch');

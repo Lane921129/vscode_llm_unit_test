@@ -9,6 +9,12 @@ export interface ImportExceptionSummary { exceptionType: string; message: string
 const identifier = (text: unknown): text is string => typeof text === 'string' && text.length <= 240 && text.trim() === text
     && /^[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*$/u.test(text);
 
+// Stable labels emitted by runtime_policy.py; these are not Python identifiers.
+const policyOperations = new Set(['network connection', 'file read', 'file write', 'shell / subprocess',
+    'replacing SQLite isolation authorizer', 'unmanaged low-level thread startup', 'replacing execution observer',
+    'non-isolated SQLite connection', 'unguarded SQLite connection factory', 'SQLite extension loading',
+    'custom SQLite connection factory']);
+
 /** Keep a bounded Python exception, never arbitrary subprocess output or traceback. */
 export function summarizeImportException(diagnostic: unknown): ImportExceptionSummary | undefined {
     if (!diagnostic || typeof diagnostic !== 'object') { return undefined; }
@@ -48,7 +54,8 @@ export function describeImportIssue(diagnostic: any, stage: string): ImportIssue
         && identifier(api?.attribute)) {
         result = { kind: 'dependency-api', issue: `${api.module}.${api.attribute}`,
             advice: '已載入的模組缺少此 API。核對套件版本、來源與原專案相依宣告；重按安裝或模擬不存在的 API 不能判定修復。' };
-    } else if (value.exception_type === 'TraceSafetyError' && identifier(value.blocked_operation)) {
+    } else if (value.exception_type === 'TraceSafetyError'
+        && (identifier(value.blocked_operation) || policyOperations.has(value.blocked_operation))) {
         result = { kind: 'import-side-effect', issue: value.blocked_operation,
             advice: '使用「檢查模組載入／初始化設定」預覽支援的初始化替身；保留受測原檔，設定後必須重新預檢。' };
     } else {

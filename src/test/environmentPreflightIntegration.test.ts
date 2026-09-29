@@ -45,8 +45,8 @@ test('missing target dependency preserves declared import setup and diagnostics 
         await handlers.get('llm-unit-test.runCaptureAndTest')!(params);
         assert.equal(modelCalls, 0);
         assert.equal(preflightFailureCacheSize(), 0);
-        const runs = fs.readdirSync(params.outputPath).flatMap(root =>
-            fs.readdirSync(path.join(params.outputPath, root)).map(name => path.join(params.outputPath, root, name)));
+        const runs = fs.readdirSync(params.outputPath, { recursive: true }).map(String)
+            .filter(name => path.basename(name) === 'target.json').map(name => path.dirname(path.join(params.outputPath, name)));
         assert.equal(runs.length, 2);
         for (const run of runs) {
             const knowledge = JSON.parse(fs.readFileSync(path.join(run, 'function_knowledge.json'), 'utf8'));
@@ -74,8 +74,9 @@ test('missing target dependency preserves declared import setup and diagnostics 
         const duplicateOutput = path.join(directory, 'duplicate-results');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ ...params, outputPath: duplicateOutput });
         assert.equal(modelCalls, 0);
-        const duplicateRoot = path.join(duplicateOutput, fs.readdirSync(duplicateOutput)[0]);
-        const duplicateRun = path.join(duplicateRoot, fs.readdirSync(duplicateRoot)[0]);
+        const duplicateLocation = fs.readdirSync(duplicateOutput, { recursive: true }).map(String)
+            .find(name => path.basename(name) === 'target.json')!;
+        const duplicateRun = path.dirname(path.join(duplicateOutput, duplicateLocation));
         const duplicateKnowledge = JSON.parse(fs.readFileSync(path.join(duplicateRun, 'function_knowledge.json'), 'utf8'));
         assert.equal(duplicateKnowledge.failureCategory, 'ast-trace');
         assert.equal(duplicateKnowledge.failureStage, 'static-analysis');

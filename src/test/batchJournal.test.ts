@@ -49,6 +49,8 @@ test('batch inventory distinguishes completion, verified passes, skips and incom
         assert.equal(result.finishedTargets, 3);
         assert.deepEqual(result.statusCounts, { passed: 1, 'incomplete-report': 6, 'stub-smoke-generated': 1, 'dummy-skipped': 1 });
         assert.ok(result.targets.every((target: any) => target.file === 'pkg/sample.py' && !path.isAbsolute(target.reportDirectory)));
+        assert.ok(result.targets.every((target: any) => target.reportDirectory.split('/').length === 2));
+        assert.equal(new Set(result.targets.map((target: any) => target.reportDirectory.split('/')[0])).size, 1);
         assert.throws(() => batch.discover(path.join(root, '..', 'outside.py'), ['target']));
         assert.throws(() => batch.attach(0, second));
         assert.equal(fs.readdirSync(second).length, 0, 'a new batch never inherits old results');

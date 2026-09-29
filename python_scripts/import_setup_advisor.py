@@ -41,6 +41,18 @@ def _parts(node):
     return None
 
 
+def _definition_time_nodes(node):
+    """Walk expressions executed when defining a function, never its local body."""
+    yield node
+    for field, value in ast.iter_fields(node):
+        if field == 'body' and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        children = value if isinstance(value, list) else [value]
+        for child in children:
+            if isinstance(child, ast.AST):
+                yield from _definition_time_nodes(child)
+
+
 def _import_binding(statements, name):
     """Conservative lexical binding, including aliases; ambiguous stores invalidate it."""
     binding = None
@@ -56,7 +68,7 @@ def _import_binding(statements, name):
                 elif (item.asname or item.name) == name:
                     binding = (statement.module, [item.name])
         else:
-            for node in ast.walk(statement):
+            for node in _definition_time_nodes(statement):
                 if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name
                         or isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and node.id == name
                         or isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))

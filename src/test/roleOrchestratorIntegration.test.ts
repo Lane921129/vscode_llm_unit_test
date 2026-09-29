@@ -150,14 +150,12 @@ class Cases(unittest.TestCase):
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
         const outputFor = (root: string, target = 'target'): string => {
-            const matches = fs.readdirSync(root, { withFileTypes: true }).filter(item => item.isDirectory()).flatMap(run => {
-                const parent = path.join(root, run.name);
-                return fs.readdirSync(parent, { withFileTypes: true }).filter(item => item.isDirectory())
-                    .map(item => path.join(parent, item.name)).filter(folder => {
-                        const location = JSON.parse(fs.readFileSync(path.join(folder, 'target.json'), 'utf8'));
-                        return location.target === target;
-                    });
-            });
+            const matches = fs.readdirSync(root, { recursive: true }).map(String)
+                .filter(name => path.basename(name) === 'target.json')
+                .map(name => path.dirname(path.join(root, name))).filter(folder => {
+                    const location = JSON.parse(fs.readFileSync(path.join(folder, 'target.json'), 'utf8'));
+                    return location.target === target;
+                });
             assert.equal(matches.length, 1, 'one result location must identify the requested target');
             return matches[0];
         };

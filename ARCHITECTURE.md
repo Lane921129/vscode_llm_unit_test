@@ -157,7 +157,7 @@ Cloud 的 `llmUnitTest.cloudThinkingMode` 預設 `minimal`，可改 `provider-de
 
 一般函式從 AST 前建立 `running` 紀錄；每個角色事件立即更新進度報告，保存第一個與最近一次拒絕／失敗原因。環境預檢或取消也會保存終態；若程序被外部強制終止，最後的 `running`／stage 是未完成檢查點，不能視為成功。
 
-批次結果使用 `<project>_<日期時分>/<專案相對來源路徑去掉 .py>/<qualified target>/`。同分鐘重跑建立 `__run2` 等新目錄，保留舊候選與失敗報告；不再只因 `final_report.md` 存在就跳過。
+批次結果使用 `<project>_<日期時分>/<程式短名_來源短碼>/<函式短名_目標短碼>/`，固定兩層，不複製來源目錄深度。同一來源的函式集中在同一程式資料夾，不同來源的同名檔分開；`source.json`、`target.json` 保留完整身分與雜湊，短碼碰撞核對完整身分後另配目錄。同分鐘重跑建立 `__run2` 等新目錄，保留舊候選與失敗報告；批次清單與報告連結記錄實際巢狀位置。舊結果仍可讀取，不會搬移或改寫。
 
 `src/pipeline/batchJournal.ts` 在來源掃描前建立 `batch_manifest.json` 與 `batch_summary.md`。整批重跑保留新根目錄（例如 `<project>_<日期時分>__run2`），先保存已發現的全部目標才開始逐項執行。來源／AST 掃描失敗、取消、缺報告與仍在執行明確分開；`complete` 表示清單處理完畢，`allTargetsPassed` 才表示每項完整通過。彙整時核對 run/source/target 與保留測試 hash，未審查、Stub、Dummy 或品質不足不升格為通過。環境問題按缺模組或被阻擋操作／專案相對位置分組，不另發模型請求；選取的獨立輸出資料夾不再被當成批次來源。
 
