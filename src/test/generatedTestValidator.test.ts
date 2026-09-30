@@ -187,6 +187,14 @@ test('accepts an assertion over a value returned by the target', () => {
     assert.strictEqual(validateUnittestStructure(code, 'add').valid, true);
 });
 
+test('production structure delegates unpacked and multiline return bindings to Python AST', () => {
+    const code = 'import unittest\nfrom calculator import split\nclass TestSplit(unittest.TestCase):\n'
+        + '    def test_result(self):\n        (number,\n         status) = split(1)\n        self.assertEqual(number, 1)\n';
+    const result = validateUnittestStructure(code, 'split', 'calculator', 'call', [], null, true);
+    assert.strictEqual(result.valid, true);
+    assert.strictEqual(result.requiresTargetBehaviorEvidence, true);
+});
+
 test('accepts a target invocation nested under assertRaises', () => {
     const code = [
         'import unittest',

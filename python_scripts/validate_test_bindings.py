@@ -3,6 +3,7 @@ import ast
 import json
 import sys
 from mock_behavior import has_mock_behavior
+from target_result_evidence import has_target_result_assertion
 
 
 def dotted(node):
@@ -126,6 +127,10 @@ def validate_bindings(code, context):
                     return {'valid': False, 'reason': f'Patch the dependency at its target use point: {expected}, not {patch_path}. Verify the mock was called.'}
     if context.get('requireMockBehavior') and not has_mock_behavior(tree, context):
         return {'valid': False, 'reason': 'Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.'}
+    if context.get('requireTargetBehavior') and not (has_target_result_assertion(tree, context) or has_mock_behavior(tree, context)):
+        locations = ', '.join(f'{node.name}:{node.lineno}' for node in ast.walk(tree)
+                             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'))[:300]
+        return {'valid': False, 'reason': f'AST 未找到目標回傳值、例外或受控相依的有效斷言（{locations}）；請保留回傳值（可解包），勿覆寫後驗證常數或比較目標與自身。'}
     return {'valid': True}
 
 

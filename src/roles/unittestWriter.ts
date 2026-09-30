@@ -17,7 +17,7 @@ The host validates Python AST, real target binding, signatures and meaningful as
 
 export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {
     return `EXECUTION_VERIFICATION_V1\n${evidence}\n`
-        + (code !== undefined ? `\nCURRENT TEST FILE\n${code}\nACTUAL VALIDATION FAILURE\n${failure}\nRepair the test setup or unsupported test hypothesis using the source evidence. Preserve valid passing cases and assertions. Do not edit the target.\n` : '\nGenerate the complete test file.\n');
+        + (code !== undefined ? `\nCURRENT TEST FILE\n${code}\nACTUAL VALIDATION FAILURE\n${failure}\nRepair the test setup or unsupported test hypothesis using the source evidence. For multiple failed methods, correct all supported failures together. Recheck every returned field: an earlier failed assertion can hide a later wrong expectation in the same method. Preserve inputs, fixtures, valid passing cases and assertion strength when correcting arithmetic constants. Do not edit the target or copy actual output without source justification.\n` : '\nGenerate the complete test file.\n');
 }
 
 /**

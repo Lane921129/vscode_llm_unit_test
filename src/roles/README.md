@@ -12,6 +12,10 @@
 
 這是五個任務入口，可以共用同一個模型；語意分析與品質分析分別在生成前後工作。Validation 是工具階段，不是另一個模型角色。
 
+執行驗證模式遇到實際斷言失敗時，先以 `repair_source_expectations.py` 嘗試有界的來源算術檢查：僅處理無外部相依的簡單函式、明確案例輸入及失敗方法內的預期常數。它不呼叫目標、不將 runner 輸出抄成答案、不更改輸入／fixture／斷言種類，保存 `arithmetic_001.json` 計算依據後仍須通過 AST、隔離執行與已通過案例保留檢查。無法證明時交回原模型修復流程；此能力驗證來源行為一致性，不驗證獨立業務需求。完整品質模式維持原有證據要求。
+
+正式生成流程的目標回傳值與斷言關聯由 `target_result_evidence.py` 使用 Python AST 檢查，支援 tuple／list 解包、多行與匯入別名；文字預檢不再因不認得解包寫法直接拒絕。
+
 - 改「角色被要求做什麼」：找該檔案的 System Prompt。
 - 改「角色看到什麼」：找 User Prompt；Reviewer 與品質分析的輸入組裝在 orchestrator 中。
 - 改「回應如何被接受」：找該角色的 parser，以及 [候選流程](../pipeline/testCandidatePipeline.ts)。Writer／Bug Fixer 的 Python 回應由共用結構與執行驗證處理。

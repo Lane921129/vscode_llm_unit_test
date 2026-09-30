@@ -2,6 +2,7 @@ export interface GeneratedTestValidation {
     valid: boolean;
     reason?: string;
     requiresMockBehaviorEvidence?: boolean;
+    requiresTargetBehaviorEvidence?: boolean;
 }
 
 export type TargetUsage = 'call' | 'property';
@@ -623,12 +624,12 @@ export function validateUnittestStructure(
         if (shadowedAlias) {
             return { valid: false, reason: '測試檔重新定義了被測函式的匯入別名 ' + shadowedAlias + '，可能沒有測到原始模組' };
         }
-        if (targetUsage === 'property' ? !accessesProperty(executable, targetCallable) : !invokesTargetCall(executable, callReference)) {
+        if (!deferMockBehaviorToAst && (targetUsage === 'property' ? !accessesProperty(executable, targetCallable) : !invokesTargetCall(executable, callReference))) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '測試沒有讀取被測 property ' + targetCallable
                 : '測試沒有呼叫被測函式 ' + targetCallable };
         }
-        if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && !mockCandidate) {
+        if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && !mockCandidate && !deferMockBehaviorToAst) {
             return { valid: false, reason: targetUsage === 'property'
                 ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
                 : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
@@ -657,5 +658,6 @@ export function validateUnittestStructure(
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
         return { valid: false, reason: '測試檔嘗試以動態模組替換被測模組 ' + targetModule };
     }
-    return requiresMockBehaviorEvidence ? { valid: true, requiresMockBehaviorEvidence: true } : { valid: true };
+    return { valid: true, ...(requiresMockBehaviorEvidence ? { requiresMockBehaviorEvidence: true } : {}),
+        ...(deferMockBehaviorToAst && targetCallable ? { requiresTargetBehaviorEvidence: true } : {}) };
 }

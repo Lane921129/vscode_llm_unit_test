@@ -63,7 +63,7 @@ class Cases(unittest.TestCase):
 `;
     assert.equal(validateUnittestStructure(code, 'target', 'sample').valid, false);
     assert.deepEqual(validateUnittestStructure(code, 'target', 'sample', 'call', [], undefined, true),
-        { valid: true, requiresMockBehaviorEvidence: true });
+        { valid: true, requiresMockBehaviorEvidence: true, requiresTargetBehaviorEvidence: true });
 });
 
 test('private targets and source-defined exception identities produce executable Trace baselines', () => {

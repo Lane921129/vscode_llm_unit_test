@@ -897,7 +897,8 @@ async function validateGeneratedTestCode(
                 : ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'],
             { env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
                 input: bindingContext ? JSON.stringify({ code, context: {
-                    ...bindingContext, requireMockBehavior: structure.requiresMockBehaviorEvidence
+                    ...bindingContext, requireMockBehavior: structure.requiresMockBehaviorEvidence,
+                    requireTargetBehavior: structure.requiresTargetBehaviorEvidence, targetUsage
                 } }) : code, timeout: 5000 }
         );
         if (parsed.code !== 0) {
@@ -1465,6 +1466,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             + JSON.stringify(astContext.callerContexts || []);
         const accepted = await runExecutionVerification({ directory: sessionDir, file: params.filePath,
             target: params.funcName, python: pythonExecutable, env: testExecutionEnv,
+            targetModule: targetImportModule,
             dependencies: astContext.sourceVersions || [], journal,
             generate: async () => sanitizeLlmResponse(await requestBudgeted(params,
                 getExecutionWriterSystemPrompt(), getExecutionWriterPrompt(evidence), log, testGenerationResponseFormat)),
@@ -1521,6 +1523,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             + '- Trace、覆蓋率、突變及品質審查：未執行；完整品質尚未驗證。\n'
             + '- 這份結果只涵蓋已執行案例與明確 mock 設定，不代表整個應用程式或所有需求正確。\n'
             + `\n\`\`\`text\n${journal.snapshot().execution}\n\`\`\`\n`;
+        const expectationRepair = journal.snapshot().expectationRepair as { file: string; candidateTestHash: string } | undefined;
+        if (expectationRepair) {
+            const applied = expectationRepair.candidateTestHash === accepted.testHash;
+            finalReportMarkdown += `\n- **預期值修正**：${applied ? '依原始碼與案例輸入進行有界算術計算，修正失敗案例的預期常數後重新執行通過。' : '曾提出來源算術修正；最後採用另一次修訂，該提案不代表最終測試。'}計算依據：[${expectationRepair.file}](${expectationRepair.file})。這只驗證與來源行為一致，不代表獨立需求正確性。\n`;
+        }
         writeReport();
         sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName, file: displayFile,
             func: params.funcName, score: 'N/A', coverage: null, reason: '執行驗證通過；完整品質尚未驗證', reportPath: existingReport });

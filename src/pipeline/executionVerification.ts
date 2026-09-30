@@ -9,10 +9,12 @@ import { generatedUnittestArguments } from '../utils/pythonTestEnvironment';
 import { runSpawn } from '../utils/processRunner';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { throwIfExecutionCancelled } from './executionContext';
+import { pythonToolPath } from './pythonTools';
 
 interface ExecutionVerificationOptions {
     directory: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
     dependencies: Array<{ file: string; hash: string }>; journal: AnalysisJournal;
+    targetModule?: string;
     generate(): Promise<string>;
     hooks: Pick<CandidatePipelineHooks, 'validate' | 'revise' | 'repairRole' | 'validateRevision' | 'event'>;
 }
@@ -40,6 +42,34 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
     hooks.event('writer', 'candidate', { code: initial, validationMode: 'execution' });
     const candidate = await validateTestCandidate(initial, {
         ...hooks, reviewRequired: false, review: async () => undefined, checkCancelled: checkCurrent,
+        repairExpectations: async (code, failure) => {
+            if (!options.targetModule || !/^FAIL: test_/m.test(failure)) { return undefined; }
+            checkCurrent();
+            const result = await runSpawn(python, ['-B', pythonToolPath('sourceExpectations')], {
+                input: JSON.stringify({ code, failure, source: fs.readFileSync(file, 'utf8'), target,
+                    module: options.targetModule }), env, timeout: 5000
+            });
+            checkCurrent();
+            if (result.code !== 0) {
+                hooks.event('source-expectation-repair', 'unavailable', { reason: '算術檢查未完成，保留模型修復流程' });
+                return undefined;
+            }
+            try {
+                const value = JSON.parse(result.stdout);
+                if (value.changed !== true || typeof value.code !== 'string' || !Array.isArray(value.corrections)
+                    || value.corrections.length === 0 || value.basis !== 'source-derived-arithmetic-v1') { return undefined; }
+                const [proofPath] = reserveArtifactFiles(directory, ['arithmetic'], 'json');
+                const evidence = { basis: value.basis, limitation: value.limitation, sourceHash: journal.sourceHash,
+                    previousTestHash: evidenceHash(code), candidateTestHash: evidenceHash(value.code), corrections: value.corrections };
+                // reserveArtifactFiles already created this exclusively owned file.
+                fs.writeFileSync(proofPath, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
+                journal.knowledge({ expectationRepair: { file: path.basename(proofPath), ...evidence } });
+                return { code: value.code, evidence };
+            } catch {
+                hooks.event('source-expectation-repair', 'unavailable', { reason: '算術檢查結果無效，保留模型修復流程' });
+                return undefined;
+            }
+        },
         execute: async code => {
             checkCurrent();
             // Every executed candidate has its own immutable file and evidence.

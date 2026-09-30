@@ -10,7 +10,10 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
     const repo = path.resolve(__dirname, '../..');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bmi-repair-'));
     const file = path.join(root, 'bmi.py');
-    const source = fs.readFileSync(path.join(repo, 'test/test_mut/bmi.py'), 'utf8');
+    // A builtin outside the bounded arithmetic subset keeps this test on the
+    // model fallback path. The raw laboratory candidate is covered separately.
+    const source = fs.readFileSync(path.join(repo, 'test/test_mut/bmi.py'), 'utf8')
+        .replace('height_cm / 100', 'float(height_cm) / 100');
     fs.writeFileSync(file, source);
     const python = resolvePythonExecutable(undefined, repo);
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;

@@ -21,6 +21,8 @@ export interface CandidatePipelineHooks {
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number): Promise<string>;
     repairRole?(code: string, failure: string): 'writer' | 'bug-fixer';
+    /** Host-only literal correction with source evidence; still subject to all execution gates. */
+    repairExpectations?(code: string, failure: string): Promise<{ code: string; evidence: unknown } | undefined>;
     validateRevision?(previousCode: string, candidateCode: string, failure: string,
         role: 'writer' | 'bug-fixer'): Promise<string | { reason: string; reasonCode: string } | undefined>;
     execute(code: string): Promise<CandidateExecution>;
@@ -48,6 +50,7 @@ export async function validateTestCandidate(
     let revisionLimit = maxRevisions;
     let writerRecoveryUsed = false;
     let writerRecoveryPending = false;
+    let executionFailure = false;
     // One reserved handoff, only after a demonstrated no-op method repair.
     // It still consumes the enclosing target's candidate/request/time budgets.
     const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change'): boolean => {
@@ -72,8 +75,11 @@ export async function validateTestCandidate(
         const writerRecoveryAttempt = writerRecoveryPending;
         writerRecoveryPending = false;
         if (attempt > 0) {
-            if (role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
-            if (role === 'bug-fixer') {
+            const arithmetic = executionFailure ? await hooks.repairExpectations?.(code, lastFailure) : undefined;
+            executionFailure = false;
+            hooks.checkCancelled();
+            if (!arithmetic && role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
+            if (!arithmetic && role === 'bug-fixer') {
                 const failureKey = repairFailureKey(lastFailure);
                 if (attemptedBugFixFailures.has(failureKey)) {
                     hooks.event(role, 'repair-rejected', { attempt, category: 'validation', contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
@@ -84,9 +90,10 @@ export async function validateTestCandidate(
                 attemptedBugFixFailures.add(failureKey);
             }
             const previousCode = code;
-            const candidate = await hooks.revise(code, lastFailure, role, attempt);
+            const candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt);
             hooks.checkCancelled();
-            hooks.event(role, 'candidate', { attempt, code: candidate });
+            hooks.event(arithmetic ? 'source-expectation-repair' : role, 'candidate', {
+                attempt, code: candidate, ...(arithmetic ? { evidence: arithmetic.evidence } : {}) });
             if (!feedback.consider(candidate, lastFailure)) {
                 lastFailure = feedback.output;
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure, category: 'validation', contractVersion: role === 'bug-fixer'
@@ -102,7 +109,7 @@ export async function validateTestCandidate(
                 continue;
             }
             const scopeStarted = Date.now();
-            const revisionViolation = await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
+            const revisionViolation = arithmetic ? undefined : await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
             if (revisionViolation) {
                 const reason = typeof revisionViolation === 'string' ? revisionViolation : revisionViolation.reason;
                 feedback.reject(reason);
@@ -176,6 +183,7 @@ export async function validateTestCandidate(
             };
         }
         lastFailure = execution.out;
+        executionFailure = true;
         if (writerRecoveryAttempt) { break; }
         // A module/fixture failure is not a failed test-method replacement.
         role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
