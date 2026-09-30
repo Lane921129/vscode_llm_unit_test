@@ -11,6 +11,7 @@ import operator
 import re
 import sys
 from dataclasses import dataclass
+from trace_value_codec import snapshot_value
 
 
 class Unsupported(ValueError):
@@ -161,12 +162,16 @@ def source_result(function, args, kwargs, calculator):
     found, result = visit(function.body)
     if not found:
         raise Unsupported('no explicit return')
-    return Value(result, {'inputs': inputs, 'steps': steps, 'result': result})
+    return Value(result, {'inputs': inputs, 'steps': steps, 'result': result,
+        'call': snapshot_value({'args': tuple(arg.data for arg in args),
+                                'kwargs': {key: value.data for key, value in kwargs.items()}}),
+        'result_snapshot': snapshot_value(result)})
 
 
 def repair(payload):
     code, source, failure = (payload.get(key, '') for key in ('code', 'source', 'failure'))
     empty = {'changed': False, 'reason': 'unsupported-or-no-proven-correction', 'corrections': []}
+    numeric_skill = payload.get('numericSkill') is True
     if max(len(code), len(source), len(failure)) > 200000:
         return empty
     # Only actual unittest assertion failures authorize constant correction.
@@ -222,6 +227,9 @@ def repair(payload):
             unit_aliases.update(item.asname or item.name for item in node.names if item.name == 'TestCase')
     if not aliases:
         return empty
+    if numeric_skill and (len({node.name for node in tree.body if isinstance(node, ast.ClassDef)})
+            != len([node for node in tree.body if isinstance(node, ast.ClassDef)])):
+        return empty
     # Reject target/builtin rebinding, alternate fixtures, module execution and decorators.
     for node in tree.body:
         if not isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef)):
@@ -232,7 +240,7 @@ def repair(payload):
         return empty
     replacements, corrections = [], []
     for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
-        if cls.decorator_list or len(cls.bases) != 1 or ast.unparse(cls.bases[0]) not in unit_aliases:
+        if cls.decorator_list or cls.keywords or len(cls.bases) != 1 or ast.unparse(cls.bases[0]) not in unit_aliases:
             continue
         methods = [node for node in cls.body if isinstance(node, ast.FunctionDef)]
         if any(node.name not in ('setUp',) and not node.name.startswith('test_') for node in methods):
@@ -246,21 +254,54 @@ def repair(payload):
                 continue
             calculator, values, pending = Calculator(), {}, []
             try:
+                def target_value(call):
+                    if not isinstance(call, ast.Call) or ast.unparse(call.func) not in aliases or any(item.arg is None for item in call.keywords):
+                        raise Unsupported('target call')
+                    if len({item.arg for item in call.keywords}) != len(call.keywords):
+                        raise Unsupported('duplicate keywords')
+                    return source_result(function, [calculator.expression(arg, values) for arg in call.args],
+                        {item.arg: calculator.expression(item.value, values) for item in call.keywords}, calculator)
+
                 fixture = [node for node in methods if node.name == 'setUp']
                 if len(fixture) > 1 or any(node.decorator_list for node in fixture):
                     raise Unsupported('fixture')
+                if numeric_skill and fixture:
+                    for item in fixture[0].body:
+                        if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+                            continue
+                        if not isinstance(item, ast.Assign) or any(
+                                isinstance(dest, ast.Name) for target_node in item.targets for dest in ast.walk(target_node)
+                                if isinstance(dest, ast.Name) and isinstance(dest.ctx, ast.Store)):
+                            raise Unsupported('fixture must only assign instance data')
                 for statement in [*(fixture[0].body if fixture else []), *method.body]:
                     if isinstance(statement, ast.Assign):
                         call = statement.value
                         if isinstance(call, ast.Call) and ast.unparse(call.func) in aliases:
-                            if any(item.arg is None for item in call.keywords):
-                                raise Unsupported('expanded keywords')
-                            value = source_result(function, [calculator.expression(arg, values) for arg in call.args],
-                                {item.arg: calculator.expression(item.value, values) for item in call.keywords}, calculator)
+                            value = target_value(call)
                         else:
                             value = calculator.expression(statement.value, values)
                         for dest in statement.targets:
+                            if numeric_skill and any(isinstance(child, ast.Attribute) and child.attr.startswith('assert') for child in ast.walk(dest)):
+                                raise Unsupported('assertion rebinding')
                             assign(dest, value, values)
+                    elif numeric_skill and isinstance(statement, ast.With):
+                        # Only a single, side-effect-free target call. Never remove a
+                        # compound exception test or a context variable used later.
+                        if len(statement.items) != 1 or statement.items[0].optional_vars is not None or len(statement.body) != 1:
+                            raise Unsupported('exception scope')
+                        context = statement.items[0].context_expr
+                        body = statement.body[0]
+                        if not (isinstance(context, ast.Call) and ast.unparse(context.func) == 'self.assertRaises'
+                                and len(context.args) == 1 and isinstance(context.args[0], ast.Name) and not context.keywords
+                                and isinstance(body, ast.Expr)):
+                            raise Unsupported('exception assertion')
+                        value = target_value(body.value)
+                        # This is a proposal only. Full mode must independently
+                        # observe this exact call returning before adopting it.
+                        pending.append((statement, {'method': cls.name + '.' + method.name, 'line': statement.lineno,
+                            'previous': {'exception': context.args[0].id}, 'calculated': value.data,
+                            'basis': value.origin, 'kind': 'exception-to-return'},
+                            'self.assertEqual(' + ast.get_source_segment(code, body.value) + ', ' + repr(value.data) + ')'))
                     elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
                         continue
                     elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
@@ -268,7 +309,8 @@ def repair(payload):
                         if not (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == 'self'
                                 and call.func.attr in ('assertEqual', 'assertAlmostEqual') and len(call.args) >= 2):
                             raise Unsupported('assertion')
-                        actual, expected = calculator.expression(call.args[0], values), calculator.expression(call.args[1], values)
+                        actual = target_value(call.args[0]) if numeric_skill and isinstance(call.args[0], ast.Call) else calculator.expression(call.args[0], values)
+                        expected = calculator.expression(call.args[1], values)
                         # No target-derived expected values, hidden calls in messages/delta, or weakened asserts.
                         extras = [*call.args[2:], *(item.value for item in call.keywords)]
                         if any(calculator.expression(item, values).origin for item in extras) or expected.origin:
@@ -277,15 +319,17 @@ def repair(payload):
                             if call.func.attr == 'assertAlmostEqual' and (type(actual.data) not in (int, float) or type(expected.data) not in (int, float)):
                                 raise Unsupported('numeric assertion')
                             pending.append((call.args[1], {'method': cls.name + '.' + method.name, 'line': call.lineno,
-                                'previous': expected.data, 'calculated': actual.data, 'basis': actual.origin}))
+                                'previous': expected.data, 'calculated': actual.data, 'basis': actual.origin}, repr(actual.data)))
                     else:
                         raise Unsupported('test statement')
-                for node, proof in pending:
-                    replacements.append((node, repr(proof['calculated'])))
+                for node, proof, replacement in pending:
+                    replacements.append((node, replacement))
                     corrections.append(proof)
             except (Unsupported, ArithmeticError, KeyError, IndexError, TypeError):
                 continue
     if not replacements:
+        return empty
+    if numeric_skill and len(corrections) > 32:
         return empty
     raw_lines = code.encode('utf-8').splitlines(keepends=True)
     edits = [(sum(map(len, raw_lines[:node.lineno - 1])) + node.col_offset,

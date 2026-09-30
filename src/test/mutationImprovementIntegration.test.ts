@@ -47,6 +47,10 @@ class Cases(unittest.TestCase):
         self.assertEqual(categorize(20, 10), (20.0, 'high'))
 `;
     let writers = 0, quality = 0, fixer = 0;
+    // Keep exercising model repair/fallback: compound contexts are outside the
+    // numeric skill. Simple arithmetic correction has its own full-mode test.
+    const unsupportedWrong = valid.replace('        self.assertEqual',
+        '        with self.subTest():\n            self.assertEqual').replace('(20.0,', '(19.0,');
     globalThis.fetch = async (_url, options) => {
         const request = JSON.parse(String(options?.body));
         let response: string;
@@ -54,7 +58,7 @@ class Cases(unittest.TestCase):
         else if (request.system.includes('You are the test Reviewer')) { response = 'invalid reviewer reply'; }
         else if (request.system.includes('Analyst after successful')) { quality++; response = 'invalid quality reply'; }
         else if (request.system.includes('Python unittest Bug Fixer')) { fixer++; response = '```python\npass\n```'; }
-        else { writers++; response = '```python\n' + (writers === 1 ? valid.replace('(20.0,', '(19.0,') : valid) + '\n```'; }
+        else { writers++; response = '```python\n' + (writers === 1 ? unsupportedWrong : valid) + '\n```'; }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
     };
     try {

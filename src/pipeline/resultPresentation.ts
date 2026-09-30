@@ -59,6 +59,11 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
     const diagnostics = Array.isArray(value?.diagnostics)
         ? value.diagnostics.filter(item => typeof item === 'string' && /^[a-z0-9-]+$/.test(item)).join(', ') : '';
     const labels: Record<string, string> = {
+        'numeric-skill:planned': localize("正在以數值計算技能核對失敗測資"),
+        'numeric-skill:verified': localize("計算與同輸入隔離觀測一致；修正候選仍須重新執行、審查與突變驗證"),
+        'numeric-skill:unverified': localize("計算缺少一致的同輸入觀測；保留原測資與修復流程"),
+        'numeric-skill:unsupported': localize("此案例超出數值技能支援範圍；保留原修復流程"),
+        'numeric-skill:unavailable': localize("數值技能未完成；保留原修復流程"),
         'structure:passed': localize("測試結構、目標呼叫與斷言證據檢查通過；尚未判定完整品質"),
         'structure:rejected': localize("測試候選未通過檢查：{0}；交 Writer 修訂，修訂額度用盡則停止本候選", reason || localize("請查看報告中的拒絕原因")),
         'scenarios:observed': localize("已記錄本次實際執行的測試情境"),

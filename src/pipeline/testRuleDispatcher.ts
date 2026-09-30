@@ -58,6 +58,7 @@ function triggerFactsForRule(
         }
         case 'pattern_matching': fact = firstSourceFact(/^\s*match\s+[^\n]+\s*:/); break;
         case 'float_precision': fact = firstSourceFact(/\bround\s*\(|\bfloat\s*\(|\bmath\./); break;
+        case 'numeric_calculation': fact = firstSourceFact(/[\w)]\s*(?:\*\*|[+*/%\-])\s*[\w(]|\bround\s*\(/); break;
         case 'dict_return': fact = firstSourceFact(/\breturn\s*\{/); break;
         case 'tuple_return': fact = firstSourceFact(/\breturn\s*\([^\n]*,[^\n]*\)|\breturn\s+[^#\n]*,[^#\n]*/); break;
         case 'none_input_handling': fact = firstSourceFact(/\bNone\b|\bnot\s+\w+/); break;

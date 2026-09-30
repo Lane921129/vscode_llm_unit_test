@@ -12,6 +12,7 @@ import {
     buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
+import { repairWithNumericSkill } from './pipeline/numericTestSkill';
 import { verificationMode, VerificationMode } from './pipeline/verificationMode';
 import { runExecutionVerification } from './pipeline/executionVerification';
 import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './roles/unittestWriter';
@@ -636,11 +637,12 @@ async function runBehaviorProbe(
     callerArgs?: CallerContext[],
     pythonExecutable: string = 'python',
     supplementalInputs: SupplementalProbeInput[] = [],
-    progressDirectory?: string
+    progressDirectory?: string,
+    skillInputs?: TypedProbeInputsV1
 ): Promise<BehaviorProbeResult | null> {
     const pythonScript = pythonToolPath('trace');
     const baseArgs = [pythonScript, filePath, funcName];
-    const suppliedInputs = buildProbeInputs(callerArgs || [], supplementalInputs);
+    const suppliedInputs = skillInputs || buildProbeInputs(callerArgs || [], supplementalInputs);
     try {
         const runProbe = async (inputs: TypedProbeInputsV1 | null = null): Promise<BehaviorProbeResult> => {
             const [progressPath] = reserveArtifactFiles(progressDirectory || os.tmpdir(), ['trace'], 'jsonl');
@@ -669,7 +671,7 @@ async function runBehaviorProbe(
         }
         return {
             ...initial,
-            input_source: supplementalInputs.length > 0
+            input_source: skillInputs || supplementalInputs.length > 0
                 ? 'semantic_guided'
                 : suppliedInputs?.cases.length ? 'caller_literals' : 'source_guided'
         };
@@ -2377,6 +2379,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reviewRequired: mayUseModelAuthoredTests,
                 checkCancelled: throwIfExecutionCancelled,
                 event: recordRole,
+                repairExpectations: ruleSelection.ids.includes('numeric_calculation') ? (code, failure) => repairWithNumericSkill({
+                    code, failure, source: initialSource, target: params.funcName || targetFuncName, module: targetImportModule,
+                    python: pythonExecutable, env: testExecutionEnv, directory: loopDir,
+                    runId: journal.runId, sourceHash: journal.sourceHash,
+                    checkCurrent: () => {
+                        throwIfExecutionCancelled();
+                        if (!evidenceStillCurrent()) {
+                            throw new AnalysisStageError('validation', 'source-changed', localize("來源版本已改變，停止使用舊證據。"));
+                        }
+                    },
+                    observe: calls => runBehaviorProbe(params.filePath, params.funcName || targetFuncName,
+                        [], pythonExecutable, [], loopDir, { schema_version: 'probe-inputs-v1', cases: calls.map(call => ({
+                            input: call.trace_input, source: { kind: 'semantic_guided', detail: 'numeric-calculation' }
+                        })) }),
+                    event: recordRole
+                }) : undefined,
                 executable: (code, execution) => checkpointExecutable(code, execution.out, execution.qualityGaps,
                     mayUseModelAuthoredTests ? 'incomplete' : 'not-required', [], execution.coverage || loopAssessment),
                 validate: async (code) => {

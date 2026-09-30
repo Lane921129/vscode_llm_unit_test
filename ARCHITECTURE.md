@@ -24,6 +24,12 @@
 
 以下圖示描述 **full 完整品質模式**；execution 在隔離測試及證據確認後產生「執行驗證通過」，Trace／coverage／mutation／Reviewer 保存未執行狀態，不寫入 0 或 100 分。環境準備依所選模式決定是否需要品質工具，相依完整性檢查與安裝清單確認仍保留。
 
+完整模式的數值計算技能由 `testRuleDispatcher.ts` 選取 `numeric_calculation` 規則卡，Writer 與修復角色使用相同指引。LLM 負責選擇具體輸入、組織測試；實際 assertion 失敗後，`numericTestSkill.ts` 先呼叫 `repair_source_expectations.py` 的受限 AST 計算器，再將候選中的原始 typed args／kwargs 交給既有隔離 Trace。只有相同來源／相依版本、同一組輸入、完整且可 assertion 的回傳快照與計算結果一致，才能採用修正；不需要模型支援原生 tool calling，也不增加模型請求。
+
+目前支援同步頂層純算術、`round`／`abs`、比較分支、tuple 拆解與簡單 `self` 資料 fixture。只改失敗方法的預期值；單一目標呼叫的錯誤 `assertRaises` 可在同輸入已證實正常回傳時改為精確回傳斷言。複合例外測試、mock、class／async、外部 I/O、動態執行、不明語法或超過計算／案例預算都保留原修復路徑。來源公式是計算假設，並非獨立需求規格。修正後仍走結構、實際 unittest、coverage、Reviewer 與 mutation，不能消除 Reviewer 未完成狀態。execution 模式維持原有來源算術修正，不啟用這條 Trace 流程。
+
+每次技能檢查在當輪保存 `numeric_001.json` 等獨立紀錄：run／source／前後測試 hash、輸入、計算步驟、觀測、修正與未採用原因；`numeric-skill` 事件及中英文進度納入當輪 `failure_report.md` 與共用完整流程。`verified` 只表示計算與觀測核對完成，不代表測試或整體品質通過。每次最多補測 6 組輸入、修正 32 處，計算器及 Trace 保留既有時限並受目標總預算限制。
+
 Python 環境準備入口與結果置於專案資料夾欄位下方。「檢查此專案相依」把已選資料夾直接交給 `pythonEnvironmentController.ts`，不重問範圍；「其他範圍…」仍可選整個專案、資料夾或單一 Python 檔案，分別保存最近選擇。資料夾／專案模式經 `environment_probe.py` 呼叫 `dependency_inventory.py`，只以 AST 盤點所選樹內 import，依所選 Python 的標準庫與頂層套件位置彙整缺項；不執行應用或外部套件的 import。`dependencyInventory.ts` 驗證並呈現 `dependency-inventory-v1` 報告，保留逐檔行號、條件／可選／型別相依、首次與最近缺項及不完整掃描原因。必要缺項優先採 requirements／明確 packageMappings，否則預填同名候選供確認補裝；條件缺項只列出。靜態可找到套件不代表正式模組載入成功，原有單檔隔離預檢與測試 gate 不變。詳細操作及範圍限制見 [專案相依掃描](docs/Python相依掃描.md)。
 
 補裝前由 `pythonInstallationPlan.ts` 彙整目前缺項、明確映射、requirements 與工具宣告，`pythonInstallationPreview.ts` 提供獨立清單頁面。無宣告的外部必要缺項以 `sameNameCandidate` 標示同名候選，頁面與報告保留未驗證對應的區別；可直接確認補裝，候選不自動持久化。使用者確認的計畫綁定 Python、安裝操作與本機 requirements／引用／constraint 檔案 hash；安裝前再次核對，取消或未確認時不執行 pip。新增缺項重新預覽；初次清單會一次列出資料夾掃描的所有已知必要缺項。無效名稱、無法讀取或範圍外引用不可批准。來源網址與任意原文不進入頁面／Markdown 報告，直接宣告與 pip 後續解析的間接相依分開說明。原有 interpreter 選擇、隔離載入與安裝後驗證仍保留。
@@ -52,8 +58,14 @@ flowchart TD
     Checkpoint --> Reviewer[Reviewer 審查]
     Reviewer -->|具體審查問題| Writer
     Structure -->|結構問題| Writer
-    Validation -->|唯一定位的一個方法失敗| Fixer[Bug Fixer 修復]
-    Validation -->|多方法、匯入或 fixture 問題| Writer
+    Validation -->|數值 assertion 失敗| Calculator[受限計算器提出候選]
+    Calculator -->|有受限計算候選| ExactTrace[同輸入隔離 Trace 核對]
+    Calculator -->|不支援| Repair[原有失敗分流]
+    ExactTrace -->|一致且來源未變| Structure
+    ExactTrace -->|未核對| Repair
+    Validation -->|其他失敗| Repair
+    Repair -->|唯一定位的一個方法失敗| Fixer[Bug Fixer 修復]
+    Repair -->|多方法、匯入或 fixture 問題| Writer
     Fixer --> Structure
     Reviewer -->|審查完成或明示未完成| Quality[完整所選範圍突變測量]
     Quality -->|證據完整且不退步| QualityCheckpoint[提交同候選最佳品質基線]

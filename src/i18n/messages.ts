@@ -1,5 +1,10 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "正在以數值計算技能核對失敗測資": "Checking failing cases with the numeric calculation skill",
+    "計算與同輸入隔離觀測一致；修正候選仍須重新執行、審查與突變驗證": "Calculation agrees with isolated execution of the same inputs; the candidate still requires execution, review and mutation validation",
+    "計算缺少一致的同輸入觀測；保留原測資與修復流程": "Calculation lacks matching observations for the same inputs; retaining the tests and normal repair flow",
+    "此案例超出數值技能支援範圍；保留原修復流程": "This case is outside the numeric skill's supported scope; retaining the normal repair flow",
+    "數值技能未完成；保留原修復流程": "Numeric skill did not complete; retaining the normal repair flow",
     "## 第 {0} 輪結果": "## Round {0} results",
     "本頁僅記錄本輪；最終保留成果請見函式的 final_report.md。\n\n": "This page records this round only. See the function's final_report.md for retained results.\n\n",
     "### 本輪檔案\n\n": "### Files for this round\n\n",

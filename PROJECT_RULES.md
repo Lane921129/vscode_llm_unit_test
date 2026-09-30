@@ -13,6 +13,7 @@
 
 - `python_scripts/dynamic_tracer.py`、`python_scripts/ast_extractor.py` 與基礎提示詞不得硬編碼任何業務領域關鍵字、固定閾值或特定回傳結構。
 - 技能必須由 Skill Dispatcher 根據目標原始碼與 AST 選取 Skill Cards；不得把某個專案的規則帶進其他專案。
+- full 的數值技能僅可把受限計算結果當候選；採用前須有同版來源／相依與同一組 typed 輸入的完整、可 assertion 隔離 Trace 核對。不得以算術工具輸出取代 Trace，或把計算一致當作獨立需求驗證。只修失敗方法；正常回傳與例外依原輸入分開核對，保留 passing 方法、輸入及原品質 gate。
 - Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；模型不再負責選取技能 ID，舊 required_skills 僅保留讀取相容性；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
 - 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕並保留 AST 推導的技能卡基線。
 - 供應商支援 JSON Schema 時，Semantic Analyzer 與 mutant triage 必須帶最小任務 schema；供應商 schema 只提供傳輸層結構保證，所有回覆仍需通過本地語意／分流 parser 和 execution quality gates。不得因 schema 成功就把模型候選升格為事實。

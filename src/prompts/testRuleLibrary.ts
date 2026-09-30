@@ -16,6 +16,16 @@ export interface TestGenerationRuleCard {
 
 export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
     {
+        id: 'numeric_calculation',
+        title: 'Numeric Calculation Skill',
+        trigger_hint: 'Source contains numeric arithmetic or rounding',
+        rules: [
+            'Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.',
+            'After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.',
+            'Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain.'
+        ]
+    },
+    {
         id: 'string_length_boundary',
         title: 'String Length Boundary',
         trigger_hint: 'Use when source has a len(x) comparison against a literal threshold',
@@ -332,6 +342,10 @@ export function inferTestRuleIdsFromCode(
 ): string[] {
     const ids = new Set<string>(['import_module_name']);
     const source = sourceCode || '';
+    const numericCallable = (!context?.method_kind || context.method_kind === 'module')
+        && !context?.class_name && !context?.class_context && !context?.dependencies?.length
+        && !(context?.calls || []).some(call => !['round', 'abs'].includes(call));
+    if (numericCallable && /[\w)]\s*(?:\*\*|[+*/%\-])\s*[\w(]|\bround\s*\(/.test(source)) { ids.add('numeric_calculation'); }
 
     if (/\blen\s*\([^)]*\)\s*[<>]=?\s*\d+/.test(source)) { ids.add('string_length_boundary'); }
     if (/\w+\s*\[\s*-?\d*\s*:\s*-?\d*\s*\]/.test(source)) { ids.add('python_slicing'); }
