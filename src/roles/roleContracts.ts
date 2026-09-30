@@ -6,7 +6,7 @@ export const ROLE_CONTRACT_VERSIONS = {
     reviewer: 'review-v7',
     qualityAnalyst: 'quality-task-v3',
     writerRevision: 'writer-revision-v2',
-    bugFix: 'bug-fix-v4'
+    bugFix: 'bug-fix-v5'
 } as const;
 
 /** Writer owns review, structure, fixture and multi-method execution failures. */

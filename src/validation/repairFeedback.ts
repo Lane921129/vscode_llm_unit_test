@@ -24,12 +24,15 @@ export function repairFailureKey(output: string): string {
 }
 
 /** Verbose unittest IDs include the class, so different suites cannot collide. */
-export function passingTestIds(output: string): Set<string> {
+export function passingTestIds(output: string, testModule?: string): Set<string> {
     const passing = new Set<string>();
     let current: string | undefined;
     for (const line of output.split(/\r?\n/)) {
         const start = line.match(/^test\S* \(([^)\n]+)\)/);
-        if (start) { current = start[1]; }
+        if (start) {
+            current = testModule && start[1].startsWith(testModule + '.')
+                ? start[1].slice(testModule.length + 1) : start[1];
+        }
         // unittest puts a method docstring on a second line in verbose mode.
         if (current && / \.\.\. ok\s*$/.test(line)) { passing.add(current); current = undefined; }
         else if (/ \.\.\. (?:FAIL|ERROR|skipped|expected failure|unexpected success)/.test(line)) { current = undefined; }
@@ -63,8 +66,8 @@ export class RepairFeedback {
         this.output = `CANDIDATE REJECTED; the previous test file is retained.\n${reason}\n\nPrevious execution:\n${this.output}`;
     }
 
-    record(output: string): { accepted: boolean; regressed: string[] } {
-        const passing = passingTestIds(output);
+    record(output: string, testModule?: string): { accepted: boolean; regressed: string[] } {
+        const passing = passingTestIds(output, testModule);
         const regressed = [...this.passing].filter(id => !passing.has(id));
         if (regressed.length > 0) {
             this.reject(`Previously passing tests failed, disappeared, or were skipped: ${regressed.join(', ')}\nRejected candidate execution:\n${output}`);

@@ -93,7 +93,7 @@ test('qualifies Reviewer JSON and Bug Fixer method replacement independently', (
         method: 'test_increment',
         replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)',
         imports: []
-    })).state, 'verified');
+    })).state, 'unverified', 'format alone cannot certify execution');
     assert.match(REVIEWER_QUALIFICATION_PROMPT, /reason/);
     assert.match(BUG_FIXER_QUALIFICATION_PROMPT, /test_increment/);
     assert.match(ROLE_QUALIFICATION_TEST_FILE, /increment\(1\)/);
@@ -112,6 +112,10 @@ test('role qualification runs Reviewer and Bug Fixer probes independently', asyn
             return prompt.includes('ONE findings array')
                 ? '{"findings":[]}'
                 : JSON.stringify({ method: 'test_increment', replacement: 'def test_increment(self):\n    self.assertEqual(increment(1), 2)', imports: [] });
+        }, async code => {
+            assert.match(code, /increment\(1\), 2/);
+            assert.match(code, /increment\(-1\), 0/);
+            return true;
         }
     );
     assert.deepStrictEqual(formats, ['json', 'text']);

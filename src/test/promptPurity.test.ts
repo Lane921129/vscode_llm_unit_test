@@ -295,7 +295,7 @@ test('active Bug Fixer prompt preserves evidence and requests the focused Python
         }, 'calculator', '=== TEST RULES ===\n[Float Precision]'
     );
 
-    assert.match(prompt, /BUG_FIX_REQUEST_V4/);
+    assert.match(prompt, /BUG_FIX_REQUEST_V5/);
     assert.match(prompt, /NECESSARY TARGET BRANCH/);
     assert.match(prompt, /LIMIT = 3/);
     assert.match(prompt, /observations/);

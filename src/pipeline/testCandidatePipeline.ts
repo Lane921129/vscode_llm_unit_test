@@ -11,6 +11,8 @@ export interface CandidateExecution {
     out: string;
     qualityGaps: string[];
     coverage?: TargetCoverageAssessment;
+    /** Generated candidate modules change between attempts; testcase identity must not. */
+    testModule?: string;
 }
 
 export interface CandidatePipelineHooks {
@@ -43,10 +45,32 @@ export async function validateTestCandidate(
     let retainedCode = baseline?.code || initialCode;
     let lastFailure = '';
     let role: 'writer' | 'bug-fixer' = 'writer';
+    let revisionLimit = maxRevisions;
+    let writerRecoveryUsed = false;
+    let writerRecoveryPending = false;
+    // One reserved handoff, only after a demonstrated no-op method repair.
+    // It still consumes the enclosing target's candidate/request/time budgets.
+    const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change'): boolean => {
+        if (writerRecoveryUsed || maxRevisions < 1) { return false; }
+        writerRecoveryUsed = true;
+        writerRecoveryPending = true;
+        revisionLimit = Math.max(revisionLimit, attempt + 1);
+        code = retainedCode;
+        role = 'writer';
+        lastFailure = 'FOCUSED REPAIR MADE NO EFFECTIVE CHANGE. Reassess the failing test using the supplied source and failure. '
+            + 'Recalculate source-supported deterministic expectations; actual output alone is not an oracle. '
+            + 'Preserve all passing cases and verified assertions. Keep the target real. Return the complete test file.\n'
+            + lastFailure;
+        hooks.event('repair-routing', 'selected', { attempt, action: 'writer-recovery', reasonCode,
+            nextAttempt: attempt + 1, revisionLimit, previousTestUnchanged: true });
+        return true;
+    };
     const attemptedBugFixFailures = new Set<string>();
-    for (let attempt = 0; attempt <= maxRevisions; attempt++) {
+    for (let attempt = 0; attempt <= revisionLimit; attempt++) {
         hooks.checkCancelled();
         currentTargetBudget()?.consumeCandidateAttempt();
+        const writerRecoveryAttempt = writerRecoveryPending;
+        writerRecoveryPending = false;
         if (attempt > 0) {
             if (role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
             if (role === 'bug-fixer') {
@@ -71,8 +95,10 @@ export async function validateTestCandidate(
                         reasonCodes: ['repeated-candidate'], previousTestHash: repairHash(previousCode),
                         candidateTestHash: repairHash(candidate), previousTestUnchanged: true } satisfies RepairDiagnostic });
                 if (role === 'bug-fixer') {
+                    if (recoverWithWriter(attempt, 'repeated-candidate')) { continue; }
                     throw new Error(`Bug Fixer 未產生有效變更，停止重複修復：${lastFailure}`);
                 }
+                if (writerRecoveryAttempt) { break; }
                 continue;
             }
             const scopeStarted = Date.now();
@@ -88,6 +114,9 @@ export async function validateTestCandidate(
                         reasonCodes: [repairReasonCode(typeof revisionViolation === 'string' ? undefined : revisionViolation.reasonCode)],
                         previousTestHash: repairHash(previousCode), candidateTestHash: repairHash(candidate),
                         previousTestUnchanged: true } satisfies RepairDiagnostic });
+                if (role === 'bug-fixer' && typeof revisionViolation !== 'string'
+                    && revisionViolation.reasonCode === 'no-method-change'
+                    && recoverWithWriter(attempt, 'no-method-change')) { continue; }
                 hooks.event('repair-routing', 'selected', { attempt, action: attempt < maxRevisions ? 'continue-repair' : 'stop-revisions',
                     previousTestUnchanged: true });
                 role = 'bug-fixer';
@@ -102,16 +131,18 @@ export async function validateTestCandidate(
             code = retainedCode;
             // A malformed file has no proven failing method to replace.
             role = 'writer';
+            if (writerRecoveryAttempt) { break; }
             continue;
         }
         const execution = await hooks.execute(code);
         hooks.checkCancelled();
         hooks.event('validation', execution.ok ? 'passed' : 'failed', { attempt, code, ...execution });
-        const regression = feedback.record(execution.out);
+        const regression = feedback.record(execution.out, execution.testModule);
         if (!regression.accepted) {
             lastFailure = feedback.output;
             code = retainedCode;
             role = 'bug-fixer';
+            if (writerRecoveryAttempt) { break; }
             continue;
         }
         retainedCode = code;
@@ -127,6 +158,7 @@ export async function validateTestCandidate(
             if (blocking.length) {
                 lastFailure = JSON.stringify(blocking);
                 role = 'writer';
+                if (writerRecoveryAttempt) { break; }
                 continue;
             }
             return {
@@ -144,9 +176,10 @@ export async function validateTestCandidate(
             };
         }
         lastFailure = execution.out;
+        if (writerRecoveryAttempt) { break; }
         // A module/fixture failure is not a failed test-method replacement.
         role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }
-    throw new Error(`測試候選未通過驗證（修訂上限 ${maxRevisions}）：${lastFailure}`);
+    throw new Error(`測試候選未通過驗證（修訂上限 ${maxRevisions}${writerRecoveryUsed ? '，已使用一次 Writer 接手' : ''}）：${lastFailure}`);
 }

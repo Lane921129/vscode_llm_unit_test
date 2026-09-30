@@ -60,7 +60,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             const out = (run.stdout + run.stderr).trim()
                 + (!ok && run.code === 0 ? '\n執行證據不足：需有真正通過的案例、目標函式呼叫與完整隔離紀錄。' : '');
             if (ok) { accepted = baseline; }
-            return { ok, out: out || 'No executable unittest cases', qualityGaps: [] };
+            return { ok, out: out || 'No executable unittest cases', qualityGaps: [], testModule: path.basename(testFile, '.py') };
         }
     }, 2);
     checkCurrent();

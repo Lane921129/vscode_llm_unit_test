@@ -103,15 +103,15 @@ test('dropping previously passing tests cannot be accepted, and next repair uses
     assert.equal(repairedFrom, 'baseline');
 });
 
-test('an unchanged Bug Fixer result stops immediately without duplicate execution', async () => {
+test('an unchanged Bug Fixer gets one Writer handoff and unchanged recovery stops without duplicate execution', async () => {
     let executions = 0;
     let revisions = 0;
     await assert.rejects(validateTestCandidate('draft', hooks({
         execute: async () => { executions++; return { ok: false, out: 'failure', qualityGaps: [] }; },
         revise: async () => { revisions++; return 'draft'; }
-    })), /Bug Fixer 未產生有效變更/);
+    })), /已使用一次 Writer 接手/);
     assert.equal(executions, 1);
-    assert.equal(revisions, 1);
+    assert.equal(revisions, 2);
 });
 
 test('the same execution failure is offered to Bug Fixer at most once', async () => {

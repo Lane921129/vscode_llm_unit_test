@@ -436,7 +436,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                         }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                                         if (!roleResponse.ok) { return undefined; }
                                                         return (await roleResponse.json() as { response?: string }).response;
-                                                    }
+                                                    }, isolatedProbeExecutor
                                                 );
                                                 const qualificationProfile = {
                                                     ...profile,
@@ -543,7 +543,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 );
                                 const roleQualification = await runRoleQualificationProbes(
                                     { state: capability.capability, reason: capability.reason },
-                                    (prompt, format) => cloudProbe(prompt, format === 'json')
+                                    (prompt, format) => cloudProbe(prompt, format === 'json'), isolatedProbeExecutor
                                 );
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,
@@ -601,7 +601,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             ))
                                         }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                         return roleResponse.ok ? getCustomChatCompletionText(await roleResponse.json()) : undefined;
-                                    }
+                                    }, isolatedProbeExecutor
                                 );
                                 const profile = {
                                     paramSize: 'Custom API',

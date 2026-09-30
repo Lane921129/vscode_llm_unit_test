@@ -43,6 +43,7 @@ export function formatRepairRouting(detail: unknown): string {
     const labels: Record<string, string> = {
         'continue-repair': '依剩餘修訂額度重新選擇修復角色',
         'stop-revisions': '本候選修訂額度已用完，交上層保留成果或停止',
+        'writer-recovery': '局部修復未產生有效變更，在目標總預算內交 Writer 接手一次；保留已通過案例並重新驗證',
         'tier-fallback': '依既有策略降階，交 Writer 重新產生候選',
         'stop-tier-fallback': '已無可降階策略，結束本候選並保留既有成果'
     };

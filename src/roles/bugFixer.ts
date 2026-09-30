@@ -25,11 +25,12 @@ export function getBugFixerSystemPrompt(): string {
     return `You are a Python unittest Bug Fixer. Repair one failing test method only.
 
 CONTRACT:
-- Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V4.
+- Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V5.
 - Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
 - For async with client.method(...), use MagicMock for the unawaited method returning a context manager, and AsyncMock for __aenter__/__aexit__ or awaited resource methods. Configuring __aenter__ on an AsyncMock return_value does not fix calling that AsyncMock: the call still returns a coroutine.
-- Source code describes the branch under test, but exact expected values still require an explicit return/raise or same-test mock behavior.
+- Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. For a failed assertion, check the concrete inputs, units, arithmetic, rounding and returned fields against that evidence. Correct unsupported expectations; actual output alone is not proof of correctness. Never call the target to compute the expected value or duplicate its implementation as an oracle.
+- Make a substantive change to the failing method. Do not return it unchanged or weaken/remove assertions, use skip/expectedFailure, swallow exceptions, or mock the target to make it pass. If evidence does not justify a change, do not invent one.
 - Observations marked uncontrolled-ambient-read cannot supply expected values or exceptions. Control clock/entropy at its use point instead of copying a captured value.
 - Return one Python code fence containing at most 3 missing import statements followed by exactly the complete named test method. Use real Python newlines and indentation, never JSON strings or escaped newline text.
 - Keep the original method signature and decorators already owned by the host. Do not repeat decorators or wrap the method in a class. Every unchanged test and fixture is preserved by the host.`;
@@ -115,7 +116,7 @@ export function getBugFixerUserPrompt(
     void semanticGuidance;
     const method = selectedFailureMethod(brokenCode, errorOutput);
     const imports = importLines(brokenCode);
-    return `BUG_FIX_REQUEST_V4
+    return `BUG_FIX_REQUEST_V5
 === REPAIR TARGET ===
 - Failing method: ${method?.name || 'not identified; stop without guessing'}
 ${formatTargetContract(moduleName, funcName, funcArgs, astContext)}
@@ -137,7 +138,7 @@ ${formatRepairSetup(brokenCode, astContext, method)}
 ${focusedSource(sourceCode)}
 
 RESPONSE:
-Return one Python fence with only truly missing imports and the complete named method. Repair only that method. Preserve its signature. The host merges this fragment into the existing tests.`;
+Return one Python fence with only truly missing imports and the complete named method. Repair only that method. Preserve its signature and valid assertions. Recheck every expected field affected by the correction using source evidence; do not merely copy the observed output. The host merges this fragment into the existing tests.`;
 }
 
 /** Target context is read-only; every finding still quotes the test file. */

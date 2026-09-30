@@ -1,5 +1,6 @@
 import { canRepairTestMethod, getBugFixerSystemPrompt, mergeBugFixReplacement } from '../roles/bugFixer';
 import { getTestReviewerSystemPrompt, numberReviewLines, parseTestReviewDetailed, reviewableLineIds } from '../roles/testReviewer';
+import { assessIsolatedProbeCode, runIsolatedProbe } from './modelProbeExecution';
 
 export type RoleQualificationState = 'verified' | 'unverified' | 'not-run';
 
@@ -31,7 +32,15 @@ class Cases(unittest.TestCase):
 `;
 
 export const ROLE_QUALIFICATION_FAILURE =
-    'FAIL: test_increment (Cases.test_increment)\nAssertionError: expected 3';
+    'FAIL: test_increment (TestRepair.test_increment)\nAssertionError: 2 != 3';
+
+export const BUG_FIXER_QUALIFICATION_TEST_FILE = `import unittest
+class TestRepair(unittest.TestCase):
+    def test_increment(self):
+        self.assertEqual(increment(1), 3)
+    def test_keep(self):
+        self.assertEqual(increment(-1), 0)
+`;
 
 export const REVIEWER_QUALIFICATION_PROMPT = `${getTestReviewerSystemPrompt()}
 Review this exact TEST_FILE for a concrete demonstrated test problem. It is valid to return an empty findings array.
@@ -43,10 +52,11 @@ ${numberReviewLines(ROLE_QUALIFICATION_TEST_FILE)}`;
 export const BUG_FIXER_QUALIFICATION_PROMPT = `${getBugFixerSystemPrompt()}
 Repair only the named failing method test_increment in the supplied TEST_FILE. Keep the method name and return one method body.
 Return one Python fence; do not add a class, target source, or unrelated test.
+A safe runtime provides the real increment(value), implemented as return value + 1. Do not import or redefine it. Correct the expected numeric literal in the existing direct assertEqual call; preserve its increment(1) input and test_keep.
 FAILURE:
 ${ROLE_QUALIFICATION_FAILURE}
 TEST_FILE:
-${ROLE_QUALIFICATION_TEST_FILE}`;
+${BUG_FIXER_QUALIFICATION_TEST_FILE}`;
 
 function status(state: RoleQualificationState, reason: string): RoleQualificationStatus {
     return { state, reason };
@@ -61,15 +71,29 @@ export function assessReviewerQualification(response: string | undefined): RoleQ
         : status('unverified', 'Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。');
 }
 
-export function assessBugFixerQualification(response: string | undefined): RoleQualificationStatus {
+function bugFixerProbeCode(response: string | undefined): string | undefined {
+    if (!response?.trim()) { return undefined; }
+    const code = mergeBugFixReplacement(response, BUG_FIXER_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE);
+    // Fixed qualification fixture: prove the requested literal edit before
+    // executing. This intentionally does not interpret arbitrary repair code.
+    if (!code || !assessIsolatedProbeCode(code).valid) { return undefined; }
+    const normalize = (value: string) => value.split(/\r?\n/).filter(line => line.trim() && !/^\s*#/.test(line))
+        .map(line => line.replace(/\s/g, '')).join('\n');
+    const expected = BUG_FIXER_QUALIFICATION_TEST_FILE.replace('increment(1), 3', 'increment(1), 2');
+    return normalize(code) === normalize(expected) ? code : undefined;
+}
+
+export function assessBugFixerQualification(response: string | undefined, executionPassed = false): RoleQualificationStatus {
     if (!response?.trim()) { return status('unverified', 'Bug Fixer 沒有回傳 Python 單方法替換。'); }
-    if (!canRepairTestMethod(ROLE_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE)) {
+    if (!canRepairTestMethod(BUG_FIXER_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE)) {
         return status('unverified', '資格 fixture 沒有可唯一定位的失敗方法。');
     }
-    const merged = mergeBugFixReplacement(response, ROLE_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE);
-    return merged
-        ? status('verified', 'Bug Fixer 已通過單一方法、名稱保留與完整測試合併契約。')
-        : status('unverified', 'Bug Fixer 回覆未通過單一方法替換或 imports 契約。');
+    if (!bugFixerProbeCode(response)) {
+        return status('unverified', 'Bug Fixer 未正確修正固定案例的預期值，或修改了輸入、斷言／方法範圍。');
+    }
+    return executionPassed
+        ? status('verified', 'Bug Fixer 已修正固定案例的錯誤預期值，並在隔離 Python 中保留另一通過案例。')
+        : status('unverified', 'Bug Fixer 固定案例修正格式符合；尚未通過隔離執行。');
 }
 
 export function buildRoleQualificationProfile(
@@ -87,13 +111,20 @@ export function buildRoleQualificationProfile(
 /** Run the two role-specific probes after the basic Writer probe. */
 export async function runRoleQualificationProbes(
     writer: RoleQualificationStatus,
-    request: RoleQualificationRequester
+    request: RoleQualificationRequester,
+    executor: (code: string) => Promise<boolean> = runIsolatedProbe
 ): Promise<RoleQualificationProfile> {
     let reviewer: string | undefined;
     let bugFixer: string | undefined;
     try { reviewer = await request(REVIEWER_QUALIFICATION_PROMPT, 'json'); } catch { reviewer = undefined; }
     try { bugFixer = await request(BUG_FIXER_QUALIFICATION_PROMPT, 'text'); } catch { bugFixer = undefined; }
-    return buildRoleQualificationProfile(writer, reviewer, bugFixer);
+    const profile = buildRoleQualificationProfile(writer, reviewer, bugFixer);
+    const code = bugFixerProbeCode(bugFixer);
+    if (code) {
+        try { profile.bugFixer = assessBugFixerQualification(bugFixer, await executor(code)); }
+        catch { profile.bugFixer = status('unverified', 'Bug Fixer 固定案例的隔離執行未完成。'); }
+    }
+    return profile;
 }
 
 export function formatRoleQualificationLog(profile: RoleQualificationProfile): string {
