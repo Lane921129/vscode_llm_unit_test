@@ -1,3 +1,4 @@
+import { resultArtifactPath } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -44,7 +45,7 @@ test('laboratory unpacked BMI candidate reaches execution and all arithmetic cor
             funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', maxLoops: 2, timeoutSeconds: 30 });
         const report = fs.readdirSync(outputPath, { recursive: true }).map(String).find(p => path.basename(p) === 'function_knowledge.json')!;
         const directory = path.dirname(path.join(outputPath, report));
-        const read = (name: string) => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
+        const read = (name: string) => JSON.parse(fs.readFileSync(resultArtifactPath(directory, name), 'utf8'));
         const knowledge = read('function_knowledge.json');
         assert.equal(knowledge.terminalStatus, 'execution-passed', JSON.stringify(knowledge.lastFailure));
         const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -59,7 +60,7 @@ test('laboratory unpacked BMI candidate reaches execution and all arithmetic cor
         const baseline = read('execution_baseline.json');
         assert.equal(verifyExecutionEvidence(directory, file, baseline, read('run_manifest.json')), true);
         assert.equal(baseline.testHash, proof.candidateTestHash);
-        const actual = fs.readFileSync(path.join(directory, baseline.testFile), 'utf8');
+        const actual = fs.readFileSync(resultArtifactPath(directory, baseline.testFile), 'utf8');
         assert.ok(actual.includes('bmi, status = calculate_bmi'));
         assert.ok(actual.endsWith(keep.trimEnd()));
         assert.equal(read(baseline.invocationFile).testResult.testsRun, 5);

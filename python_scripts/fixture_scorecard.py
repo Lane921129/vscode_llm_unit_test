@@ -21,6 +21,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from result_layout import data_directory, local_artifact as _local_artifact
 from lab_batch_plan import DEFAULT_BATCH_MANIFEST, resolve_lab_batch
 from quality_policy import create_fixture_quality_policy, evaluate_quality, validate_quality_policy
 
@@ -39,12 +40,6 @@ def load_manifest(manifest_path=DEFAULT_MANIFEST):
 def percentage_values(markdown, field_name):
     pattern = re.compile(rf'\*\*{re.escape(field_name)}\*\*:\s*(\d+(?:\.\d+)?)%')
     return [float(value) for value in pattern.findall(markdown)]
-
-
-def _local_artifact(directory, name):
-    if type(name) is not str or not name or Path(name).name != name or '/' in name or '\\' in name:
-        raise ValueError('invalid artifact name')
-    return directory / name
 
 
 def _same_json(left, right):
@@ -69,7 +64,7 @@ def _read_policy_assessment(report_path, knowledge, manifest, target_file, targe
     """Recompute new evidence; serialized pass booleans never authorize a pass."""
     if knowledge.get('evidenceValid') is False:
         raise ValueError('quality evidence explicitly invalidated')
-    directory = Path(report_path).parent
+    directory = data_directory(Path(report_path).parent)
     snapshot = json.loads((directory / 'quality_baseline.json').read_text(encoding='utf-8'))
     if any(item.get('qualityContractVersion') != 'quality-policy-v1' for item in (manifest, knowledge)):
         raise ValueError('quality contract version missing or unsupported')
@@ -140,7 +135,14 @@ def report_fields(report_path):
         review_status = 'incomplete'
     terminal_status, quality_gaps, invalid_journal = None, [], False
     new_quality_policy, policy, quality_assessment = False, None, None
-    checkpoint_path = Path(report_path).with_name('quality_baseline.json')
+    try:
+        directory = data_directory(Path(report_path).parent)
+        if 'result-layout: function-loops-v1' in text and directory == Path(report_path).parent:
+            raise ValueError('missing result layout')
+    except (OSError, ValueError, TypeError, AttributeError):
+        directory = Path(report_path).parent / 'loop' / '_run'
+        invalid_journal = True
+    checkpoint_path = directory / 'quality_baseline.json'
     if checkpoint_path.exists():
         try:
             checkpoint = json.loads(checkpoint_path.read_text(encoding='utf-8'))
@@ -148,7 +150,7 @@ def report_fields(report_path):
         except (OSError, ValueError, TypeError):
             pass  # A declared new contract below still fails its mandatory read.
     coverage_scope, module_coverage, retained_tier = 'module', coverage[-1] if coverage else None, None
-    journal_path = Path(report_path).with_name('function_knowledge.json')
+    journal_path = directory / 'function_knowledge.json'
     if journal_path.exists():
         try:
             knowledge = json.loads(journal_path.read_text(encoding='utf-8'))
@@ -181,7 +183,7 @@ def report_fields(report_path):
             accepted = knowledge.get('acceptedTest', '')
             if not accepted or Path(accepted).name != accepted or '/' in accepted or '\\' in accepted:
                 raise ValueError('missing retained test')
-            digest = hashlib.sha256(journal_path.with_name(accepted).read_bytes()).hexdigest()
+            digest = hashlib.sha256(_local_artifact(directory, accepted).read_bytes()).hexdigest()
             if (not knowledge.get('runId') or manifest.get('runId') != knowledge['runId']
                     or manifest.get('sourceHash') != knowledge.get('sourceHash')
                     or digest != knowledge.get('acceptedCodeHash')):
@@ -232,7 +234,7 @@ def report_fields(report_path):
             try:
                 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
                 new_quality_policy = new_quality_policy or 'qualityPolicy' in manifest or 'qualityContractVersion' in manifest
-                invalid_journal = new_quality_policy
+                invalid_journal = invalid_journal or new_quality_policy
             except (OSError, ValueError, TypeError):
                 invalid_journal = True
     return {

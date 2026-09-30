@@ -1,3 +1,4 @@
+import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
 import { localize, withLanguage } from './i18n/core';
 import { initI18n } from './i18n';
 import * as vscode from 'vscode';
@@ -1194,7 +1195,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     // Rollback 保底：記錄歷史最高分的測試檔，防止後輪 LLM 改壞舊測試
     let bestScore = -1;
     let bestCode = '';
-    let bestTestPath = '';
     let bestSurvivors = '';
     let bestExecution = '';
     let bestScenarios: ScenarioIdentity[] = [];
@@ -1322,10 +1322,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const displayFile = params.projectName ? path.relative(projectRoot, params.filePath) : path.basename(params.filePath);
     const displayName = params.funcName ? `${displayFile}:${params.funcName}` : displayFile;
     throwIfExecutionCancelled();
-    const sessionDir = createAnalysisDirectory(baseDir, dateStr, params.filePath, safeFuncName, params.projectName, projectRoot,
+    const reportRoot = createAnalysisDirectory(baseDir, dateStr, params.filePath, safeFuncName, params.projectName, projectRoot,
         params.batchJournal?.directory);
-    if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, sessionDir); }
-    let existingReport = path.join(sessionDir, 'final_report.md');
+    if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, reportRoot); }
+    const sessionDir = createResultLayout(reportRoot);
+    let existingReport = path.join(reportRoot, 'final_report.md');
     const reportIdentity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: params.filePath,
         sourceFile: path.relative(projectRoot, params.filePath).replace(/\\/g, '/'),
         target: params.funcName || 'file', modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: userTierSetting };
@@ -1486,7 +1487,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
             + '\nCaller setup context (source literals are input hints, not output facts):\n'
             + JSON.stringify(astContext.callerContexts || []);
-        const accepted = await runExecutionVerification({ directory: sessionDir, file: params.filePath,
+        const accepted = await runExecutionVerification({ directory: sessionDir, artifactDirectory: roundDirectory(sessionDir, 1), file: params.filePath,
             target: params.funcName, python: pythonExecutable, env: testExecutionEnv,
             targetModule: targetImportModule,
             dependencies: astContext.sourceVersions || [], journal,
@@ -1618,7 +1619,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             `    unittest.main()`,
         ].join('\n');
 
-        const testPath = path.join(sessionDir, 'loop1_test.py');
+        const testPath = path.join(roundDirectory(sessionDir, 1), 'loop1_test.py');
+        fs.mkdirSync(path.dirname(testPath), { recursive: true });
         throwIfExecutionCancelled();
         fs.writeFileSync(testPath, smokeTest, 'utf-8');
 
@@ -1896,10 +1898,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             break;
         }
 
-        // 測試結果全部放入 sessionDir
-        const testPath = path.join(sessionDir, `loop${currentLoop}_test.py`);
+        // 每輪結果獨立保存；跨輪證據留在 sessionDir。
+        const loopDir = roundDirectory(sessionDir, currentLoop);
+        fs.mkdirSync(loopDir, { recursive: true });
+        const testPath = path.join(loopDir, `loop${currentLoop}_test.py`);
         const testDir = path.dirname(testPath);
-        const reportDir = path.join(sessionDir, `loop${currentLoop}_report`);
+        const reportDir = path.join(loopDir, `loop${currentLoop}_report`);
 
         let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
         let focusContext = "";
@@ -2297,7 +2301,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     throw new AnalysisStageError('validation', 'trace-baseline',
                         localize("系統 Trace 基線未通過結構／安全檢查，停止模型修訂：") + traceStructure.reason);
                 }
-                const traceTestPath = path.join(sessionDir, `loop${currentLoop}_trace_test.py`);
+                const traceTestPath = path.join(loopDir, `loop${currentLoop}_trace_test.py`);
                 fs.writeFileSync(traceTestPath, verifiedTrace.code, 'utf8');
                 const traceRun = await runSpawn(pythonExecutable,
                     generatedUnittestArguments(path.basename(traceTestPath, '.py'), targetDir, false, true),
@@ -2485,7 +2489,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (!evidenceStillCurrent()) {
                         throw new AnalysisStageError('validation', 'source-changed', localize("來源版本已改變，停止使用舊證據。"));
                     }
+                    preserveCandidate(testPath);
                     fs.writeFileSync(testPath, code, 'utf8');
+                    preserveCandidate(testPath);
                     const testRunId = randomUUID();
                     const testHash = evidenceHash(code);
                     const [invocationFile, coverageFile] = reserveArtifactFiles(testDir, ['invocation', 'coverage'], 'json');
@@ -2711,7 +2717,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     externalRun.code, { ...mutationContext, baselinePassed: true, isolationVerified: true });
             }
 
-            fs.writeFileSync(path.join(sessionDir, `loop${currentLoop}_mutation.json`), JSON.stringify(mutationRun, null, 2), 'utf8');
+            fs.writeFileSync(path.join(loopDir, `loop${currentLoop}_mutation.json`), JSON.stringify(mutationRun, null, 2), 'utf8');
             if (!['complete', 'no-candidates'].includes(mutationRun.status)) {
                 journal.knowledge({ latestMutation: mutationRun });
                 throw new AnalysisStageError('mutation', 'mutation-execution',
@@ -2779,7 +2785,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const qualitySnapshot = checkpoints.saveQuality(measuredCandidate, mutationRun);
                 bestScore = mutationScore;
                 bestCode = qualitySnapshot.code;
-                bestTestPath = testPath;
                 bestSurvivors = survivedMutants;
                 bestExecution = loopExecution;
                 bestScenarios = acceptedScenarios;
@@ -2796,6 +2801,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 recordRole('baseline', 'rollback', { rejectedScore: mutationScore, retainedScore: bestScore,
                     reintroduced, lostQuality, coverageComparison, retainedCodeHash: evidenceHash(bestCode) });
                 throwIfExecutionCancelled();
+                preserveCandidate(testPath);
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore;
                 mutationRun = bestMutation!;
@@ -2825,7 +2831,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 sourceStructure: astContext?.code, dependencies: astContext?.dependencyContexts,
                 planningHypotheses: semanticPlanContract || null,
                 selectedRules: ruleSelection,
-                acceptedTest: path.basename(bestTestPath || testPath),
+                acceptedTest: checkpoints.quality!.testFile,
                 acceptedCodeHash: evidenceHash(fs.readFileSync(testPath, 'utf8')),
                 dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })),
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
@@ -2915,6 +2921,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 retainedScore
             });
             if (bestCode) {
+                preserveCandidate(testPath);
                 fs.writeFileSync(testPath, bestCode, 'utf8');
                 mutationScore = bestScore;
                 loopExecution = bestExecution;
@@ -2925,6 +2932,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reviewWarnings = [...bestReviewWarnings];
                 reviewStatus = bestReviewStatus;
             } else if (executable) {
+                preserveCandidate(testPath);
                 fs.writeFileSync(testPath, executable.code, 'utf8');
                 loopExecution = executable.execution;
                 loopCoverage = executable.coverage;
@@ -2984,7 +2992,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const plan = await planMutationProbes(initialSource, params.funcName || targetFuncName,
                         bestMutation, astContext.traceResult, pythonExecutable);
                     if (plan.inputs.length || plan.diagnostics.length) {
-                        fs.writeFileSync(path.join(sessionDir, `loop${currentLoop}_mutation_input_plan.json`),
+                        fs.writeFileSync(path.join(loopDir, `loop${currentLoop}_mutation_input_plan.json`),
                             JSON.stringify({ ...plan, sourceHash: journal.sourceHash, candidateSetId: bestMutation.candidateSetId }, null, 2), 'utf8');
                         journal.knowledge({ mutationInputPlan: plan });
                         recordRole('mutation-inputs', 'planned', { inputCount: plan.inputs.length, diagnostics: plan.diagnostics });
@@ -2994,7 +3002,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     }
                     if (plan.inputs.length) {
                         const observations = await runBehaviorProbe(params.filePath, params.funcName || targetFuncName,
-                            [], pythonExecutable, plan.inputs, sessionDir);
+                            [], pythonExecutable, plan.inputs, loopDir);
                         if (!evidenceStillCurrent()) { throw new Error(localize("來源或相依已變更，未採用補測觀測。")); }
                         observedBoundary = Boolean(observations && !observations.load_error
                             && [...observations.examples, ...observations.errors].some(item => item.call_assertable !== false
@@ -3053,7 +3061,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     }
 
 
-    const finalReportPath = path.join(sessionDir, `final_report.md`);
+    const finalReportPath = path.join(reportRoot, `final_report.md`);
     writeReport();
     sidebarProvider.webview?.postMessage({
         command: 'attachResultReport',

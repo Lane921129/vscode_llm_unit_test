@@ -1,3 +1,4 @@
+import { createResultLayout, resultArtifactPath, preserveCandidate, roundDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -119,4 +120,49 @@ test('batch reports exclude skipped and unselected targets while preserving fail
         const reread = JSON.parse(fs.readFileSync(path.join(output, 'batch_manifest.json'), 'utf8'));
         assert.equal(reread.targets[2].terminalStatus, 'incomplete-report');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('organized reports isolate rounds, preserve rejected candidates and fail closed on missing evidence', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'round-report-'));
+    try {
+        setLanguage('en');
+        fs.writeFileSync(path.join(root, 'target.json'), '{}');
+        const data = createResultLayout(root);
+        const identity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: path.join(root, 'source.py'),
+            sourceFile: 'source.py', target: 'target', modelIdentity: 'local/neutral', requestedTier: 'tier2' };
+        const journal = new AnalysisJournal(data, 'source', 'target', 'neutral');
+        const round1 = roundDirectory(data, 1), round2 = roundDirectory(data, 2);
+        fs.mkdirSync(round1); fs.mkdirSync(round2);
+        const code = 'import unittest\n# retained\n';
+        fs.writeFileSync(path.join(round1, 'loop1_test.py'), code);
+        const candidate = path.join(round2, 'loop2_test.py');
+        fs.writeFileSync(candidate, '# rejected'); preserveCandidate(candidate); preserveCandidate(candidate);
+        fs.writeFileSync(candidate, code); preserveCandidate(candidate);
+        assert.equal(fs.readdirSync(round2).filter(name => name.startsWith('candidate_')).length, 2);
+        journal.record(1, 'validation', 'accepted', {});
+        journal.record(2, 'validation', 'failed', { reason: 'ROUND_TWO_ONLY' });
+        journal.knowledge({ terminalStatus: 'retained-after-failure', acceptedTest: 'loop1_test.py', acceptedCodeHash: evidenceHash(code),
+            failure: 'ROUND_TWO_ONLY', failureCategory: 'validation', reviewStatus: 'incomplete' });
+        const body = 'setup\n## Test round 1\nFIRST_ROUND_ONLY\n```python\n## Test round 99\n```\n'
+            + '## Test round 2\nSECOND_ROUND_ONLY\n';
+        writeTargetReports(data, identity, journal.sourceHash, journal.runId, journal.snapshot(), body);
+        assert.deepEqual(fs.readdirSync(root).sort(), ['failure_report.md', 'final_report.md', 'loop']);
+        const first = fs.readFileSync(path.join(round1, 'report.md'), 'utf8');
+        const second = fs.readFileSync(path.join(round2, 'failure_report.md'), 'utf8');
+        assert.match(first, /FIRST_ROUND_ONLY/); assert.doesNotMatch(first, /SECOND_ROUND_ONLY|ROUND_TWO_ONLY/);
+        assert.match(second, /SECOND_ROUND_ONLY|ROUND_TWO_ONLY/); assert.doesNotMatch(second, /FIRST_ROUND_ONLY/);
+        assert.equal(fs.existsSync(roundDirectory(data, 99)), false);
+        assert.doesNotMatch(first + second, /[\u4e00-\u9fff]/);
+        const final = fs.readFileSync(path.join(root, 'final_report.md'), 'utf8');
+        assert.match(final, /loop\/1\/loop1_test.py/); assert.doesNotMatch(final, /rejected|SECOND_ROUND_ONLY/);
+        assert.equal(resultArtifactPath(data, 'loop1_test.py'), path.join(round1, 'loop1_test.py'));
+        for (const name of ['../escape.py', 'a:b', 'loop/1/test.py', '..']) {
+            assert.throws(() => resultArtifactPath(data, name));
+        }
+        fs.unlinkSync(path.join(round1, 'loop1_test.py'));
+        assert.equal(summarizeTarget(data, journal.snapshot(), identity, journal.sourceHash).testFile, undefined);
+        fs.writeFileSync(path.join(data, 'layout.json'), '{"schemaVersion":"unknown"}');
+        assert.throws(() => resultArtifactPath(root, 'loop1_test.py'));
+    } finally { setLanguage('zh-tw'); fs.rmSync(root, { recursive: true, force: true }); }
 });

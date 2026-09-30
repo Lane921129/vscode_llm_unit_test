@@ -13,7 +13,7 @@ import { throwIfExecutionCancelled } from './executionContext';
 import { pythonToolPath } from './pythonTools';
 
 interface ExecutionVerificationOptions {
-    directory: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
+    directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
     dependencies: Array<{ file: string; hash: string }>; journal: AnalysisJournal;
     targetModule?: string;
     generate(): Promise<string>;
@@ -23,6 +23,8 @@ interface ExecutionVerificationOptions {
 /** Execution-only path: same validation/repair gates, no behavioral probes or quality measurements. */
 export async function runExecutionVerification(options: ExecutionVerificationOptions): Promise<ExecutionBaseline> {
     const { directory, file, target, python, env, dependencies, journal, hooks } = options;
+    const artifacts = options.artifactDirectory || directory;
+    fs.mkdirSync(artifacts, { recursive: true });
     let accepted: ExecutionBaseline | undefined;
     let attempt = 0;
     const expected = { runId: journal.runId, sourceHash: journal.sourceHash, target };
@@ -59,7 +61,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 const value = JSON.parse(result.stdout);
                 if (value.changed !== true || typeof value.code !== 'string' || !Array.isArray(value.corrections)
                     || value.corrections.length === 0 || value.basis !== 'source-derived-arithmetic-v1') { return undefined; }
-                const [proofPath] = reserveArtifactFiles(directory, ['arithmetic'], 'json');
+                const [proofPath] = reserveArtifactFiles(artifacts, ['arithmetic'], 'json');
                 const evidence = { basis: value.basis, limitation: value.limitation, sourceHash: journal.sourceHash,
                     previousTestHash: evidenceHash(code), candidateTestHash: evidenceHash(value.code), corrections: value.corrections };
                 // reserveArtifactFiles already created this exclusively owned file.
@@ -75,9 +77,9 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             checkCurrent();
             // Every executed candidate has its own immutable file and evidence.
             const testFile = `exec${++attempt}_test.py`;
-            const testPath = path.join(directory, testFile);
+            const testPath = path.join(artifacts, testFile);
             fs.writeFileSync(testPath, code, { encoding: 'utf8', flag: 'wx' });
-            const [invocation, isolation] = reserveArtifactFiles(directory, ['invocation', 'isolation'], 'jsonl');
+            const [invocation, isolation] = reserveArtifactFiles(artifacts, ['invocation', 'isolation'], 'jsonl');
             const baseline: ExecutionBaseline = { schemaVersion: 'execution-baseline-v1', validationMode: 'execution',
                 ...expected, testFile, testHash: evidenceHash(code), testRunId: randomUUID(),
                 invocationFile: path.basename(invocation), isolationFile: path.basename(isolation), dependencyVersions: dependencies };
@@ -85,7 +87,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 ...generatedUnittestArguments(path.basename(testFile, '.py'), path.dirname(file), false, true),
                 '--target-file', file, '--target-name', target, '--target-test-file', testPath,
                 '--target-evidence', invocation, '--target-run-id', baseline.testRunId, '--violation-report', isolation
-            ], { cwd: directory, env, timeout: 30000 });
+            ], { cwd: artifacts, env, timeout: 30000 });
             checkCurrent();
             const ok = run.code === 0 && verifyExecutionEvidence(directory, file, baseline, expected);
             const out = (run.stdout + run.stderr).trim()

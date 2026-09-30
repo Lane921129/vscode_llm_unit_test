@@ -201,3 +201,10 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 共用版本化 `QualityPolicy` 亦未交付；正式 strict100 與 fixture manifest 的不同門檻尚未統一為明確政策欄位。現有 gate 不降低，N/A、未知、未完成審查與未完成測量不因此升格通過。固定模型 A/B、完整 corpus／保留評估集，以及外部引擎的真實支援環境驗收均未執行。
 
 CI workflow 已設定 Windows／Ubuntu 與 Python 3.12／3.13 矩陣；設定存在不代表遠端工作已成功。本輪本機 Node 392／Python 200 項、型別、lint、生產 build、Webview 及 secret scan 均通過；遠端 CI 與模型／外部引擎實驗仍待驗收，詳見實作追蹤文件。
+
+
+## 分輪結果輸出（function-loops-v1）
+
+`resultLayout.ts` 區分函式首頁、每輪執行產物與跨輪證據。函式目錄下 `final_report.md` 呈現保留成果，`failure_report.md` 索引每輪獨立流程；`loop/<n>` 保存實際執行、coverage、mutation 與候選快照，`loop/_run` 保存 journal、不可變基線、共用 Trace 與完整稽核流程。`targetReport.ts` 依輪次分離事件與 Markdown 區段，忽略證據 code fence 內的偽標題，避免把別輪流程或全域保留分數當作當輪結果。
+
+`resultArtifactPath`／Python `result_layout.py` 只接受 basename，在目前函式的新舊布局定位證據，不跨批次搜尋。完整品質的 acceptedTest 綁定 `_run` 中的不可變 checkpoint；執行模式以 `loop/1` 中逐次建立的檔案及原 runner canonical path 驗證。BatchJournal、fixture_scorecard 與匯出同步採用布局識別；缺少新格式證據不得降成文字分數。呼叫站、相依 inventory 與批次掃描排除新格式生成內容。

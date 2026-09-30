@@ -7,6 +7,10 @@ import argparse
 import hashlib
 import json
 import os
+if __package__:
+    from .result_layout import data_directory
+else:
+    from result_layout import data_directory
 from pathlib import Path, PurePosixPath
 import stat
 import zipfile
@@ -47,7 +51,7 @@ def missing_reports(root):
         if not relative or parts.is_absolute() or '..' in parts.parts or ':' in relative:
             missing.append({'file': target.get('file'), 'target': target.get('target'), 'reason': 'no-safe-report-path'})
         elif (target.get('terminalStatus') in {'dummy-skipped', 'stub-skipped', 'stub-smoke-generated'}
-              and (root.joinpath(*parts.parts) / 'workflow_report.md').is_file()):
+              and (data_directory(root.joinpath(*parts.parts)) / 'workflow_report.md').is_file()):
             continue  # Explicitly skipped targets have an audit report, not a final test result.
         elif not (root.joinpath(*parts.parts) / 'final_report.md').is_file():
             missing.append({'file': target.get('file'), 'target': target.get('target'), 'reason': 'missing-report'})

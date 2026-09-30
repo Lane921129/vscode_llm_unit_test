@@ -6,6 +6,10 @@ import os
 from pathlib import Path
 import sys
 import tokenize
+if __package__:
+    from .result_layout import data_directory
+else:
+    from result_layout import data_directory
 
 
 EXCLUDED = {'.git', '.hg', '.svn', '.venv', 'venv', 'env', 'node_modules',
@@ -19,8 +23,8 @@ MAX_REFERENCES = 10000
 
 def generated_directory(directory):
     """Recognize our artifacts by their manifest, not arbitrary user folder names."""
-    manifest = directory / 'run_manifest.json'
     try:
+        manifest = data_directory(directory) / 'run_manifest.json'
         if manifest.is_file() and manifest.stat().st_size < 65536:
             value = json.loads(manifest.read_text(encoding='utf-8-sig'))
             return (isinstance(value, dict) and value.get('schemaVersion') == 2 and 'runId' in value

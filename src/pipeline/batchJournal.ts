@@ -1,3 +1,4 @@
+import { resultDataDirectory, resultArtifactPath } from './resultLayout';
 import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -45,8 +46,8 @@ function verifyQualityPass(directory: string, sourcePath: string, target: string
         || typeof snapshot.code !== 'string' || evidenceHash(snapshot.code) !== snapshot.codeHash
         || knowledge.acceptedCodeHash !== snapshot.codeHash
         || evidenceHash(fs.readFileSync(sourcePath, 'utf8')) !== knowledge.sourceHash
-        || evidenceHash(fs.readFileSync(path.join(directory, test), 'utf8')) !== snapshot.codeHash
-        || evidenceHash(fs.readFileSync(path.join(directory, immutableTest), 'utf8')) !== snapshot.codeHash
+        || evidenceHash(fs.readFileSync(resultArtifactPath(directory, test), 'utf8')) !== snapshot.codeHash
+        || evidenceHash(fs.readFileSync(resultArtifactPath(directory, immutableTest), 'utf8')) !== snapshot.codeHash
         || typeof snapshot.execution !== 'string' || !snapshot.execution.trim()
         || snapshot.execution !== knowledge.execution || snapshot.reviewStatus !== knowledge.reviewStatus
         || snapshot.generationMode !== knowledge.generationMode
@@ -113,10 +114,11 @@ export class BatchJournal {
     dummy(id: number): void { this.targets[id].terminalStatus = 'dummy-skipped'; }
     refresh(id: number): void {
         const target = this.targets[id];
-        const directory = target.reportDirectory && path.join(this.directory, target.reportDirectory);
+        const reportRoot = target.reportDirectory && path.join(this.directory, target.reportDirectory);
         try {
-            if (!directory) { throw Error('missing-report'); }
-            const hasFinal = fs.existsSync(path.join(directory, 'final_report.md'));
+            if (!reportRoot) { throw Error('missing-report'); }
+            const directory = resultDataDirectory(reportRoot);
+            const hasFinal = fs.existsSync(path.join(reportRoot, 'final_report.md'));
             const hasWorkflow = fs.existsSync(path.join(directory, 'workflow_report.md'));
             if (!hasFinal && !hasWorkflow) { throw Error('missing-report'); }
             if (target.terminalStatus !== 'dummy-skipped') {
@@ -141,7 +143,7 @@ export class BatchJournal {
                             || !Array.isArray(knowledge.qualityGaps) || knowledge.qualityGaps.length
                             || typeof knowledge.execution !== 'string' || !knowledge.execution.trim()
                             || knowledge.mutationScore !== 100 || !Array.isArray(knowledge.survivors) || knowledge.survivors.length
-                            || evidenceHash(fs.readFileSync(path.join(directory, test), 'utf8')) !== knowledge.acceptedCodeHash) {
+                            || evidenceHash(fs.readFileSync(resultArtifactPath(directory, test), 'utf8')) !== knowledge.acceptedCodeHash) {
                             throw Error('incomplete-provenance');
                         }
                     }

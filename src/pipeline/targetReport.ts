@@ -1,3 +1,4 @@
+import { functionReportDirectory, resultArtifactPath, roundDirectory } from './resultLayout';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { localize } from '../i18n/core';
@@ -28,10 +29,11 @@ function readTest(directory: string, file: unknown, hash: unknown): { testFile: 
     if (typeof file !== 'string' || !file || path.basename(file) !== file || /[\\/:]/.test(file)
         || typeof hash !== 'string') { return undefined; }
     try {
-        const target = path.join(directory, file);
+        const target = resultArtifactPath(directory, file);
         if (!fs.lstatSync(target).isFile() || fs.realpathSync(target) !== path.resolve(target)) { return undefined; }
         const code = fs.readFileSync(target, 'utf8');
-        return evidenceHash(code) === hash ? { testFile: file, code } : undefined;
+        return evidenceHash(code) === hash
+            ? { testFile: path.relative(functionReportDirectory(directory), target).replace(/\\/g, '/'), code } : undefined;
     } catch { return undefined; }
 }
 
@@ -117,21 +119,22 @@ export function renderFinalReport(identity: ReportIdentity, summary: TargetRepor
 }
 
 /** All events are read from this run only. Large code and provider payloads stay out of the timeline. */
-function eventTimeline(directory: string, runId: string, sourceHash: string): string {
+function eventTimeline(directory: string, runId: string, sourceHash: string, loop?: number): string {
     let events: any[];
     try {
         events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
         if (events.some(event => event.runId !== runId || event.sourceHash !== sourceHash)) { throw Error('identity'); }
     } catch { return localize('事件紀錄缺少或身分不符；流程證據不完整。\n'); }
+    if (loop !== undefined) { events = events.filter(event => event.loop === loop); }
     return [localize('### 完整流程（依事件順序）'), '', localize('| 序號 | 時間 | 輪次 | 階段 | 狀態 | 摘要 |'),
         '| --- | --- | --- | --- | --- | --- |', ...events.map(event => {
             const detail = event.detail || {};
-            const summary = ['role', 'category', 'reason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus']
+            const summary = ['role', 'category', 'reason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus', 'codeHash']
                 .filter(key => typeof detail[key] === 'string' || typeof detail[key] === 'number')
                 .map(key => `${key}: ${String(detail[key]).slice(0, 600)}`).join('; ')
                 + (Array.isArray(detail.diagnostics) ? '; ' + detail.diagnostics.filter((v: unknown) => typeof v === 'string').join(', ') : '');
             return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)} |`;
-        }), '', '[role_events.jsonl](role_events.jsonl)', ''].join('\n');
+        }), '', `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
 }
 
 export function writeTargetReports(directory: string, identity: ReportIdentity, sourceHash: string,
@@ -144,6 +147,9 @@ export function writeTargetReports(directory: string, identity: ReportIdentity, 
         || (!isReportExcluded(terminal) && !['running', 'passed', 'execution-passed'].includes(String(terminal)));
     const flow = withOutcomeHeader(formatTierHistory(state) + eventTimeline(directory, runId, sourceHash) + processBody, displayState);
     fs.writeFileSync(path.join(directory, 'workflow_report.md'), flow, 'utf8');
+    if (functionReportDirectory(directory) !== directory) {
+        return writeOrganizedReports(directory, identity, sourceHash, runId, state, processBody, summary, failed);
+    }
     if (failed) {
         const describeFailure = (value: unknown): string => {
             const failure = value as { stage?: string; category?: string; reason?: string } | undefined;
@@ -160,4 +166,69 @@ export function writeTargetReports(directory: string, identity: ReportIdentity, 
     // This path belongs to the current exclusive run directory; remove only our temporary summary.
     if (fs.existsSync(final)) { fs.unlinkSync(final); }
     return path.join(directory, 'workflow_report.md');
+}
+
+
+/** Round reports never inherit a later round's retained score or terminal status. */
+function writeOrganizedReports(data: string, identity: ReportIdentity, sourceHash: string, runId: string,
+    state: Record<string, unknown>, body: string, summary: TargetReportSummary, failed: boolean): string {
+    const root = functionReportDirectory(data);
+    const sections = new Map<number, string>();
+    // Only framework headings outside fenced evidence delimit rounds.
+    let round: number | undefined, fenceMarker: string | undefined;
+    for (const line of body.split('\n')) {
+        const marker = /^(`{3,}|~{3,})/.exec(line)?.[1];
+        if (marker && !fenceMarker) { fenceMarker = marker; }
+        else if (marker && fenceMarker && marker[0] === fenceMarker[0] && marker.length >= fenceMarker.length) { fenceMarker = undefined; }
+        const header = !fenceMarker && /^(?:## 第 (\d+) 輪測試|## Test round (\d+))\s*$/.exec(line);
+        if (header) { round = Number(header[1] || header[2]); }
+        if (round !== undefined) { sections.set(round, (sections.get(round) || '') + line + '\n'); }
+    }
+    const loopRoot = path.join(root, 'loop');
+    const rounds = fs.readdirSync(loopRoot).filter(name => /^[1-9]\d*$/.test(name)
+        && fs.lstatSync(path.join(loopRoot, name)).isDirectory()).map(Number);
+    for (const number of sections.keys()) { if (!rounds.includes(number)) { rounds.push(number); } }
+    let events: any[] = [];
+    try {
+        events = fs.readFileSync(path.join(data, 'role_events.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+        if (events.some(event => event.runId !== runId || event.sourceHash !== sourceHash)) { events = []; }
+    } catch { /* eventTimeline explicitly reports missing evidence. */ }
+    const links: string[] = [];
+    for (const number of rounds.sort((a, b) => a - b)) {
+        const directory = roundDirectory(data, number);
+        fs.mkdirSync(directory, { recursive: true });
+        const failures = events.filter(event => event.loop === number && /failed|rejected|invalid|unavailable|rollback|retained-baseline/.test(event.status));
+        const artifacts = fs.readdirSync(directory).filter(name => !['report.md', 'failure_report.md'].includes(name));
+        const title = localize('## 第 {0} 輪結果', number);
+        const flow = title + '\n\n' + identityLines(identity) + '\n'
+            + localize('本頁僅記錄本輪；最終保留成果請見函式的 final_report.md。\n\n')
+            + ((state.tierHistory as any)?.transitions || []).filter((item: any) => item.loop === number)
+                .map((item: any) => localize('第 {0} 輪 Tier {1} → {2}（{3}）', item.loop, item.from, item.to, item.reason) + '\n\n').join('')
+            + eventTimeline(data, runId, sourceHash, number) + (sections.get(number) || '')
+            + '\n' + localize('### 本輪檔案\n\n')
+            + artifacts.map(file => `- [${reportCell(file)}](${reportLink(file)})`).join('\n') + '\n';
+        fs.writeFileSync(path.join(directory, 'report.md'), flow, 'utf8');
+        fs.writeFileSync(path.join(directory, 'failure_report.md'), localize('# 失敗報告\n\n')
+            + (failures.length ? localize('本輪有 {0} 筆失敗或回退事件；詳情與完整流程如下。\n\n', failures.length)
+                : localize('本輪沒有記錄失敗事件；不代表完整品質通過。\n\n')) + flow, 'utf8');
+        links.push(`- [${reportCell(title.replace(/^## /, ''))}](loop/${number}/report.md) · [${localize('失敗報告')}](loop/${number}/failure_report.md)`);
+    }
+    const describe = (value: unknown): string => {
+        const f = value as { stage?: string; category?: string; reason?: string } | undefined;
+        return f ? reportCell(conciseReason([f.stage, f.category, f.reason].filter(Boolean).join(' / '))) : localize('無');
+    };
+    const index = localize('# 失敗報告\n\n') + identityLines(identity)
+        + localize('- **失敗原因**: {0}\n', reportCell(conciseReason(summary.reason)))
+        + localize('- **首次失敗**: {0}\n- **最近失敗**: {1}\n', describe(state.firstFailure), describe(state.lastFailure))
+        + '\n' + localize('### 各輪流程\n\n') + links.join('\n') + '\n\n'
+        + localize('[共用紀錄與完整稽核流程](loop/_run/workflow_report.md)\n');
+    fs.writeFileSync(path.join(root, 'failure_report.md'), index, 'utf8');
+    const final = path.join(root, 'final_report.md');
+    if (!summary.included) {
+        if (fs.existsSync(final)) { fs.unlinkSync(final); }
+        return path.join(data, 'workflow_report.md');
+    }
+    fs.writeFileSync(final, renderFinalReport(identity, summary, failed)
+        + '\n' + localize('### 各輪流程\n\n') + links.join('\n') + '\n<!-- result-layout: function-loops-v1 -->\n', 'utf8');
+    return final;
 }

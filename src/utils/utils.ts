@@ -1,3 +1,4 @@
+import { resultDataDirectory } from '../pipeline/resultLayout';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runSpawn } from './processRunner';
@@ -123,8 +124,10 @@ export async function findPythonFilesInDir(dir: string, strict = false, excluded
 
 function isRecordedBatchDirectory(directory: string): boolean {
     const manifest = path.join(directory, 'batch_manifest.json');
-    if (!fs.existsSync(manifest)) { return false; }
     try {
+        const data = resultDataDirectory(directory);
+        if (data !== directory) { return true; }
+        if (!fs.existsSync(manifest)) { return false; }
         const record = JSON.parse(fs.readFileSync(manifest, 'utf8'));
         return record.schemaVersion === 1 && typeof record.batchId === 'string'
             && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(record.batchId)

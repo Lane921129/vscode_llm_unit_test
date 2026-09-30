@@ -1,3 +1,4 @@
+import { functionReportDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -61,7 +62,7 @@ test('missing target dependency preserves declared import setup and diagnostics 
                 [{ file: 'sample.py', operation: 'pathlib.Path.mkdir', line: 2 }]);
             assert.equal(knowledge.initialTargetObservations, null);
             assert.match(knowledge.sourceStructure, /return value \+ 1/);
-            assert.match(fs.readFileSync(path.join(run, 'final_report.md'), 'utf8'), /fixture_dependency_not_installed/);
+            assert.match(fs.readFileSync(path.join(functionReportDirectory(run), 'final_report.md'), 'utf8'), /fixture_dependency_not_installed/);
             const events = fs.readFileSync(path.join(run, 'role_events.jsonl'), 'utf8');
             assert.doesNotMatch(events, /"stage":"(?:writer|reviewer|bug-fixer|analyst-planning)"/);
             assert.doesNotMatch(events, /"stage":"behavior-probe"/);

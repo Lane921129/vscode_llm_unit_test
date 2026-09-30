@@ -1,3 +1,4 @@
+import { functionReportDirectory, resultArtifactPath } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -63,7 +64,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         assert.equal(verificationMode(), 'full'); assert.throws(() => verificationMode('fast'));
         const passed = await run('pass');
-        const englishReport = fs.readFileSync(path.join(passed.directory, 'final_report.md'), 'utf8');
+        const englishReport = fs.readFileSync(path.join(functionReportDirectory(passed.directory), 'final_report.md'), 'utf8');
         assert.match(englishReport, /## Final outcome: Execution verified/);
         assert.match(englishReport, /\*\*Mutation score\*\*: N\/A \(Not run\)/);
         assert.match(englishReport, /\*\*Target function\*\*: target/);
@@ -84,7 +85,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
             testFile: '../sample.py', invocationFile: 'missing.json', sourceHash: '0'.repeat(64) })) {
             assert.equal(verifyExecutionEvidence(passed.directory, file, { ...baseline, [field]: value }, manifest), false, field);
         }
-        const invocationPath = path.join(passed.directory, baseline.invocationFile);
+        const invocationPath = resultArtifactPath(passed.directory, baseline.invocationFile);
         const invocation = JSON.parse(fs.readFileSync(invocationPath, 'utf8'));
         for (const override of [{ observed: false }, { profileIntact: false }, { status: 'running' },
             { testResult: { ...invocation.testResult, skipped: invocation.testResult.testsRun } },
@@ -94,12 +95,12 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         }
         fs.writeFileSync(invocationPath, JSON.stringify(invocation));
         // Batch recount uses the underlying proof; an execution pass is never a full quality pass.
-        const batch = new BatchJournal(path.dirname(passed.directory), root,
+        const batch = new BatchJournal(path.dirname(functionReportDirectory(passed.directory)), root,
             { model: 'fixture', buildTimestamp: 'test', python, validationMode: 'execution' });
-        batch.discover(file, ['target']); batch.start(); batch.begin(0); batch.attach(0, passed.directory); batch.refresh(0); batch.finish('completed');
+        batch.discover(file, ['target']); batch.start(); batch.begin(0); batch.attach(0, functionReportDirectory(passed.directory)); batch.refresh(0); batch.finish('completed');
         const batchManifest = () => JSON.parse(fs.readFileSync(path.join(batch.directory, 'batch_manifest.json'), 'utf8'));
         assert.equal(batchManifest().allTargetsExecutionVerified, true); assert.equal(batchManifest().allTargetsPassed, false);
-        fs.appendFileSync(path.join(passed.directory, baseline.testFile), '\n# edited\n'); batch.refresh(0); batch.finish('completed');
+        fs.appendFileSync(resultArtifactPath(passed.directory, baseline.testFile), '\n# edited\n'); batch.refresh(0); batch.finish('completed');
         assert.equal(batchManifest().complete, false); assert.equal(batchManifest().allTargetsExecutionVerified, false);
 
         for (const [name, code, input] of [
@@ -141,7 +142,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         const repaired = await run('repair', good.replace('target(2), 3', 'target(2), 999'), source, 'tier1',
             'def test_value(self):\n    self.assertEqual(target(2), 3)');
         assert.equal(repaired.knowledge.terminalStatus, 'execution-passed', JSON.stringify(repaired.knowledge.lastFailure));
-        assert.ok(fs.existsSync(path.join(repaired.directory, 'exec1_test.py')));
+        assert.ok(fs.existsSync(resultArtifactPath(repaired.directory, 'exec1_test.py')));
         assert.equal(repaired.knowledge.acceptedTest, 'exec2_test.py');
         changeSource = true;
         const changed = await run('changed'); changeSource = false;

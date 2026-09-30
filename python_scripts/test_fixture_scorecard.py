@@ -31,6 +31,28 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 
 
 class FixtureScorecardTests(unittest.TestCase):
+    def test_organized_reports_preserve_scores_and_reject_missing_or_invalid_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            report_path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            expected = report_fields(report_path)
+            folder = report_path.parent
+            data = folder / 'loop' / '_run'
+            files = list(folder.iterdir())
+            data.mkdir(parents=True)
+            (data / 'layout.json').write_text(json.dumps({'schemaVersion': 'function-loops-v1'}), encoding='utf-8')
+            for file in files:
+                if file != report_path and file.is_file():
+                    file.rename(data / file.name)
+            round_folder = data.parent / '1'
+            round_folder.mkdir()
+            (data / 'loop1_test.py').rename(round_folder / 'loop1_test.py')
+            self.assertEqual(report_fields(report_path), expected)
+            (data / 'quality_baseline.json').unlink()
+            self.assertTrue(report_fields(report_path)['invalid_journal'])
+            (data / 'layout.json').write_text('{}', encoding='utf-8')
+            self.assertTrue(report_fields(report_path)['invalid_journal'])
+
     def test_concise_report_uses_bound_manifest_and_retained_evidence_not_markdown_maxima(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

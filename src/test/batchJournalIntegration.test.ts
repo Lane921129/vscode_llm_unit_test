@@ -1,3 +1,4 @@
+import { functionReportDirectory, resultDataDirectory, createResultLayout, roundDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -130,7 +131,7 @@ class Cases(unittest.TestCase):
         const clockRun = manifests().find(item => item.manifest.targets[0]?.file === 'clock_sample.py')!;
         assert.ok(clockRun);
         const clockTarget = clockRun.manifest.targets[0];
-        const clockOutput = path.join(clockRun.directory, clockTarget.reportDirectory);
+        const clockOutput = resultDataDirectory(path.join(clockRun.directory, clockTarget.reportDirectory));
         const knowledge = JSON.parse(fs.readFileSync(path.join(clockOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(clockTarget.terminalStatus, 'passed', JSON.stringify({ status: knowledge.terminalStatus,
             failure: knowledge.lastFailure, diagnostic: knowledge.diagnostic, gaps: knowledge.qualityGaps }));
@@ -181,7 +182,7 @@ class Cases(unittest.TestCase):
             const script = 'import json,sys;sys.path.insert(0,sys.argv[1]);'
                 + 'from fixture_scorecard import build_scorecard;'
                 + 'print(json.dumps(build_scorecard(sys.argv[2],manifest_path=sys.argv[3])))';
-            const result = spawnSync(python, ['-B', '-c', script, scripts, clockOutput, fixtureManifest], {
+            const result = spawnSync(python, ['-B', '-c', script, scripts, functionReportDirectory(clockOutput), fixtureManifest], {
                 encoding: 'utf8', timeout: 20000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
             });
             assert.equal(result.status, 0, result.stderr || result.error?.message);
@@ -213,7 +214,7 @@ class Cases(unittest.TestCase):
                 model: 'fixture', buildTimestamp: 'integration-reread', python
             });
             reader.discover(sourceFile, ['target']); reader.start(); reader.begin(0);
-            reader.attach(0, clockOutput); reader.refresh(0); reader.finish('completed');
+            reader.attach(0, functionReportDirectory(clockOutput)); reader.refresh(0); reader.finish('completed');
             return JSON.parse(fs.readFileSync(path.join(clockRun.directory, 'batch_manifest.json'), 'utf8'));
         };
         try {
@@ -252,6 +253,13 @@ class Cases(unittest.TestCase):
         fs.writeFileSync(generatedHelper, 'def materialize(value): return list(value)\n');
         assert.ok((await findPythonFilesInDir(root)).includes(generatedHelper));
         assert.ok(!(await findPythonFilesInDir(root, true, [], true)).includes(generatedHelper));
+        const single = path.join(root, 'single-result'); fs.mkdirSync(single);
+        fs.writeFileSync(path.join(single, 'target.json'), '{}');
+        const singleData = createResultLayout(single), singleRound = roundDirectory(singleData, 1);
+        fs.mkdirSync(singleRound);
+        const generatedCase = path.join(singleRound, 'candidate.py');
+        fs.writeFileSync(generatedCase, 'def generated(): return 99\n');
+        assert.ok(!(await findPythonFilesInDir(root, true, [], true)).includes(generatedCase));
         const ordinary = path.join(root, 'ordinary');
         fs.mkdirSync(ordinary);
         fs.writeFileSync(path.join(ordinary, 'batch_manifest.json'), '{"note":"not a batch record"}');

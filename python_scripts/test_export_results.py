@@ -22,7 +22,12 @@ class ResultExportTests(unittest.TestCase):
                                 'reportDirectory': str(index)})
             (root / 'batch_manifest.json').write_text(json.dumps({'targets': targets}))
             self.assertEqual([item['target'] for item in tool.missing_reports(root)], ['3', '4'])
-            (root / '0/workflow_report.md').unlink()
+            data = root / '0/loop/_run'
+            data.mkdir(parents=True)
+            (data / 'layout.json').write_text(json.dumps({'schemaVersion': 'function-loops-v1'}))
+            (root / '0/workflow_report.md').rename(data / 'workflow_report.md')
+            self.assertEqual([item['target'] for item in tool.missing_reports(root)], ['3', '4'])
+            (data / 'workflow_report.md').unlink()
             self.assertEqual([item['target'] for item in tool.missing_reports(root)], ['0', '3', '4'])
 
     def test_zip_preserves_relative_paths_bytes_and_reports_missing_source_files(self):

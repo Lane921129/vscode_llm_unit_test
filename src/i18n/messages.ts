@@ -1,5 +1,14 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "## 第 {0} 輪結果": "## Round {0} results",
+    "本頁僅記錄本輪；最終保留成果請見函式的 final_report.md。\n\n": "This page records this round only. See the function's final_report.md for retained results.\n\n",
+    "### 本輪檔案\n\n": "### Files for this round\n\n",
+    "本輪有 {0} 筆失敗或回退事件；詳情與完整流程如下。\n\n": "This round has {0} failure or rollback events. Details and the full workflow follow.\n\n",
+    "本輪沒有記錄失敗事件；不代表完整品質通過。\n\n": "No failure events were recorded for this round; full quality has not necessarily passed.\n\n",
+    "失敗報告": "Failure report",
+    "### 各輪流程\n\n": "### Workflows by round\n\n",
+    "[共用紀錄與完整稽核流程](loop/_run/workflow_report.md)\n": "[Shared records and complete audit workflow](loop/_run/workflow_report.md)\n",
+
     "目標、保留測資或量測證據無法核對。": "The target, retained tests or measurement evidence could not be verified.",
     "仍有 {0} 個存活突變。": "{0} surviving mutants remain.",
     "- **首次失敗**: {0}\n- **最近失敗**: {1}\n": "- **First failure**: {0}\n- **Last failure**: {1}\n",

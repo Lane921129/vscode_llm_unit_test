@@ -1,3 +1,4 @@
+import { functionReportDirectory, resultArtifactPath, roundDirectory } from '../pipeline/resultLayout';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -160,7 +161,7 @@ class Cases(unittest.TestCase):
             return matches[0];
         };
         const output = outputFor(path.join(directory, 'results'));
-        const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
+        const report = fs.readFileSync(path.join(functionReportDirectory(output), 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
         assert.equal(manifest.validationMode, 'full', 'omitting mode still requires the complete mutation pipeline');
@@ -244,9 +245,9 @@ class Cases(unittest.TestCase):
         assert.equal(interrupted.mutationStatus, 'incomplete');
         const checkpoint = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'executable_baseline.json'), 'utf8'));
         assert.equal(interrupted.acceptedCodeHash, checkpoint.codeHash);
-        assert.equal(fs.readFileSync(path.join(interruptedOutput, 'loop1_test.py'), 'utf8'), checkpoint.code);
+        assert.equal(fs.readFileSync(resultArtifactPath(interruptedOutput, 'loop1_test.py'), 'utf8'), checkpoint.code);
         assert.ok(fs.existsSync(path.join(interruptedOutput, checkpoint.testFile)));
-        assert.match(fs.readFileSync(path.join(interruptedOutput, 'final_report.md'), 'utf8'), /尚未完成有效測量/);
+        assert.match(fs.readFileSync(path.join(functionReportDirectory(interruptedOutput), 'final_report.md'), 'utf8'), /尚未完成有效測量/);
         failBuiltinMutation = false;
         for (const changed of ['source', 'test'] as const) {
             mutateDuringMutation = changed;
@@ -262,7 +263,7 @@ class Cases(unittest.TestCase):
             const saved = JSON.parse(fs.readFileSync(path.join(changedOutput, 'executable_baseline.json'), 'utf8'));
             assert.equal(changedKnowledge.mutationScore, null);
             assert.equal(fs.existsSync(path.join(changedOutput, 'quality_baseline.json')), false);
-            assert.equal(fs.readFileSync(path.join(changedOutput, 'loop1_test.py'), 'utf8'), saved.code);
+            assert.equal(fs.readFileSync(resultArtifactPath(changedOutput, 'loop1_test.py'), 'utf8'), saved.code);
             if (changed === 'source') {
                 assert.equal(changedKnowledge.terminalStatus, 'source-changed');
                 assert.equal(changedKnowledge.evidenceValid, false);
@@ -305,7 +306,7 @@ class Cases(unittest.TestCase):
                 maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
             const scopeRoot = path.join(directory, engine + '-results');
             const scopeOutput = outputFor(scopeRoot);
-            const measured = JSON.parse(fs.readFileSync(path.join(scopeOutput, 'loop1_mutation.json'), 'utf8'));
+            const measured = JSON.parse(fs.readFileSync(resultArtifactPath(scopeOutput, 'loop1_mutation.json'), 'utf8'));
             assert.equal(measured.engine, 'builtin');
             assert.equal(measured.targetScope.kind, 'function');
             assert.equal(measured.targetScope.qualifiedName, 'target');
@@ -489,7 +490,7 @@ class Cases(unittest.TestCase):
             const eventText = fs.readFileSync(path.join(repairOutput, 'role_events.jsonl'), 'utf8');
             const repairEvents = eventText.trim().split('\n').map(line => JSON.parse(line));
             const repairKnowledge = JSON.parse(fs.readFileSync(path.join(repairOutput, 'function_knowledge.json'), 'utf8'));
-            const repairReport = fs.readFileSync(path.join(repairOutput, 'failure_report.md'), 'utf8');
+            const repairReport = fs.readFileSync(path.join(roundDirectory(repairOutput, 1), 'failure_report.md'), 'utf8');
             if (mode === 'format') {
                 assert.equal(fixerCalls, 1);
                 assert.ok(repairEvents.some(event => event.stage === 'bug-fixer' && event.status === 'format-normalized'));
@@ -511,7 +512,7 @@ class Cases(unittest.TestCase):
             assert.match(repairReport, /修復後續處理/);
             assert.equal(repairKnowledge.terminalStatus, 'failed');
             assert.ok(!eventText.includes(marker) && !repairReport.includes(marker));
-            assert.ok(!fs.readFileSync(path.join(repairOutput, 'loop1_test.py'), 'utf8').includes('from datetime import datetime'));
+            assert.ok(!fs.readFileSync(resultArtifactPath(repairOutput, 'loop1_test.py'), 'utf8').includes('from datetime import datetime'));
         }
     } finally {
         globalThis.fetch = originalFetch;

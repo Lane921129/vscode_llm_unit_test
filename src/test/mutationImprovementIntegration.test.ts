@@ -1,3 +1,4 @@
+import { functionReportDirectory, roundDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -73,8 +74,8 @@ class Cases(unittest.TestCase):
         const output = path.dirname(path.join(directory, 'results', relative));
         const state = JSON.parse(fs.readFileSync(path.join(output, 'function_knowledge.json'), 'utf8'));
         const events = fs.readFileSync(path.join(output, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-        const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
-        const failureReport = fs.readFileSync(path.join(output, 'failure_report.md'), 'utf8');
+        const report = fs.readFileSync(path.join(functionReportDirectory(output), 'final_report.md'), 'utf8');
+        const failureReport = fs.readFileSync(path.join(output, 'workflow_report.md'), 'utf8');
         const writerEvents = events.filter(event => event.stage === 'writer' && event.status === 'candidate');
         assert.ok(writerEvents.length > 0);
         assert.ok(writerEvents.every(event => !Object.hasOwn(event.detail, 'raw')
@@ -88,6 +89,12 @@ class Cases(unittest.TestCase):
         assert.match(failureReport, /Full workflow \(event order\)/);
         assert.doesNotMatch(report, /Automatic fallback|Role event|Semantic Analyst report/);
         assert.match(report, /failure_report.md/);
+        const firstRound = fs.readFileSync(path.join(roundDirectory(output, 1), 'report.md'), 'utf8');
+        const secondRound = fs.readFileSync(path.join(roundDirectory(output, 2), 'report.md'), 'utf8');
+        assert.match(firstRound, /Round 1: Tier 2 → 1/);
+        assert.doesNotMatch(secondRound, /Round 1: Tier 2 → 1/);
+        assert.match(secondRound, /Round 2 results/);
+        assert.deepEqual(fs.readdirSync(functionReportDirectory(output)).sort(), ['failure_report.md', 'final_report.md', 'loop']);
         assert.match(report, /### Test cases/);
         assert.match(report, /### Mutation cases/);
         assert.match(report, /89.47% \(17\/19\)/);

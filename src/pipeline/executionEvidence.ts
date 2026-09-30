@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { resultArtifactPath as artifact } from './resultLayout';
 import { evidenceHash } from './analysisJournal';
 
 export interface ExecutionBaseline {
@@ -9,11 +9,6 @@ export interface ExecutionBaseline {
     dependencyVersions: Array<{ file: string; hash: string }>;
 }
 
-function artifact(directory: string, name: string): string {
-    if (typeof name !== 'string' || !name || name === '.' || name === '..'
-        || path.basename(name) !== name || /[\\/]/.test(name)) { throw Error('invalid-artifact-path'); }
-    return path.join(directory, name);
-}
 function canonical(file: string): string {
     const value = fs.realpathSync(file);
     return process.platform === 'win32' ? value.toLowerCase() : value;
