@@ -31,6 +31,11 @@ export interface MutationCounts {
     timeout: number;
     error: number;
 }
+export interface MutationCodeChange {
+    schemaVersion: 'mutation-code-v1';
+    before: string;
+    after: string;
+}
 export interface MutationRecord {
     id: string;
     kind: string;
@@ -41,6 +46,8 @@ export interface MutationRecord {
     to: string;
     status: MutationOutcome;
     output?: string;
+    /** Display-only snapshot from the actual AST variant, never a test oracle. */
+    codeChange?: MutationCodeChange;
 }
 export interface MutationRun extends MutationContext {
     schemaVersion: 1;
@@ -67,6 +74,15 @@ const record = (value: unknown): value is Record<string, unknown> => Boolean(val
 const outcomes: MutationOutcome[] = ['KILLED', 'SURVIVED', 'TIMEOUT', 'ERROR', 'NOT_RUN'];
 const normalizePath = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
 const sourceBasename = (value: string) => path.posix.basename(value.replace(/\\/g, '/'));
+
+/** Optional display data must not invalidate otherwise valid historical measurements. */
+export function readMutationCodeChange(value: unknown): MutationCodeChange | undefined {
+    if (!record(value) || value.schemaVersion !== 'mutation-code-v1'
+        || typeof value.before !== 'string' || typeof value.after !== 'string'
+        || !value.before.trim() || !value.after.trim() || value.before === value.after
+        || value.before.length > 6000 || value.after.length > 6000) { return undefined; }
+    return { schemaVersion: 'mutation-code-v1', before: value.before, after: value.after };
+}
 
 export type MutationReadResult = { ok: true; run: MutationRun } | { ok: false; reason: string };
 
@@ -153,7 +169,7 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         seen.add(item.id);
         if (item.id !== candidateIds[mutants.length]) { return fail('Selected mutant does not match the enumerated candidate universe'); }
         observedCounts[item.status as MutationOutcome]++;
-        mutants.push(item as unknown as MutationRecord);
+        mutants.push({ ...item, codeChange: readMutationCodeChange(item.codeChange) } as unknown as MutationRecord);
     }
     if (value.baseline_passed && (observedCounts.KILLED !== counts.killed || observedCounts.SURVIVED !== counts.survived
         || observedCounts.TIMEOUT !== counts.timeout || observedCounts.ERROR !== counts.error || observedCounts.NOT_RUN !== counts.notRun)) {

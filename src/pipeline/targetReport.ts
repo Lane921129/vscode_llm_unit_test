@@ -6,7 +6,7 @@ import { evidenceHash } from './analysisJournal';
 import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 import { presentOutcome, presentSummaryOutcome, withOutcomeHeader } from './resultPresentation';
 import { formatTierHistory } from './tierHistory';
-import { readStoredMutationRun, MutationRun } from '../mutation/mutationResult';
+import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../mutation/mutationResult';
 
 export interface ReportIdentity {
     schemaVersion: 'target-report-v1'; sourcePath: string; sourceFile: string;
@@ -133,6 +133,25 @@ function fence(code: string): string {
     return `${delimiter}python\n${code.trimEnd()}\n${delimiter}\n`;
 }
 
+function codeTableCell(code: string): string {
+    return code.split(/\r\n|\r|\n/).map(line => '<code>' + reportCell(line)
+        .replace(/[*_~\\]/g, char => `&#${char.charCodeAt(0)};`)
+        .replace(/ /g, '&nbsp;').replace(/\t/g, '&nbsp;'.repeat(4)) + '</code>').join('<br>');
+}
+
+/** Keep the compact table intact; show each recorded variant separately underneath. */
+export function renderMutationCodeTable(mutants: NonNullable<TargetReportSummary['mutants']>): string {
+    if (!mutants.length) { return ''; }
+    return '\n' + localize('### 突變程式碼逐項對照\n\n')
+        + localize('每列對應上表同一筆突變，顯示修改處的程式碼；空白與排版經整理，測試案例沿用上方測資。\n\n')
+        + [localize('| 位置 | 突變 | 修改前程式碼 | 修改後程式碼 | 結果 |'), '| --- | --- | --- | --- | --- |',
+            ...mutants.map(m => {
+                const change = readMutationCodeChange(m.codeChange);
+                const unavailable = localize('此筆紀錄未保存程式碼');
+                return `| ${m.line}:${m.column} | ${reportCell(m.from)} → ${reportCell(m.to)} | ${change ? codeTableCell(change.before) : unavailable} | ${change ? codeTableCell(change.after) : unavailable} | ${m.status} |`;
+            }), ''].join('\n');
+}
+
 export function renderFinalReport(identity: ReportIdentity, summary: TargetReportSummary, hasFailures: boolean): string {
     return localize('## 最終結果：{0}\n\n', summary.summaryOutcome || (summary.outcome === localize('未完成：執行達標，審查未完成')
         ? localize('未完成：缺少完整通過證據') : summary.outcome)) + identityLines(identity)
@@ -147,7 +166,8 @@ export function renderFinalReport(identity: ReportIdentity, summary: TargetRepor
         + '\n' + localize('### 突變測資\n\n')
         + (summary.mutants?.length ? [localize('| 位置 | 突變前 | 突變後 | 結果 |'), '| --- | --- | --- | --- |',
             ...summary.mutants.map(m => `| ${m.line}:${m.column} | ${reportCell(m.from)} | ${reportCell(m.to)} | ${m.status} |`), ''].join('\n')
-            : localize('沒有已完成且綁定上述測資的突變案例。\n'));
+            : localize('沒有已完成且綁定上述測資的突變案例。\n'))
+        + renderMutationCodeTable(summary.mutants || []);
 }
 
 /** All events are read from this run only. Large code and provider payloads stay out of the timeline. */

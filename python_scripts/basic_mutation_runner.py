@@ -8,6 +8,7 @@ when available.
 
 import ast
 import copy
+import difflib
 import hashlib
 import json
 import math
@@ -54,6 +55,42 @@ NO_PATTERN_MUTATION = object()
 OPERATOR_SET_VERSION = 'builtin-ast-v1'
 FUNCTION_SCOPE_VERSION = 'selected-function-body-v1'
 MODULE_SCOPE_VERSION = 'module-ast-v1'
+CODE_CHANGE_MAX_CHARS = 6000
+
+
+def mutation_code_change(before_source, after_source):
+    """Capture one complete changed block from the normalized trial sources.
+
+    This optional display evidence is independent of mutation identity and
+    scoring. Do not splice disconnected edits or truncate a code block into an
+    apparently complete snapshot. Trim unchanged surroundings before the diff
+    so its work is bounded by the display limit even for a large module.
+    """
+    before_lines = before_source.splitlines()
+    after_lines = after_source.splitlines()
+    start = 0
+    common_length = min(len(before_lines), len(after_lines))
+    while start < common_length and before_lines[start] == after_lines[start]:
+        start += 1
+    before_end, after_end = len(before_lines), len(after_lines)
+    while (before_end > start and after_end > start
+           and before_lines[before_end - 1] == after_lines[after_end - 1]):
+        before_end -= 1
+        after_end -= 1
+    before_block, after_block = before_lines[start:before_end], after_lines[start:after_end]
+    if not before_block or not after_block:
+        return None
+    if any(sum(map(len, block)) + len(block) - 1 > CODE_CHANGE_MAX_CHARS
+           for block in (before_block, after_block)):
+        return None
+    opcodes = difflib.SequenceMatcher(None, before_block, after_block, autojunk=False).get_opcodes()
+    if len(opcodes) != 1 or opcodes[0][0] != 'replace':
+        return None
+    return {
+        'schemaVersion': 'mutation-code-v1',
+        'before': '\n'.join(before_block),
+        'after': '\n'.join(after_block),
+    }
 
 
 def mutation_scope_walk(scope):
@@ -485,6 +522,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     result['targetScope'].update(startLine=body_start, endLine=getattr(scope, 'end_lineno', len(original_source.splitlines())))
     candidates = []
     original_ast = ast.dump(tree, include_attributes=False)
+    normalized_source = ast.unparse(tree)
     seen_variants = set()
     for index, candidate in enumerate(mutation_candidates(tree, scope)):
         if deadline is not None and time.monotonic() >= deadline:
@@ -513,7 +551,12 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         variant_hash = hashlib.sha256(variant_ast.encode('utf-8')).hexdigest()
         identity = json.dumps([OPERATOR_SET_VERSION, result['scopeVersion'], source_hash, scope_name, candidate, variant_hash],
                               sort_keys=True, separators=(',', ':'))
-        candidates.append(({**candidate, 'id': hashlib.sha256(identity.encode('utf-8')).hexdigest()}, ast.unparse(variant) + '\n'))
+        record = {**candidate, 'id': hashlib.sha256(identity.encode('utf-8')).hexdigest()}
+        mutant_source = ast.unparse(variant) + '\n'
+        code_change = mutation_code_change(normalized_source, mutant_source)
+        if code_change is not None:
+            record['codeChange'] = code_change
+        candidates.append((record, mutant_source))
     result['counts']['available'] = len(candidates)
     result['candidateIds'] = [candidate['id'] for candidate, _ in candidates]
     result['candidateSetId'] = hashlib.sha256('\n'.join(sorted(result['candidateIds'])).encode('ascii')).hexdigest()

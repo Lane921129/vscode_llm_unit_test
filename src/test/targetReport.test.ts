@@ -6,9 +6,50 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { AnalysisJournal, evidenceHash } from '../pipeline/analysisJournal';
 import { BatchJournal } from '../pipeline/batchJournal';
-import { ReportIdentity, summarizeTarget, writeTargetReports } from '../pipeline/targetReport';
+import { ReportIdentity, summarizeTarget, writeTargetReports, renderFinalReport } from '../pipeline/targetReport';
+import { MutationRecord } from '../mutation/mutationResult';
 import { createDefaultQualityPolicy, createStrictQualityPolicy } from '../pipeline/qualityPolicy';
 import { setLanguage } from '../i18n/core';
+
+test('mutation code table follows the unchanged summary with one row per variant and safe bilingual code', () => {
+    const identity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: 'sample.py',
+        sourceFile: 'sample.py', target: 'target', modelIdentity: 'local/test', requestedTier: 'tier2' };
+    const mutants: MutationRecord[] = [
+        { id: 'a'.repeat(64), kind: 'binop', line: 8, column: 15, position: 0,
+            from: 'Div', to: 'FloorDiv', status: 'KILLED', codeChange: { schemaVersion: 'mutation-code-v1',
+                before: 'height_m = height_cm / 100', after: 'height_m = height_cm // 100' } },
+        { id: 'b'.repeat(64), kind: 'constant', line: 8, column: 27, position: 0,
+            from: '100', to: '0', status: 'SURVIVED', codeChange: { schemaVersion: 'mutation-code-v1',
+                before: 'height_m = height_cm / 100', after: 'height_m = height_cm / 0' } },
+        { id: 'c'.repeat(64), kind: 'constant', line: 10, column: 4, position: 0,
+            from: 'True', to: 'False', status: 'TIMEOUT', codeChange: { schemaVersion: 'mutation-code-v1',
+                before: 'if True:\n    return "<script>|`*_[]&"', after: 'if False:\n    return "<script>|`*_[]&"' } },
+        { id: 'd'.repeat(64), kind: 'return', line: 12, column: 4, position: 0,
+            from: 'return_value', to: 'None', status: 'NOT_RUN' }
+    ];
+    const summary = { included: true, outcome: 'Pending', reason: 'Incomplete', coverage: '100%', mutation: 'N/A', mutants };
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            setLanguage(language);
+            const report = renderFinalReport(identity, summary, false);
+            const heading = language === 'en' ? '### Code changes for each mutation' : '### 突變程式碼逐項對照';
+            const [original, detail] = report.split(heading);
+            assert.match(original, /\| 8:15 \| Div \| FloorDiv \| KILLED \|/);
+            assert.match(original, /\| 8:27 \| 100 \| 0 \| SURVIVED \|/);
+            const rows = detail.split('\n').filter(line => /^\| \d+:/.test(line));
+            assert.equal(rows.length, 4);
+            assert.ok(rows[0].includes('height&#95;m&nbsp;=&nbsp;height&#95;cm&nbsp;//&nbsp;100'));
+            assert.ok(rows[1].includes('height&#95;m&nbsp;=&nbsp;height&#95;cm&nbsp;/&nbsp;0'));
+            assert.ok(rows.every(row => row.split('|').length === 7), 'code cannot inject extra table cells');
+            assert.match(rows[2], /<br>/);
+            assert.match(rows[2], /&#60;script&#62;&#124;&#96;&#42;&#95;&#91;&#93;&#38;/);
+            assert.doesNotMatch(detail, /<script>/);
+            assert.match(rows[3], language === 'en' ? /Code was not saved/ : /此筆紀錄未保存程式碼/);
+            if (language === 'en') { assert.doesNotMatch(report, /[\u4e00-\u9fff]/); }
+            assert.ok(!renderFinalReport(identity, { ...summary, mutants: [] }, false).includes(heading));
+        }
+    } finally { setLanguage('zh-tw'); }
+});
 
 test('concise reports bind tests, target coverage and mutations to one retained candidate in both languages', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'target-report-'));

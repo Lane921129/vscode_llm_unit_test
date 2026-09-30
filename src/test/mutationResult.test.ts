@@ -87,10 +87,36 @@ test('the Python runner and TypeScript adapter agree on the actual wire contract
         assert.equal(run.status, 'complete', run.diagnostic);
         assert.equal(run.counts.available, 2);
         assert.equal(mutationMeetsThreshold(run), true);
+        assert.ok(run.mutants.every(mutant => mutant.codeChange?.schemaVersion === 'mutation-code-v1'));
+        assert.deepEqual(run.mutants.map(mutant => mutant.codeChange?.after.trim()).sort(), ['return False', 'return None']);
+        assert.ok(run.mutants.every(mutant => mutant.codeChange?.before.trim() === 'return True'));
     } finally {
         assert.ok(directory.startsWith(tempPrefix));
         fs.rmSync(directory, { recursive: true, force: true });
     }
+});
+
+test('mutation code snapshots survive persisted reads without changing counts or candidate identity', () => {
+    const change = { schemaVersion: 'mutation-code-v1', before: 'if value < 3:', after: 'if value <= 3:' };
+    const original = builtin();
+    const withCode = { ...original, mutants: original.mutants.map(m => ({ ...m, codeChange: change })) };
+    const run = parseBuiltinMutationRun(withCode, context);
+    assert.deepEqual(run.mutants[0].codeChange, change);
+    assert.deepEqual(run.counts, original.counts);
+    assert.equal(run.candidateSetId, original.candidateSetId);
+    const stored = readStoredMutationRun(JSON.stringify(run), context);
+    assert.ok(stored.ok);
+    assert.deepEqual(stored.run.mutants[0].codeChange, change);
+    for (const invalid of [null, 'text', { ...change, schemaVersion: 'unknown' },
+        { ...change, after: 3 }, { ...change, before: '' }, { ...change, after: change.before },
+        { ...change, before: 'x'.repeat(6001) }, { ...change, after: 'x'.repeat(6001) }]) {
+        const parsed = parseBuiltinMutationRun({ ...withCode,
+            mutants: withCode.mutants.map(m => ({ ...m, codeChange: invalid })) }, context);
+        assert.equal(parsed.status, 'complete', 'display metadata must not invalidate measurements');
+        assert.equal(parsed.mutants[0].codeChange, undefined, 'invalid code must never be displayed');
+        assert.equal(parsed.candidateSetId, original.candidateSetId);
+    }
+    assert.equal(parseBuiltinMutationRun(original, context).mutants[0].codeChange, undefined);
 });
 
 test('sampling and timeout never constitute complete mutation validation', () => {
