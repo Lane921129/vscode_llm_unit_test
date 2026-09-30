@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "quality-standard80-tests-v1",
+  "policy": {
+    "schemaVersion": "quality-policy-v1",
+    "policyId": "standard80-v1",
+    "mode": "standard",
+    "scopeVersion": "selected-function-body-v1",
+    "branchPolicy": "complete-required",
+    "mutationPolicy": "complete-universe-no-timeout-or-error",
+    "noCandidatePolicy": "not-applicable-unpassed",
+    "reviewPolicy": "completed-or-verified-deterministic-fallback",
+    "baselinePolicy": "single-passed-baseline",
+    "timeoutPolicy": "unscored",
+    "lineThreshold": {
+      "numerator": 100,
+      "denominator": 100
+    },
+    "mutationThreshold": {
+      "numerator": 80,
+      "denominator": 100
+    },
+    "policyHash": "18ede6ab07ce96bdb14e35651c82c3bec56f9a53619a5db441489b1a419019c3"
+  },
+  "thresholdCases": [
+    {
+      "name": "exact-80-percent",
+      "killed": 80,
+      "total": 100,
+      "passed": true
+    },
+    {
+      "name": "below-80-percent",
+      "killed": 79,
+      "total": 100,
+      "passed": false
+    },
+    {
+      "name": "79-point-5-cannot-round-to-80",
+      "killed": 159,
+      "total": 200,
+      "passed": false
+    },
+    {
+      "name": "laboratory-17-of-19",
+      "killed": 17,
+      "total": 19,
+      "passed": true
+    },
+    {
+      "name": "15-of-19-below-80",
+      "killed": 15,
+      "total": 19,
+      "passed": false
+    }
+  ]
+}

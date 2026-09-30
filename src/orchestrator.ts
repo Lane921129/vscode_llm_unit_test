@@ -22,7 +22,7 @@ import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidat
 import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget } from './pipeline/targetBudget';
 import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObservations } from './pipeline/behaviorObservations';
 import { buildProbeInputs, TypedProbeInputsV1 } from './pipeline/probeInputs';
-import { createStrictQualityPolicy } from './pipeline/qualityPolicy';
+import { createDefaultQualityPolicy } from './pipeline/qualityPolicy';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
@@ -1350,7 +1350,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         return;
     }
 
-    const qualityPolicy = createStrictQualityPolicy();
+    const qualityPolicy = createDefaultQualityPolicy();
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName,
         mode === 'full' ? qualityPolicy : undefined, mode, reportIdentity);
     finalReportMarkdown += localize("- **驗證目標**: {0}\n", mode === 'execution' ? localize("執行驗證（Trace、覆蓋率、突變與品質審查延後）") : localize("完整品質驗證"));

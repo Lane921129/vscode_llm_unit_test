@@ -30,7 +30,7 @@ function verifyQualityPass(directory: string, sourcePath: string, target: string
     manifest: any, knowledge: any): void {
     const invalid = () => { throw Error('incomplete-quality-provenance'); };
     const validated = validateQualityPolicy(manifest.qualityPolicy);
-    if (!validated.ok || validated.policy.mode !== 'strict100'
+    if (!validated.ok || !['standard', 'strict100'].includes(validated.policy.mode)
         || manifest.qualityContractVersion !== 'quality-policy-v1'
         || knowledge.qualityContractVersion !== 'quality-policy-v1'
         || !isDeepStrictEqual(manifest.qualityPolicy, knowledge.qualityPolicy)

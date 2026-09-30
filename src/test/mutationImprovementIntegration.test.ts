@@ -107,8 +107,13 @@ class Cases(unittest.TestCase):
         assert.ok(measured.length >= 2, logs.join('\n'));
         assert.ok(measured[1].detail.score > measured[0].detail.score, JSON.stringify(measured.map(event => event.detail.score)));
         assert.ok(events.some(event => event.stage === 'mutation-inputs' && event.status === 'observed'));
-        assert.equal(quality, 2, 'invalid quality replies do not cost two additional requests every round');
-        assert.ok(events.some(event => event.stage === 'analyst-quality' && event.status === 'suspended'));
+        assert.equal(quality, 0, 'meeting the 80% policy must stop further quality-model requests');
+        assert.equal(measured.length, 2, 'stop once the complete measurement meets the fixed threshold');
+        assert.equal(state.qualityPolicy.policyId, 'standard80-v1');
+        assert.equal(state.qualityAssessment.toolsSatisfied, true);
+        assert.equal(state.terminalStatus, 'execution-passed-review-incomplete');
+        assert.match(report, /threshold ≥ 80%/);
+        assert.doesNotMatch(report, /surviving mutants/);
         assert.equal(state.reviewStatus, 'incomplete');
         assert.equal(state.qualityAssessment.fullyPassed, false);
         assert.ok(state.mutationInputPlan.diagnostics.some((item: any) => item.status === 'conditional-equivalence' && item.excludedFromScore === false));

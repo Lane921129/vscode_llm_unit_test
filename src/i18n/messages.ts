@@ -1,5 +1,6 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "；門檻 ≥ {0}%": "; threshold ≥ {0}%",
     "正在以數值計算技能核對失敗測資": "Checking failing cases with the numeric calculation skill",
     "計算與同輸入隔離觀測一致；修正候選仍須重新執行、審查與突變驗證": "Calculation agrees with isolated execution of the same inputs; the candidate still requires execution, review and mutation validation",
     "計算缺少一致的同輸入觀測；保留原測資與修復流程": "Calculation lacks matching observations for the same inputs; retaining the tests and normal repair flow",

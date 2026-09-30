@@ -167,6 +167,7 @@
 - Dynamic Trace 以新程序逐案執行，建構子與目標呼叫前後分開快照；未知物件、共享參照、循環與超出容量的值不得藉 repr／deepcopy hook 重建。blocked、setup_error、timeout 與 not_started 保留逐筆狀態，不能混入例外 oracle。
 - caller literal 全程使用有界 tagged input 傳輸，保留參數型態、dict／kwargs 順序及每案 constructor；typed 欄位無效時不能回退一般 JSON 猜測，分治比對與 Tier 1 實例建立必須使用同一筆呼叫條件。
 - 正式品質政策在量測前固定並綁定 hash；checkpoint、批次及 scorecard 必須依相同政策與同一候選證據重算，不能只採顯示分數或自行宣稱 passed。fixture 政策另綁 manifest 身分與原門檻，不得事後降標或升級舊結果；完整量測、政策達標、審查完成與整次執行終態分開保存。
+- 依使用者 2026-09-30 指示，新執行採 `standard80-v1`：突變分數至少 80%，目標行覆蓋維持 100%、分支完整覆蓋，且仍須完整執行／量測與 Reviewer 完成。存活突變保留在分母與報告；已達門檻不再只為追求 100% 重複生成。歷史 `strict100-v1` 及 fixture manifest 的原政策保留，不回溯改標舊報告。
 - Trace／預檢／正式 unittest／mutation 共用版本化 runtime policy；所有違規持續記錄，即使被目標捕捉亦不得通過。只保留必要 import／traceback／async plumbing 例外，不准任意一般讀檔或 loopback。
 - 正式 coverage 使用原生 statement／branch 與來源實體核對；目標呼叫證據綁本次 source/test/run 與 coverage hash。單行定義被匯入不等於目標執行，舊文字 parser 僅作歷史相容。
 - 正式突變以 qualified function body 範圍、完整候選集合與精確計數驗收；工具錯誤、timeout、未測候選及未知外部格式不得當 killed 或完整通過。百分比只作顯示，抽樣 100% 不等於完整集合 100%。

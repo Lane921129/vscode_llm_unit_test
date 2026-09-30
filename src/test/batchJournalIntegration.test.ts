@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { BatchJournal } from '../pipeline/batchJournal';
 import { evidenceHash } from '../pipeline/analysisJournal';
-import { createStrictQualityPolicy, evaluateQuality } from '../pipeline/qualityPolicy';
+import { createDefaultQualityPolicy, evaluateQuality } from '../pipeline/qualityPolicy';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { findPythonFilesInDir } from '../utils/utils';
 
@@ -149,7 +149,7 @@ class Cases(unittest.TestCase):
         const runManifest = readClockJson('run_manifest.json');
         const executable = readClockJson('executable_baseline.json');
         const checkpoint = readClockJson('quality_baseline.json');
-        const policy = createStrictQualityPolicy();
+        const policy = createDefaultQualityPolicy();
         for (const artifact of [runManifest, knowledge, executable, checkpoint]) {
             assert.deepEqual(artifact.qualityPolicy, policy, 'every stage must retain the policy fixed before execution');
         }

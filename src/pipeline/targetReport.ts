@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { localize } from '../i18n/core';
 import { evidenceHash } from './analysisJournal';
+import { validateQualityPolicy } from './qualityPolicy';
 import { presentOutcome, withOutcomeHeader } from './resultPresentation';
 import { formatTierHistory } from './tierHistory';
 import { readStoredMutationRun, MutationRun } from '../mutation/mutationResult';
@@ -85,12 +86,20 @@ export function summarizeTarget(directory: string, state: any, identity: ReportI
     if (measured.ok) {
         result.mutants = measured.run.mutants;
         const { counts, status, scoreAvailable } = measured.run;
-        if (counts.survived && outcome.kind !== 'passed') {
-            result.reason += '；' + localize('仍有 {0} 個存活突變。', counts.survived);
-        }
+        let thresholdMet = false;
+        const policy = validateQualityPolicy(state.qualityPolicy);
         if (status === 'complete' && scoreAvailable && counts.selected > 0) {
             result.mutation = `${(counts.killed / counts.selected * 100).toFixed(2)}% (${counts.killed}/${counts.selected})`;
+            if (policy.ok) {
+                const threshold = policy.policy.mutationThreshold;
+                thresholdMet = BigInt(counts.killed) * BigInt(threshold.denominator)
+                    >= BigInt(counts.selected) * BigInt(threshold.numerator);
+                result.mutation += localize('；門檻 ≥ {0}%', 100 * threshold.numerator / threshold.denominator);
+            }
         } else if (status === 'no-candidates') { result.mutation = localize('N/A（沒有突變候選）'); }
+        if (counts.survived && outcome.kind !== 'passed' && !thresholdMet) {
+            result.reason += '；' + localize('仍有 {0} 個存活突變。', counts.survived);
+        }
     }
     return result.coverage.startsWith('N/A') || result.mutation.startsWith('N/A') ? incomplete() : result;
 }

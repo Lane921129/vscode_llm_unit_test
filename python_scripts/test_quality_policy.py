@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import unittest
 
-from quality_policy import (create_fixture_quality_policy, create_strict_quality_policy,
+from quality_policy import (create_default_quality_policy, create_fixture_quality_policy, create_strict_quality_policy,
                             evaluate_quality, quality_policy_hash, validate_quality_policy)
 
 VECTORS = json.loads((Path(__file__).resolve().parent.parent / 'contracts' / 'quality-policy-cases-v1.json').read_text(encoding='utf-8'))
@@ -22,6 +22,18 @@ class QualityPolicyTests(unittest.TestCase):
         policy['mode'] = ['strict100']
         policy['policyHash'] = quality_policy_hash(policy)
         self.assertFalse(validate_quality_policy(policy)['ok'])
+
+    def test_standard_policy_preserves_historical_strict_thresholds(self):
+        fixture = json.loads((Path(__file__).resolve().parent.parent / 'contracts' /
+                              'quality-policy-standard80-tests-v1.json').read_text(encoding='utf-8'))
+        policy = create_default_quality_policy()
+        self.assertEqual(policy, fixture['policy'])
+        self.assertTrue(validate_quality_policy(policy)['ok'])
+        strict = create_strict_quality_policy()
+        self.assertNotEqual(policy['policyHash'], strict['policyHash'])
+        strict['mutationThreshold'] = policy['mutationThreshold']
+        strict['policyHash'] = quality_policy_hash(strict)
+        self.assertFalse(validate_quality_policy(strict)['ok'])
 
     def test_shared_conformance_cases(self):
         for item in VECTORS['cases']:

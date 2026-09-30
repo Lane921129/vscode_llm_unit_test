@@ -10,7 +10,7 @@ import unittest
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 from fixture_scorecard import DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard, report_fields
-from quality_policy import create_fixture_quality_policy, create_strict_quality_policy, evaluate_quality
+from quality_policy import create_default_quality_policy, create_fixture_quality_policy, create_strict_quality_policy, evaluate_quality
 
 
 def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None, resolved_tier=1, model_identity='cloud/test-model'):
@@ -118,6 +118,15 @@ class FixtureScorecardTests(unittest.TestCase):
             self.assertEqual(verified['requested_tier'], 'tier2')
             policy_path.with_name('quality_baseline.json').unlink()
             self.assertTrue(report_fields(policy_path)['invalid_journal'])
+
+    def test_standard80_report_reassessment_does_not_relabel_strict_history(self):
+        for policy, passed in [(create_default_quality_policy(), True), (create_strict_quality_policy(), False)]:
+            with self.subTest(policy=policy['policyId']), tempfile.TemporaryDirectory() as root:
+                path, _ = self.write_policy_report(pathlib.Path(root), policy, 'strict-90-of-100-below')
+                parsed = report_fields(path)
+                self.assertFalse(parsed['invalid_journal'])
+                self.assertEqual(parsed['quality_assessment']['fullyPassed'], passed)
+                self.assertEqual(parsed['mutation_score'], 90)
 
     def write_policy_report(self, root, policy, vector_name='strict-full-success', terminal='passed'):
         fixture = next(item for item in load_manifest()['fixtures'] if item['id'] == 'tier1-class-method')

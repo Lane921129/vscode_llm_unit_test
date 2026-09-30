@@ -6,13 +6,14 @@ import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 // that the Python scorecard reads; no deployment-relative filesystem lookup.
 const definition = require('../../contracts/quality-policy-v1.json') as {
     schemaVersion: 'quality-policy-v1'; assessmentVersion: 'quality-assessment-v1';
-    policyIds: Record<'strict100' | 'fixture', string>; fixed: Record<string, string>;
+    policyIds: Record<'standard' | 'strict100' | 'fixture', string>; fixed: Record<string, string>;
+    standardThresholds: { lineThreshold: ExactRatio; mutationThreshold: ExactRatio };
     strictThresholds: { lineThreshold: ExactRatio; mutationThreshold: ExactRatio }; coverageVersion: string;
 };
 
 export interface ExactRatio { numerator: number; denominator: number }
 export interface QualityPolicySnapshot {
-    schemaVersion: 'quality-policy-v1'; policyId: string; mode: 'strict100' | 'fixture'; policyHash: string;
+    schemaVersion: 'quality-policy-v1'; policyId: string; mode: 'standard' | 'strict100' | 'fixture'; policyHash: string;
     lineThreshold: ExactRatio; mutationThreshold: ExactRatio;
     scopeVersion: string; branchPolicy: string; mutationPolicy: string; noCandidatePolicy: string;
     reviewPolicy: string; baselinePolicy: string; timeoutPolicy: string;
@@ -70,7 +71,7 @@ function freezePolicy(value: QualityPolicySnapshot): QualityPolicySnapshot {
     if (value.fixture) { Object.freeze(value.fixture); }
     return Object.freeze(value);
 }
-function createPolicy(mode: 'strict100' | 'fixture', thresholds: { lineThreshold: ExactRatio; mutationThreshold: ExactRatio },
+function createPolicy(mode: QualityPolicySnapshot['mode'], thresholds: { lineThreshold: ExactRatio; mutationThreshold: ExactRatio },
     fixture?: QualityPolicySnapshot['fixture']): QualityPolicySnapshot {
     const value = { schemaVersion: definition.schemaVersion, policyId: definition.policyIds[mode], mode,
         ...definition.fixed, ...thresholds, ...(fixture ? { fixture } : {}) };
@@ -78,6 +79,10 @@ function createPolicy(mode: 'strict100' | 'fixture', thresholds: { lineThreshold
     if (!result.ok) { throw new Error(result.reason); }
     return result.policy;
 }
+export function createDefaultQualityPolicy(): QualityPolicySnapshot {
+    return createPolicy('standard', JSON.parse(JSON.stringify(definition.standardThresholds)));
+}
+/** Historical reports retain their original policy and must not be upgraded. */
 export function createStrictQualityPolicy(): QualityPolicySnapshot {
     return createPolicy('strict100', JSON.parse(JSON.stringify(definition.strictThresholds)));
 }
@@ -93,8 +98,8 @@ export function createFixtureQualityPolicy(input: {
 }
 export function validateQualityPolicy(raw: unknown): QualityPolicyValidation {
     const fail = (): QualityPolicyValidation => ({ ok: false, reason: 'invalid-quality-policy' });
-    if (!object(raw) || (raw.mode !== 'strict100' && raw.mode !== 'fixture') || !digest(raw.policyHash)
-        || raw.schemaVersion !== definition.schemaVersion || raw.policyId !== definition.policyIds[raw.mode as 'strict100' | 'fixture']
+    if (!object(raw) || (raw.mode !== 'standard' && raw.mode !== 'strict100' && raw.mode !== 'fixture') || !digest(raw.policyHash)
+        || raw.schemaVersion !== definition.schemaVersion || raw.policyId !== definition.policyIds[raw.mode as QualityPolicySnapshot['mode']]
         || !ratio(raw.lineThreshold) || !ratio(raw.mutationThreshold)) { return fail(); }
     const expectedKeys = ['schemaVersion', 'policyId', 'mode', 'policyHash', 'lineThreshold', 'mutationThreshold', ...Object.keys(definition.fixed)];
     if (Object.entries(definition.fixed).some(([key, value]) => raw[key] !== value)) { return fail(); }
@@ -103,7 +108,7 @@ export function validateQualityPolicy(raw: unknown): QualityPolicyValidation {
         if (!object(raw.fixture) || !keysAre(raw.fixture, ['fixtureId', 'manifestHash'])
             || !safeId(raw.fixture.fixtureId) || !digest(raw.fixture.manifestHash)) { return fail(); }
     } else if (canonicalQualityJson({ lineThreshold: raw.lineThreshold, mutationThreshold: raw.mutationThreshold })
-        !== canonicalQualityJson(definition.strictThresholds)) { return fail(); }
+        !== canonicalQualityJson(raw.mode === 'standard' ? definition.standardThresholds : definition.strictThresholds)) { return fail(); }
     if (!keysAre(raw, expectedKeys) || qualityPolicyHash(raw) !== raw.policyHash) { return fail(); }
     return { ok: true, policy: freezePolicy(JSON.parse(JSON.stringify(raw)) as QualityPolicySnapshot) };
 }

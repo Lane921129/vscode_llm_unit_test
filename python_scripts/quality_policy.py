@@ -60,7 +60,7 @@ def _ratio(value):
 
 def validate_quality_policy(raw):
     failure = {'ok': False, 'reason': 'invalid-quality-policy'}
-    if type(raw) is not dict or raw.get('mode') not in ('strict100', 'fixture') \
+    if type(raw) is not dict or raw.get('mode') not in ('standard', 'strict100', 'fixture') \
             or not _digest(raw.get('policyHash')) or raw.get('schemaVersion') != DEFINITION['schemaVersion'] \
             or raw.get('policyId') != DEFINITION['policyIds'][raw['mode']] \
             or not _ratio(raw.get('lineThreshold')) or not _ratio(raw.get('mutationThreshold')):
@@ -76,7 +76,8 @@ def validate_quality_policy(raw):
                 or re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}', fixture['fixtureId']) is None \
                 or not _digest(fixture.get('manifestHash')):
             return failure
-    elif {key: raw[key] for key in ('lineThreshold', 'mutationThreshold')} != DEFINITION['strictThresholds']:
+    elif {key: raw[key] for key in ('lineThreshold', 'mutationThreshold')} != DEFINITION[
+            'standardThresholds' if raw['mode'] == 'standard' else 'strictThresholds']:
         return failure
     if set(raw) != keys or quality_policy_hash(raw) != raw['policyHash']:
         return failure
@@ -93,6 +94,10 @@ def _create_policy(mode, thresholds, fixture=None):
     if not result['ok']:
         raise ValueError(result['reason'])
     return result['policy']
+
+
+def create_default_quality_policy():
+    return _create_policy('standard', DEFINITION['standardThresholds'])
 
 
 def create_strict_quality_policy():

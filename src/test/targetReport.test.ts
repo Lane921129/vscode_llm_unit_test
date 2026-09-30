@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import { AnalysisJournal, evidenceHash } from '../pipeline/analysisJournal';
 import { BatchJournal } from '../pipeline/batchJournal';
 import { ReportIdentity, summarizeTarget, writeTargetReports } from '../pipeline/targetReport';
+import { createDefaultQualityPolicy, createStrictQualityPolicy } from '../pipeline/qualityPolicy';
 import { setLanguage } from '../i18n/core';
 
 test('concise reports bind tests, target coverage and mutations to one retained candidate in both languages', () => {
@@ -44,6 +45,24 @@ test('concise reports bind tests, target coverage and mutations to one retained 
             assert.match(failure, /\| 1 \| .* \| 1 \| pipeline \| running/);
             assert.match(failure, /\| 2 \| .* \| 1 \| reviewer \| invalid-response/);
             if (language === 'en') { assert.doesNotMatch(report, /[\u4e00-\u9fff]/); }
+        }
+        const scored = structuredClone(require('../../contracts/quality-policy-cases-v1.json').cases
+            .find((item: any) => item.name === 'strict-90-of-100-below').evidence.mutation);
+        Object.assign(scored, { sourcePath: identity.sourcePath, sourceHash, testHash: evidenceHash(code) });
+        for (const language of ['zh-tw', 'en']) {
+            setLanguage(language);
+            const updated = summarizeTarget(root, { ...state, mutation: scored, qualityPolicy: createDefaultQualityPolicy(),
+                terminalStatus: 'execution-passed-review-incomplete' }, identity, sourceHash);
+            assert.match(updated.mutation, /90.00%.*80%/);
+            assert.doesNotMatch(updated.reason, /存活突變|surviving mutants/);
+            assert.match(updated.reason, /Reviewer|review/i);
+            const historical = summarizeTarget(root, { ...state, mutation: scored, qualityPolicy: createStrictQualityPolicy() }, identity, sourceHash);
+            assert.match(historical.mutation, /90.00%.*100%/);
+            assert.match(historical.reason, /存活突變|surviving mutants/);
+            const invalidPolicy = { ...createDefaultQualityPolicy(), policyHash: '0'.repeat(64) };
+            const unverified = summarizeTarget(root, { ...state, mutation: scored, qualityPolicy: invalidPolicy }, identity, sourceHash);
+            assert.doesNotMatch(unverified.mutation, /threshold|門檻/);
+            if (language === 'en') { assert.doesNotMatch(updated.mutation + updated.reason, /[\u4e00-\u9fff]/); }
         }
         for (const changed of [
             { acceptedCodeHash: 'wrong' }, { evidenceValid: false }, { target: 'other' },
