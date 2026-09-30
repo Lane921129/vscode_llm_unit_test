@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface GoogleGenerateContentRequest {
     url: string;
     headers: Record<string, string>;
@@ -194,7 +195,7 @@ export function getGoogleModelConnectionMetadata(
     const parameterMatch = modelLabel.match(/(?:^|[\s_-])(\d+(?:\.\d+)?)\s*b(?:\b|[\s_-])/i);
 
     return {
-        paramSize: parameterMatch ? `${parameterMatch[1]}B（依模型名稱推定）` : 'Cloud API 未提供',
+        paramSize: parameterMatch ? localize("{0}B（依模型名稱推定）", parameterMatch[1]) : localize("Cloud API 未提供"),
         contextLength: contextLengthKnown ? advertisedLimit : 4096,
         contextLengthKnown,
     };

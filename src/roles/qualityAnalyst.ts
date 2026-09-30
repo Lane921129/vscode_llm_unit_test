@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { createHash } from 'crypto';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
@@ -92,7 +93,7 @@ export class QualityAnalystSession {
     async request(input: Parameters<typeof requestFocusedQualityTask>[0]): Promise<QualityTask[] | undefined> {
         input.checkCancelled();
         if (this.invalidResponses >= 2) {
-            input.event('suspended', { reason: '品質分析連續兩次格式無效；停止額外請求，使用實測缺口補測指引。' });
+            input.event('suspended', { reason: localize("品質分析連續兩次格式無效；停止額外請求，使用實測缺口補測指引。") });
             return undefined;
         }
         return requestFocusedQualityTask({ ...input, maxAttempts: 2 - this.invalidResponses, event: (status, detail) => {

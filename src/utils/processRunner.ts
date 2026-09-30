@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { spawn, ChildProcess } from 'node:child_process';
 import { currentExecution } from '../pipeline/executionContext';
 import { currentTargetBudget } from '../pipeline/targetBudget';
@@ -64,10 +65,10 @@ export function runSpawn(
             // next stage while this owned process tree is still being killed.
             terminationCleanup = killProcessTree(proc);
         };
-        release = context?.onCancel(() => terminate(new Error('使用者強制中止')));
+        release = context?.onCancel(() => terminate(new Error(localize("使用者強制中止"))));
         if (!terminationReason && Number.isFinite(timeout)) {
             timer = setTimeout(() => terminate(limitedByTarget ? budget!.deadlineError()
-                : new Error(`執行超時 (超過 ${timeout / 1000} 秒)`)), Math.max(1, timeout));
+                : new Error(localize("執行超時 (超過 {0} 秒)", timeout / 1000))), Math.max(1, timeout));
         }
         proc.stdout.on('data', data => { stdout += data.toString(); });
         proc.stderr.on('data', data => { stderr += data.toString(); });
@@ -80,7 +81,7 @@ export function runSpawn(
             settled = true;
             cleanup();
             await terminationCleanup;
-            if (context?.cancelled) { reject(new Error('使用者強制中止')); }
+            if (context?.cancelled) { reject(new Error(localize("使用者強制中止"))); }
             else if (terminationReason) { reject(terminationReason); }
             else { resolve({ stdout, stderr, code }); }
         });

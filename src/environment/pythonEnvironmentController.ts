@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -87,19 +88,19 @@ export class PythonEnvironmentController {
 
     async prepare(filePath?: string, projectRoot?: string): Promise<void> {
         if (vscode.workspace.isTrusted === false) {
-            await vscode.window.showWarningMessage('請先在 VS Code 信任此工作區，才能執行 Python 環境檢查及安裝相依。');
+            await vscode.window.showWarningMessage(localize("請先在 VS Code 信任此工作區，才能執行 Python 環境檢查及安裝相依。"));
             return;
         }
         const release = pythonEnvironmentActivity.acquire('setup');
         if (!release) {
-            await vscode.window.showInformationMessage('Python 分析、模型資格測試或環境準備仍在執行；請等待完成後再準備環境。');
+            await vscode.window.showInformationMessage(localize("Python 分析、模型資格測試或環境準備仍在執行；請等待完成後再準備環境。"));
             return;
         }
         this.controller = new AbortController();
         let latestInventory: DependencyInventory | undefined;
         let initialMissing: string[] | undefined;
         const installationPlans: { plan: PythonInstallationPlan; approved: boolean; mappingsUpdated?: boolean }[] = [];
-        let outcome = '環境準備尚未完成。';
+        let outcome = localize("環境準備尚未完成。");
         try {
             // An explicit directory from the project button is already a selected scope.
             const directProject = filePath && fs.existsSync(filePath) && fs.statSync(filePath).isDirectory() ? filePath : undefined;
@@ -107,12 +108,12 @@ export class PythonEnvironmentController {
                 filePath ? vscode.Uri.file(filePath) : undefined).get<string>('projectPath', '');
             const previousScope = this.state.get<string>('llmUnitTest.lastEnvironmentScope.v1', 'project');
             const scopes = [
-                { label: '整個專案', description: '掃描目前專案的所有 Python import', scope: 'project' },
-                { label: '選擇資料夾', description: '掃描所選資料夾及其子目錄', scope: 'folder' },
-                { label: '單一 Python 檔案', description: '保留原有的隔離載入與相依檢查', scope: 'file' }
+                { label: localize("整個專案"), description: localize("掃描目前專案的所有 Python import"), scope: 'project' },
+                { label: localize("選擇資料夾"), description: localize("掃描所選資料夾及其子目錄"), scope: 'folder' },
+                { label: localize("單一 Python 檔案"), description: localize("保留原有的隔離載入與相依檢查"), scope: 'file' }
             ].sort((a, b) => Number(b.scope === previousScope) - Number(a.scope === previousScope));
             const selection = directProject ? { scope: 'project' }
-                : await vscode.window.showQuickPick(scopes, { title: '選擇 Python 相依檢查範圍' });
+                : await vscode.window.showQuickPick(scopes, { title: localize("選擇 Python 相依檢查範圍") });
             if (!selection) { return; }
             const scope = selection.scope === 'file' ? 'file' : 'folder';
             if (selection.scope === 'project') {
@@ -123,7 +124,7 @@ export class PythonEnvironmentController {
                     const previous = this.state.get<string>('llmUnitTest.lastEnvironmentProject.v1');
                     root = (await vscode.window.showQuickPick(folders.map(folder => ({ label: path.basename(folder.uri.fsPath),
                         description: folder.uri.fsPath })).sort((a, b) => Number(b.description === previous) - Number(a.description === previous)),
-                    { title: '選擇要檢查相依的專案' }))?.description || '';
+                    { title: localize("選擇要檢查相依的專案") }))?.description || '';
                     if (!root) { return; }
                 }
                 filePath = root;
@@ -133,7 +134,7 @@ export class PythonEnvironmentController {
                 const previous = this.state.get<string>(selectionKey) || preferredProject;
                 const choice = await vscode.window.showOpenDialog({ canSelectFiles: scope === 'file', canSelectFolders: scope === 'folder',
                     canSelectMany: false, filters: scope === 'file' ? { Python: ['py'] } : undefined,
-                    openLabel: scope === 'file' ? '選擇要檢查相依的 Python 檔案' : '選擇要掃描相依的資料夾',
+                    openLabel: scope === 'file' ? localize("選擇要檢查相依的 Python 檔案") : localize("選擇要掃描相依的資料夾"),
                     defaultUri: previous && fs.existsSync(previous) ? vscode.Uri.file(previous) : undefined });
                 if (!choice?.[0]) { return; }
                 filePath = choice[0].fsPath;
@@ -153,9 +154,9 @@ export class PythonEnvironmentController {
             if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) { projectRoot = fallbackRoot; }
             const targetFile = filePath;
             const root = projectRoot;
-            this.publish({ command: 'environmentPreparation', busy: true, text: '正在尋找可沿用的 Python 環境…' });
+            this.publish({ command: 'environmentPreparation', busy: true, text: localize("正在尋找可沿用的 Python 環境…") });
             await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
-                title: '檢查並補齊 Python 環境', cancellable: true }, async (progress, token) => {
+                title: localize("檢查並補齊 Python 環境"), cancellable: true }, async (progress, token) => {
                 const subscription = token.onCancellationRequested(() => this.controller?.abort());
                 if (token.isCancellationRequested) { this.controller?.abort(); }
                 try {
@@ -178,12 +179,12 @@ export class PythonEnvironmentController {
                         },
                         toolRequirements: path.resolve(path.dirname(pythonToolPath('ast')), '..', 'requirements.txt'),
                         signal: this.controller!.signal,
-                        progress: text => { progress.report({ message: text }); this.publish({ command: 'appendLog', text: '[環境] ' + text }); },
+                        progress: text => { progress.report({ message: text }); this.publish({ command: 'appendLog', text: localize("[環境] ") + text }); },
                         chooseRequirements: async files => {
                             const previous = this.state.get<string>('llmUnitTest.lastRequirements.v1.' + root);
                             const preferred = files.find(file => file === previous) || files.find(file => path.basename(file) === 'requirements.txt');
                             const selected = preferred || (await vscode.window.showQuickPick(files.map(file => ({ label: path.basename(file), description: file })),
-                                { title: '選擇原應用的相依清單' }))?.description;
+                                { title: localize("選擇原應用的相依清單") }))?.description;
                             if (selected) { await this.state.update('llmUnitTest.lastRequirements.v1.' + root, selected); }
                             return selected;
                         },
@@ -192,28 +193,28 @@ export class PythonEnvironmentController {
                             return Object.prototype.hasOwnProperty.call(mappings, missing) ? mappings[missing] : undefined;
                         }
                     }));
-                    if (this.controller!.signal.aborted) { outcome = '環境準備已取消，未保存 Python 設定。'; return; }
+                    if (this.controller!.signal.aborted) { outcome = localize("環境準備已取消，未保存 Python 設定。"); return; }
                     await config.update('pythonPath', result.python, configurationTarget);
                     if (result.requirements) { await this.state.update('llmUnitTest.lastRequirements.v1.' + root, result.requirements); }
                     outcome = config.get<string>('validationMode', 'full') === 'full'
-                        ? '靜態相依與測試工具檢查完成，已保存 Python；正式模組載入尚待測試預檢。'
-                        : '執行驗證所需的靜態相依檢查完成，已保存 Python；完整品質工具延後，正式模組載入尚待測試預檢。';
+                        ? localize("靜態相依與測試工具檢查完成，已保存 Python；正式模組載入尚待測試預檢。")
+                        : localize("執行驗證所需的靜態相依檢查完成，已保存 Python；完整品質工具延後，正式模組載入尚待測試預檢。");
                     this.publish({ command: 'environmentPreparation', busy: false,
-                        text: (result.inventory ? inventorySummary(result.inventory) + ' 正式載入仍待測試預檢。'
-                            : '所選檔案的匯入與測試工具檢查通過。') + 'Python：' + result.python });
+                        text: (result.inventory ? inventorySummary(result.inventory) + localize(" 正式載入仍待測試預檢。")
+                            : localize("所選檔案的匯入與測試工具檢查通過。")) + 'Python：' + result.python });
                     void vscode.window.showInformationMessage(result.inventory
-                        ? '相依掃描完成，已保存 Python。詳細結果已開啟；正式測試仍會檢查模組載入與執行限制。'
+                        ? localize("相依掃描完成，已保存 Python。詳細結果已開啟；正式測試仍會檢查模組載入與執行限制。")
                         : result.installed.length
-                        ? '已補齊相依並保存 Python，現在可以重新測試。'
-                        : '已找到相依完整的 Python，未安裝套件；已保存供後續測試使用。');
+                        ? localize("已補齊相依並保存 Python，現在可以重新測試。")
+                        : localize("已找到相依完整的 Python，未安裝套件；已保存供後續測試使用。"));
                 } finally { subscription.dispose(); }
             });
         } catch (error) {
             const message = error instanceof EnvironmentSetupError ? '[' + error.stage + '] ' + error.message
-                : '環境準備未完成，請確認檔案、Python 與設定寫入權限。';
+                : localize("環境準備未完成，請確認檔案、Python 與設定寫入權限。");
             outcome = message;
             this.publish({ command: 'environmentPreparation', busy: false, text: message });
-            this.publish({ command: 'appendLog', text: '[環境] ' + message });
+            this.publish({ command: 'appendLog', text: localize("[環境] ") + message });
             void vscode.window.showWarningMessage(message);
         } finally {
             this.controller = undefined;
@@ -221,13 +222,13 @@ export class PythonEnvironmentController {
             this.publish({ command: 'environmentPreparationFinished' });
             if (latestInventory || installationPlans.length) {
                 try {
-                    const content = [latestInventory ? inventoryReport(latestInventory, initialMissing, outcome) : '# Python 環境準備\n\n' + outcome,
+                    const content = [latestInventory ? inventoryReport(latestInventory, initialMissing, outcome) : localize("# Python 環境準備\n\n") + outcome,
                         ...installationPlans.map(record => installationPlanReport(record.plan, record.approved, record.mappingsUpdated))].join('\n\n');
                     const document = await vscode.workspace.openTextDocument({ language: 'markdown',
                         content });
                     await vscode.window.showTextDocument(document, { preview: false });
                 } catch {
-                    this.publish({ command: 'appendLog', text: '[環境] 無法開啟相依報告；' + (latestInventory ? inventorySummary(latestInventory) : outcome) });
+                    this.publish({ command: 'appendLog', text: localize("[環境] 無法開啟相依報告；") + (latestInventory ? inventorySummary(latestInventory) : outcome) });
                 }
             }
         }

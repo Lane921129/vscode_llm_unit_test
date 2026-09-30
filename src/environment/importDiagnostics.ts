@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface ImportIssue {
     kind: 'import-side-effect' | 'missing-dependency' | 'dependency-api' | 'module-resolution' | 'other';
     issue: string;
@@ -25,7 +26,7 @@ export function summarizeImportException(diagnostic: unknown): ImportExceptionSu
     if (/[a-z][a-z\d+.-]*:\/\//i.test(message)
         || /\b(?:authorization|password|passwd|api[_-]?key|access[_-]?token|client[_-]?secret|token|secret)\b["']?\s*[:=]/i.test(message)
         || /\bBearer\s+\S+|\bAIza[\w-]{20,}|\bsk-[\w-]{16,}|\bgh[pousr]_[\w]{20,}/i.test(message)) {
-        message = '例外訊息含可能的憑證或連線網址，已省略；請依例外類型與來源位置檢查。';
+        message = localize("例外訊息含可能的憑證或連線網址，已省略；請依例外類型與來源位置檢查。");
     } else {
         message = message.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
         if (message.length > 600) { message = message.slice(0, 600) + '…'; }
@@ -49,19 +50,19 @@ export function describeImportIssue(diagnostic: any, stage: string): ImportIssue
     let result: ImportIssue;
     if (value.exception_type === 'ModuleNotFoundError' && identifier(value.missing_module)) {
         result = { kind: 'missing-dependency', issue: value.missing_module,
-            advice: '在同一個 Python 檢查專案相依；依 requirements／明確套件對應預覽並確認安裝。' };
+            advice: localize("在同一個 Python 檢查專案相依；依 requirements／明確套件對應預覽並確認安裝。") };
     } else if (value.exception_type === 'AttributeError' && identifier(api?.module)
         && identifier(api?.attribute)) {
         result = { kind: 'dependency-api', issue: `${api.module}.${api.attribute}`,
-            advice: '已載入的模組缺少此 API。核對套件版本、來源與原專案相依宣告；重按安裝或模擬不存在的 API 不能判定修復。' };
+            advice: localize("已載入的模組缺少此 API。核對套件版本、來源與原專案相依宣告；重按安裝或模擬不存在的 API 不能判定修復。") };
     } else if (value.exception_type === 'TraceSafetyError'
         && (identifier(value.blocked_operation) || policyOperations.has(value.blocked_operation))) {
         result = { kind: 'import-side-effect', issue: value.blocked_operation,
-            advice: '使用「檢查模組載入／初始化設定」預覽支援的初始化替身；保留受測原檔，設定後必須重新預檢。' };
+            advice: localize("使用「檢查模組載入／初始化設定」預覽支援的初始化替身；保留受測原檔，設定後必須重新預檢。") };
     } else {
         result = { kind: stage === 'module-resolution' ? 'module-resolution' : 'other',
             issue: identifier(value.exception_type) ? value.exception_type : stage,
-            advice: '查看預檢報告下方的逐模組診斷，或該目標 final_report.md 的停止原因；核對例外與來源位置。' };
+            advice: localize("查看預檢報告下方的逐模組診斷，或該目標 final_report.md 的停止原因；核對例外與來源位置。") };
     }
     const origin = value.origin;
     if (origin && typeof origin.file === 'string' && origin.file.length <= 1000 && !/^[\\/]|:|[\r\n|]/.test(origin.file)

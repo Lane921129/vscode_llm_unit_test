@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { TestReview } from './testReviewer';
 
 export type ReviewStatus = 'completed' | 'incomplete' | 'not-required';
@@ -17,7 +18,7 @@ export class ReviewSession {
         }
         if (this.consecutiveFailures >= this.failureLimit) {
             event('suspended', { consecutiveFailures: this.consecutiveFailures,
-                reason: '本次分析連續審查未完成，停止額外請求；保留工具驗證並明示審查未完成。' });
+                reason: localize("本次分析連續審查未完成，停止額外請求；保留工具驗證並明示審查未完成。") });
             return undefined;
         }
         // Cancellation and unexpected thrown errors are not cached as model assessments.

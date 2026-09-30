@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { canRepairTestMethod, getBugFixerSystemPrompt, mergeBugFixReplacement } from '../roles/bugFixer';
 import { getTestReviewerSystemPrompt, numberReviewLines, parseTestReviewDetailed, reviewableLineIds } from '../roles/testReviewer';
 import { assessIsolatedProbeCode, runIsolatedProbe } from './modelProbeExecution';
@@ -63,12 +64,12 @@ function status(state: RoleQualificationState, reason: string): RoleQualificatio
 }
 
 export function assessReviewerQualification(response: string | undefined): RoleQualificationStatus {
-    if (!response?.trim()) { return status('unverified', 'Reviewer 沒有回傳 JSON。'); }
+    if (!response?.trim()) { return status('unverified', localize("Reviewer 沒有回傳 JSON。")); }
     const parsed = parseTestReviewDetailed(response, ROLE_QUALIFICATION_TEST_FILE, true,
         { target: 'increment', methodKind: 'module' }).review;
     return parsed
-        ? status('verified', 'Reviewer 已通過 review-v7 分類、行號引用與欄位契約。')
-        : status('unverified', 'Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。');
+        ? status('verified', localize("Reviewer 已通過 review-v7 分類、行號引用與欄位契約。"))
+        : status('unverified', localize("Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。"));
 }
 
 function bugFixerProbeCode(response: string | undefined): string | undefined {
@@ -84,16 +85,16 @@ function bugFixerProbeCode(response: string | undefined): string | undefined {
 }
 
 export function assessBugFixerQualification(response: string | undefined, executionPassed = false): RoleQualificationStatus {
-    if (!response?.trim()) { return status('unverified', 'Bug Fixer 沒有回傳 Python 單方法替換。'); }
+    if (!response?.trim()) { return status('unverified', localize("Bug Fixer 沒有回傳 Python 單方法替換。")); }
     if (!canRepairTestMethod(BUG_FIXER_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE)) {
-        return status('unverified', '資格 fixture 沒有可唯一定位的失敗方法。');
+        return status('unverified', localize("資格 fixture 沒有可唯一定位的失敗方法。"));
     }
     if (!bugFixerProbeCode(response)) {
-        return status('unverified', 'Bug Fixer 未正確修正固定案例的預期值，或修改了輸入、斷言／方法範圍。');
+        return status('unverified', localize("Bug Fixer 未正確修正固定案例的預期值，或修改了輸入、斷言／方法範圍。"));
     }
     return executionPassed
-        ? status('verified', 'Bug Fixer 已修正固定案例的錯誤預期值，並在隔離 Python 中保留另一通過案例。')
-        : status('unverified', 'Bug Fixer 固定案例修正格式符合；尚未通過隔離執行。');
+        ? status('verified', localize("Bug Fixer 已修正固定案例的錯誤預期值，並在隔離 Python 中保留另一通過案例。"))
+        : status('unverified', localize("Bug Fixer 固定案例修正格式符合；尚未通過隔離執行。"));
 }
 
 export function buildRoleQualificationProfile(
@@ -122,11 +123,11 @@ export async function runRoleQualificationProbes(
     const code = bugFixerProbeCode(bugFixer);
     if (code) {
         try { profile.bugFixer = assessBugFixerQualification(bugFixer, await executor(code)); }
-        catch { profile.bugFixer = status('unverified', 'Bug Fixer 固定案例的隔離執行未完成。'); }
+        catch { profile.bugFixer = status('unverified', localize("Bug Fixer 固定案例的隔離執行未完成。")); }
     }
     return profile;
 }
 
 export function formatRoleQualificationLog(profile: RoleQualificationProfile): string {
-    return `角色資格：Writer=${profile.writer.state}；Reviewer=${profile.reviewer.state}；Bug Fixer=${profile.bugFixer.state}`;
+    return localize("角色資格：Writer={0}；Reviewer={1}；Bug Fixer={2}", profile.writer.state, profile.reviewer.state, profile.bugFixer.state);
 }

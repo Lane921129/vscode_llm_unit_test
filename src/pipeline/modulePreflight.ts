@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { pythonToolPath } from './pythonTools';
 import { runSpawn } from '../utils/processRunner';
 import { buildGeneratedTestEnvironment } from '../utils/pythonTestEnvironment';
@@ -94,12 +95,12 @@ async function executePreflight(python: string, file: string, module: string, im
         throwIfExecutionCancelled();
         if (result.code !== 0) {
             throw new AnalysisStageError('environment', 'module-preflight',
-                `模組預檢工具未完成：${(result.stderr || result.stdout).slice(-2000)}`);
+                localize("模組預檢工具未完成：{0}", (result.stderr || result.stdout).slice(-2000)));
         }
         const value = JSON.parse(result.stdout);
         if (value.ok !== true) {
             const error = new AnalysisStageError('environment', value.stage || 'module-preflight',
-                `被測模組尚不可在隔離環境載入：${value.reason || 'unknown'}`,
+                localize("被測模組尚不可在隔離環境載入：{0}", value.reason || 'unknown'),
                 value.importFixtures ? { ...value.diagnostic, importFixtures: value.importFixtures } : value.diagnostic);
             if (value.stage === 'module-import' || value.stage === 'module-resolution') {
                 cache?.failures.set(key, error);
@@ -110,7 +111,7 @@ async function executePreflight(python: string, file: string, module: string, im
     } catch (error) {
         throwIfExecutionCancelled();
         const stageError = error instanceof AnalysisStageError ? error
-            : new AnalysisStageError('environment', 'module-preflight', `模組預檢無法完成：${String(error)}`);
+            : new AnalysisStageError('environment', 'module-preflight', localize("模組預檢無法完成：{0}", String(error)));
         throw stageError;
     }
 }

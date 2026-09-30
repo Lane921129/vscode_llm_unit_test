@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface TraceAssertionExample {
     args?: string[];
     kwargs?: Record<string, string>;
@@ -27,7 +28,7 @@ export async function validateTraceEvidence(
         input: JSON.stringify({ code, target, trace: trace || {}, module, className }),
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 5000
     });
-    if (result.code !== 0) { return { valid: false, reason: 'Trace 證據檢查無法完成：' + result.stderr.slice(-500) }; }
+    if (result.code !== 0) { return { valid: false, reason: localize("Trace 證據檢查無法完成：") + result.stderr.slice(-500) }; }
     const parsed = JSON.parse(result.stdout);
-    return typeof parsed.valid === 'boolean' ? parsed : { valid: false, reason: 'Trace 證據檢查輸出無效。' };
+    return typeof parsed.valid === 'boolean' ? parsed : { valid: false, reason: localize("Trace 證據檢查輸出無效。") };
 }

@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -29,7 +30,7 @@ export async function inspectProjectImports(root: string, python: string, target
     rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = ''): Promise<ImportCheck> {
     root = fs.realpathSync(root);
     const selectedRules = selectImportFixtureRules(root, rules, boundRoot);
-    if (rules.length && !selectedRules.length) { log('[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。'); }
+    if (rules.length && !selectedRules.length) { log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。")); }
     rules = selectedRules;
     const plan = createImportFixturePlan(root, rules, boundRoot);
     const result: ImportCheck = { root, python, directory, rows: [], proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
@@ -42,25 +43,25 @@ export async function inspectProjectImports(root: string, python: string, target
             note: 'Module loading only; not test execution or full project readiness.' }, null, 2));
         const cell = (text: string) => text.replace(/[\r\n]/g, ' ').replace(/[\\`*_[\]<>|]/g, '\\$&');
         const details = blocked.flatMap((row, index) => [
-            `### ${index + 1}. 受阻模組`, '',
-            `    來源：${row.file.replace(/[\r\n]/g, ' ')}`,
-            `    階段：${row.stage || 'unknown'}`,
-            `    例外：${row.diagnostic?.exceptionType || '未取得結構化例外'}`,
-            `    原因：${row.diagnostic?.message || row.issue?.issue || '未取得具體訊息'}`,
-            ...(row.issue?.origin ? [`    位置：${row.issue.origin.file}:${row.issue.origin.line}`] : []),
-            ...(row.suggestion ? [`    可預覽替身：${row.suggestion.operation}（${row.suggestion.file}:${row.suggestion.line}）`,
-                '    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。',
-                '    影響：略過此初始化呼叫；不驗證其真實副作用，須確認測試不依賴它建立的狀態。'] : []), '',
-            cell(row.issue?.advice || '請核對直譯器及預檢工具是否正常執行。'), ''
+            localize("### {0}. 受阻模組", index + 1), '',
+            localize("    來源：{0}", row.file.replace(/[\r\n]/g, ' ')),
+            localize("    階段：{0}", row.stage || 'unknown'),
+            localize("    例外：{0}", row.diagnostic?.exceptionType || localize("未取得結構化例外")),
+            localize("    原因：{0}", row.diagnostic?.message || row.issue?.issue || localize("未取得具體訊息")),
+            ...(row.issue?.origin ? [localize("    位置：{0}:{1}", row.issue.origin.file, row.issue.origin.line)] : []),
+            ...(row.suggestion ? [localize("    可預覽替身：{0}（{1}:{2}）", row.suggestion.operation, row.suggestion.file, row.suggestion.line),
+                localize("    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。"),
+                localize("    影響：略過此初始化呼叫；不驗證其真實副作用，須確認測試不依賴它建立的狀態。")] : []), '',
+            cell(row.issue?.advice || localize("請核對直譯器及預檢工具是否正常執行。")), ''
         ]);
-        fs.writeFileSync(path.join(directory, 'import_check.md'), ['# 模組載入預檢', '',
-            `受測根目錄：${root}`, `Python：${python}`, '',
-            `已檢查 ${result.rows.length} 個模組；載入受阻 ${blocked.length} 個。載入成功不代表函式測試通過。`, '',
-            '| 模組 | 預檢結果 | 原因 | 來源位置 | 處理方式 |', '| --- | --- | --- | --- | --- |',
-            ...result.rows.map(row => `| ${cell(row.file)} | ${row.status === 'loaded' ? '可載入，尚未測試' : '受阻／未完成'} | ${cell(row.issue?.issue || '')} | ${cell(row.issue?.origin ? `${row.issue.origin.file}:${row.issue.origin.line}` : '')} | ${cell(row.issue?.advice || '')} |`), '',
-            ...(blocked.length ? ['## 逐模組診斷', '', ...details] : []),
-            '設定只模擬明確宣告的初始化，不修改受測原檔，也不假造缺少的套件或 API。',
-            '所有建議均須預覽後確認；套用後重新檢查，可能發現下一個原先被遮住的障礙。', ''].join('\n'));
+        fs.writeFileSync(path.join(directory, 'import_check.md'), [localize("# 模組載入預檢"), '',
+            localize("受測根目錄：{0}", root), `Python：${python}`, '',
+            localize("已檢查 {0} 個模組；載入受阻 {1} 個。載入成功不代表函式測試通過。", result.rows.length, blocked.length), '',
+            localize("| 模組 | 預檢結果 | 原因 | 來源位置 | 處理方式 |"), '| --- | --- | --- | --- | --- |',
+            ...result.rows.map(row => `| ${cell(row.file)} | ${row.status === 'loaded' ? localize("可載入，尚未測試") : localize("受阻／未完成")} | ${cell(row.issue?.issue || '')} | ${cell(row.issue?.origin ? `${row.issue.origin.file}:${row.issue.origin.line}` : '')} | ${cell(row.issue?.advice || '')} |`), '',
+            ...(blocked.length ? [localize("## 逐模組診斷"), '', ...details] : []),
+            localize("設定只模擬明確宣告的初始化，不修改受測原檔，也不假造缺少的套件或 API。"),
+            localize("所有建議均須預覽後確認；套用後重新檢查，可能發現下一個原先被遮住的障礙。"), ''].join('\n'));
     };
     save();
     await withImportFixtures(plan, async () => {
@@ -71,15 +72,15 @@ export async function inspectProjectImports(root: string, python: string, target
             if (seen.has(file)) { continue; }
             seen.add(file);
             const relative = path.relative(root, file);
-            if (relative.startsWith('..') || path.isAbsolute(relative)) { throw new Error('預檢來源超出受測根目錄。'); }
+            if (relative.startsWith('..') || path.isAbsolute(relative)) { throw new Error(localize("預檢來源超出受測根目錄。")); }
             const row: ImportCheckRow = { file: relative.replace(/\\/g, '/'), status: 'loaded' };
-            log(`[匯入預檢] ${row.file}`);
+            log(localize("[匯入預檢] {0}", row.file));
             try {
                 const ast = await runSpawn(python, ['-B', pythonToolPath('ast'), file, target.target],
                     { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 15000 });
                 const context = ast.code === 0 ? JSON.parse(ast.stdout) : null;
                 if (!context || context.error || !Array.isArray(context.file_imports)) {
-                    throw new AnalysisStageError('ast-trace', 'static-analysis', 'AST 預檢未完成。');
+                    throw new AnalysisStageError('ast-trace', 'static-analysis', localize("AST 預檢未完成。"));
                 }
                 const parent = path.dirname(file);
                 await preflightTargetModule(python, file, inferTargetImportModule(file, context.file_imports),
@@ -120,7 +121,7 @@ export async function inspectProjectImports(root: string, python: string, target
     if (proposedHashes.size) {
         result.proposedPlan = createImportFixturePlan(root, result.proposedRules);
         if ([...proposedHashes].some(([file, hash]) => sourceHash(file) !== hash)) {
-            throw new Error('來源在預檢期間改變；請重新檢查後再建立初始化設定。');
+            throw new Error(localize("來源在預檢期間改變；請重新檢查後再建立初始化設定。"));
         }
     }
     return result;
@@ -128,6 +129,6 @@ export async function inspectProjectImports(root: string, python: string, target
 
 export function verifyImportProposal(check: ImportCheck): void {
     if (!check.proposedPlan || createImportFixturePlan(check.root, check.proposedRules)?.id !== check.proposedPlan.id) {
-        throw new Error('初始化建議已過期或來源已變更；請重新預檢。');
+        throw new Error(localize("初始化建議已過期或來源已變更；請重新預檢。"));
     }
 }

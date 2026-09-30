@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -103,17 +104,17 @@ export async function inspectPython(candidate: PythonCandidate, projectRoot: str
 function installationFailure(stage: string, output: { code: number | null; stdout: string; stderr: string }, packageName?: string): void {
     if (output.code === 0) { return; }
     const diagnostic = output.stdout + output.stderr;
-    const reason = output.code === null ? '執行逾時或被中止。'
-        : /externally-managed-environment|EXTERNALLY-MANAGED/i.test(diagnostic) ? '此 Python 由系統套件管理器管理，不能直接使用 pip 修改；請選取原應用的 Python 環境。'
-        : /PermissionError|Permission denied|Access is denied/i.test(diagnostic) ? '目前 Python 的套件目錄無寫入權限，請選取可寫入的原應用環境。'
-        : /ResolutionImpossible|conflicting dependencies|dependency conflict/i.test(diagnostic) ? '相依版本衝突，請確認原應用相依清單。'
-        : /No matching distribution|Requires-Python|requires a different Python/i.test(diagnostic) ? '找不到符合目前 Python／平台的套件；import 名稱可能與安裝名稱不同。'
-        : /ConnectionError|ConnectTimeout|ProxyError|SSLError|CERTIFICATE_VERIFY_FAILED|Temporary failure|Connection refused/i.test(diagnostic) ? '無法連線至套件來源，請檢查網路、代理伺服器或憑證設定。'
-        : stage === 'check' ? '已安裝套件的相依不完整或版本不相容。'
-        : '套件安裝未完成，請檢查相依清單、套件名稱與建置需求。';
+    const reason = output.code === null ? localize("執行逾時或被中止。")
+        : /externally-managed-environment|EXTERNALLY-MANAGED/i.test(diagnostic) ? localize("此 Python 由系統套件管理器管理，不能直接使用 pip 修改；請選取原應用的 Python 環境。")
+        : /PermissionError|Permission denied|Access is denied/i.test(diagnostic) ? localize("目前 Python 的套件目錄無寫入權限，請選取可寫入的原應用環境。")
+        : /ResolutionImpossible|conflicting dependencies|dependency conflict/i.test(diagnostic) ? localize("相依版本衝突，請確認原應用相依清單。")
+        : /No matching distribution|Requires-Python|requires a different Python/i.test(diagnostic) ? localize("找不到符合目前 Python／平台的套件；import 名稱可能與安裝名稱不同。")
+        : /ConnectionError|ConnectTimeout|ProxyError|SSLError|CERTIFICATE_VERIFY_FAILED|Temporary failure|Connection refused/i.test(diagnostic) ? localize("無法連線至套件來源，請檢查網路、代理伺服器或憑證設定。")
+        : stage === 'check' ? localize("已安裝套件的相依不完整或版本不相容。")
+        : localize("套件安裝未完成，請檢查相依清單、套件名稱與建置需求。");
     const conflicts = stage === 'check' ? dependencyConflictSummary(diagnostic) : '';
-    throw new EnvironmentSetupError(stage, (packageName ? '安裝項目 ' + packageName + '：' : '')
-        + reason + (conflicts ? ' ' + conflicts : '') + ' 尚未標示環境就緒。');
+    throw new EnvironmentSetupError(stage, (packageName ? localize("安裝項目 ") + packageName + '：' : '')
+        + reason + (conflicts ? ' ' + conflicts : '') + localize(" 尚未標示環境就緒。"));
 }
 
 /** Only package/version tokens from known pip check lines, never arbitrary output or URLs. */
@@ -124,8 +125,8 @@ export function dependencyConflictSummary(output: string): string {
         const conflict = /^([\w.-]+) ([\w.+!-]+) has requirement ([A-Za-z0-9_.+!,<>=~* -]+), but you have ([\w.-]+) ([\w.+!-]+)\.$/.exec(line.trim());
         const missing = /^([\w.-]+) ([\w.+!-]+) requires ([\w.-]+), which is not installed\.$/.exec(line.trim());
         if (conflict && conflict.slice(1).every(value => value.length <= 160 && safe.test(value))) {
-            summaries.push(`${conflict[1]} ${conflict[2]} 需要 ${conflict[3]}，目前為 ${conflict[4]} ${conflict[5]}。`);
-        } else if (missing) { summaries.push(`${missing[1]} ${missing[2]} 缺少 ${missing[3]}。`); }
+            summaries.push(localize("{0} {1} 需要 {2}，目前為 {3} {4}。", conflict[1], conflict[2], conflict[3], conflict[4], conflict[5]));
+        } else if (missing) { summaries.push(localize("{0} {1} 缺少 {2}。", missing[1], missing[2], missing[3])); }
         if (summaries.length >= 5) { break; }
     }
     return summaries.join(' ');
@@ -133,13 +134,13 @@ export function dependencyConflictSummary(output: string): string {
 
 function requireImportable(value: EnvironmentInspection): void {
     if (value.inventory && !value.inventory.complete) {
-        throw new EnvironmentSetupError('dependency-scan', '相依掃描不完整，請先處理報告中的本地匯入、語法、讀取或容量問題；本地模組不會當成外部套件補裝。未標示環境就緒。');
+        throw new EnvironmentSetupError('dependency-scan', localize("相依掃描不完整，請先處理報告中的本地匯入、語法、讀取或容量問題；本地模組不會當成外部套件補裝。未標示環境就緒。"));
     }
     if (value.status === 'ready' || value.status === 'missing') { return; }
-    const message = value.status === 'blocked' ? '模組載入副作用被隔離規則攔下；請在測試工具設定 importFixtures，明確模擬初始化相依。安裝套件無法解決，不需要修改受測原檔。'
-        : value.status === 'local-or-submodule' ? '找不到專案模組或已安裝套件的子模組；請檢查來源路徑、套件版本與 import，不會把它當成新的外部套件安裝。'
-        : value.status === 'stdlib' ? 'Python 標準庫不完整或版本不相容，請檢查原應用需要的 Python 版本。'
-        : '模組匯入失敗，但不是可確認的缺套件錯誤；請查看正式預檢報告。';
+    const message = value.status === 'blocked' ? localize("模組載入副作用被隔離規則攔下；請在測試工具設定 importFixtures，明確模擬初始化相依。安裝套件無法解決，不需要修改受測原檔。")
+        : value.status === 'local-or-submodule' ? localize("找不到專案模組或已安裝套件的子模組；請檢查來源路徑、套件版本與 import，不會把它當成新的外部套件安裝。")
+        : value.status === 'stdlib' ? localize("Python 標準庫不完整或版本不相容，請檢查原應用需要的 Python 版本。")
+        : localize("模組匯入失敗，但不是可確認的缺套件錯誤；請查看正式預檢報告。");
     throw new EnvironmentSetupError('module-import', message);
 }
 
@@ -155,13 +156,13 @@ export async function preparePythonEnvironment(options: {
     savePackageMappings?: (mappings: Record<string, string>) => Promise<void>;
 }, runner: SetupRunner = runSetupCommand): Promise<{ python: string; requirements?: string; installed: string[]; inventory?: DependencyInventory }> {
     const cancelled = () => {
-        if (options.signal?.aborted) { throw new EnvironmentSetupError('cancelled', '環境準備已取消；已安裝的套件會保留，下次會重新檢查。'); }
+        if (options.signal?.aborted) { throw new EnvironmentSetupError('cancelled', localize("環境準備已取消；已安裝的套件會保留，下次會重新檢查。")); }
     };
     const progress = (message: string) => { cancelled(); options.progress?.(message); };
     const scope = options.scope || 'file';
     const needsTools = (value: EnvironmentInspection) => options.requireQualityTools !== false && !value.coverage;
     if (!fs.existsSync(options.file) || !(scope === 'folder' ? fs.statSync(options.file).isDirectory() : fs.statSync(options.file).isFile())) {
-        throw new EnvironmentSetupError('target', '請先選擇有效的 Python 檔案或來源資料夾。');
+        throw new EnvironmentSetupError('target', localize("請先選擇有效的 Python 檔案或來源資料夾。"));
     }
     const inspect = (candidate: PythonCandidate) => inspectPython(candidate, options.projectRoot, options.file,
         runner, options.signal, scope, options.excludedPaths);
@@ -172,7 +173,7 @@ export async function preparePythonEnvironment(options: {
     const seen = new Set<string>();
     for (const candidate of options.candidates.slice(0, 32)) {
         cancelled();
-        progress('正在檢查現有 Python 與目標模組相依…');
+        progress(localize("正在檢查現有 Python 與目標模組相依…"));
         let value: EnvironmentInspection | undefined;
         try { value = await inspect(candidate); }
         catch { cancelled(); continue; }
@@ -183,11 +184,11 @@ export async function preparePythonEnvironment(options: {
         if (!selected || (value.status === 'ready' && selected.status !== 'ready')
             || (value.status === 'missing' && selected.status !== 'missing' && selected.status !== 'ready')) { selected = value; }
     }
-    if (!selected) { throw new EnvironmentSetupError('python', '找不到可執行的 Python 3。請先安裝 Python，或設定 llmUnitTest.pythonPath。'); }
+    if (!selected) { throw new EnvironmentSetupError('python', localize("找不到可執行的 Python 3。請先安裝 Python，或設定 llmUnitTest.pythonPath。")); }
     report(selected);
     requireImportable(selected);
     const python = selected.python;
-    progress('選用 Python：' + python);
+    progress(localize("選用 Python：") + python);
     const installed: string[] = [];
     const approvedOperations = new Map<string, PythonInstallationPlan>();
     const approvedMappings = new Map<string, string>();
@@ -197,7 +198,7 @@ export async function preparePythonEnvironment(options: {
         cancelled();
         const approved = approvedOperations.get(operationKey(args, cwd));
         if (!approved || !installationPlanFilesUnchanged(approved)) {
-            throw new EnvironmentSetupError('install-plan', '安裝清單尚未確認或 requirements 已變更，請重新檢查並確認後再安裝。');
+            throw new EnvironmentSetupError('install-plan', localize("安裝清單尚未確認或 requirements 已變更，請重新檢查並確認後再安裝。"));
         }
         approvedOperations.delete(operationKey(args, cwd));
         const output = await runner({ executable: python,
@@ -221,39 +222,39 @@ export async function preparePythonEnvironment(options: {
             cancelled();
             if (accepted && typeof accepted === 'object') {
                 const mappings = validateInstallationMappings(plan, accepted.mappings);
-                if (!mappings) { throw new EnvironmentSetupError('package-mappings', '安裝名稱無效或不屬於本次清單；未依此清單安裝。'); }
+                if (!mappings) { throw new EnvironmentSetupError('package-mappings', localize("安裝名稱無效或不屬於本次清單；未依此清單安裝。")); }
                 try { await options.savePackageMappings?.(mappings); }
-                catch { throw new EnvironmentSetupError('package-mappings', '無法儲存安裝名稱，請檢查設定寫入權限；未依此清單安裝。'); }
+                catch { throw new EnvironmentSetupError('package-mappings', localize("無法儲存安裝名稱，請檢查設定寫入權限；未依此清單安裝。")); }
                 cancelled();
                 for (const [module, name] of Object.entries(mappings)) { editedMappings.set(module, name); }
-                progress('安裝名稱已更新，請確認重新產生的清單…');
+                progress(localize("安裝名稱已更新，請確認重新產生的清單…"));
                 continue;
             }
             if (plan.blockers.length) { throw new EnvironmentSetupError('dependency', plan.blockers.join(' ')); }
             if (accepted !== true) {
                 throw new EnvironmentSetupError('install-plan', installed.length
-                    ? '已取消此安裝清單；先前已完成的安裝會保留，環境尚未就緒。'
-                    : '未確認安裝清單，本次未安裝任何套件，也未變更 Python 路徑設定。');
+                    ? localize("已取消此安裝清單；先前已完成的安裝會保留，環境尚未就緒。")
+                    : localize("未確認安裝清單，本次未安裝任何套件，也未變更 Python 路徑設定。"));
             }
             if (!installationPlanFilesUnchanged(plan)) {
-                throw new EnvironmentSetupError('install-plan', 'requirements 在確認期間已變更，請重新檢查並確認新的安裝清單。');
+                throw new EnvironmentSetupError('install-plan', localize("requirements 在確認期間已變更，請重新檢查並確認新的安裝清單。"));
             }
             for (const operation of plan.operations) { approvedOperations.set(operationKey(operation.args, operation.cwd), plan); }
             for (const [module, name] of Object.entries(plan.mappings)) { approvedMappings.set(module, name); }
             return;
         }
-        throw new EnvironmentSetupError('install-plan', '清單更新次數過多，請重新檢查；未依最後清單安裝。');
+        throw new EnvironmentSetupError('install-plan', localize("清單更新次數過多，請重新檢查；未依最後清單安裝。"));
     };
     if (selected.status === 'missing' || needsTools(selected)) {
         const files = findRequirementFiles(options.projectRoot, options.file, scope);
         requirements = files.length === 1 ? files[0] : files.length ? await options.chooseRequirements?.(files) : undefined;
         cancelled();
-        if (files.length && !requirements) { throw new EnvironmentSetupError('requirements', '尚未選擇相依清單，未安裝任何套件。'); }
-        if (requirements && !files.includes(requirements)) { throw new EnvironmentSetupError('requirements', '相依清單不屬於目前選取的專案。'); }
-        progress('檢查完成，等待確認安裝清單…');
+        if (files.length && !requirements) { throw new EnvironmentSetupError('requirements', localize("尚未選擇相依清單，未安裝任何套件。")); }
+        if (requirements && !files.includes(requirements)) { throw new EnvironmentSetupError('requirements', localize("相依清單不屬於目前選取的專案。")); }
+        progress(localize("檢查完成，等待確認安裝清單…"));
         await approve(selected);
         if (requirements && selected.status === 'missing') {
-            progress('依原專案 requirements 安裝相依…');
+            progress(localize("依原專案 requirements 安裝相依…"));
             await install(['-r', requirements], path.dirname(requirements));
             installed.push('requirements');
         }
@@ -263,43 +264,43 @@ export async function preparePythonEnvironment(options: {
         cancelled();
         const current = await inspect({ executable: python });
         cancelled();
-        if (!current) { throw new EnvironmentSetupError('probe', '無法完成安裝後的環境檢查。'); }
+        if (!current) { throw new EnvironmentSetupError('probe', localize("無法完成安裝後的環境檢查。")); }
         report(current);
         requireImportable(current);
         if (current.status === 'ready') { selected = current; break; }
         const missing = current.missing;
         if (!missing || !/^[A-Za-z][A-Za-z0-9_]*$/.test(missing)) {
-            throw new EnvironmentSetupError('dependency', '缺少的模組名稱無法可靠對應外部套件，請檢查原應用的相依宣告。');
+            throw new EnvironmentSetupError('dependency', localize("缺少的模組名稱無法可靠對應外部套件，請檢查原應用的相依宣告。"));
         }
         // A present requirements file is authoritative; never silently override its pins.
-        if (requirements) { throw new EnvironmentSetupError('dependency', '依 requirements 安裝後仍缺少 ' + missing + '，請補齊原應用相依清單。'); }
+        if (requirements) { throw new EnvironmentSetupError('dependency', localize("依 requirements 安裝後仍缺少 ") + missing + localize("，請補齊原應用相依清單。")); }
         if (missingAttempts.has(missing) || attempt === 20) {
-            throw new EnvironmentSetupError('dependency', '安裝後仍缺少 ' + missing + ' 或已達補裝上限；請確認套件名稱／版本，停止重複安裝。');
+            throw new EnvironmentSetupError('dependency', localize("安裝後仍缺少 ") + missing + localize(" 或已達補裝上限；請確認套件名稱／版本，停止重複安裝。"));
         }
         missingAttempts.add(missing);
         if (!approvedMappings.has(missing)) { await approve(current); }
         const name = approvedMappings.get(missing);
         cancelled();
         if (!name) {
-            throw new EnvironmentSetupError('dependency', '缺少 ' + missing
-                + '，但無法僅憑 import 名稱確認外部套件；請補充 requirements 或 llmUnitTest.packageMappings 的明確對應，未安裝猜測套件。');
+            throw new EnvironmentSetupError('dependency', localize("缺少 ") + missing
+                + localize("，但無法僅憑 import 名稱確認外部套件；請補充 requirements 或 llmUnitTest.packageMappings 的明確對應，未安裝猜測套件。"));
         }
         if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) {
-            throw new EnvironmentSetupError('dependency', '安裝名稱必須是單一套件名稱，不接受網址、路徑或 pip 引數。');
+            throw new EnvironmentSetupError('dependency', localize("安裝名稱必須是單一套件名稱，不接受網址、路徑或 pip 引數。"));
         }
-        progress('缺少 ' + missing + '，正在安裝 ' + name + '…');
+        progress(localize("缺少 ") + missing + localize("，正在安裝 ") + name + '…');
         await install([name], options.projectRoot);
         installed.push(name);
     }
     if (needsTools(selected)) {
-        if (!fs.existsSync(options.toolRequirements)) { throw new EnvironmentSetupError('tools', '擴充套件的測試工具相依清單遺失，請重新安裝擴充套件。'); }
-        progress('正在補齊 coverage 與突變測試工具…');
+        if (!fs.existsSync(options.toolRequirements)) { throw new EnvironmentSetupError('tools', localize("擴充套件的測試工具相依清單遺失，請重新安裝擴充套件。")); }
+        progress(localize("正在補齊 coverage 與突變測試工具…"));
         const args = ['-r', options.toolRequirements, ...requirements ? ['-r', requirements] : []];
         if (!approvedOperations.has(operationKey(args, options.projectRoot))) { await approve(selected); }
         await install(args, options.projectRoot);
         installed.push('test-tools');
     }
-    progress('正在確認相依版本與最終匯入結果…');
+    progress(localize("正在確認相依版本與最終匯入結果…"));
     const check = await runner({ executable: python, args: ['-m', 'pip', 'check'],
         cwd: os.tmpdir(), env: setupEnvironment(process.env), timeoutMs: 30000, signal: options.signal });
     cancelled();
@@ -308,7 +309,7 @@ export async function preparePythonEnvironment(options: {
     cancelled();
     if (final) { report(final); }
     if (!final || final.status !== 'ready' || needsTools(final)) {
-        throw new EnvironmentSetupError('verify', '最終模組或所需測試工具檢查未通過，環境尚未就緒。');
+        throw new EnvironmentSetupError('verify', localize("最終模組或所需測試工具檢查未通過，環境尚未就緒。"));
     }
     return { python, requirements, installed, inventory: final.inventory };
 }

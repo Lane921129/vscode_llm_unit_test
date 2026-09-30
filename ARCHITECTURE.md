@@ -12,6 +12,8 @@
 
 兩種語言透過子程序參數／標準輸入傳遞資料。Python 分析工具回傳 JSON，unittest 保留執行報告；正式 target coverage 與 mutation 以結構化證據交給 TypeScript 驗證，不能從顯示用百分比推定成功。
 
+介面語言由 `src/i18n/index.ts` 讀取 VS Code 設定，`core.ts` 提供不依賴 VS Code 的字典／框架訊息翻譯；每次分析以 async context 固定語言，插入的原始證據不作翻譯。機讀狀態及模型資格模式與顯示文字分離，scorecard 同時接受中英文報告欄位並核對相同證據。原生命令／設定名稱由 `package.nls*.json` 跟隨 VS Code 顯示語言；詳見 [英文介面與報告](docs/英文介面與報告.md)。
+
 ## 主流程
 
 預設 `llmUnitTest.validationMode=full`，正常流程包含突變、覆蓋率與品質審查；`execution` 僅供明確選用的單元測試執行診斷。模式在命令開始時固定並寫入 run／batch manifest，介面顯示是否包含突變，執行中不可切換；已保存的明確選擇不會被預設值覆蓋。共同步驟保留 AST、匯入預檢、相依來源與 caller 語境；execution 不啟動任何 `runBehaviorProbe`，在 coverage 預檢之前交給 `executionVerification.ts`。Writer 提示位於 `roles/unittestWriter.ts`，生成與修復共用原有結構、AST、簽名、目標 binding 與 Bug Fixer 範圍 gate。Auto Writer 尚未合格時停止，不暗中啟用 Trace fallback。

@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
@@ -15,7 +16,7 @@ export class ExecutionContext<Snapshot = unknown> {
     get cancelled(): boolean { return this.stopped; }
 
     throwIfCancelled(): void {
-        if (this.stopped) { throw new Error('使用者強制中止'); }
+        if (this.stopped) { throw new Error(localize("使用者強制中止")); }
     }
 
     onCancel(cancel: () => void): () => void {

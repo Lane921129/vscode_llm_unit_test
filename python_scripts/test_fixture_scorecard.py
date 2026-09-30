@@ -9,7 +9,7 @@ import unittest
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
-from fixture_scorecard import DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard
+from fixture_scorecard import DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard, report_fields
 from quality_policy import create_fixture_quality_policy, create_strict_quality_policy, evaluate_quality
 
 
@@ -31,6 +31,43 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 
 
 class FixtureScorecardTests(unittest.TestCase):
+    def test_english_report_preserves_scores_identity_failures_and_retained_tier(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / 'final_report.md'
+            chinese = report('sample.py', 'Group.method', 90, 80, error=True, failure_category='validation')
+            chinese = chinese.replace('- **策略**: 請求 tier1，實際 Tier 1', '- **起始策略**: 請求 tier2，起始 Tier 2')
+            path.write_text(chinese, encoding='utf-8')
+            expected = report_fields(path)
+            english = chinese
+            for before, after in [('目標檔案', 'Target file'), ('測試函式', 'Target function'),
+                                  ('模型識別', 'Model identity'), ('失敗分類', 'Failure category'),
+                                  ('覆蓋率', 'Coverage'), ('突變分數', 'Mutation score'),
+                                  ('起始策略**: 請求 tier2，起始 Tier 2', 'Initial strategy**: requested tier2, initial Tier 2'),
+                                  ('### ❌ 執行中斷（第 2 輪）', '### ❌ Execution interrupted (round 2)')]:
+                english = english.replace(before, after)
+            path.write_text(english, encoding='utf-8')
+            self.assertEqual(report_fields(path), expected)
+            self.assertEqual(expected['requested_tier'], 'tier2')
+            self.assertTrue(expected['execution_error'])
+            self.assertIsNone(expected['resolved_tier'], 'initial strategy cannot become retained tier')
+
+            # The report language must not bypass or invalidate verified journal evidence.
+            policy_path, _ = self.write_policy_report(pathlib.Path(root), create_strict_quality_policy())
+            content = policy_path.read_text(encoding='utf-8').replace(
+                '- **策略**: 請求 tier1，實際 Tier 1', '- **起始策略**: 請求 tier2，起始 Tier 2')
+            policy_path.write_text(content, encoding='utf-8')
+            verified = report_fields(policy_path)
+            for before, after in [('目標檔案', 'Target file'), ('測試函式', 'Target function'),
+                                  ('模型識別', 'Model identity'), ('覆蓋率', 'Coverage'), ('突變分數', 'Mutation score'),
+                                  ('起始策略**: 請求 tier2，起始 Tier 2', 'Initial strategy**: requested tier2, initial Tier 2')]:
+                content = content.replace(before, after)
+            policy_path.write_text(content, encoding='utf-8')
+            self.assertEqual(report_fields(policy_path), verified)
+            self.assertEqual(verified['resolved_tier'], 1)
+            self.assertEqual(verified['requested_tier'], 'tier2')
+            policy_path.with_name('quality_baseline.json').unlink()
+            self.assertTrue(report_fields(policy_path)['invalid_journal'])
+
     def write_policy_report(self, root, policy, vector_name='strict-full-success', terminal='passed'):
         fixture = next(item for item in load_manifest()['fixtures'] if item['id'] == 'tier1-class-method')
         vectors = json.loads((SCRIPTS_DIR.parent / 'contracts' / 'quality-policy-cases-v1.json').read_text(encoding='utf-8'))

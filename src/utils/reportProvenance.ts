@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface ReportProvenance {
     extensionId: string;
     extensionVersion: string;
@@ -21,26 +22,26 @@ export interface ReportProvenance {
 /** Render portable execution facts without disclosing a user's local paths. */
 export function formatReportProvenance(provenance: ReportProvenance): string {
     const qualification = provenance.qualified === true
-        ? '通過'
-        : provenance.qualified === false ? '未通過' : '尚未探測';
+        ? localize("通過")
+        : provenance.qualified === false ? localize("未通過") : localize("尚未探測");
     const qualificationDetails = provenance.qualificationReason
         ? [
-            provenance.qualificationMode ? `- **驗證方式**: ${provenance.qualificationMode}` : '',
-            `- **驗證說明**: ${provenance.qualificationReason}`,
+            provenance.qualificationMode ? localize("- **驗證方式**: {0}", localize(provenance.qualificationMode)) : '',
+            localize("- **驗證說明**: {0}", provenance.qualificationReason),
         ].filter(Boolean)
         : [];
     return [
-        '### 執行環境追溯',
-        `- **擴充功能**: \`${provenance.extensionId}@${provenance.extensionVersion}\``,
-        `- **建置識別**: \`${provenance.buildTimestamp}\``,
-        `- **執行模式**: ${provenance.extensionMode}`,
-        `- **模型識別**: \`${provenance.modelProvider}/${provenance.modelName}\``,
-        `- **模型**: \`${provenance.modelName}\``,
-        `- **起始策略**: 請求 ${provenance.requestedTier}，起始 Tier ${provenance.resolvedTier}（中途切換見策略執行摘要）`,
-        `- **模型 unittest 生成能力（測試連線驗證）**: ${qualification}`,
+        localize("### 執行環境追溯"),
+        localize("- **擴充功能**: `{0}@{1}`", provenance.extensionId, provenance.extensionVersion),
+        localize("- **建置識別**: `{0}`", provenance.buildTimestamp),
+        localize("- **執行模式**: {0}", provenance.extensionMode),
+        localize("- **模型識別**: `{0}/{1}`", provenance.modelProvider, provenance.modelName),
+        localize("- **模型**: `{0}`", provenance.modelName),
+        localize("- **起始策略**: 請求 {0}，起始 Tier {1}（中途切換見策略執行摘要）", provenance.requestedTier, provenance.resolvedTier),
+        localize("- **模型 unittest 生成能力（測試連線驗證）**: {0}", qualification),
         ...qualificationDetails,
         ...(provenance.roleQualification ? [
-            `- **角色資格**: Writer=${provenance.roleQualification.writer.state}；Reviewer=${provenance.roleQualification.reviewer.state}；Bug Fixer=${provenance.roleQualification.bugFixer.state}`
+            localize("- **角色資格**: Writer={0}；Reviewer={1}；Bug Fixer={2}", provenance.roleQualification.writer.state, provenance.roleQualification.reviewer.state, provenance.roleQualification.bugFixer.state)
         ] : []),
         ''
     ].join('\n');

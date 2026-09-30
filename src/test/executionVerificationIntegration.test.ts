@@ -8,6 +8,7 @@ import { verifyExecutionEvidence } from '../pipeline/executionEvidence';
 import { BatchJournal } from '../pipeline/batchJournal';
 import { presentOutcome } from '../pipeline/resultPresentation';
 import { verificationMode } from '../pipeline/verificationMode';
+import { setLanguage } from '../i18n/core';
 
 test('execution mode runs real guarded tests, preserves failures, and never invokes deferred tools', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'execution-mode-'));
@@ -16,7 +17,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
     const runner = require('../utils/processRunner'), originalSpawn = runner.runSpawn;
     const handlers = new Map<string, (...args: any[]) => any>(), messages: any[] = [], requests: any[] = [];
     let replies: string[] = [], changeSource = false, cancel = false;
-    const settings: Record<string, unknown> = { validationMode: 'execution' };
+    const settings: Record<string, unknown> = { validationMode: 'execution', language: 'en' };
     const file = path.join(root, 'sample.py');
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -62,6 +63,11 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         assert.equal(verificationMode(), 'full'); assert.throws(() => verificationMode('fast'));
         const passed = await run('pass');
+        const englishReport = fs.readFileSync(path.join(passed.directory, 'final_report.md'), 'utf8');
+        assert.match(englishReport, /## Final outcome: Execution verified/);
+        assert.match(englishReport, /Mutation was not run/);
+        assert.match(englishReport, /\*\*Target function\*\*: target/);
+        assert.doesNotMatch(englishReport, /\*\*(?:目標檔案|測試函式|驗證目標)\*\*/);
         assert.equal(passed.knowledge.terminalStatus, 'execution-passed', JSON.stringify(passed.knowledge.lastFailure));
         assert.equal(passed.knowledge.validationMode, 'execution');
         assert.equal(passed.knowledge.qualityAssessment, null); assert.equal(passed.knowledge.coverage, null);
@@ -149,6 +155,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         const cancelled = await run('cancelled'); cancel = false;
         assert.equal(cancelled.knowledge.terminalStatus, 'cancelled');
     } finally {
+        setLanguage('zh-tw');
         Module._load = originalLoad; globalThis.fetch = originalFetch; runner.runSpawn = originalSpawn;
         fs.rmSync(root, { recursive: true, force: true });
     }

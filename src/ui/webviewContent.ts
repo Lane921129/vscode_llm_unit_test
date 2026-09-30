@@ -1,7 +1,7 @@
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full') {
     return `
 <!DOCTYPE html>
-<html lang="en">
+<html lang="${t('ui.documentLanguage')}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -183,15 +183,15 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             </select>
             
             <div id="cloud-ui">
-                <label>已儲存的 Cloud 設定</label>
+                <label>${t('ui.savedCloud')}</label>
                 <div class="flex-row">
-                    <select id="api-key-select"><option value="">-- 選擇設定 --</option></select>
+                    <select id="api-key-select"><option value="">${t('ui.selectSetting')}</option></select>
                 </div>
 
-                <label style="margin-top:5px;">API Key 名稱</label>
-                <input type="text" id="new-key-name" placeholder="例如：Google AI Studio 個人帳號">
+                <label style="margin-top:5px;">${t('ui.keyName')}</label>
+                <input type="text" id="new-key-name" placeholder="${t('ui.keyNameHint')}">
                 <label>API Model</label>
-                <input type="text" id="new-key-model" placeholder="例如：gemma-4-31b-it">
+                <input type="text" id="new-key-model" placeholder="${t('ui.modelHint')}">
                 <label>${t('ui.apiKey')}</label>
                 <div class="flex-row">
                     <input type="password" id="new-key-value" placeholder="Google AI Studio API Key">
@@ -244,19 +244,19 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.testConfig')}</summary>
         <div class="content">
-            <label for="validation-mode">驗證目標</label>
+            <label for="validation-mode">${t('ui.validationScope')}</label>
             <select id="validation-mode">
-                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>完整品質驗證（含突變，預設）</option>
-                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>僅執行驗證（不跑突變）</option>
+                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>${t('ui.fullValidation')}</option>
+                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>${t('ui.executionValidation')}</option>
             </select>
             <p id="validation-scope" role="status" aria-live="polite"></p>
             <label>🧠 ${t('ui.promptStrategy')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
-                <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>Auto — 依模型自動路由</option>
-                <option value="tier1"    ${currentStrategy === 'tier1' ? 'selected' : ''}>Tier 1 — 2–3B (填空法)</option>
+                <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>${t('ui.tierAuto')}</option>
+                <option value="tier1"    ${currentStrategy === 'tier1' ? 'selected' : ''}>${t('ui.tier1')}</option>
                 <option value="tier2"    ${currentStrategy === 'tier2' ? 'selected' : ''}>Tier 2 — 7–13B (Ground-Truth)</option>
                 <option value="tier3"    ${currentStrategy === 'tier3' ? 'selected' : ''}>Tier 3 — 34–70B (Mock Scaffold)</option>
-                <option value="tier4"    ${currentStrategy === 'tier4' ? 'selected' : ''}>Tier 4 — 100B+/Cloud (全自主)</option>
+                <option value="tier4"    ${currentStrategy === 'tier4' ? 'selected' : ''}>${t('ui.tier4')}</option>
             </select>
 
             <label>📂 ${t('ui.projectPath')}</label>
@@ -268,7 +268,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <button id="btn-prepare-env" style="flex:1;">${t('ui.prepareProjectEnvironment')}</button>
                 <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
             </div>
-            <button id="btn-import-setup">檢查模組載入／初始化設定</button>
+            <button id="btn-import-setup">${t('ui.importSetup')}</button>
             <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
             <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
             
@@ -279,10 +279,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             </div>
             
             <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
-                <label style="margin-top:0;">${t('ui.maxLoops')}（完整品質模式）</label>
+                <label style="margin-top:0;">${t('ui.maxLoops')}${t('ui.fullModeSuffix')}</label>
                 <input type="number" id="max-loop" value="5" min="1">
                 
-                <label>${t('ui.mutpyTimeout')}（完整品質模式）</label>
+                <label>${t('ui.mutpyTimeout')}${t('ui.fullModeSuffix')}</label>
                 <input type="number" id="mutpy-timeout" value="20" min="1" style="width:100%;">
 
                 <label>${t('ui.apiTimeout')}</label>
@@ -315,28 +315,28 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             <!-- 顯示模式切換工具列 -->
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <div style="display:inline-flex; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; overflow:hidden;">
-                    <button type="button" id="btn-mode-flat" style="margin:0; padding:4px 10px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">📄 平鋪模式</button>
-                    <button type="button" id="btn-mode-grouped" style="margin:0; padding:4px 10px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">📁 檔案分組</button>
+                    <button type="button" id="btn-mode-flat" style="margin:0; padding:4px 10px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">${t('ui.flatView')}</button>
+                    <button type="button" id="btn-mode-grouped" style="margin:0; padding:4px 10px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">${t('ui.groupedView')}</button>
                 </div>
                 <div id="grouped-tools" style="display:none; gap:4px;">
-                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(true)">全部展開</button>
-                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(false)">全部折疊</button>
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(true)">${t('ui.expandAll')}</button>
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(false)">${t('ui.collapseAll')}</button>
                 </div>
             </div>
 
             <!-- 指標與符號說明列 (Legend) -->
-            <div style="font-size:11px; opacity:0.85; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--vscode-editor-inactiveSelectionBackground); padding:4px 8px; border-radius:3px; margin-bottom:6px;" title="突變分數代表變異體殺死率，覆蓋率代表程式碼執行涵蓋行數比例">
-                <span title="🧬 突變分數 (Mutation Score)：測試套件殺死程式碼變異體的百分比，分數越高代表測試抓錯能力越強">🧬 <strong>突變分數</strong>: 變異體殺死率</span>
+            <div style="font-size:11px; opacity:0.85; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--vscode-editor-inactiveSelectionBackground); padding:4px 8px; border-radius:3px; margin-bottom:6px;" title="${t('ui.metricHint')}">
+                <span title="${t('ui.mutationHint')}">🧬 <strong>${t('ui.mutationScore')}</strong>: ${t('ui.killRate')}</span>
                 <span style="opacity:0.3;">|</span>
-                <span title="📊 行覆蓋率 (Line Coverage)：測試執行過程中所涵蓋到的原始程式碼行數比例">📊 <strong>覆蓋率</strong>: 程式碼行覆蓋</span>
+                <span title="${t('ui.coverageHint')}">📊 <strong>${t('ui.lineCoverage')}</strong>: ${t('ui.linesExecuted')}</span>
             </div>
 
-            <!-- 全選與控制列 -->
+            <!-- ${t('ui.selectAll')}與控制列 -->
             <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
                 <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
-                    <input type="checkbox" id="select-all" style="margin:0; width:auto;"> 全選
+                    <input type="checkbox" id="select-all" style="margin:0; width:auto;"> ${t('ui.selectAll')}
                 </label>
-                <span id="results-count" style="font-size:11px; opacity:0.75;">0 項結果</span>
+                <span id="results-count" style="font-size:11px; opacity:0.75;">${t('ui.resultCount', 0)}</span>
             </div>
 
             <!-- 響應式卡片容器 (平鋪 / 分組共用) -->
@@ -375,11 +375,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let currentViewMode = 'flat';
         let environmentBusy = false;
 
-        const i18n = {
-            noCoverageData: "${t('ui.noCoverageData')}",
-            runBtn: "${t('ui.runBtn')}",
-            allFiles: "${t('ui.allFiles')}"
-        };
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         vscode.postMessage({ command: 'getInitialData' });
 
@@ -415,16 +412,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function getScoreBadge(score, coverage, outcome) {
             const colors = { passed: '#2ea043', executed: '#1677a6', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
-            const state = outcome || { label: '尚未判定完整通過', kind: 'pending' };
+            const state = outcome || { label: i18n.pendingOutcome, kind: 'pending' };
             const outcomeBadge = '<span style="background:' + (colors[state.kind] || colors.pending) + '; color:#fff; padding:2px 7px; border-radius:4px;">' + escapeHtml(state.label) + '</span>';
             const scoreColor = '#555';
+            const scoreLabel = score === '測試中' ? i18n.testing : score === '失敗' ? i18n.failed : score;
 
-            const scoreTitle = score === '測試中' ? '狀態: 測試中 (正在執行突變測試與分析)'
-                : score === '失敗' ? '狀態: 執行中斷或驗證失敗'
-                : '突變量測: ' + score + '；此分數不代表最終通過，請看最終狀態。';
-            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;" title="' + escapeHtml(scoreTitle) + '">🧬 ' + escapeHtml(score) + '</span>';
+            const scoreTitle = score === '測試中' ? i18n.runningStatus
+                : score === '失敗' ? i18n.failedStatus
+                : i18n.measurementPrefix + score + i18n.measurementSuffix;
+            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;" title="' + escapeHtml(scoreTitle) + '">🧬 ' + escapeHtml(scoreLabel) + '</span>';
 
-            const covTitle = '📊 行覆蓋率 (Line Coverage): ' + (coverage || 'N/A') + ' (測試所涵蓋執行的原始程式碼行數比例)';
+            const covTitle = i18n.coveragePrefix + (coverage || 'N/A') + i18n.coverageSuffix;
             const covBadge = coverage
                 ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
                 : '';
@@ -442,7 +440,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const canOpenReport = !!item.reportPath;
             if (canOpenReport) {
                 card.tabIndex = 0;
-                card.title = '點擊開啟此函式的測試結果報告';
+                card.title = i18n.openReport;
                 card.style.cursor = 'pointer';
                 const openReport = () => vscode.postMessage({ command: 'openTestResult', reportPath: item.reportPath });
                 card.onclick = event => {
@@ -475,10 +473,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
             const label = document.createElement('span');
             if (showFileName) {
-                label.innerHTML = '<span title="目標檔案: ' + escapeHtml(item.file) + '" style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
-                                  (item.func ? '<span title="目標函式: ' + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
+                label.innerHTML = '<span title="' + escapeHtml(i18n.targetFile) + escapeHtml(item.file) + '" style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
+                                  (item.func ? '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
             } else {
-                label.innerHTML = '<span title="目標函式: ' + escapeHtml(item.func || item.fileName) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
+                label.innerHTML = '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func || item.fileName) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
             }
             titleBox.appendChild(label);
             header.appendChild(titleBox);
@@ -500,7 +498,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function renderDashboard() {
             const countSpan = document.getElementById('results-count');
-            if (countSpan) countSpan.textContent = resultsMap.size + ' 項結果';
+            if (countSpan) countSpan.textContent = message('resultCount', resultsMap.size);
 
             const container = document.getElementById('dashboard-container');
             if (!container) return;
@@ -520,7 +518,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 // 檔案分組模式
                 const groups = new Map();
                 resultsMap.forEach(item => {
-                    const f = item.file || '其他';
+                    const f = item.file || i18n.other;
                     if (!groups.has(f)) groups.set(f, []);
                     groups.get(f).push(item);
                 });
@@ -534,7 +532,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     details.style.borderRadius = '4px';
 
                     const summary = document.createElement('summary');
-                    summary.innerHTML = '<span style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + items.length + ' 個函式)</small></span>';
+                    summary.innerHTML = '<span style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + escapeHtml(message('functionCount', items.length)) + ')</small></span>';
                     details.appendChild(summary);
 
                     const groupContent = document.createElement('div');
@@ -646,7 +644,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     document.getElementById('custom-api-select').innerHTML = '<option value="">-- Select --</option>' + ckeys.map(k => '<option value="' + k + '">' + k + '</option>').join('');
                     break;
                 case 'pythonEnvironmentSelection':
-                    document.getElementById('python-environment-status').value = '${t('ui.currentPython')}' + msg.python;
+                    document.getElementById('python-environment-status').value = i18n.currentPython + msg.python;
                     break;
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
@@ -662,6 +660,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     }
                     break;
                 case 'analysisFinished':
+                    document.getElementById('lang-select').disabled = false;
                     document.getElementById('validation-mode').disabled = false;
                     const runBtn = document.getElementById('btn-run');
                     if (runBtn) {
@@ -688,8 +687,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const full = document.getElementById('validation-mode').value === 'full';
             const hint = document.getElementById('validation-scope');
             if (hint) hint.textContent = full
-                ? '本次包含突變測試、覆蓋率與品質審查；通過前置驗證後執行，全部符合門檻才算完整通過。'
-                : '本次不執行突變、覆蓋率與品質審查。只診斷生成的單元測試能否通過，不代表整個專案可正常運作。需要突變請切換完整品質驗證並重新執行。';
+                ? i18n.fullScopeHint
+                : i18n.executionScopeHint;
             document.getElementById('max-loop').disabled = !full;
             document.getElementById('mutpy-timeout').disabled = !full;
         }
@@ -782,7 +781,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         document.getElementById('btn-import-setup').onclick = () => {
             const projectRoot = document.getElementById('project-path').value;
-            if (!projectRoot) { alert('請先選擇受測專案資料夾'); return; }
+            if (!projectRoot) { alert(i18n.selectProject); return; }
             vscode.postMessage({ command: 'prepareImportSetup', projectRoot, outputPath: document.getElementById('output-path').value });
         };
         document.getElementById('btn-prepare-env').onclick = () => {
@@ -831,6 +830,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
 
         function setRunningState(isBatch) {
+            document.getElementById('lang-select').disabled = true;
             document.getElementById('validation-mode').disabled = true;
             document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-prepare-env-scope').disabled = true;

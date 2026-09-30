@@ -28,7 +28,7 @@
       "activitybar": [
         {
           "id": "mutation-test-explorer",
-          "title": "突變測試分析",
+          "title": "%contributes.viewsContainers.activitybar.0.title%",
           "icon": "$(beaker)"
         }
       ]
@@ -38,49 +38,49 @@
         {
           "type": "webview",
           "id": "mutation-test-view",
-          "name": "模型與測試設定"
+          "name": "%contributes.views.mutation-test-explorer.0.name%"
         }
       ]
     },
     "commands": [
       {
         "command": "llm-unit-test.runCaptureAndTest",
-        "title": "執行自動化測試循環"
+        "title": "%contributes.commands.0.title%"
       },
       {
         "command": "llm-unit-test.runBatchAnalysis",
-        "title": "設定批次突變測試"
+        "title": "%contributes.commands.1.title%"
       },
       {
         "command": "llm-unit-test.abortTest",
-        "title": "中止突變測試"
+        "title": "%contributes.commands.2.title%"
       },
       {
         "command": "llm-unit-test.preparePythonEnvironment",
-        "title": "檢查並補齊 Python 測試環境"
+        "title": "%contributes.commands.3.title%"
       },
       {
         "command": "llm-unit-test.prepareImportSetup",
-        "title": "檢查模組載入／初始化設定"
+        "title": "%contributes.commands.4.title%"
       }
     ],
     "configuration": {
-      "title": "LLM 自動化測試設定",
+      "title": "%contributes.configuration.title%",
       "properties": {
         "llmUnitTest.importFixtureRoot": {
           "type": "string",
           "default": "",
-          "description": "匯入初始化替身綁定的受測根目錄；設定精靈會保存，切換受測專案時不得套用到同名檔案。"
+          "description": "%contributes.configuration.properties.llmUnitTest.importFixtureRoot.description%"
         },
         "llmUnitTest.projectPath": {
           "type": "string",
           "default": "",
-          "description": "測試專案資料夾路徑"
+          "description": "%contributes.configuration.properties.llmUnitTest.projectPath.description%"
         },
         "llmUnitTest.outputPath": {
           "type": "string",
           "default": "",
-          "description": "測試結果輸出資料夾路徑"
+          "description": "%contributes.configuration.properties.llmUnitTest.outputPath.description%"
         },
         "llmUnitTest.language": {
           "type": "string",
@@ -104,10 +104,16 @@
         },
         "llmUnitTest.validationMode": {
           "type": "string",
-          "enum": ["execution", "full"],
+          "enum": [
+            "execution",
+            "full"
+          ],
           "default": "full",
-          "enumDescriptions": ["僅診斷生成測試能否隔離執行；不執行突變、覆蓋率與品質審查，也不驗證整個專案能否運作。", "預設流程：通過前置驗證後執行覆蓋率、突變與品質審查，符合完整門檻才通過。"],
-          "description": "預設完整品質驗證，包含突變測試。只有需要診斷生成測試時才選 execution；已保存的明確選擇仍會保留。"
+          "enumDescriptions": [
+            "%contributes.configuration.properties.llmUnitTest.validationMode.enumDescriptions.0%",
+            "%contributes.configuration.properties.llmUnitTest.validationMode.enumDescriptions.1%"
+          ],
+          "description": "%contributes.configuration.properties.llmUnitTest.validationMode.description%"
         },
         "llmUnitTest.ollamaBaseUrl": {
           "type": "string",
@@ -116,37 +122,81 @@
         },
         "llmUnitTest.cloudThinkingMode": {
           "type": "string",
-          "enum": ["minimal", "provider-default"],
+          "enum": [
+            "minimal",
+            "provider-default"
+          ],
           "default": "minimal",
-          "description": "Cloud 思考量：minimal 優先降低等待時間；供應商明確不支援時沿原時限回退。provider-default 使用服務預設。兩者均保留完整測試品質檢查。"
+          "description": "%contributes.configuration.properties.llmUnitTest.cloudThinkingMode.description%"
         },
         "llmUnitTest.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "測試使用的 Python。可用「檢查並補齊 Python 測試環境」尋找相依完整的既有環境並保存完整路徑；AST、模型資格、Trace、coverage 與突變測試共用此設定。留空時沿用專案／工作區 .venv，否則使用 PATH python。"
+          "description": "%contributes.configuration.properties.llmUnitTest.pythonPath.description%"
         },
         "llmUnitTest.packageMappings": {
           "type": "object",
           "default": {},
-          "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
-          "description": "沒有 requirements 時，優先使用這裡的 import → pip 套件名稱，例如 PIL → Pillow。未設定者在安裝清單帶入同名候選，確認後才嘗試 pip 安裝並重新檢查；也可在清單修改名稱並保存對應。"
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "description": "%contributes.configuration.properties.llmUnitTest.packageMappings.description%"
         },
         "llmUnitTest.importFixtures": {
           "type": "array",
           "default": [],
           "maxItems": 64,
-          "description": "匯入前測試設定。只模擬指定來源檔在模組初始化期間的外部操作，不修改受測原檔；預檢、Trace、測試及內建突變共用設定。file 相對於受測專案目錄。設定檔內容僅填測試資料，勿填憑證。",
+          "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.description%",
           "items": {
             "type": "object",
-            "required": ["file"],
+            "required": [
+              "file"
+            ],
             "additionalProperties": false,
             "properties": {
-              "file": { "type": "string", "description": "受測根目錄內的相對 Python 檔案路徑。" },
-              "mkdir": { "type": "boolean", "default": false, "description": "只模擬此檔案模組頂層的 Path.mkdir。" },
-              "configFiles": { "type": "object", "additionalProperties": { "type": "string" }, "description": "同目錄 ini 檔名到測試內容的對應，供 ConfigParser.read 使用。" },
-              "entryPoints": { "type": "array", "items": { "type": "string" }, "description": "在此檔案模組頂層模擬為返回 None 的外部初始化函式。可由實測阻擋自動提出建議，預覽確認後套用。" },
-              "entryPointLines": { "type": "object", "maxProperties": 8, "additionalProperties": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "integer", "minimum": 1 } }, "description": "自動建議綁定的入口名稱與來源行號；只模擬這些行的頂層呼叫，保留其他呼叫。" },
-              "entryPointSourceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "自動產生的初始化入口來源版本；來源變更後必須重新預覽確認，不可沿用舊行號設定。" }
+              "file": {
+                "type": "string",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.file.description%"
+              },
+              "mkdir": {
+                "type": "boolean",
+                "default": false,
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.mkdir.description%"
+              },
+              "configFiles": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.configFiles.description%"
+              },
+              "entryPoints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPoints.description%"
+              },
+              "entryPointLines": {
+                "type": "object",
+                "maxProperties": 8,
+                "additionalProperties": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointLines.description%"
+              },
+              "entryPointSourceHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointSourceHash.description%"
+              }
             }
           }
         },
@@ -155,13 +205,33 @@
           "default": {},
           "additionalProperties": false,
           "properties": {
-            "timeoutMs": { "type": "integer", "minimum": 1, "default": 600000 },
-            "logicalRequests": { "type": "integer", "minimum": 0, "default": 20 },
-            "transportAttempts": { "type": "integer", "minimum": 0, "default": 40 },
-            "estimatedInputTokens": { "type": "integer", "minimum": 0, "default": 200000 },
-            "candidateAttempts": { "type": "integer", "minimum": 0, "default": 20 }
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 600000
+            },
+            "logicalRequests": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 20
+            },
+            "transportAttempts": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 40
+            },
+            "estimatedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 200000
+            },
+            "candidateAttempts": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 20
+            }
           },
-          "description": "每個目標共用的總預算；角色、策略切換與重試不會重設。輸入 tokens 是每次傳送的估算，不是供應商實際計費；耗盡時保留已驗證成果並標示未完成。"
+          "description": "%contributes.configuration.properties.llmUnitTest.targetBudget.description%"
         }
       }
     }
@@ -179,7 +249,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-      "test:python": "node test/run_python_tests.js",
+    "test:python": "node test/run_python_tests.js",
     "test:unit": "npm run compile-tests && node test/run_unit_tests.js && npm run test:webview && npm run test:python",
     "test:webview": "node test/extract_script.js"
   },

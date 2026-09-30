@@ -18,7 +18,7 @@ test('coverage dashboard cards can open their completed function report', () => 
 
     assert.ok(html.includes("command: 'openTestResult'"));
     assert.ok(html.includes("case 'attachResultReport'"));
-    assert.ok(html.includes('點擊開啟此函式的測試結果報告'));
+    assert.ok(html.includes('ui.openReport'));
 });
 
 test('startAnalysis and startBatchAnalysis include cloudKeyName in payload', () => {

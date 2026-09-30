@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -34,7 +35,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
         } catch { /* Missing source invalidates the run as well. */ }
         if (!current) {
             journal.knowledge({ evidenceValid: false });
-            throw new AnalysisStageError('validation', 'source-changed', '來源或相依已變更；請重新執行，舊證據不能計入通過。');
+            throw new AnalysisStageError('validation', 'source-changed', localize("來源或相依已變更；請重新執行，舊證據不能計入通過。"));
         }
     };
     checkCurrent();
@@ -51,7 +52,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             });
             checkCurrent();
             if (result.code !== 0) {
-                hooks.event('source-expectation-repair', 'unavailable', { reason: '算術檢查未完成，保留模型修復流程' });
+                hooks.event('source-expectation-repair', 'unavailable', { reason: localize("算術檢查未完成，保留模型修復流程") });
                 return undefined;
             }
             try {
@@ -66,7 +67,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 journal.knowledge({ expectationRepair: { file: path.basename(proofPath), ...evidence } });
                 return { code: value.code, evidence };
             } catch {
-                hooks.event('source-expectation-repair', 'unavailable', { reason: '算術檢查結果無效，保留模型修復流程' });
+                hooks.event('source-expectation-repair', 'unavailable', { reason: localize("算術檢查結果無效，保留模型修復流程") });
                 return undefined;
             }
         },
@@ -88,7 +89,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             checkCurrent();
             const ok = run.code === 0 && verifyExecutionEvidence(directory, file, baseline, expected);
             const out = (run.stdout + run.stderr).trim()
-                + (!ok && run.code === 0 ? '\n執行證據不足：需有真正通過的案例、目標函式呼叫與完整隔離紀錄。' : '');
+                + (!ok && run.code === 0 ? localize("\n執行證據不足：需有真正通過的案例、目標函式呼叫與完整隔離紀錄。") : '');
             if (ok) { accepted = baseline; }
             return { ok, out: out || 'No executable unittest cases', qualityGaps: [], testModule: path.basename(testFile, '.py') };
         }
@@ -96,7 +97,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
     checkCurrent();
     if (!accepted || accepted.testHash !== evidenceHash(candidate.code)
         || !verifyExecutionEvidence(directory, file, accepted, expected)) {
-        throw new AnalysisStageError('validation', 'execution-evidence', '執行證據不完整，未計入通過。');
+        throw new AnalysisStageError('validation', 'execution-evidence', localize("執行證據不完整，未計入通過。"));
     }
     fs.writeFileSync(path.join(directory, 'execution_baseline.json'), JSON.stringify(accepted, null, 2), { encoding: 'utf8', flag: 'wx' });
     journal.knowledge({ terminalStatus: 'execution-passed', evidenceValid: true, executionVerified: true,

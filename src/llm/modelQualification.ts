@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { createHash } from 'node:crypto';
 import { RoleQualificationProfile } from './roleQualification';
 
@@ -93,19 +94,19 @@ export function formatModelQualificationLog(profile: ModelQualificationProfile, 
         : profile.envType === 'custom'
             ? 'Custom API'
             : 'Local Ollama';
-    const model = compactLogValue(profile.modelName, '未指定模型');
-    const mode = compactLogValue(profile.testGenerationMode, 'unittest 生成探測');
-    const reason = compactLogValue(profile.testGenerationReason, '未提供原因');
+    const model = compactLogValue(profile.modelName, localize("未指定模型"));
+    const mode = localize(compactLogValue(profile.testGenerationMode, localize("unittest 生成探測")));
+    const reason = compactLogValue(profile.testGenerationReason, localize("未提供原因"));
 
     if (profile.testGenerationReady !== undefined && profile.qualificationVersion !== QUALIFICATION_VERSION) {
-        return `[模型資格] ${provider}／${model}：舊探針結果已過期（原紀錄：${mode}）；請重新執行測試連線。正式測試生成使用純 Python。`;
+        return localize("[模型資格] {0}／{1}：舊探針結果已過期（原紀錄：{2}）；請重新執行測試連線。正式測試生成使用純 Python。", provider, model, mode);
     }
 
     const summary = profile.testGenerationReady === true
-        ? `[模型資格] ${provider}／${model}：連線成功，已通過 ${mode}。`
-        : `[模型資格] ${provider}／${model}：連線成功，但未通過 ${mode}（${reason}）。Auto 將保守使用 Tier 1。`;
+        ? localize("[模型資格] {0}／{1}：連線成功，已通過 {2}。", provider, model, mode)
+        : localize("[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。Auto 將保守使用 Tier 1。", provider, model, mode, reason);
     return profile.testGenerationReady !== true && responsePreview
-        ? `${summary}\n[模型探測回應]\n${responsePreview}`
+        ? localize("{0}\n[模型探測回應]\n{1}", summary, responsePreview)
         : summary;
 }
 

@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { createHash } from 'crypto';
 
 export const REPAIR_REASON_LABELS = {
@@ -41,17 +42,17 @@ export function repairReasonCode(value: unknown): RepairReasonCode {
 export function formatRepairRouting(detail: unknown): string {
     const value = detail as { action?: string; fromTier?: number; toTier?: number } | null;
     const labels: Record<string, string> = {
-        'continue-repair': '依剩餘修訂額度重新選擇修復角色',
-        'stop-revisions': '本候選修訂額度已用完，交上層保留成果或停止',
-        'writer-recovery': '局部修復未產生有效變更，在目標總預算內交 Writer 接手一次；保留已通過案例並重新驗證',
-        'tier-fallback': '依既有策略降階，交 Writer 重新產生候選',
-        'stop-tier-fallback': '已無可降階策略，結束本候選並保留既有成果'
+        'continue-repair': localize("依剩餘修訂額度重新選擇修復角色"),
+        'stop-revisions': localize("本候選修訂額度已用完，交上層保留成果或停止"),
+        'writer-recovery': localize("局部修復未產生有效變更，在目標總預算內交 Writer 接手一次；保留已通過案例並重新驗證"),
+        'tier-fallback': localize("依既有策略降階，交 Writer 重新產生候選"),
+        'stop-tier-fallback': localize("已無可降階策略，結束本候選並保留既有成果")
     };
     const label = value?.action && Object.prototype.hasOwnProperty.call(labels, value.action) ? labels[value.action] : undefined;
     if (!label) { return ''; }
     const tiers = Number.isInteger(value?.fromTier) && Number.isInteger(value?.toTier)
         ? `（Tier ${value!.fromTier} → ${value!.toTier}）` : '';
-    return `- **修復後續處理**：${label}${tiers}。\n`;
+    return localize("- **修復後續處理**：{0}{1}。\n", label, tiers);
 }
 
 /** Counts are lexical hints, not a substitute for Python AST validation. No reply text is retained. */
@@ -72,7 +73,7 @@ export interface RepairDiagnostic {
 
 export class RepairResponseError extends Error {
     constructor(readonly diagnostic: RepairDiagnostic) {
-        super('Bug Fixer 局部修復被拒絕：' + diagnostic.reasonCodes.map(code => REPAIR_REASON_LABELS[code]).join('；'));
+        super(localize("Bug Fixer 局部修復被拒絕：") + diagnostic.reasonCodes.map(code => localize(REPAIR_REASON_LABELS[code])).join('; '));
         this.name = 'RepairResponseError';
     }
 }
@@ -83,12 +84,12 @@ export function formatRepairDiagnostic(loop: number, detail: {
     executableBaselineAvailable?: boolean;
 }): string {
     const d = detail.diagnostic;
-    const reasons = d.reasonCodes.map(code => `${repairReasonCode(code)}：${REPAIR_REASON_LABELS[repairReasonCode(code)]}`).join('；');
+    const reasons = d.reasonCodes.map(code => `${repairReasonCode(code)}：${localize(REPAIR_REASON_LABELS[repairReasonCode(code)])}`).join('; ');
     const shape = d.responseShape;
-    return `\n### 修復失敗診斷（第 ${loop} 輪／修訂 ${detail.attempt}）\n\n`
-        + `- 階段：${d.gate}；原因：${reasons}。\n`
-        + (shape ? `- 回覆結構（詞法統計）：${shape.characterCount} 字元、${shape.codeFenceCount} 個程式區塊、${shape.classCount} 個 class、${shape.testMethodCount} 個測試方法、${shape.importCount} 個 import；區塊外內容：${shape.hasOutsideText ? '有' : '無'}。\n` : '')
-        + `- 處理：拒絕本次修復，原測試未修改；已驗證執行基線：${detail.executableBaselineAvailable ? '已另存，繼續保留' : '尚未建立'}。\n`
-        + (detail.elapsedMs === undefined ? '' : `- 本階段耗時：${detail.elapsedMs} ms。\n`)
-        + '- 後續修訂／降階／停止及候選雜湊見 role_events.jsonl；拒絕原因不代表模型修復後執行結果。\n';
+    return localize("\n### 修復失敗診斷（第 {0} 輪／修訂 {1}）\n\n", loop, detail.attempt)
+        + localize("- 階段：{0}；原因：{1}。\n", d.gate, reasons)
+        + (shape ? localize("- 回覆結構（詞法統計）：{0} 字元、{1} 個程式區塊、{2} 個 class、{3} 個測試方法、{4} 個 import；區塊外內容：{5}。\n", shape.characterCount, shape.codeFenceCount, shape.classCount, shape.testMethodCount, shape.importCount, shape.hasOutsideText ? localize("有") : localize("無")) : '')
+        + localize("- 處理：拒絕本次修復，原測試未修改；已驗證執行基線：{0}。\n", detail.executableBaselineAvailable ? localize("已另存，繼續保留") : localize("尚未建立"))
+        + (detail.elapsedMs === undefined ? '' : localize("- 本階段耗時：{0} ms。\n", detail.elapsedMs))
+        + localize("- 後續修訂／降階／停止及候選雜湊見 role_events.jsonl；拒絕原因不代表模型修復後執行結果。\n");
 }

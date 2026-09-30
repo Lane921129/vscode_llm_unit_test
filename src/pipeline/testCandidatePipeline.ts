@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { RepairFeedback, repairFailureKey } from '../validation/repairFeedback';
 import { TestReview } from '../roles/testReviewer';
 import { ReviewStatus } from '../roles/reviewSession';
@@ -85,7 +86,7 @@ export async function validateTestCandidate(
                     hooks.event(role, 'repair-rejected', { attempt, category: 'validation', contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
                         diagnostic: { version: 'repair-diagnostics-v1', gate: 'candidate-deduplication',
                             reasonCodes: ['repeated-failure'], previousTestHash: repairHash(code), previousTestUnchanged: true } satisfies RepairDiagnostic });
-                    throw new Error(`Bug Fixer 已處理過相同失敗，停止重複修復：${lastFailure}`);
+                    throw new Error(localize("Bug Fixer 已處理過相同失敗，停止重複修復：{0}", lastFailure));
                 }
                 attemptedBugFixFailures.add(failureKey);
             }
@@ -103,7 +104,7 @@ export async function validateTestCandidate(
                         candidateTestHash: repairHash(candidate), previousTestUnchanged: true } satisfies RepairDiagnostic });
                 if (role === 'bug-fixer') {
                     if (recoverWithWriter(attempt, 'repeated-candidate')) { continue; }
-                    throw new Error(`Bug Fixer 未產生有效變更，停止重複修復：${lastFailure}`);
+                    throw new Error(localize("Bug Fixer 未產生有效變更，停止重複修復：{0}", lastFailure));
                 }
                 if (writerRecoveryAttempt) { break; }
                 continue;
@@ -176,7 +177,7 @@ export async function validateTestCandidate(
                 // Only measured execution gaps may trigger another quality loop.
                 qualityIssues: [...execution.qualityGaps],
                 reviewWarnings: [
-                ...(reviewStatus === 'incomplete' ? ['Reviewer 審查未完成；工具執行通過不代表模型審查通過。'] : []),
+                ...(reviewStatus === 'incomplete' ? [localize("Reviewer 審查未完成；工具執行通過不代表模型審查通過。")] : []),
                 ...(review?.issues.filter(issue => issue.severity === 'quality').map(issue =>
                     `${issue.id}: ${issue.action}`) || [])
                 ]
@@ -189,5 +190,5 @@ export async function validateTestCandidate(
         role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }
-    throw new Error(`測試候選未通過驗證（修訂上限 ${maxRevisions}${writerRecoveryUsed ? '，已使用一次 Writer 接手' : ''}）：${lastFailure}`);
+    throw new Error(localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure));
 }

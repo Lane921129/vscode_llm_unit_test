@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { evidenceHash } from './analysisJournal';
@@ -107,7 +108,7 @@ export class CandidateCheckpointStore {
                 targetScope: context.targetScope, policyHash: context.policy.policyHash },
             executionPassed: candidate.execution.trim().length > 0,
             coverage: { sourceHash: this.sourceHash, testHash: candidate.codeHash, targetScope: context.targetScope,
-                assessment: candidate.coverage.assessment || { available: false, coverageText: 'N/A', missingLines: '未知' } },
+                assessment: candidate.coverage.assessment || { available: false, coverageText: 'N/A', missingLines: localize("未知") } },
             mutation, reviewStatus: candidate.reviewStatus, generationMode: candidate.generationMode,
             // These displayed gaps are derived from native coverage, which the
             // policy evaluates directly against its fixed thresholds above.

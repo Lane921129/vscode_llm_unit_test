@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -55,7 +56,7 @@ export function assessTargetCoverageEvidence(
     expectedRun?: { testRunId: string; testHash: string }
 ): TargetCoverageAssessment {
     const unavailable = (reason: string): TargetCoverageAssessment => ({
-        available: false, coverageText: 'N/A', missingLines: '未知', reason
+        available: false, coverageText: 'N/A', missingLines: localize("未知"), reason
     });
     let value: Record<string, unknown>;
     try {
@@ -116,7 +117,7 @@ export function assessTargetCoverageEvidence(
         invocationEvidence: invocation ? { observed: invocation.observed as boolean,
             testRunId: invocation.testRunId as string, testHash: invocation.testHash as string } : undefined,
         coverageText: total ? `${Number((100 * covered / total).toFixed(2))}%` : 'N/A',
-        missingLines: [...missing].sort((a, b) => a - b).join(', ') || '無',
+        missingLines: [...missing].sort((a, b) => a - b).join(', ') || localize("無"),
         targetExecuted: invocation ? invocation.observed as boolean
             : orderedTarget.length ? orderedTarget.some(line => executed.has(line)) : undefined,
         missingTargetLines: targetMissing,
@@ -208,7 +209,7 @@ export function assessTargetCoverage(
         return {
             available: true,
             coverageText: row.coverage,
-            missingLines: row.missing || '無',
+            missingLines: row.missing || localize("無"),
             // If coverage cannot parse its missing-line field, avoid a false
             // rejection and let normal execution/mutation validation decide.
             targetExecuted: missing === undefined || usableLines.length === 0
@@ -224,5 +225,5 @@ export function assessTargetCoverage(
                 : missingTargetBranches.length === 0,
         };
     }
-    return { available: false, coverageText: 'N/A', missingLines: '無' };
+    return { available: false, coverageText: 'N/A', missingLines: localize("無") };
 }

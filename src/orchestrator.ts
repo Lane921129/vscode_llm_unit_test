@@ -1,3 +1,5 @@
+import { localize, withLanguage } from './i18n/core';
+import { initI18n } from './i18n';
 import * as vscode from 'vscode';
 import { MutationViewProvider } from './ui/SidebarProvider';
 import {
@@ -130,7 +132,7 @@ async function runSequentially<T>(
             results.push(await tasks[index]());
         } catch (err: any) {
             if (!isExecutionCancelled()) {
-                onError(`[順序執行] 任務 ${index + 1} 執行失敗: ${err?.message ?? err}`);
+                onError(localize("[順序執行] 任務 {0} 執行失敗: {1}", index + 1, err?.message ?? err));
             }
             results.push(undefined);
         }
@@ -216,14 +218,14 @@ async function runAnalysisSession<T extends object>(
 ): Promise<void> {
     const releasePython = pythonEnvironmentActivity.acquire('use');
     if (!releasePython) {
-        await vscode.window.showInformationMessage('Python 環境準備中，請等待完成後再開始測試。');
+        await vscode.window.showInformationMessage(localize("Python 環境準備中，請等待完成後再開始測試。"));
         void sidebar.webview?.postMessage({ command: 'analysisFinished' });
         return;
     }
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles });
     if (!execution) {
         releasePython();
-        await vscode.window.showInformationMessage('已有分析執行中，請等待完成或先中止。');
+        await vscode.window.showInformationMessage(localize("已有分析執行中，請等待完成或先中止。"));
         return;
     }
     const view: AnalysisView = { webview: { postMessage: message => {
@@ -231,19 +233,21 @@ async function runAnalysisSession<T extends object>(
         return sidebar.webview?.postMessage(message) ?? Promise.resolve(false);
     } } };
     const log = (text: string) => { void view.webview?.postMessage({ command: 'appendLog', text }); };
+    sidebar.beginAnalysis(execution.id);
     // Group this run's results under its local date and minute.
     const runParams = { ...params, sessionDate: formatSessionDate() };
-    await runInExecution(execution, async () => {
+    await withLanguage(() => runInExecution(execution, async () => {
         try { await operation(runParams, log, view); }
         catch (error: any) {
-            if (!execution.cancelled) { log(`[錯誤] 測試執行發生異常: ${error?.message ?? error}`); }
+            if (!execution.cancelled) { log(localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error)); }
         } finally {
             releasePython();
             if (analysisRuns.finish(execution)) {
                 void sidebar.webview?.postMessage({ command: 'analysisFinished' });
             }
         }
-    });
+    }));
+    sidebar.endAnalysis(execution.id);
 }
 
 let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVersion' | 'buildTimestamp' | 'extensionMode'> = {
@@ -356,6 +360,7 @@ function formatSessionDate(now: Date = new Date()): string {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    if (typeof vscode.workspace?.getConfiguration === 'function') { initI18n(); }
     let buildTimestamp = 'unknown';
     try {
         buildTimestamp = fs.statSync(__filename).mtime.toISOString();
@@ -374,6 +379,10 @@ export function activate(context: vscode.ExtensionContext) {
         context.globalState.get<unknown>(MODEL_PROFILE_STORE_KEY)
     );
     const sidebarProvider = new MutationViewProvider(context.secrets, context.globalState);
+    const languageSubscription = vscode.workspace?.onDidChangeConfiguration?.(event => {
+        if (event.affectsConfiguration('llmUnitTest.language')) { sidebarProvider.refreshLanguage(); }
+    });
+    if (languageSubscription) { context.subscriptions.push(languageSubscription); }
     const environmentController = new PythonEnvironmentController(context.globalState,
         message => { void sidebarProvider.webview?.postMessage(message); });
     const importSetup = new ImportSetupController(message => { void sidebarProvider.webview?.postMessage(message); });
@@ -403,10 +412,10 @@ export function activate(context: vscode.ExtensionContext) {
                 const funcs = await extractFunctionsWithAst(runParams.filePath, runParams.pythonExecutable);
                 throwIfExecutionCancelled();
                 if (funcs.length === 0) {
-                    log(`[系統] 檔案 ${path.basename(runParams.filePath)} 中無可測試函式。`);
+                    log(localize("[系統] 檔案 {0} 中無可測試函式。", path.basename(runParams.filePath)));
                     return;
                 }
-                log(`[系統] 全檔案掃描：${funcs.length} 個函式，將逐一分析與測試。`);
+                log(localize("[系統] 全檔案掃描：{0} 個函式，將逐一分析與測試。", funcs.length));
                 const processed = await runSequentially(funcs.map(func => async () => {
                     throwIfExecutionCancelled();
                     await executeSingleFileAnalysis({ ...runParams, funcName: func.fullName }, log, view);
@@ -414,7 +423,7 @@ export function activate(context: vscode.ExtensionContext) {
                 }), log);
                 throwIfExecutionCancelled();
                 const blocked = processed.filter(result => result === undefined).length;
-                log(`[系統] 全檔案流程結束：${funcs.length} 個目標，${blocked} 個流程錯誤／受阻。各函式是否通過以結果卡與報告為準。`);
+                log(localize("[系統] 全檔案流程結束：{0} 個目標，{1} 個流程錯誤／受阻。各函式是否通過以結果卡與報告為準。", funcs.length, blocked));
             });
         }
     );
@@ -449,7 +458,7 @@ export function activate(context: vscode.ExtensionContext) {
                     catch {
                         throwIfExecutionCancelled();
                         batch.discoveryFailed(runParams.batchPath, 'source-discovery');
-                        throw new Error('批次來源掃描未完成，請檢查資料夾是否存在及讀取權限。');
+                        throw new Error(localize("批次來源掃描未完成，請檢查資料夾是否存在及讀取權限。"));
                     }
                     const tasks: Array<() => Promise<void>> = [];
                     const importTargets: ImportCheckTarget[] = [];
@@ -460,7 +469,7 @@ export function activate(context: vscode.ExtensionContext) {
                         catch {
                             throwIfExecutionCancelled();
                             batch.discoveryFailed(file, 'ast-discovery');
-                            log(`[系統] 無法解析 ${path.relative(runParams.batchPath, file)}，批次摘要將保留掃描未完成狀態。`);
+                            log(localize("[系統] 無法解析 {0}，批次摘要將保留掃描未完成狀態。", path.relative(runParams.batchPath, file)));
                             continue;
                         }
                         batch.discover(file, funcs.map(func => func.fullName));
@@ -471,7 +480,7 @@ export function activate(context: vscode.ExtensionContext) {
                             tasks.push(async () => {
                                 throwIfExecutionCancelled();
                                 batch.begin(id);
-                                log(`[系統] 批次目標：${path.basename(file)}:${func.fullName}`);
+                                log(localize("[系統] 批次目標：{0}:{1}", path.basename(file), func.fullName));
                                 try { await executeSingleFileAnalysis({
                                     ...runParams, filePath: file, funcName: func.fullName,
                                     projectName, batchJournal: batch, batchTargetId: id
@@ -491,18 +500,18 @@ export function activate(context: vscode.ExtensionContext) {
                         const report = path.join(importCheck.directory, 'import_check.md');
                         await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(report), { preview: true });
                         const choice = await vscode.window.showWarningMessage(
-                            `${blockedModules} 個模組載入受阻；尚未呼叫模型。可先用「檢查模組載入／初始化設定」處理，或繼續並保留受阻目標的失敗。`,
-                            { modal: true }, '繼續測試並記錄失敗');
+                            localize("{0} 個模組載入受阻；尚未呼叫模型。可先用「檢查模組載入／初始化設定」處理，或繼續並保留受阻目標的失敗。", blockedModules),
+                            { modal: true }, localize("繼續測試並記錄失敗"));
                         throwIfExecutionCancelled();
-                        if (choice !== '繼續測試並記錄失敗') { log('[系統] 已在模型請求前停止；修復環境後請重新開始。'); return; }
+                        if (choice !== localize("繼續測試並記錄失敗")) { log(localize("[系統] 已在模型請求前停止；修復環境後請重新開始。")); return; }
                     }
-                    log(`[系統] 批次掃描完成：${tasks.length} 個函式，將逐一分析與測試。`);
+                    log(localize("[系統] 批次掃描完成：{0} 個函式，將逐一分析與測試。", tasks.length));
                     await runSequentially(tasks, log);
                     outcome = 'completed';
                 } finally {
                     batch.finish(isExecutionCancelled() ? 'cancelled' : outcome);
-                    log(`[批次結果] ${batch.summary()}`);
-                    log(`[系統] 批次狀態與環境問題摘要：${path.join(batchDirectory, 'batch_summary.md')}（執行結束不代表全部通過）`);
+                    log(localize("[批次結果] {0}", batch.summary()));
+                    log(localize("[系統] 批次狀態與環境問題摘要：{0}（執行結束不代表全部通過）", path.join(batchDirectory, 'batch_summary.md')));
                     if (!isExecutionCancelled()) {
                         await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(path.join(batchDirectory, 'batch_summary.md')), { preview: true });
                     }
@@ -513,7 +522,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
         if (analysisRuns.cancel()) {
-            sidebarProvider.webview?.postMessage({ command: 'appendLog', text: '\n[系統] 已中止本次分析，可重新開始。' });
+            sidebarProvider.webview?.postMessage({ command: 'appendLog', text: localize("\n[系統] 已中止本次分析，可重新開始。") });
             sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
         }
     });
@@ -705,7 +714,7 @@ async function requestLlmApiUnlocked(
 ): Promise<string> {
     const remainingTimeoutMs = remainingDeadlineMs(deadlineAt);
     if (remainingTimeoutMs <= 0) {
-        throw new Error(`API 請求已超過 ${params.timeoutSeconds} 秒總時限。`);
+        throw new Error(localize("API 請求已超過 {0} 秒總時限。", params.timeoutSeconds));
     }
     let apiUrl = "";
     let bodyData = {};
@@ -740,7 +749,7 @@ async function requestLlmApiUnlocked(
     } else {
         const actualKey = resolveGoogleApiKey(params.cloudKey);
         if (!actualKey) {
-            throw new Error('找不到 Google AI Studio API Key。請在側邊欄儲存對應模型的 key，或設定 LLM_UNIT_TEST_GOOGLE_API_KEY。');
+            throw new Error(localize("找不到 Google AI Studio API Key。請在側邊欄儲存對應模型的 key，或設定 LLM_UNIT_TEST_GOOGLE_API_KEY。"));
         }
         const responseSchema = responseSchemaForOutputFormat(outputFormat);
         const googleRequest = buildGoogleGenerateContentRequest(
@@ -764,7 +773,7 @@ async function requestLlmApiUnlocked(
     const timeoutId = setTimeout(() => {
         deadlineExpired = true;
         controller.abort();
-        log(`[警告] API 請求超時 (超過 ${params.timeoutSeconds} 秒)`);
+        log(localize("[警告] API 請求超時 (超過 {0} 秒)", params.timeoutSeconds));
     }, remainingTimeoutMs);
     try {
         const send = (request?: GoogleGenerateContentRequest) => retryTransientProviderRequest(
@@ -781,22 +790,22 @@ async function requestLlmApiUnlocked(
                     || isExecutionCancelled()
                     || remainingDeadlineMs(deadlineAt) <= 0,
                 onRetry: event => log(
-                    `[供應商重試] ${event.reason}；等待 ${event.delayMs}ms 後重試 `
+                    localize("[供應商重試] {0}；等待 {1}ms 後重試 ", event.reason, event.delayMs)
                     + `(${event.retryAttempt}/${event.maxAttempts})。`
                 )
             }
         );
         const response = cloudRequest ? await googleThinkingSession.send(cloudRequest, send,
-            () => log('[思考量回退] 供應商明確不支援低思考量，沿原時限使用服務預設。')) : await send();
+            () => log(localize("[思考量回退] 供應商明確不支援低思考量，沿原時限使用服務預設。"))) : await send();
         throwIfExecutionCancelled();
         if (!response.ok) {
             await response.body?.cancel();
             if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
-                log(`[格式回退] 供應商拒絕結構化輸出（HTTP ${response.status}），沿原時限改用一般文字輸出。`);
+                log(localize("[格式回退] 供應商拒絕結構化輸出（HTTP {0}），沿原時限改用一般文字輸出。", response.status));
                 return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
             }
             throw new AnalysisStageError('model-api', 'model-request',
-                `API 伺服器錯誤 (HTTP ${response.status})；未記錄供應商回應內容。`, { httpStatus: response.status });
+                localize("API 伺服器錯誤 (HTTP {0})；未記錄供應商回應內容。", response.status), { httpStatus: response.status });
         }
 
         const resJson = await response.json() as Record<string, unknown>;
@@ -809,25 +818,25 @@ async function requestLlmApiUnlocked(
             if (customText) {
                 responseText = customText;
             } else if ((resJson as any).error) {
-                throw new AnalysisStageError('model-api', 'model-request', '自訂 API 回傳錯誤物件；未記錄供應商回應內容。');
+                throw new AnalysisStageError('model-api', 'model-request', localize("自訂 API 回傳錯誤物件；未記錄供應商回應內容。"));
             } else {
-                throw new AnalysisStageError('model-format', 'model-response', '無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。');
+                throw new AnalysisStageError('model-format', 'model-response', localize("無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。"));
             }
         } else {
             const cloudText = getGoogleGeneratedText(resJson);
             if (cloudText) {
                 responseText = cloudText;
             } else if ((resJson as any).error) {
-                throw new AnalysisStageError('model-api', 'model-request', '雲端 API 回傳錯誤物件；未記錄供應商回應內容。');
+                throw new AnalysisStageError('model-api', 'model-request', localize("雲端 API 回傳錯誤物件；未記錄供應商回應內容。"));
             } else {
-                throw new AnalysisStageError('model-format', 'model-response', '無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。');
+                throw new AnalysisStageError('model-format', 'model-response', localize("無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。"));
             }
         }
 
         // Reviewer contract failures belong to the bounded review session.
         // Repeating the same invalid assessment in text mode doubles its cost.
         if (!['review-json', 'quality-json'].includes(outputFormat) && !isStructuredResponseUsable(responseText, outputFormat)) {
-            log('[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。');
+            log(localize("[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。"));
             return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
         }
         throwIfExecutionCancelled();
@@ -835,11 +844,11 @@ async function requestLlmApiUnlocked(
     } catch (error) {
         throwIfExecutionCancelled();
         if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) {
-            throw new AnalysisStageError('timeout', 'model-request', `API 請求超時 (超過 ${params.timeoutSeconds} 秒總時限)`,
+            throw new AnalysisStageError('timeout', 'model-request', localize("API 請求超時 (超過 {0} 秒總時限)", params.timeoutSeconds),
                 { cause: 'deadline', outputFormat, deadlineAt });
         }
         if (error instanceof AnalysisStageError) { throw error; }
-        throw new AnalysisStageError('model-api', 'model-request', 'API 連線或回應讀取失敗；未記錄供應商回應內容。');
+        throw new AnalysisStageError('model-api', 'model-request', localize("API 連線或回應讀取失敗；未記錄供應商回應內容。"));
     } finally {
         clearTimeout(timeoutId);
         release?.();
@@ -904,7 +913,7 @@ async function validateGeneratedTestCode(
                 } }) : code, timeout: 5000 }
         );
         if (parsed.code !== 0) {
-            return { valid: false, reason: `Python AST 無法解析：${(parsed.stderr || parsed.stdout).trim().slice(0, 300)}` };
+            return { valid: false, reason: localize("Python AST 無法解析：{0}", (parsed.stderr || parsed.stdout).trim().slice(0, 300)) };
         }
         if (bindingContext) {
             const bindings = JSON.parse(parsed.stdout) as { valid: boolean; reason?: string };
@@ -920,21 +929,21 @@ async function validateGeneratedTestCode(
             if (compatibility.code !== 0) {
                 return {
                     valid: false,
-                    reason: `目標函式簽名驗證無法執行：${(compatibility.stderr || compatibility.stdout).trim().slice(0, 300)}`
+                    reason: localize("目標函式簽名驗證無法執行：{0}", (compatibility.stderr || compatibility.stdout).trim().slice(0, 300))
                 };
             }
             try {
                 const callValidation = JSON.parse(compatibility.stdout) as { valid?: boolean; reason?: string };
                 if (!callValidation.valid) {
-                    return { valid: false, reason: callValidation.reason || '呼叫不符合被測函式簽名' };
+                    return { valid: false, reason: callValidation.reason || localize("呼叫不符合被測函式簽名") };
                 }
             } catch {
-                return { valid: false, reason: '目標函式簽名驗證回傳了無法解析的內容' };
+                return { valid: false, reason: localize("目標函式簽名驗證回傳了無法解析的內容") };
             }
         }
         return { valid: true };
     } catch (error: any) {
-        return { valid: false, reason: `Python AST 驗證無法執行：${error.message || error}` };
+        return { valid: false, reason: localize("Python AST 驗證無法執行：{0}", error.message || error) };
     }
 }
 
@@ -1019,32 +1028,32 @@ function parseMutmutSurvived(mutatestResult: string): string {
 }
 
 function buildAstMarkdownReport(astContext: AstContext): string {
-    let astReport = `### AST 靜態解析結果\n`;
-    astReport += `- 函式名稱: \`${astContext.name}\`\n`;
-    astReport += `- 參數列表: \`${astContext.args.join(', ') || '無'}\`\n`;
-    astReport += `- 相依呼叫: \`${astContext.calls.join(', ') || '無'}\`\n`;
+    let astReport = localize("### AST 靜態解析結果\n");
+    astReport += localize("- 函式名稱: `{0}`\n", astContext.name);
+    astReport += localize("- 參數列表: `{0}`\n", astContext.args.join(', ') || localize("無"));
+    astReport += localize("- 相依呼叫: `{0}`\n", astContext.calls.join(', ') || localize("無"));
     if (astContext.docstring) {
-        astReport += `- 文件註解: \`${astContext.docstring.trim().replace(/\n/g, ' ')}\`\n`;
+        astReport += localize("- 文件註解: `{0}`\n", astContext.docstring.trim().replace(/\n/g, ' '));
     }
     if (astContext.dependencies && astContext.dependencies.length > 0) {
-        astReport += `- 跨檔案依賴: ${astContext.dependencies.map((d: any) => `\`${formatPythonImport(d)}.${d.name}\``).join(', ')}\n`;
+        astReport += localize("- 跨檔案依賴: {0}\n", astContext.dependencies.map((d: any) => `\`${formatPythonImport(d)}.${d.name}\``).join(', '));
     }
     if (astContext.file_imports && astContext.file_imports.length > 0) {
-        astReport += `- 模組 Imports: ${astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', ')}\n`;
+        astReport += localize("- 模組 Imports: {0}\n", astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', '));
     }
     if (astContext.referenced_globals && astContext.referenced_globals.length > 0) {
-        astReport += `- 引用模組常數: ${astContext.referenced_globals.map(item => `\`${item.name}\``).join(', ')}\n`;
+        astReport += localize("- 引用模組常數: {0}\n", astContext.referenced_globals.map(item => `\`${item.name}\``).join(', '));
     }
     if (astContext.class_context) {
         const init = astContext.class_context.init;
         const effectiveInit = astContext.class_context.effective_init;
         const inherited = effectiveInit && effectiveInit.defined_on !== astContext.class_context.name
-            ? `；繼承建構子：\`${effectiveInit.defined_on}(${effectiveInit.params.join(', ') || '無'})\``
+            ? localize("；繼承建構子：`{0}({1})`", effectiveInit.defined_on, effectiveInit.params.join(', ') || localize("無"))
             : '';
-        astReport += `- 類別語境: \`${astContext.class_context.name}\`，__init__ 參數：\`${init.params.join(', ') || '無'}\`，初始化屬性：\`${init.assigns.map(item => item.name).join(', ') || '無'}\`${inherited}\n`;
+        astReport += localize("- 類別語境: `{0}`，__init__ 參數：`{1}`，初始化屬性：`{2}`{3}\n", astContext.class_context.name, init.params.join(', ') || localize("無"), init.assigns.map(item => item.name).join(', ') || localize("無"), inherited);
     }
     if (astContext.callerContexts && astContext.callerContexts.length > 0) {
-        astReport += `- 呼叫站語境 (${astContext.callerContexts.length} 個):\n`;
+        astReport += localize("- 呼叫站語境 ({0} 個):\n", astContext.callerContexts.length);
         for (const ctx of astContext.callerContexts) {
             const argsStr = ctx.args.join(', ');
             const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
@@ -1055,7 +1064,7 @@ function buildAstMarkdownReport(astContext: AstContext): string {
     if (astContext.dependencyContexts && astContext.dependencyContexts.length > 0) {
         for (const dep of astContext.dependencyContexts) {
             if (dep.callerContexts && dep.callerContexts.length > 0) {
-                astReport += `- \`${dep.name}\` 的呼叫站語境 (${dep.callerContexts.length} 個):\n`;
+                astReport += localize("- `{0}` 的呼叫站語境 ({1} 個):\n", dep.name, dep.callerContexts.length);
                 for (const ctx of dep.callerContexts) {
                     const argsStr = ctx.args.join(', ');
                     const kwargsStr = Object.entries(ctx.kwargs as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
@@ -1079,22 +1088,22 @@ async function resolveAstAndDependencies(
     progressDirectory?: string,
     probeBehavior = true
 ): Promise<AstContext | null> {
-    log(`[AST] 正在解析函式 \`${funcName}\` 的結構與依賴...`);
+    log(localize("[AST] 正在解析函式 `{0}` 的結構與依賴...", funcName));
     const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
     if (!astContext || astContext.error) {
         return astContext;
     }
-    log(`[AST] 解析完成！已擷取函式特徵與依賴。`);
+    log(localize("[AST] 解析完成！已擷取函式特徵與依賴。"));
     const environment = await beforeBehavior(astContext);
     astContext.dependencyResolution = environment.dependencies || [];
     astContext.dependencyContexts = [...(astContext.localDependencyContexts || [])];
     astContext.sourceVersions = [];
     if (astContext.retrieval?.selected) {
-        log(`[AST] 已檢索 ${astContext.retrieval.selected} 個同模組 helper，僅作來源語境，不新增執行觀測。`);
+        log(localize("[AST] 已檢索 {0} 個同模組 helper，僅作來源語境，不新增執行觀測。", astContext.retrieval.selected));
     }
 
     if (astContext.dependencies && astContext.dependencies.length > 0) {
-        log(`[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼...`);
+        log(localize("[AST] 發現跨檔案依賴！正在深度擷取相依模組原始碼..."));
 
         for (const dep of astContext.dependencies) {
             const resolved = environment.dependencies?.find(item => item.module === dep.module
@@ -1105,25 +1114,25 @@ async function resolveAstAndDependencies(
                 const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
                 if (depAst && !depAst.error) {
                     depAst.sourceHash = evidenceHash(depAst.code);
-                    log(`[AST] 掃描 ${dep.name} 的呼叫站語境...`);
+                    log(localize("[AST] 掃描 {0} 的呼叫站語境...", dep.name));
                     const callers = await findCallerContexts(dep.name, projectRoot, depFilePath, pythonExecutable);
                     if (callers.length > 0) {
                         depAst.callerContexts = callers;
-                        log(`[AST] 找到 ${callers.length} 個呼叫點：${callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')}`);
+                        log(localize("[AST] 找到 {0} 個呼叫點：{1}", callers.length, callers.map(c => `${c.caller_file}:${c.caller_func}`).join(', ')));
                     }
                     const dependencyTrace = probeBehavior
                         ? await runBehaviorProbe(depFilePath, dep.name, callers, pythonExecutable, [], progressDirectory) : undefined;
                     if (dependencyTrace && !dependencyTrace.load_error) {
                         depAst.traceResult = dependencyTrace;
-                        log(`[行為探測] 相依 ${dep.name}：取得 ${dependencyTrace.examples.length} 個成功範例、${dependencyTrace.errors.length} 個例外範例。`);
+                        log(localize("[行為探測] 相依 {0}：取得 {1} 個成功範例、{2} 個例外範例。", dep.name, dependencyTrace.examples.length, dependencyTrace.errors.length));
                     } else if (dependencyTrace?.load_error) {
-                        log(`[行為探測] 相依 ${dep.name} 無法安全取得事實：${dependencyTrace.load_error}（保留原始碼語境，不中止分析）。`);
+                        log(localize("[行為探測] 相依 {0} 無法安全取得事實：{1}（保留原始碼語境，不中止分析）。", dep.name, dependencyTrace.load_error));
                     }
                     astContext.dependencyContexts.push(depAst);
-                    log(`[AST] 成功擷取外部依賴: ${formatPythonImport(dep)}.${dep.name}`);
+                    log(localize("[AST] 成功擷取外部依賴: {0}.{1}", formatPythonImport(dep), dep.name));
                 }
             } else {
-                log(`[AST] 相依 ${formatPythonImport(dep)}.${dep.name} 未提供來源：${resolved?.reason || 'not-resolved-by-preflight'}。`);
+                log(localize("[AST] 相依 {0}.{1} 未提供來源：{2}。", formatPythonImport(dep), dep.name, resolved?.reason || 'not-resolved-by-preflight'));
             }
         }
     }
@@ -1131,11 +1140,11 @@ async function resolveAstAndDependencies(
     const selfCallers = await findCallerContexts(funcName, projectRoot, filePath, pythonExecutable);
     if (selfCallers.length > 0) {
         astContext.callerContexts = selfCallers;
-        log(`[AST] 目標函式被呼叫 ${selfCallers.length} 次，已收集所有呼叫語境。`);
+        log(localize("[AST] 目標函式被呼叫 {0} 次，已收集所有呼叫語境。", selfCallers.length));
     }
 
     if (!probeBehavior) { return astContext; }
-    log(`[行為探測] 正在受控執行函式以取得輸入輸出觀測...`);
+    log(localize("[行為探測] 正在受控執行函式以取得輸入輸出觀測..."));
     const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable, [], progressDirectory);
     if (traceResult) { astContext.traceResult = traceResult; }
     if (traceResult && !traceResult.load_error) {
@@ -1143,11 +1152,11 @@ async function resolveAstAndDependencies(
         const exCount = traceResult.examples.length;
         const errCount = traceResult.errors.length;
         const sourceLabel = traceResult.input_source === 'source_guided_retry'
-            ? '（caller 字面值無效，已改用原始碼導向輸入）'
-            : traceResult.input_source === 'caller_literals' ? '（含 caller 字面值）' : '';
-        log(`[行為探測] 完成！取得 ${exCount} 個成功範例、${errCount} 個例外觀測。${sourceLabel}`);
+            ? localize("（caller 字面值無效，已改用原始碼導向輸入）")
+            : traceResult.input_source === 'caller_literals' ? localize("（含 caller 字面值）") : '';
+        log(localize("[行為探測] 完成！取得 {0} 個成功範例、{1} 個例外觀測。{2}", exCount, errCount, sourceLabel));
     } else if (traceResult?.load_error) {
-        log(`[行為探測] 受控執行失敗: ${traceResult.load_error}（將繼續使用靜態分析）`);
+        log(localize("[行為探測] 受控執行失敗: {0}（將繼續使用靜態分析）", traceResult.load_error));
     }
 
     return astContext;
@@ -1164,7 +1173,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const root = relative.startsWith('..') || path.isAbsolute(relative) ? path.dirname(params.filePath) : requestedRoot;
     const fixtures = createImportFixturePlan(root, config.get<unknown>('importFixtures', []), config.get<string>('importFixtureRoot', ''));
     if (!fixtures && config.get<ImportFixtureRule[]>('importFixtures', []).length) {
-        log('[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。');
+        log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。"));
     }
     return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(limits),
         () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider)));
@@ -1173,7 +1182,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
     params = { ...params, ...normalizeExecutionSettings(params) };
     const mode = verificationMode(params.validationMode);
-    const gateDescription = mode === 'full' ? '結構、執行、覆蓋率與突變驗證' : '結構、真實目標呼叫與隔離執行驗證';
+    const gateDescription = mode === 'full' ? localize("結構、執行、覆蓋率與突變驗證") : localize("結構、真實目標呼叫與隔離執行驗證");
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
         ?? { current: currentModelProfile, stored: storedModelProfiles };
@@ -1215,9 +1224,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     if (params.funcName && !dummyNameMarked) {
         const comp = await assessFunctionComplexity(params.filePath, params.funcName, pythonExecutable);
         complexityScore = comp.score;
-        log(`[Tier] 複雜度評估: ${comp.score}/100 (${comp.level})${comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''}`);
+        log(localize("[Tier] 複雜度評估: {0}/100 ({1}){2}", comp.score, comp.level, comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''));
     } else if (dummyNameMarked) {
-        log(`[快速通道] 偵測到 dummy 名稱標記，跳過複雜度評估與後續 AST 分析。`);
+        log(localize("[快速通道] 偵測到 dummy 名稱標記，跳過複雜度評估與後續 AST 分析。"));
     }
     const selectedEndpointKey = qualificationEndpointKey(params.envType, params.envType === 'local' ? params.ollamaUrl : params.envType === 'custom' ? params.customUrl : undefined);
     const selectedStoredProfile = findModelProfile(modelSnapshot.stored, {
@@ -1251,14 +1260,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
-        log('[模型能力] 此模型已驗證純 Python unittest 輸出；正式測試、語意分析與突變分流將不強制供應商 JSON schema。');
+        log(localize("[模型能力] 此模型已驗證純 Python unittest 輸出；正式測試、語意分析與突變分流將不強制供應商 JSON schema。"));
     }
     if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
             ? mode === 'execution'
-                ? '[模型能力] 此供應商／模型尚未完成 Writer 探測；執行驗證的 Auto 需要先透過「測試連線」確認生成能力。'
-                : '[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。'
-            : `[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier ${userTierSetting.replace('tier', '')} 選擇繼續執行。輸出仍須通過${gateDescription}。`);
+                ? localize("[模型能力] 此供應商／模型尚未完成 Writer 探測；執行驗證的 Auto 需要先透過「測試連線」確認生成能力。")
+                : localize("[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。")
+            : localize("[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier {0} 選擇繼續執行。輸出仍須通過{1}。", userTierSetting.replace('tier', ''), gateDescription));
     }
     const resolvedTier = resolveTier(
         modelParamBillion,
@@ -1274,13 +1283,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         resolvedTier
     );
     if (qualifiedForSelectedModel === false && userTierSetting !== 'auto') {
-        log(`[模型能力] 此模型尚未通過 unittest 探測；保留你的手動 Tier 選擇，並以${gateDescription}檢查每次輸出。`);
+        log(localize("[模型能力] 此模型尚未通過 unittest 探測；保留你的手動 Tier 選擇，並以{0}檢查每次輸出。", gateDescription));
     }
-    log(mode === 'execution' ? '[系統] 執行驗證：使用來源與明確 Mock 生成測試，延後完整品質流程。'
-        : `[系統] 策略路由: ${userTierSetting === 'auto' ? 'Auto 自動' : '使用者指定'} → Tier ${resolvedTier}`);
+    log(mode === 'execution' ? localize("[系統] 執行驗證：使用來源與明確 Mock 生成測試，延後完整品質流程。")
+        : localize("[系統] 策略路由: {0} → Tier {1}", userTierSetting === 'auto' ? localize("Auto 自動") : localize("使用者指定"), resolvedTier));
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {
-        log('[錯誤] 找不到目標檔案路徑');
+        log(localize("[錯誤] 找不到目標檔案路徑"));
         return;
     }
 
@@ -1288,7 +1297,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let tier1GenerationModeRecorded = false;
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let currentTier = resolvedTier;
-    let finalReportMarkdown = `# ${mode === 'execution' ? '執行驗證與修復報告' : '突變測試與修復分析報告'}\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **起始生成方式**: ${mode === 'execution' ? '來源與明確 Mock 測試假設；採執行驗證流程' : 'Tier ' + currentTier}\n- **日期**: ${reportDateStr}\n\n`;
+    let finalReportMarkdown = localize("# {0}\n\n- **目標檔案**: {1}\n- **測試函式**: {2}\n- **起始生成方式**: {3}\n- **日期**: {4}\n\n", mode === 'execution' ? localize("執行驗證與修復報告") : localize("突變測試與修復分析報告"), params.filePath, params.funcName || localize("全檔案"), mode === 'execution' ? localize("來源與明確 Mock 測試假設；採執行驗證流程") : 'Tier ' + currentTier, reportDateStr);
     finalReportMarkdown += formatReportProvenance({
         ...extensionBuildIdentity,
         modelProvider: params.envType,
@@ -1320,23 +1329,23 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
     // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
     if (dummyNameMarked) {
-        finalReportMarkdown += `## 🚀 Dummy 標記快速通道\n\n`;
-        finalReportMarkdown += `> [!NOTE]\n> 函式名稱包含明確 \`dummy\` token，已依使用者標記略過 AST、受控行為探測、LLM 與突變測試。\n\n`;
-        finalReportMarkdown += `- **測試狀態**: 已略過（Dummy／雜訊函式）\n`;
-        finalReportMarkdown += `- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n`;
+        finalReportMarkdown += localize("## 🚀 Dummy 標記快速通道\n\n");
+        finalReportMarkdown += localize("> [!NOTE]\n> 函式名稱包含明確 `dummy` token，已依使用者標記略過 AST、受控行為探測、LLM 與突變測試。\n\n");
+        finalReportMarkdown += localize("- **測試狀態**: 已略過（Dummy／雜訊函式）\n");
+        finalReportMarkdown += localize("- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n");
         throwIfExecutionCancelled();
         fs.writeFileSync(existingReport, withOutcomeHeader(finalReportMarkdown, { terminalStatus: 'dummy-skipped' }), 'utf-8');
         sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
             func: params.funcName || '', reportPath: existingReport, outcome: presentOutcome({ terminalStatus: 'dummy-skipped' }) });
         if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.dummy(params.batchTargetId); }
-        log(`[快速通道] ✅ Dummy 函式 ${params.funcName} 已略過；結果已寫入 ${existingReport}`);
+        log(localize("[快速通道] ✅ Dummy 函式 {0} 已略過；結果已寫入 {1}", params.funcName, existingReport));
         return;
     }
 
     const qualityPolicy = createStrictQualityPolicy();
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName,
         mode === 'full' ? qualityPolicy : undefined, mode);
-    finalReportMarkdown += `- **驗證目標**: ${mode === 'execution' ? '執行驗證（Trace、覆蓋率、突變與品質審查延後）' : '完整品質驗證'}\n`;
+    finalReportMarkdown += localize("- **驗證目標**: {0}\n", mode === 'execution' ? localize("執行驗證（Trace、覆蓋率、突變與品質審查延後）") : localize("完整品質驗證"));
     const tierHistory: TierHistory = { requested: userTierSetting, initial: resolvedTier, rounds: [], transitions: [] };
     if (mode === 'full') { journal.knowledge({ tierHistory }); }
     const qualityAnalystSession = new QualityAnalystSession();
@@ -1346,7 +1355,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     if (importFixtures) {
         fs.writeFileSync(path.join(sessionDir, 'import_fixtures.json'), JSON.stringify(importFixtures, null, 2), 'utf8');
         journal.knowledge({ importFixtureId: importFixtures.id, importFixtureContract: 'import-fixtures-v1' });
-        finalReportMarkdown += `\n- **匯入測試設定**: ${importFixtures.id}（import_fixtures.json）。初始化外部操作使用明確 mock；未驗證真實目錄建立、設定檔或介面啟動。\n`;
+        finalReportMarkdown += localize("\n- **匯入測試設定**: {0}（import_fixtures.json）。初始化外部操作使用明確 mock；未驗證真實目錄建立、設定檔或介面啟動。\n", importFixtures.id);
     }
     const checkpoints = new CandidateCheckpointStore(sessionDir, journal.sourceHash, params.funcName || 'file', {
         policy: qualityPolicy, sourcePath: params.filePath,
@@ -1356,7 +1365,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const diagnosticReport = journal.record(currentLoop, stage, status, detail);
         const description = describeStageEvent(stage, status, detail, mode);
         log(`[${stage}] ${description}`);
-        finalReportMarkdown += `- **角色事件**: ${stage} / ${status}：${description}（完整證據：role_events.jsonl）\n`;
+        finalReportMarkdown += localize("- **角色事件**: {0} / {1}：{2}（完整證據：role_events.jsonl）\n", stage, status, description);
         finalReportMarkdown += diagnosticReport + (stage === 'repair-routing' ? formatRepairRouting(detail) : '');
         writeReport();
     };
@@ -1381,7 +1390,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (!promptFits(contractedSystem, prompt, activeModelProfile.budgetTokens)) {
             recordRole('model-request', 'budget-exceeded', metrics);
             throw new AnalysisStageError('validation', 'prompt-budget',
-                '完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。', metrics);
+                localize("完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。"), metrics);
         }
         const started = Date.now();
         currentTargetBudget()?.consumeModelRequest();
@@ -1399,7 +1408,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             throw error;
         }
     };
-    finalReportMarkdown += `- **執行識別**: ${journal.runId}\n- **來源版本**: ${journal.sourceHash}\n\n`;
+    finalReportMarkdown += localize("- **執行識別**: {0}\n- **來源版本**: {1}\n\n", journal.runId, journal.sourceHash);
     recordRole('pipeline', 'running', { target: params.funcName });
     try {
     let astContext: AstContext | null = null;
@@ -1433,7 +1442,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             targetFuncName = astContext.name || targetFuncName;
             finalReportMarkdown += buildAstMarkdownReport(astContext);
         } else {
-            throw new AnalysisStageError('ast-trace', 'static-analysis', astContext?.error || '無法解析選取的目標函式；未退回其他目標。');
+            throw new AnalysisStageError('ast-trace', 'static-analysis', astContext?.error || localize("無法解析選取的目標函式；未退回其他目標。"));
         }
     }
     const targetImportModule = inferTargetImportModule(params.filePath, astContext?.file_imports || []);
@@ -1458,13 +1467,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
     if (mode === 'execution') {
         if (!astContext || !params.funcName) {
-            throw new AnalysisStageError('ast-trace', 'static-analysis', '執行驗證需要明確的函式目標。');
+            throw new AnalysisStageError('ast-trace', 'static-analysis', localize("執行驗證需要明確的函式目標。"));
         }
         journal.knowledge({ traceStatus: 'deferred', coverage: null, mutationScore: null,
             mutationStatus: 'deferred', reviewStatus: 'deferred', qualityAssessment: null });
         if (!mayUseModelAuthoredTests) {
             throw new AnalysisStageError('validation', 'writer-qualification',
-                'Auto 的 Writer 尚未通過此模型的生成探測。請先執行「測試連線」，或明確選擇手動 Tier；執行驗證模式不會改用 Trace 代替生成。');
+                localize("Auto 的 Writer 尚未通過此模型的生成探測。請先執行「測試連線」，或明確選擇手動 Tier；執行驗證模式不會改用 Trace 代替生成。"));
         }
         const evidence = getReviewEvidence('', '', targetFuncName, astContext.args, astContext.code,
             astContext, targetImportModule, undefined,
@@ -1488,7 +1497,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
                 revise: async (code, failure, role, attempt) => {
                     if (role === 'bug-fixer' && !mayUseModelAuthoredRepair) {
-                        throw new AnalysisStageError('validation', 'fixer-qualification', 'Auto 的 Bug Fixer 尚未通過資格探測；已保存失敗測試。');
+                        throw new AnalysisStageError('validation', 'fixer-qualification', localize("Auto 的 Bug Fixer 尚未通過資格探測；已保存失敗測試。"));
                     }
                     const system = role === 'bug-fixer' ? getBugFixerSystemPrompt() : getExecutionWriterSystemPrompt();
                     const prompt = role === 'bug-fixer'
@@ -1514,30 +1523,30 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         input: JSON.stringify({ contractVersion: ROLE_CONTRACT_VERSIONS.bugFix, previous, candidate, failure }),
                         timeout: 5000, env: testExecutionEnv
                     });
-                    if (result.code !== 0) { return { reason: REPAIR_REASON_LABELS['scope-tool-error'], reasonCode: 'scope-tool-error' }; }
+                    if (result.code !== 0) { return { reason: localize(REPAIR_REASON_LABELS['scope-tool-error']), reasonCode: 'scope-tool-error' }; }
                     try {
                         const value = JSON.parse(result.stdout);
                         const reasonCode = repairReasonCode(value.reasonCode);
-                        return value.valid === true ? undefined : { reason: REPAIR_REASON_LABELS[reasonCode], reasonCode };
+                        return value.valid === true ? undefined : { reason: localize(REPAIR_REASON_LABELS[reasonCode]), reasonCode };
                     } catch {
-                        return { reason: REPAIR_REASON_LABELS['scope-result-invalid'], reasonCode: 'scope-result-invalid' };
+                        return { reason: localize(REPAIR_REASON_LABELS['scope-result-invalid']), reasonCode: 'scope-result-invalid' };
                     }
                 }
             }
         });
-        finalReportMarkdown += `\n### 執行驗證結果\n\n- 已執行測試：[${accepted.testFile}](${accepted.testFile})\n`
-            + '- 已驗證真實目標呼叫、有效案例與隔離完成；結果綁定本次來源及測試版本。\n'
-            + '- Trace、覆蓋率、突變及品質審查：未執行；完整品質尚未驗證。\n'
-            + '- 這份結果只涵蓋已執行案例與明確 mock 設定，不代表整個應用程式或所有需求正確。\n'
+        finalReportMarkdown += localize("\n### 執行驗證結果\n\n- 已執行測試：[{0}]({1})\n", accepted.testFile, accepted.testFile)
+            + localize("- 已驗證真實目標呼叫、有效案例與隔離完成；結果綁定本次來源及測試版本。\n")
+            + localize("- Trace、覆蓋率、突變及品質審查：未執行；完整品質尚未驗證。\n")
+            + localize("- 這份結果只涵蓋已執行案例與明確 mock 設定，不代表整個應用程式或所有需求正確。\n")
             + `\n\`\`\`text\n${journal.snapshot().execution}\n\`\`\`\n`;
         const expectationRepair = journal.snapshot().expectationRepair as { file: string; candidateTestHash: string } | undefined;
         if (expectationRepair) {
             const applied = expectationRepair.candidateTestHash === accepted.testHash;
-            finalReportMarkdown += `\n- **預期值修正**：${applied ? '依原始碼與案例輸入進行有界算術計算，修正失敗案例的預期常數後重新執行通過。' : '曾提出來源算術修正；最後採用另一次修訂，該提案不代表最終測試。'}計算依據：[${expectationRepair.file}](${expectationRepair.file})。這只驗證與來源行為一致，不代表獨立需求正確性。\n`;
+            finalReportMarkdown += localize("\n- **預期值修正**：{0}計算依據：[{1}]({2})。這只驗證與來源行為一致，不代表獨立需求正確性。\n", applied ? localize("依原始碼與案例輸入進行有界算術計算，修正失敗案例的預期常數後重新執行通過。") : localize("曾提出來源算術修正；最後採用另一次修訂，該提案不代表最終測試。"), expectationRepair.file, expectationRepair.file);
         }
         writeReport();
         sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName, file: displayFile,
-            func: params.funcName, score: 'N/A', coverage: null, reason: '執行驗證通過；完整品質尚未驗證', reportPath: existingReport });
+            func: params.funcName, score: 'N/A', coverage: null, reason: localize("執行驗證通過；完整品質尚未驗證"), reportPath: existingReport });
         if (!params.batchJournal) {
             const document = await vscode.workspace.openTextDocument(existingReport);
             throwIfExecutionCancelled();
@@ -1549,7 +1558,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     // ─── 優化一：Stub/Dummy 函式快速通道 ───
     // 若函式為純 Stub（pass/return None/return <literal>），跳過 LLM + 突變測試
     if (params.funcName && isStubFunction(astContext)) {
-        log(`[快速通道] 🚀 偵測到 Stub/Dummy 函式（複雜度 ${complexityScore}/100），直接生成最小 Smoke Test，跳過 LLM 呼叫與突變測試。`);
+        log(localize("[快速通道] 🚀 偵測到 Stub/Dummy 函式（複雜度 {0}/100），直接生成最小 Smoke Test，跳過 LLM 呼叫與突變測試。", complexityScore));
         const moduleName = targetImportModule;
         const className = astContext?.class_context?.name as string | undefined;
         const args: string[] = astContext?.args || [];
@@ -1568,11 +1577,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             astContext?.callerContexts
         );
         if (!stubPlan) {
-            const reason = `類別 ${className} 的建構子需要 ${requiredConstructorParams.join(', ')}，但找不到可驗證的 caller literal 設定。`;
-            finalReportMarkdown += `## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：${reason} 未產生測試，也未呼叫 LLM。\n`;
+            const reason = localize("類別 {0} 的建構子需要 {1}，但找不到可驗證的 caller literal 設定。", className, requiredConstructorParams.join(', '));
+            finalReportMarkdown += localize("## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：{0} 未產生測試，也未呼叫 LLM。\n", reason);
             throwIfExecutionCancelled();
             writeReport();
-            log(`[快速通道] ⏭️ ${reason} 已安全略過。`);
+            log(localize("[快速通道] ⏭️ {0} 已安全略過。", reason));
             journal.knowledge({ terminalStatus: 'stub-skipped', reason });
             return;
         }
@@ -1607,15 +1616,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         throwIfExecutionCancelled();
         fs.writeFileSync(testPath, smokeTest, 'utf-8');
 
-        finalReportMarkdown += `## 🚀 快速通道結果\n\n`;
-        finalReportMarkdown += `> [!NOTE]\n> 此函式為 Stub/Dummy 函式（複雜度 ${complexityScore}/100），已跳過 LLM 生成與突變測試，直接產出最小 Smoke Test。\n\n`;
-        finalReportMarkdown += `- **突變分數**: N/A（函式無可突變的業務邏輯）\n`;
-        finalReportMarkdown += `- **生成測試**: \`${testPath}\`\n\n`;
+        finalReportMarkdown += localize("## 🚀 快速通道結果\n\n");
+        finalReportMarkdown += localize("> [!NOTE]\n> 此函式為 Stub/Dummy 函式（複雜度 {0}/100），已跳過 LLM 生成與突變測試，直接產出最小 Smoke Test。\n\n", complexityScore);
+        finalReportMarkdown += localize("- **突變分數**: N/A（函式無可突變的業務邏輯）\n");
+        finalReportMarkdown += localize("- **生成測試**: `{0}`\n\n", testPath);
         finalReportMarkdown += `\`\`\`python\n${smokeTest}\n\`\`\`\n`;
 
         throwIfExecutionCancelled();
         writeReport();
-        log(`[快速通道] ✅ Stub 函式 ${params.funcName} 處理完成！Smoke Test 已寫入 ${testPath}`);
+        log(localize("[快速通道] ✅ Stub 函式 {0} 處理完成！Smoke Test 已寫入 {1}", params.funcName, testPath));
         journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false });
         // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
         return;
@@ -1629,7 +1638,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         func: params.funcName || '',
         score: '測試中',
         coverage: null,
-        reason: '分析中...',
+        reason: localize("分析中..."),
         reportPath: ''
     });
 
@@ -1654,7 +1663,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             mutationScore: null, mutationStatus: 'invalidated', coverage: null, retainedScore: null, qualityAssessment: null,
             historicalBaseline: retained ? { codeHash: retained.codeHash,
                 sourceHash: retained.sourceHash, artifactOnly: true } : null });
-        finalReportMarkdown += '\n> 來源或相依版本已改變；保留檔案僅供歷史查看，舊覆蓋與突變結果不適用於目前來源。\n';
+        finalReportMarkdown += localize("\n> 來源或相依版本已改變；保留檔案僅供歷史查看，舊覆蓋與突變結果不適用於目前來源。\n");
     };
     const targetSourceHash = evidenceHash(astContext?.code || initialSource);
     let semanticPlan: SemanticAnalysis | undefined;
@@ -1689,7 +1698,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         observations: initialTargetObservations || null
     });
     if (astContext && !astContext.error && mayUseModelAuthoredTests) {
-        log(`[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）...`);
+        log(localize("[語意分析師] 啟動語意前置分析（分析依賴行為 + 推導測資策略）..."));
         try {
             const semSys = buildSemanticAnalyzerSystemPrompt();
             const semUsr = getSemanticAnalyzerUserPrompt(
@@ -1731,7 +1740,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     result: semanticPlanContract
                 });
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
-                log(`[語意分析師] ✅ 分析完成！相依行為: ${semResult.dependency_behaviors.length} 個、候選不可達路徑: ${semResult.unreachable_paths.length} 個、測資策略參數提示: ${hasStrategy ? semResult.test_strategy.input_hints.length : 0} 個。`);
+                log(localize("[語意分析師] ✅ 分析完成！相依行為: {0} 個、候選不可達路徑: {1} 個、測資策略參數提示: {2} 個。", semResult.dependency_behaviors.length, semResult.unreachable_paths.length, hasStrategy ? semResult.test_strategy.input_hints.length : 0));
             } else {
                 recordRole('analyst-planning', 'invalid-response', {
                     inputContractVersion: ROLE_CONTRACT_VERSIONS.analystEvidence,
@@ -1739,11 +1748,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     raw: semRaw,
                     result: null
                 });
-                log(`[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵規則基線（不影響主流程）。`);
+                log(localize("[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵規則基線（不影響主流程）。"));
             }
         } catch (semErr: any) {
             recordRole('analyst-planning', 'failed', { reason: semErr.message });
-            log(`[語意分析師] ⚠️ 語意分析呼叫失敗: ${semErr.message}，繼續主流程。`);
+            log(localize("[語意分析師] ⚠️ 語意分析呼叫失敗: {0}，繼續主流程。", semErr.message));
         }
     } else {
         recordRole('analyst-planning', 'skipped', {
@@ -1767,7 +1776,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             astContext.signature
         );
         if (supplementalInputs.length > 0) {
-            log(`[補充行為探測] 正在以 ${supplementalInputs.length} 組安全純量輸入取得真實 I/O...`);
+            log(localize("[補充行為探測] 正在以 {0} 組安全純量輸入取得真實 I/O...", supplementalInputs.length));
             const supplementalObservations = await runBehaviorProbe(
                 params.filePath,
                 params.funcName,
@@ -1784,9 +1793,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         supplementalObservations
                     );
                     astContext.traceResult = mergedObservations;
-                    log(`[補充行為探測] 完成！新增輸入已實測；目前共 ${mergedObservations.examples.length} 個成功範例、${mergedObservations.errors.length} 個例外範例。`);
+                    log(localize("[補充行為探測] 完成！新增輸入已實測；目前共 {0} 個成功範例、{1} 個例外範例。", mergedObservations.examples.length, mergedObservations.errors.length));
                 } else {
-                    log(`[補充行為探測] 無法安全執行：${supplementalObservations.load_error}（保留原有行為觀測）。`);
+                    log(localize("[補充行為探測] 無法安全執行：{0}（保留原有行為觀測）。", supplementalObservations.load_error));
                 }
             }
             recordRole('behavior-probe', supplementalTargetObservations && !supplementalTargetObservations.load_error
@@ -1799,7 +1808,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         } else {
             recordRole('behavior-probe', 'supplemental-skipped', {
                 phase: 'supplemental',
-                reason: '分析師未提出可安全解析且能滿足函式簽章的純量輸入。'
+                reason: localize("分析師未提出可安全解析且能滿足函式簽章的純量輸入。")
             });
         }
     }
@@ -1840,44 +1849,44 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         selectedRules: ruleSelection
     });
     if (semanticPlan) {
-        finalReportMarkdown += `\n### 🧠 語意分析師報告\n\n\`\`\`\n${analystGuidance}\n\`\`\`\n\n`;
+        finalReportMarkdown += localize("\n### 🧠 語意分析師報告\n\n```\n{0}\n```\n\n", analystGuidance);
     }
-    finalReportMarkdown += `\n### 測試生成規則\n\n${deterministicRuleIds.map(id => `- ${id}`).join('\n') || '- 無'}\n\n`;
+    finalReportMarkdown += localize("\n### 測試生成規則\n\n{0}\n\n", deterministicRuleIds.map(id => `- ${id}`).join('\n') || localize("- 無"));
     log(mayUseModelAuthoredTests
-        ? `[測試生成規則] 分析完成後選取：${deterministicRuleIds.join(', ') || '無'}。`
-        : `[測試生成規則] 模型尚未驗證；使用 AST 確定性規則：${deterministicRuleIds.join(', ') || '無'}。`);
+        ? localize("[測試生成規則] 分析完成後選取：{0}。", deterministicRuleIds.join(', ') || localize("無"))
+        : localize("[測試生成規則] 模型尚未驗證；使用 AST 確定性規則：{0}。", deterministicRuleIds.join(', ') || localize("無")));
 
     while (currentLoop <= params.maxLoops && !qualityToolsSatisfied) {
 
         if (isExecutionCancelled()) {
-            log(`[系統] ⚠️ 測試已由使用者強制中止。`);
+            log(localize("[系統] ⚠️ 測試已由使用者強制中止。"));
             break;
         }
 
-        log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
+        log(localize("\n--- 🔄 第 {0} 輪開始 ---", currentLoop));
         currentTier = resolvedTier;
         tierHistory.rounds.push({ loop: currentLoop, start: currentTier });
         journal.knowledge({ tierHistory });
         recordRole('tier', 'started', { tier: currentTier, requested: userTierSetting });
-        finalReportMarkdown += `## 第 ${currentLoop} 輪測試\n`;
+        finalReportMarkdown += localize("## 第 {0} 輪測試\n", currentLoop);
 
         let targetCode: string;
         try {
             targetCode = fs.readFileSync(params.filePath, 'utf-8');
             if (!evidenceStillCurrent()) {
-                recordRole('source', 'changed', { reason: '來源版本已改變；停止沿用舊行為觀測與品質證據。' });
+                recordRole('source', 'changed', { reason: localize("來源版本已改變；停止沿用舊行為觀測與品質證據。") });
                 invalidateSourceEvidence();
                 sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName,
                     file: displayFile, func: params.funcName || '', score: 'N/A', coverage: null,
-                    reason: '來源已變更；舊成果僅供歷史查看，需重新分析' });
+                    reason: localize("來源已變更；舊成果僅供歷史查看，需重新分析") });
                 break;
             }
         } catch {
-            log('[錯誤] 讀取檔案失敗');
+            log(localize("[錯誤] 讀取檔案失敗"));
             invalidateSourceEvidence();
             sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName,
                 file: displayFile, func: params.funcName || '', score: 'N/A', coverage: null,
-                reason: '無法核對來源；舊成果僅供歷史查看，需重新分析' });
+                reason: localize("無法核對來源；舊成果僅供歷史查看，需重新分析") });
             break;
         }
 
@@ -1891,13 +1900,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (currentLoop > 1 && (survivedMutants || qualityGaps.length)) {
             focusContext = extractFocusContext(survivedMutants, targetCode);
             if (focusContext) {
-                log(`[動態焦點] 已擷取 ${focusContext.split('【目標變異體】').length - 1} 個突變體焦點區塊，準備進行精準修復。`);
+                log(localize("[動態焦點] 已擷取 {0} 個突變體焦點區塊，準備進行精準修復。", focusContext.split(localize("【目標變異體】")).length - 1));
             }
             // 最優解錨定：將歷史最高分的測試嵌入到 focusContext，明確禁止 LLM 刪除修改
             if (bestCode) {
                 const bestBlock = `=== EXISTING VERIFIED TESTS (DO NOT DELETE OR MODIFY THESE METHODS) ===\n${bestCode}\n=== END OF EXISTING TESTS ===\n\n`;
                 focusContext = bestBlock + focusContext;
-                log(`[最優解錨定] 已將歷史最優測試集（${bestScore}%）嵌入到 Prompt，防止 LLM 改壞舊斷言。`);
+                log(localize("[最優解錨定] 已將歷史最優測試集（{0}%）嵌入到 Prompt，防止 LLM 改壞舊斷言。", bestScore));
             }
         }
 
@@ -1917,13 +1926,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             writerEvidenceBundle
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
-        log(`[Budget] Prompt 估算：${estimatedTokens.toLocaleString()} / ${activeModelProfile.budgetTokens.toLocaleString()} tokens (模型: ${activeModelProfile.paramSize}, Context: ${activeModelProfile.contextLength.toLocaleString()})`);
+        log(localize("[Budget] Prompt 估算：{0} / {1} tokens (模型: {2}, Context: {3})", estimatedTokens.toLocaleString(), activeModelProfile.budgetTokens.toLocaleString(), activeModelProfile.paramSize, activeModelProfile.contextLength.toLocaleString()));
 
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
         let sanitizedCode = "";
         let loopCoverage: RetainedCoverage | null = null;
-        let loopAssessment: TargetCoverageAssessment = { available: false, coverageText: 'N/A', missingLines: '未知' };
+        let loopAssessment: TargetCoverageAssessment = { available: false, coverageText: 'N/A', missingLines: localize("未知") };
         let loopExecution = '';
         qualityGaps = [];
         try {
@@ -1931,7 +1940,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             let tierSuccess = false;
             while (currentTier >= 1 && !tierSuccess && !isExecutionCancelled()) {
                 try {
-                log(`[Tier 執行] 目前使用策略：Tier ${currentTier}`);
+                log(localize("[Tier 執行] 目前使用策略：Tier {0}", currentTier));
                 sanitizedCode = "";
                 rawCode = "";
 
@@ -1942,7 +1951,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 if (currentTier === 2 && evalStrategy === 'small' && !survivedMutants) {
                     const { callers: _callers, ...detail } = callerPlan;
                     recordRole('caller-partition', 'planned', detail);
-                    log(`[分治規劃] ${callerPlan.totalCallers} 個呼叫站、${callerPlan.distinctInputs} 組已知輸入：${useDivideAndConquer ? '按不同輸入分組' : '使用單次生成，保留完整語境'}。`);
+                    log(localize("[分治規劃] {0} 個呼叫站、{1} 組已知輸入：{2}。", callerPlan.totalCallers, callerPlan.distinctInputs, useDivideAndConquer ? localize("按不同輸入分組") : localize("使用單次生成，保留完整語境")));
                 }
 
                 // ─── Tier 1：LLM 證據導向生成；未驗證 Auto 才使用確定性備援 ───
@@ -1950,9 +1959,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const traceResult = astContext?.traceResult;
                 if (!tier1GenerationModeRecorded) {
                     const modeLabel = tier1GenerationMode === 'llm-evidence-bound'
-                        ? 'LLM 證據導向生成（來源碼 + AST + 已驗證行為觀測 + 測試生成規則）'
-                        : '確定性備援（模型尚未通過 Auto 的 unittest 資格探測）';
-                    finalReportMarkdown += `- **Tier 1 實際產生模式**: ${modeLabel}\n\n`;
+                        ? localize("LLM 證據導向生成（來源碼 + AST + 已驗證行為觀測 + 測試生成規則）")
+                        : localize("確定性備援（模型尚未通過 Auto 的 unittest 資格探測）");
+                    finalReportMarkdown += localize("- **Tier 1 實際產生模式**: {0}\n\n", modeLabel);
                     // Stable, machine-readable provenance for fixture scorecards.
                     // Keep this separate from the localized explanation above.
                     finalReportMarkdown += `- **Tier 1 generation mode**: ${tier1GenerationMode}\n\n`;
@@ -1960,15 +1969,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 }
                 if (tier1GenerationMode === 'llm-evidence-bound') {
                     systemPrompt = getTier1EvidenceBoundSystemPrompt();
-                    log('[Tier 1] 以 LLM 證據導向生成：模型將根據來源碼、AST、已驗證行為觀測與測試生成規則撰寫測試；後續閘門驗證產物。');
+                    log(localize("[Tier 1] 以 LLM 證據導向生成：模型將根據來源碼、AST、已驗證行為觀測與測試生成規則撰寫測試；後續閘門驗證產物。"));
                 } else {
                     if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
                         throw new Error(
-                            'Tier 1 確定性備援無法取得可驗證的行為觀測；Auto 模式下選定模型尚未通過 unittest 生成探測，'
-                            + '因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 1–4 後以既有驗證閘門使用 LLM 生成。'
+                            localize("Tier 1 確定性備援無法取得可驗證的行為觀測；Auto 模式下選定模型尚未通過 unittest 生成探測，")
+                            + localize("因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 1–4 後以既有驗證閘門使用 LLM 生成。")
                         );
                     }
-                    log(`[Tier 1 備援] 模型未驗證，使用已驗證行為觀測機械式生成 ${traceResult.examples.length} 個成功範例與 ${traceResult.errors.length} 個例外範例。`);
+                    log(localize("[Tier 1 備援] 模型未驗證，使用已驗證行為觀測機械式生成 {0} 個成功範例與 {1} 個例外範例。", traceResult.examples.length, traceResult.errors.length));
                     const className = astContext?.class_name as string | null | undefined;
                     const constructorParams = (astContext?.class_context?.effective_init?.required_params
                         || astContext?.class_context?.effective_init?.params
@@ -1987,26 +1996,26 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     });
                     if (tier1File.missingConstructorFacts) {
                         throw new Error(
-                            `Tier 1 確定性備援無法安全建立 ${className}：建構子需要 ${tier1File.missingConstructorFacts.join(', ')}，`
-                            + '但沒有可驗證的 caller literal。請先執行「測試連線」後改用 LLM 證據導向生成。'
+                            localize("Tier 1 確定性備援無法安全建立 {0}：建構子需要 {1}，", className, tier1File.missingConstructorFacts.join(', '))
+                            + localize("但沒有可驗證的 caller literal。請先執行「測試連線」後改用 LLM 證據導向生成。")
                         );
                     } else if (tier1File.code) {
                         sanitizedCode = tier1File.code;
                         rawCode = `[Tier 1 deterministic fallback] Generated ${tier1File.methodCount} observation-derived test methods`;
-                        log(`[Tier 1 備援] 完成！共產出 ${tier1File.methodCount} 個行為觀測衍生測試方法。${className ? ` (Class method: ${className}.${targetFuncName})` : ''}`);
+                        log(localize("[Tier 1 備援] 完成！共產出 {0} 個行為觀測衍生測試方法。{1}", tier1File.methodCount, className ? ` (Class method: ${className}.${targetFuncName})` : ''));
                     } else {
-                        throw new Error('Tier 1 確定性備援未能從已驗證行為觀測產生測試。');
+                        throw new Error(localize("Tier 1 確定性備援未能從已驗證行為觀測產生測試。"));
                     }
                 }
             }
 
                 // ─── Tier 3：Mock Scaffold（34–70B 模型） ───
                 if (currentTier === 3 && !sanitizedCode && !survivedMutants) {
-                log(`[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…`);
+                log(localize("[Tier 3] 開啟 Mock Scaffold 策略，正在產生 @patch 骨架…"));
                 const traceResult = astContext?.traceResult;
                 const scaffoldResult = await runMockScaffold(params.filePath, params.funcName, traceResult, targetImportModule, pythonExecutable);
                 if (scaffoldResult && scaffoldResult.scaffold) {
-                    log(`[Tier 3] 骨架產生完成！patches: ${scaffoldResult.patches.join(', ') || '(無外部依賴)'}`);
+                    log(localize("[Tier 3] 骨架產生完成！patches: {0}", scaffoldResult.patches.join(', ') || localize("(無外部依賴)")));
                     const moduleName = targetImportModule;
                     const traceExamples = traceResult?.examples || [];
                     const sysP = getTier3SystemPrompt();
@@ -2029,15 +2038,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         const extracted = sanitizeLlmResponse(raw);
                         if (extracted) {
                             sanitizedCode = extracted;
-                            log(`[Tier 3] 模型補充完成！`);
+                            log(localize("[Tier 3] 模型補充完成！"));
                         }
                     } catch (e: any) {
                         throwIfExecutionCancelled();
                         if (e instanceof AnalysisStageError) { throw e; }
-                        log(`[Tier 3] 模型詢問失敗: ${e.message}，退回標準流程`);
+                        log(localize("[Tier 3] 模型詢問失敗: {0}，退回標準流程", e.message));
                     }
                 } else {
-                    log(`[Tier 3] Mock 骨架產生失敗，退回標準 Tier 2/4 流程`);
+                    log(localize("[Tier 3] Mock 骨架產生失敗，退回標準 Tier 2/4 流程"));
                 }
             }
 
@@ -2048,12 +2057,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
 
             if (useDivideAndConquer && astContext && astContext.callerContexts) {
-                log(`[分治合流] 💡 偵測到 ${callerContextsCount} 個呼叫站，開啟分治合流模式（單一小 Task 多次請求，避免失焦與失憶）...`);
+                log(localize("[分治合流] 💡 偵測到 {0} 個呼叫站，開啟分治合流模式（單一小 Task 多次請求，避免失焦與失憶）...", callerContextsCount));
                 const subSnippets: string[] = [];
 
                 for (let cIdx = 0; cIdx < callerPlan.callers.length; cIdx++) {
                     const ctx = callerPlan.callers[cIdx];
-                    log(`[分治合流] 正在生成第 ${cIdx + 1}/${callerContextsCount} 個呼叫點測試: \`${ctx.caller_file}\` -> \`${ctx.caller_func}()\``);
+                    log(localize("[分治合流] 正在生成第 {0}/{1} 個呼叫點測試: `{2}` -> `{3}()`", cIdx + 1, callerContextsCount, ctx.caller_file, ctx.caller_func));
 
                     // 打造微型 AST／行為觀測 context：子任務只能看到本 caller
                     // 可精確對應的實測 I/O，不能借用其他 caller 的 oracle。
@@ -2105,30 +2114,30 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                     subSnippets.push(subClean);
                                     break;
                                 }
-                                const subReason = subGate.reason || '不明驗證錯誤';
+                                const subReason = subGate.reason || localize("不明驗證錯誤");
                                 if (retry === 0) {
-                                    log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆未通過格式／行為觀測證據驗證：${subReason}；將重試此子任務。`);
+                                    log(localize("[分治合流] 呼叫點 {0} 子回覆未通過格式／行為觀測證據驗證：{1}；將重試此子任務。", cIdx + 1, subReason));
                                     subGenerationPrompt = `${subUserPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${subReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Preserve exact verified behavior observations.`;
                                 } else {
-                                    log(`[警告] 呼叫點 ${cIdx + 1} 子回覆連續未通過格式／行為觀測證據驗證：${subReason}`);
+                                    log(localize("[警告] 呼叫點 {0} 子回覆連續未通過格式／行為觀測證據驗證：{1}", cIdx + 1, subReason));
                                 }
                             } else if (retry === 0) {
-                                log(`[分治合流] 呼叫點 ${cIdx + 1} 子回覆為空或不可擷取，將重試此子任務。`);
+                                log(localize("[分治合流] 呼叫點 {0} 子回覆為空或不可擷取，將重試此子任務。", cIdx + 1));
                             }
                         } catch (err: any) {
                             throwIfExecutionCancelled();
                             if (err instanceof AnalysisStageError) { throw err; }
-                            if (retry === 1) {log(`[警告] 呼叫點 ${cIdx + 1} 生成失敗: ${err.message}`);}
+                            if (retry === 1) {log(localize("[警告] 呼叫點 {0} 生成失敗: {1}", cIdx + 1, err.message));}
                         }
                     }
                     rawCode += `\n--- [Call Site ${cIdx + 1}: ${ctx.caller_func}] ---\n` + subRaw;
                 }
 
                 if (subSnippets.length > 0) {
-                    log(`[分治合流] 成功取得 ${subSnippets.length} 個單一呼叫點測試，正在進行 AST/正則機械式合併...`);
+                    log(localize("[分治合流] 成功取得 {0} 個單一呼叫點測試，正在進行 AST/正則機械式合併...", subSnippets.length));
                     const mergeRes = mergeTestSnippets(subSnippets, `Test${targetFuncName || 'Merged'}`);
                     sanitizedCode = mergeRes.mergedCode;
-                    log(`[分治合流] 🎉 成功重組為單一類別，共包含 ${mergeRes.totalMethodsCount} 個獨立測試方法！`);
+                    log(localize("[分治合流] 🎉 成功重組為單一類別，共包含 {0} 個獨立測試方法！", mergeRes.totalMethodsCount));
                 }
             }
 
@@ -2136,13 +2145,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (!sanitizedCode) {
                 let generationPrompt = userPrompt;
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
-                    if (llmRetry === 0) {log(`[LLM] 正在呼叫模型推論中... (模型: ${params.modelName})`);}
+                    if (llmRetry === 0) {log(localize("[LLM] 正在呼叫模型推論中... (模型: {0})", params.modelName));}
                     try {
                         rawCode = await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat);
                     } catch (err: any) {
                         if (err instanceof AnalysisStageError) { throw err; }
                         if (llmRetry === 0) {
-                            log(`[警告] 網路或 API 請求失敗: ${err.message}，嘗試自動重試 (1/1)...`);
+                            log(localize("[警告] 網路或 API 請求失敗: {0}，嘗試自動重試 (1/1)...", err.message));
                             continue;
                         } else {
                             throw err;
@@ -2153,10 +2162,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
                     if (!sanitizedCode) {
                         if (llmRetry === 0) {
-                            log(`[警告] 模型回傳程式碼為空或包含無效標籤，嘗試自動重試...`);
+                            log(localize("[警告] 模型回傳程式碼為空或包含無效標籤，嘗試自動重試..."));
                             continue;
                         } else {
-                            throw new Error("模型產生的程式碼內容為空 (已重試失敗)");
+                            throw new Error(localize("模型產生的程式碼內容為空 (已重試失敗)"));
                         }
                     }
 
@@ -2165,26 +2174,26 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const looksLikeSourceCopy = !hasTestMethods && targetFuncName && sanitizedCode.includes(`def ${targetFuncName}`);
                     if (looksLikeSourceCopy) {
                         if (llmRetry === 0) {
-                            log(`[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試...`);
+                            log(localize("[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試..."));
                             continue;
                         } else {
-                            throw new Error("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試");
+                            throw new Error(localize("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試"));
                         }
                     }
 
                     // 驗證 AI 產出的程式碼格式是否符合要求，若不合規則嘗試自動救援
                     if (!sanitizedCode.includes('unittest.TestCase') && !sanitizedCode.includes('import unittest')) {
-                        log(`[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換...`);
+                        log(localize("[警告] AI 未按格式輸出 unittest.TestCase，嘗試自動救援轉換..."));
                         const rescued = await rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule, pythonExecutable);
                         if (!rescued) {
                             if (llmRetry === 0) {
-                                log(`[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求...`);
+                                log(localize("[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求..."));
                                 continue;
                             } else {
-                                throw new Error("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）");
+                                throw new Error(localize("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）"));
                             }
                         }
-                        log(`[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。`);
+                        log(localize("[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。"));
                         sanitizedCode = rescued;
                     }
 
@@ -2206,12 +2215,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (!candidateValidation.valid || !traceEvidenceValidation.valid) {
                         const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
                         if (llmRetry === 0) {
-                            log(`[警告] 模型輸出未通過證據／Python unittest 驗證：${validationReason}；將以嚴格格式要求重試。`);
+                            log(localize("[警告] 模型輸出未通過證據／Python unittest 驗證：{0}；將以嚴格格式要求重試。", validationReason));
                             generationPrompt = `${userPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${validationReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block. Keep every assertion for an exact verified call equal to its behavior observation.`;
                             sanitizedCode = '';
                             continue;
                         }
-                        throw new Error(`模型連續兩次未通過證據／Python unittest 驗證：${validationReason}`);
+                        throw new Error(localize("模型連續兩次未通過證據／Python unittest 驗證：{0}", validationReason));
                     }
 
                     break; // 成功跳出 retry
@@ -2220,11 +2229,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
             const isDeterministicTier1Output = rawCode.startsWith('[Tier 1 deterministic fallback]');
             const generatedOutputTitle = isDeterministicTier1Output
-                ? '### 🧩 Tier 1 確定性備援產物'
-                : '### 🤖 LLM 原始輸出與思考過程';
+                ? localize("### 🧩 Tier 1 確定性備援產物")
+                : localize("### 🤖 LLM 原始輸出與思考過程");
             const generatedOutputSummary = isDeterministicTier1Output
-                ? '點擊展開由已驗證行為觀測組裝的產物（非 LLM）'
-                : '點擊展開 AI 完整回應';
+                ? localize("點擊展開由已驗證行為觀測組裝的產物（非 LLM）")
+                : localize("點擊展開 AI 完整回應");
             finalReportMarkdown += `${generatedOutputTitle}\n\n`;
             finalReportMarkdown += `<details>\n<summary>${generatedOutputSummary}</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
 
@@ -2249,7 +2258,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
             if (!finalCode.includes(`from ${targetImportModule} import`)
                 && !finalCode.includes(`import ${targetImportModule}`)) {
-                log(`[警告] AI 遺漏了 import 目標模組的語句，系統自動補齊...`);
+                log(localize("[警告] AI 遺漏了 import 目標模組的語句，系統自動補齊..."));
                 if (finalCode.includes('import unittest')) {
                     finalCode = finalCode.replace('import unittest', `import unittest\nfrom ${targetImportModule} import *`);
                 } else {
@@ -2259,7 +2268,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
             // 🚨 自動補齊 mock / patch import (小模型常見遺漏)
             if ((finalCode.includes('patch(') || finalCode.includes('MagicMock')) && !finalCode.includes('unittest.mock')) {
-                log(`[警告] 偵測到程式碼使用 patch/MagicMock 但遺漏 import，系統自動補齊 unittest.mock...`);
+                log(localize("[警告] 偵測到程式碼使用 patch/MagicMock 但遺漏 import，系統自動補齊 unittest.mock..."));
                 finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
             }
 
@@ -2288,7 +2297,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 if (!traceStructure.valid) {
                     recordRole('trace-baseline', 'failed', { category: 'validation', reason: traceStructure.reason });
                     throw new AnalysisStageError('validation', 'trace-baseline',
-                        '系統 Trace 基線未通過結構／安全檢查，停止模型修訂：' + traceStructure.reason);
+                        localize("系統 Trace 基線未通過結構／安全檢查，停止模型修訂：") + traceStructure.reason);
                 }
                 const traceTestPath = path.join(sessionDir, `loop${currentLoop}_trace_test.py`);
                 fs.writeFileSync(traceTestPath, verifiedTrace.code, 'utf8');
@@ -2300,7 +2309,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 });
                 if (traceRun.code !== 0 || !/Ran ([1-9]\d*) tests?/.test(traceRun.stdout + traceRun.stderr)) {
                     throw new AnalysisStageError('validation', 'trace-baseline',
-                        '已驗證行為觀測的獨立 unittest 基線未通過，停止合併 Trace 與模型測試。',
+                        localize("已驗證行為觀測的獨立 unittest 基線未通過，停止合併 Trace 與模型測試。"),
                         { output: traceRun.stdout + traceRun.stderr, traceTestPath });
                 }
             }
@@ -2311,14 +2320,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     input: JSON.stringify({ code: restored, target: targetFuncName.replace(/\W+/g, '_') }),
                     timeout: 5000, env: testExecutionEnv
                 });
-                if (result.code !== 0) { throw new Error('Trace 重複案例檢查未完成；未採用修改。'); }
+                if (result.code !== 0) { throw new Error(localize("Trace 重複案例檢查未完成；未採用修改。")); }
                 const cleaned = JSON.parse(result.stdout) as { code: string; removed: number };
                 if (cleaned.removed > 0) { recordRole('trace-deduplication', 'normalized', { removed: cleaned.removed, baselinePreserved: true }); }
                 return cleaned.code;
             };
             finalCode = await preserveTrace(finalCode);
             if (verifiedTrace?.code) {
-                log(`[行為觀測保底] 已保留 ${verifiedTrace.methodCount} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。`);
+                log(localize("[行為觀測保底] 已保留 {0} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。", verifiedTrace.methodCount));
             }
 
             recordRole('writer', 'candidate', { tier: currentTier, raw: rawCode, code: finalCode });
@@ -2337,7 +2346,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const result = await runSpawn(pythonExecutable,
                         ['-B', pythonToolPath('scenarios')],
                         { input: code, timeout: 5000, env: testExecutionEnv });
-                    if (result.code !== 0) { throw new Error('無法建立測試情境識別：' + result.stderr); }
+                    if (result.code !== 0) { throw new Error(localize("無法建立測試情境識別：") + result.stderr); }
                     inventories.set(hash, JSON.parse(result.stdout));
                 }
                 return inventories.get(hash)!;
@@ -2346,7 +2355,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const checkpointExecutable = (code: string, execution: string, gaps: string[],
                 status: ReviewStatus, warnings: string[], assessment: TargetCoverageAssessment) => {
                 if (!evidenceStillCurrent()) {
-                    throw new AnalysisStageError('validation', 'source-changed', '來源或相依版本改變，停止保存舊執行證據。');
+                    throw new AnalysisStageError('validation', 'source-changed', localize("來源或相依版本改變，停止保存舊執行證據。"));
                 }
                 const snapshot = checkpoints.saveExecutable({ code, execution,
                     coverage: extractCoverage(assessment, params.funcName || targetFuncName),
@@ -2359,7 +2368,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 recordRole('executable-baseline', 'checkpointed', { codeHash: snapshot.codeHash,
                     testFile: snapshot.testFile, reviewStatus: snapshot.reviewStatus, mutationScore: null });
                 writeReport(finalReportMarkdown
-                    + `\n### 已保存可執行測試\n\n- 測試：${snapshot.testFile}\n- 審查狀態：${status}\n- 本候選突變：尚未測量\n`);
+                    + localize("\n### 已保存可執行測試\n\n- 測試：{0}\n- 審查狀態：{1}\n- 本候選突變：尚未測量\n", snapshot.testFile, status));
             };
             const accepted = await validateTestCandidate(finalCode, {
                 reviewRequired: mayUseModelAuthoredTests,
@@ -2384,7 +2393,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence },
                         Number.MAX_SAFE_INTEGER);
                     if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt, activeModelProfile.budgetTokens)) {
-                        recordRole('reviewer', 'budget-exceeded', { reason: '完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。' });
+                        recordRole('reviewer', 'budget-exceeded', { reason: localize("完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。") });
                         return undefined;
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
@@ -2411,7 +2420,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
                 revise: async (code, failure, role, attempt) => {
                     if (role === 'writer' ? !mayUseModelAuthoredTests : !mayUseModelAuthoredRepair) {
-                        throw new Error(`Auto 未驗證 ${role} 角色不可呼叫該角色修訂。`);
+                        throw new Error(localize("Auto 未驗證 {0} 角色不可呼叫該角色修訂。", role));
                     }
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
@@ -2425,8 +2434,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         });
                     if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
                         throw new Error(role === 'bug-fixer'
-                            ? 'Bug Fixer 的單方法修復內容仍超過模型預算，停止本次修復。'
-                            : 'Writer 修訂所需完整證據超過模型預算；未截斷待保留的測試。');
+                            ? localize("Bug Fixer 的單方法修復內容仍超過模型預算，停止本次修復。")
+                            : localize("Writer 修訂所需完整證據超過模型預算；未截斷待保留的測試。"));
                     }
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(
@@ -2462,20 +2471,20 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             env: testExecutionEnv
                         });
                     if (scope.code !== 0) {
-                        return { reason: REPAIR_REASON_LABELS['scope-tool-error'], reasonCode: 'scope-tool-error' };
+                        return { reason: localize(REPAIR_REASON_LABELS['scope-tool-error']), reasonCode: 'scope-tool-error' };
                     }
                     try {
                         const result = JSON.parse(scope.stdout) as { valid?: boolean; reasonCode?: string };
                         const reasonCode = repairReasonCode(result.reasonCode);
-                        return result.valid === true ? undefined : { reason: REPAIR_REASON_LABELS[reasonCode], reasonCode };
+                        return result.valid === true ? undefined : { reason: localize(REPAIR_REASON_LABELS[reasonCode]), reasonCode };
                     } catch {
-                        return { reason: REPAIR_REASON_LABELS['scope-result-invalid'], reasonCode: 'scope-result-invalid' };
+                        return { reason: localize(REPAIR_REASON_LABELS['scope-result-invalid']), reasonCode: 'scope-result-invalid' };
                     }
                 },
                 execute: async (code) => {
                     throwIfExecutionCancelled();
                     if (!evidenceStillCurrent()) {
-                        throw new AnalysisStageError('validation', 'source-changed', '來源版本已改變，停止使用舊證據。');
+                        throw new AnalysisStageError('validation', 'source-changed', localize("來源版本已改變，停止使用舊證據。"));
                     }
                     fs.writeFileSync(testPath, code, 'utf8');
                     const testRunId = randomUUID();
@@ -2498,7 +2507,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const coverage = await runSpawn(pythonExecutable, ['-m', 'coverage', 'report', '-m'],
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
                     out += '\n' + coverage.stdout + coverage.stderr;
-                    if (coverage.code !== 0) { throw new Error('Coverage 工具執行失敗：' + out); }
+                    if (coverage.code !== 0) { throw new Error(localize("Coverage 工具執行失敗：") + out); }
                     const nativeCoverage = await runSpawn(pythonExecutable, ['-B', pythonToolPath('coverage'),
                         params.filePath, params.funcName || targetFuncName, '--invocation-evidence', invocationFile,
                         '--expected-run-id', testRunId, '--expected-test-hash', testHash],
@@ -2507,12 +2516,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         params.funcName || targetFuncName, journal.sourceHash, { testRunId, testHash });
                     fs.writeFileSync(coverageFile, nativeCoverage.stdout, 'utf8');
                     const gaps: string[] = [];
-                    if (!assessment.available) { gaps.push('Coverage 無法辨識目標模組；目標覆蓋狀態未知。'); }
-                    if (assessment.targetFullyCovered === undefined) { gaps.push('目標行覆蓋狀態未知。'); }
-                    if (assessment.targetBranchesCovered === undefined) { gaps.push('目標分支覆蓋狀態未知。'); }
-                    if (assessment.targetExecuted === false) { gaps.push('目標函式未執行。'); }
-                    if (assessment.missingTargetLines?.length) { gaps.push('目標未覆蓋行：' + assessment.missingTargetLines.join(', ')); }
-                    if (assessment.missingTargetBranches?.length) { gaps.push('目標未覆蓋分支：' + assessment.missingTargetBranches.join(', ')); }
+                    if (!assessment.available) { gaps.push(localize("Coverage 無法辨識目標模組；目標覆蓋狀態未知。")); }
+                    if (assessment.targetFullyCovered === undefined) { gaps.push(localize("目標行覆蓋狀態未知。")); }
+                    if (assessment.targetBranchesCovered === undefined) { gaps.push(localize("目標分支覆蓋狀態未知。")); }
+                    if (assessment.targetExecuted === false) { gaps.push(localize("目標函式未執行。")); }
+                    if (assessment.missingTargetLines?.length) { gaps.push(localize("目標未覆蓋行：") + assessment.missingTargetLines.join(', ')); }
+                    if (assessment.missingTargetBranches?.length) { gaps.push(localize("目標未覆蓋分支：") + assessment.missingTargetBranches.join(', ')); }
                     recordRole('coverage', 'measured', assessment);
                     return { ok: true, out, qualityGaps: gaps, coverage: assessment };
                 }
@@ -2529,12 +2538,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             recordRole('validation', 'accepted', {
                 codeHash: evidenceHash(finalCode), qualityGaps, reviewWarnings, reviewStatus
             });
-            finalReportMarkdown += `\n### 執行驗證\n\n\`\`\`text\n${loopExecution}\n\`\`\`\n`;
+            finalReportMarkdown += localize("\n### 執行驗證\n\n```text\n{0}\n```\n", loopExecution);
             if (qualityGaps.length) {
-                finalReportMarkdown += `\n### 品質待補強（交分析師與 Writer）\n\n${qualityGaps.map(gap => '- ' + gap).join('\n')}\n`;
+                finalReportMarkdown += localize("\n### 品質待補強（交分析師與 Writer）\n\n{0}\n", qualityGaps.map(gap => '- ' + gap).join('\n'));
             }
             if (reviewWarnings.length) {
-                finalReportMarkdown += `\n### Reviewer 警告（不啟動額外修復輪）\n\n${reviewWarnings.map(warning => '- ' + warning).join('\n')}\n`;
+                finalReportMarkdown += localize("\n### Reviewer 警告（不啟動額外修復輪）\n\n{0}\n", reviewWarnings.map(warning => '- ' + warning).join('\n'));
             }
 
             tierSuccess = true;
@@ -2554,12 +2563,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const prevTier = currentTier;
                 currentTier--;
                 const transition = { loop: currentLoop, from: prevTier, to: currentTier,
-                    reason: tierErr instanceof RepairResponseError ? '局部修復回覆不符合契約' : '候選生成或驗證失敗' };
+                    reason: tierErr instanceof RepairResponseError ? localize("局部修復回覆不符合契約") : localize("候選生成或驗證失敗") };
                 tierHistory.transitions.push(transition);
                 journal.knowledge({ tierHistory });
                 recordRole('tier', 'fallback', transition);
-                log(`[Tier 降階] ⚠️ Tier ${prevTier} 驗證失敗，自動觸發策略降階：Tier ${prevTier} → Tier ${currentTier} 重試...`);
-                finalReportMarkdown += `\n> [!WARNING]\n> ⚠️ **策略自動降階**: Tier ${prevTier} 驗證失敗，系統已自動切換降階至 **Tier ${currentTier}** 思考模式重試。\n\n`;
+                log(localize("[Tier 降階] ⚠️ Tier {0} 驗證失敗，自動觸發策略降階：Tier {1} → Tier {2} 重試...", prevTier, prevTier, currentTier));
+                finalReportMarkdown += localize("\n> [!WARNING]\n> ⚠️ **策略自動降階**: Tier {0} 驗證失敗，系統已自動切換降階至 **Tier {1}** 思考模式重試。\n\n", prevTier, currentTier);
             } else {
                 // Tier 1 也失敗，向上拋出錯誤
                 throw tierErr;
@@ -2583,54 +2592,54 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const preferredEngine = detectMutationEngine(pyVer);
                 if (!preferredEngine) {
                     engine = 'builtin';
-                    log(`[系統] Python ${pyVer} 的原生環境沒有相容的外部突變工具，使用內建 AST 基本突變引擎。建議在 WSL 或 Python 3.11 安裝完整引擎以取得更廣的突變覆蓋。`);
+                    log(localize("[系統] Python {0} 的原生環境沒有相容的外部突變工具，使用內建 AST 基本突變引擎。建議在 WSL 或 Python 3.11 安裝完整引擎以取得更廣的突變覆蓋。", pyVer));
                 } else if (preferredEngine === 'mutmut') {
-                    log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
+                    log(localize("[系統] 偵測到 Python {0}，建議引擎：{1}", pyVer, preferredEngine));
                     // Python 3.12+ uses mutmut because mutatest requires coverage < 6.
                     const mutmutCheck = await runSpawn(pythonExecutable, ['-m', 'mutmut', '--version'], {});
                     if (mutmutCheck.code === 0) {
                         engine = 'mutmut';
-                        log(`[系統] mutmut 可用，使用 mutmut 進行突變測試。`);
+                        log(localize("[系統] mutmut 可用，使用 mutmut 進行突變測試。"));
                     } else {
                         engine = 'mutatest';
-                        log(`[系統] mutmut 不可用，退回使用 mutatest。`);
+                        log(localize("[系統] mutmut 不可用，退回使用 mutatest。"));
                     }
                 } else {
-                    log(`[系統] 偵測到 Python ${pyVer}，建議引擎：${preferredEngine}`);
+                    log(localize("[系統] 偵測到 Python {0}，建議引擎：{1}", pyVer, preferredEngine));
                     // Windows 或 Python < 3.12 優先使用 mutatest
                     const mutatestCheck = await runSpawn(pythonExecutable, ['-c', 'from mutatest.cli import cli_main'], {});
                     if (mutatestCheck.code === 0) {
                         engine = 'mutatest';
-                        log(`[系統] mutatest 可用，使用 mutatest 進行突變測試。`);
+                        log(localize("[系統] mutatest 可用，使用 mutatest 進行突變測試。"));
                     } else {
                         const mutmutCheck = await runSpawn(pythonExecutable, ['-m', 'mutmut', '--version'], {});
                         if (mutmutCheck.code === 0) {
                             engine = 'mutmut';
-                            log(`[系統] mutatest 不可用，改用 mutmut。`);
+                            log(localize("[系統] mutatest 不可用，改用 mutmut。"));
                         } else {
-                            log(`[系統] mutatest/mutmut 均不可用，使用內建 AST 基本突變引擎。`);
+                            log(localize("[系統] mutatest/mutmut 均不可用，使用內建 AST 基本突變引擎。"));
                             engine = 'builtin';
                         }
                     }
                 }
             } catch (e) {
                 engine = 'builtin';
-                log(`[系統] 無法取得 Python 版本或外部突變工具狀態，使用內建 AST 基本突變引擎。`);
+                log(localize("[系統] 無法取得 Python 版本或外部突變工具狀態，使用內建 AST 基本突變引擎。"));
             }
             }
 
-            log(`[${engine}] 正在建構突變測試指令...`);
+            log(localize("[{0}] 正在建構突變測試指令...", engine));
             const mutationTimeoutSeconds = normalizeExecutionSettings(params).mutpyTimeout;
-            log(`[${engine}] 正式啟動分析 (突變階段超時限制: ${mutationTimeoutSeconds}秒) ... 這可能會花費數十秒，請稍候！`);
+            log(localize("[{0}] 正式啟動分析 (突變階段超時限制: {1}秒) ... 這可能會花費數十秒，請稍候！", engine, mutationTimeoutSeconds));
 
-            if (isExecutionCancelled()) {throw new Error("使用者強制中止");}
+            if (isExecutionCancelled()) {throw new Error(localize("使用者強制中止"));}
 
             let mutationRun: MutationRun;
             let noMutationCandidates = false;
             let mutpyResult: string;
             const measuredCandidate = checkpoints.executable;
             if (!measuredCandidate || evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
-                throw new AnalysisStageError('validation', 'candidate-changed', '測試檔已改變，不能沿用先前執行結果進行突變測量。');
+                throw new AnalysisStageError('validation', 'candidate-changed', localize("測試檔已改變，不能沿用先前執行結果進行突變測量。"));
             }
             const mutationContext: MutationContext = { sourcePath: params.filePath,
                 sourceHash: journal.sourceHash, testHash: measuredCandidate.codeHash,
@@ -2640,7 +2649,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const fallbackScript = pythonToolPath('mutation');
                 const perMutationTimeout = Math.min(5, mutationTimeoutSeconds);
                 const selectedClassName = (astContext?.class_name as string | undefined);
-                log(`[builtin] 正在隔離執行原始基線與完整突變集合；本階段預算 ${mutationTimeoutSeconds} 秒，完成後回報殺死／存活／逾時／錯誤數。`);
+                log(localize("[builtin] 正在隔離執行原始基線與完整突變集合；本階段預算 {0} 秒，完成後回報殺死／存活／逾時／錯誤數。", mutationTimeoutSeconds));
                 const fallbackRun = await runSpawn(
                     pythonExecutable,
                     [
@@ -2656,7 +2665,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: (mutationTimeoutSeconds + 5) * 1000 }
                 );
                 if (fallbackRun.code !== 0) {
-                    throw new Error(`內建 AST 突變引擎執行失敗：${(fallbackRun.stderr || fallbackRun.stdout).slice(0, 500)}`);
+                    throw new Error(localize("內建 AST 突變引擎執行失敗：{0}", (fallbackRun.stderr || fallbackRun.stdout).slice(0, 500)));
                 }
                 mutationRun = parseBuiltinMutationRun(fallbackRun.stdout, mutationContext);
                 mutpyResult = JSON.stringify(mutationRun, null, 2);
@@ -2685,16 +2694,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     timeout: mutationTimeoutSeconds * 1000
                 });
                 if (isExecutionCancelled()) {
-                    throw new Error('使用者強制中止');
+                    throw new Error(localize("使用者強制中止"));
                 }
                 if (!fs.existsSync(isolationReport) || !externalIsolationVerified(fs.readFileSync(isolationReport, 'utf8'))) {
                     throw new AnalysisStageError('mutation', 'mutation-isolation',
-                        '突變測試缺少完整隔離執行證據，或觸發未隔離操作；不接受引擎分數。');
+                        localize("突變測試缺少完整隔離執行證據，或觸發未隔離操作；不接受引擎分數。"));
                 }
                 if (externalRun.code !== 0) {
-                    mutpyResult = `[${engine} 系統錯誤訊息]\n結束碼: ${externalRun.code ?? 'unknown'}\n[Stderr]\n${externalRun.stderr}\n[Stdout]\n${externalRun.stdout}`;
+                    mutpyResult = localize("[{0} 系統錯誤訊息]\n結束碼: {1}\n[Stderr]\n{2}\n[Stdout]\n{3}", engine, externalRun.code ?? 'unknown', externalRun.stderr, externalRun.stdout);
                 } else {
-                    mutpyResult = externalRun.stdout || externalRun.stderr || '無輸出內容';
+                    mutpyResult = externalRun.stdout || externalRun.stderr || localize("無輸出內容");
                 }
                 const nativeReport = `${reportDir}.rst`;
                 mutationRun = parseExternalMutationRun(engine,
@@ -2706,22 +2715,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (!['complete', 'no-candidates'].includes(mutationRun.status)) {
                 journal.knowledge({ latestMutation: mutationRun });
                 throw new AnalysisStageError('mutation', 'mutation-execution',
-                    `突變測量尚未完整或結果無效（${mutationRun.status}）；不宣稱完整品質分數。`, mutationRun);
+                    localize("突變測量尚未完整或結果無效（{0}）；不宣稱完整品質分數。", mutationRun.status), mutationRun);
             }
 
-            log(`[${engine}] 突變分析執行完畢！正在解析報告與分數...`);
-            log(`--- 突變測試原生輸出 ---\n${mutpyResult}\n------------------------`);
+            log(localize("[{0}] 突變分析執行完畢！正在解析報告與分數...", engine));
+            log(localize("--- 突變測試原生輸出 ---\n{0}\n------------------------", mutpyResult));
             
             // 擷取最後 1000 字元，避免錯誤訊息被截斷
             const displayLog = mutpyResult.length > 1000 ? '...' + mutpyResult.substring(mutpyResult.length - 1000) : mutpyResult;
-            finalReportMarkdown += `### 執行日誌摘要\n\n\`\`\`text\n${displayLog}\n\`\`\`\n\n`;
+            finalReportMarkdown += localize("### 執行日誌摘要\n\n```text\n{0}\n```\n\n", displayLog);
             
             if (loopCoverage) {
-                finalReportMarkdown += `- **覆蓋率**: ${loopCoverage.coverageText} (未覆蓋行號: ${loopCoverage.missingLines})\n`;
+                finalReportMarkdown += localize("- **覆蓋率**: {0} (未覆蓋行號: {1})\n", loopCoverage.coverageText, loopCoverage.missingLines);
                 const selected = loopCoverage.selectedTarget;
                 if (selected?.executableLines.length) {
                     const percent = 100 * (selected.executableLines.length - selected.missingLines.length) / selected.executableLines.length;
-                    finalReportMarkdown += `- **目標行覆蓋率**: ${percent}%（${selected.qualifiedName}；模組整體覆蓋率另列於上方）\n`;
+                    finalReportMarkdown += localize("- **目標行覆蓋率**: {0}%（{1}；模組整體覆蓋率另列於上方）\n", percent, selected.qualifiedName);
                 }
             }
             
@@ -2729,19 +2738,19 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             mutationScore = measuredMutationScore(mutationRun) ?? 0;
             const counts = mutationRun.counts;
             const scopeLabel = mutationRun.targetScope.qualifiedName;
-            finalReportMarkdown += `- **突變範圍**: ${scopeLabel}（${engine}）\n`
-                + `- **突變集合**: 已選 ${counts.selected}／可用 ${counts.available ?? "未知"}；已測 ${counts.executed}；未測 ${counts.notRun}\n`
-                + `- **突變結果**: killed ${counts.killed}、survived ${counts.survived}、timeout ${counts.timeout}、error ${counts.error}\n`
-                + `- **突變分數**: ${noMutationCandidates ? "N/A（沒有可用候選）" : mutationScore + "%"}\n`;
+            finalReportMarkdown += localize("- **突變範圍**: {0}（{1}）\n", scopeLabel, engine)
+                + localize("- **突變集合**: 已選 {0}／可用 {1}；已測 {2}；未測 {3}\n", counts.selected, counts.available ?? localize("未知"), counts.executed, counts.notRun)
+                + localize("- **突變結果**: killed {0}、survived {1}、timeout {2}、error {3}\n", counts.killed, counts.survived, counts.timeout, counts.error)
+                + localize("- **突變分數**: {0}\n", noMutationCandidates ? localize("N/A（沒有可用候選）") : mutationScore + "%");
             survivedMutants = mutationRun.mutants.filter(mutant => mutant.status === "SURVIVED")
                 .map(mutant => `- id ${mutant.id}, line ${mutant.line}, column ${mutant.column}, position ${mutant.position}, kind ${mutant.kind}: mutation from ${mutant.from} to ${mutant.to}`)
                 .join("\n");
             if (survivedMutants) {
-                log(`[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n${survivedMutants}`);
-                finalReportMarkdown += `#### 存活的變異體\n\`\`\`text\n${survivedMutants}\n\`\`\`\n`;
+                log(localize("[弱點分析] 本輪存活變異體資訊已擷取，將於下一輪優化進行 Assert 強化：\n{0}", survivedMutants));
+                finalReportMarkdown += localize("#### 存活的變異體\n```text\n{0}\n```\n", survivedMutants);
             } else {
-                log(`[分析] 本輪無存活變異體，或分析結果已達最優。`);
-                finalReportMarkdown += `- **存活變異體**: 無\n`;
+                log(localize("[分析] 本輪無存活變異體，或分析結果已達最優。"));
+                finalReportMarkdown += localize("- **存活變異體**: 無\n");
             }
 
             // Bind code, execution, gaps and survivors to the same accepted version.
@@ -2757,11 +2766,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 || mutationRun.scopeVersion !== bestMutation.scopeVersion
                 || mutationRun.candidateSetId !== bestMutation.candidateSetId)) {
                 throw new AnalysisStageError('mutation', 'mutation-candidate-set',
-                    '突變候選集合或範圍版本改變，不能與既有品質基線直接比較。');
+                    localize("突變候選集合或範圍版本改變，不能與既有品質基線直接比較。"));
             }
-            if (!evidenceStillCurrent()) { throw new AnalysisStageError('validation', 'source-changed', '來源或相依版本改變，捨棄本輪品質證據。'); }
+            if (!evidenceStillCurrent()) { throw new AnalysisStageError('validation', 'source-changed', localize("來源或相依版本改變，捨棄本輪品質證據。")); }
             if (evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
-                throw new AnalysisStageError('validation', 'candidate-changed', '測試檔在突變期間改變；保留先前已驗證快照。');
+                throw new AnalysisStageError('validation', 'candidate-changed', localize("測試檔在突變期間改變；保留先前已驗證快照。"));
             }
             recordRole('mutation', 'measured', { code: measuredCandidate.code,
                 score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps });
@@ -2800,13 +2809,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reviewStatus = bestReviewStatus;
                 measuredQualityGaps = [...bestMeasuredGaps];
                 acceptedScenarios = bestScenarios;
-                finalReportMarkdown += `> 已還原歷史基線，測試、分數（${bestScore}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n`;
+                finalReportMarkdown += localize("> 已還原歷史基線，測試、分數（{0}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n", bestScore);
             }
             qualityToolsSatisfied = checkpoints.quality?.qualityAssessment?.toolsSatisfied === true;
             if (!checkpoints.quality?.qualityAssessment || (checkpoints.quality.qualityAssessment.policyStatus === 'unassessable'
                 && !noMutationCandidates)) {
                 throw new AnalysisStageError('validation', 'quality-policy',
-                    '品質證據不符合本次政策契約；保留測試與診斷，不能宣稱通過。',
+                    localize("品質證據不符合本次政策契約；保留測試與診斷，不能宣稱通過。"),
                     { reasons: checkpoints.quality?.qualityAssessment?.reasons || ['missing-quality-assessment'] });
             }
             journal.knowledge({ target: params.funcName || targetFuncName, resolvedTier: bestTier ?? currentTier,
@@ -2836,12 +2845,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 path: existingReport
             });
             const assessment = checkpoints.quality!.qualityAssessment!;
-            const finalReason = assessment.fullyPassed ? '品質政策達標；執行與審查完成'
-                : assessment.toolsSatisfied ? '量測達標；審查未完成'
-                    : noMutationCandidates ? 'N/A - 選定範圍沒有可用突變候選'
-                        : '執行通過；品質政策尚未達標';
-            finalReportMarkdown += `- **品質政策**: ${qualityPolicy.policyId}\n`
-                + `- **品質判定**: ${finalReason}\n`;
+            const finalReason = assessment.fullyPassed ? localize("品質政策達標；執行與審查完成")
+                : assessment.toolsSatisfied ? localize("量測達標；審查未完成")
+                    : noMutationCandidates ? localize("N/A - 選定範圍沒有可用突變候選")
+                        : localize("執行通過；品質政策尚未達標");
+            finalReportMarkdown += localize("- **品質政策**: {0}\n", qualityPolicy.policyId)
+                + localize("- **品質判定**: {0}\n", finalReason);
 
             sidebarProvider.webview?.postMessage({
                 command: 'updateCoverage',
@@ -2860,25 +2869,25 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
             if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), coverageGapIds(
                 loopAssessment))) {
-                recordRole('analyst-quality', 'stagnated', { reason: '連續 3 輪沒有減少已測量缺口；保留基線並停止。' });
-                finalReportMarkdown += '> 品質尚未達標：連續 3 輪沒有進步，停止相同策略重試。\n';
+                recordRole('analyst-quality', 'stagnated', { reason: localize("連續 3 輪沒有減少已測量缺口；保留基線並停止。") });
+                finalReportMarkdown += localize("> 品質尚未達標：連續 3 輪沒有進步，停止相同策略重試。\n");
                 journal.knowledge({ terminalStatus: 'stagnated' });
                 break;
             }
             if (noMutationCandidates && measuredQualityGaps.length === 0) {
-                log(`[優化] 本輪沒有可評分的突變點，停止重複迴圈。`);
+                log(localize("[優化] 本輪沒有可評分的突變點，停止重複迴圈。"));
                 journal.knowledge({ terminalStatus: 'no-mutation-candidates' });
                 break;
             }
             if (checkpoints.quality?.qualityAssessment?.toolsSatisfied) {
-                log('[優化] 同一候選的完整量測已符合執行前固定的品質政策；已保存基準。');
+                log(localize("[優化] 同一候選的完整量測已符合執行前固定的品質政策；已保存基準。"));
                 journal.knowledge({ terminalStatus: checkpoints.quality.qualityAssessment.fullyPassed
                     ? 'passed' : 'execution-passed-review-incomplete' });
                 break;
             }
             if ((survivedMutants || qualityGaps.length) && !mayUseModelAuthoredTests) {
-                const note = 'Auto 模式下目前模型尚未通過 unittest 生成探測；已保留 deterministic Tier 1 測試與存活變異體報告，停止 LLM 修補以避免猜測性測試。請先執行「測試連線」，或明確選擇 Tier 2–4 後再啟用受驗證閘門保護的自我修復。';
-                log(`[優化] ${note}`);
+                const note = localize("Auto 模式下目前模型尚未通過 unittest 生成探測；已保留 deterministic Tier 1 測試與存活變異體報告，停止 LLM 修補以避免猜測性測試。請先執行「測試連線」，或明確選擇 Tier 2–4 後再啟用受驗證閘門保護的自我修復。");
+                log(localize("[優化] {0}", note));
                 finalReportMarkdown += `> [!NOTE]\n> ${note}\n\n`;
                 journal.knowledge({ terminalStatus: 'quality-incomplete' });
                 break;
@@ -2934,24 +2943,24 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (!evidenceValid) {
                 invalidateSourceEvidence();
             }
-            if (message !== "使用者強制中止") {log(`[錯誤] 執行中斷: ${message}`);}
+            if (message !== localize("使用者強制中止")) {log(localize("[錯誤] 執行中斷: {0}", message));}
             finalReportMarkdown += retainedBaseline
-                ? `\n### 後續步驟中斷；已保留可執行基準（第 ${currentLoop} 輪）\n\n`
-                : `\n### ❌ 執行中斷（第 ${currentLoop} 輪）\n\n`;
-            finalReportMarkdown += `- **失敗分類**: ${failureCategory}\n\n`;
+                ? localize("\n### 後續步驟中斷；已保留可執行基準（第 {0} 輪）\n\n", currentLoop)
+                : localize("\n### ❌ 執行中斷（第 {0} 輪）\n\n", currentLoop);
+            finalReportMarkdown += localize("- **失敗分類**: {0}\n\n", failureCategory);
             if (retainedBaseline && retainedScore === null) {
-                const unavailableReason = !evidenceValid ? '來源已變更，舊證據失效'
-                    : bestMutation?.status === 'no-candidates' ? '沒有可用候選' : '尚未完成有效測量';
-                finalReportMarkdown += `- **突變分數**: N/A（${unavailableReason}）\n`
-                    + `- **保留測試**: ${(checkpoints.quality || executable)!.testFile}\n- **Reviewer status**: ${reviewStatus}\n\n`;
+                const unavailableReason = !evidenceValid ? localize("來源已變更，舊證據失效")
+                    : bestMutation?.status === 'no-candidates' ? localize("沒有可用候選") : localize("尚未完成有效測量");
+                finalReportMarkdown += localize("- **突變分數**: N/A（{0}）\n", unavailableReason)
+                    + localize("- **保留測試**: {0}\n- **Reviewer status**: {1}\n\n", (checkpoints.quality || executable)!.testFile, reviewStatus);
             }
-            finalReportMarkdown += `**錯誤訊息**: ${message}\n\n`;
+            finalReportMarkdown += localize("**錯誤訊息**: {0}\n\n", message);
             if (stack && stack !== message) {
-                finalReportMarkdown += `**錯誤堆疊**:\n\`\`\`\n${stack}\n\`\`\`\n\n`;
+                finalReportMarkdown += localize("**錯誤堆疊**:\n```\n{0}\n```\n\n", stack);
             }
             // 記錄 AI 原始輸出（如果有的話）
             if (rawCode) {
-                finalReportMarkdown += `**AI 實際輸出內容（前 500 字元）**:\n\`\`\`\n${rawCode.substring(0, 500)}\n\`\`\`\n\n`;
+                finalReportMarkdown += localize("**AI 實際輸出內容（前 500 字元）**:\n```\n{0}\n```\n\n", rawCode.substring(0, 500));
             }
             writeReport();
             sidebarProvider.webview?.postMessage({
@@ -2961,9 +2970,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 func: params.funcName || '',
                 score: retainedScore !== null ? `${retainedScore}%` : retainedBaseline ? 'N/A' : '失敗',
                 coverage: retainedBaseline && evidenceValid ? loopCoverage?.coverageText ?? null : null,
-                reason: !evidenceValid ? '來源已變更；舊成果僅供歷史查看，需重新分析' : retainedBaseline
-                    ? retainedScore !== null ? `已保留 ${retainedScore}% 基準；後續步驟失敗` : '已保留可執行測試；突變品質尚未完成'
-                    : message.includes('CUDA') ? 'VRAM 不足' : (message.length > 50 ? message.substring(0, 47) + '...' : message)
+                reason: !evidenceValid ? localize("來源已變更；舊成果僅供歷史查看，需重新分析") : retainedBaseline
+                    ? retainedScore !== null ? localize("已保留 {0}% 基準；後續步驟失敗", retainedScore) : localize("已保留可執行測試；突變品質尚未完成")
+                    : message.includes('CUDA') ? localize("VRAM 不足") : (message.length > 50 ? message.substring(0, 47) + '...' : message)
             });
             break;
         }
@@ -2984,13 +2993,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         journal.knowledge({ mutationInputPlan: plan });
                         recordRole('mutation-inputs', 'planned', { inputCount: plan.inputs.length, diagnostics: plan.diagnostics });
                         if (plan.diagnostics.some(item => item.status === 'conditional-equivalence')) {
-                            finalReportMarkdown += '\n> 存活突變包含「前置分支可能使下限重複」的條件式等價候選；尚未證明自訂型別等所有路徑等價，仍保留分母與未達標狀態。詳見本輪 mutation_input_plan.json。\n';
+                            finalReportMarkdown += localize("\n> 存活突變包含「前置分支可能使下限重複」的條件式等價候選；尚未證明自訂型別等所有路徑等價，仍保留分母與未達標狀態。詳見本輪 mutation_input_plan.json。\n");
                         }
                     }
                     if (plan.inputs.length) {
                         const observations = await runBehaviorProbe(params.filePath, params.funcName || targetFuncName,
                             [], pythonExecutable, plan.inputs, sessionDir);
-                        if (!evidenceStillCurrent()) { throw new Error('來源或相依已變更，未採用補測觀測。'); }
+                        if (!evidenceStillCurrent()) { throw new Error(localize("來源或相依已變更，未採用補測觀測。")); }
                         observedBoundary = Boolean(observations && !observations.load_error
                             && [...observations.examples, ...observations.errors].some(item => item.call_assertable !== false
                                 && item.result_assertable !== false));
@@ -2999,7 +3008,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             writerEvidenceBundle.mergedTargetObservations = astContext.traceResult;
                             journal.knowledge({ verifiedObservations: astContext.traceResult,
                                 nextTasks: [{ origin: 'measured-mutation-inputs', inputs: plan.inputs,
-                                    verification: '觀測僅支持相同輸入的斷言；下一輪仍須通過獨立基線、執行、審查與突變量測。' }],
+                                    verification: localize("觀測僅支持相同輸入的斷言；下一輪仍須通過獨立基線、執行、審查與突變量測。") }],
                                 taskStatus: 'observed-inputs-require-quality-measurement' });
                             analystTasks += '\nNew boundary inputs have isolated execution observations in TRACE evidence. '
                                 + 'The host preserves these tests. Keep model cases; do not copy TestVerifiedTrace methods into model classes. '
@@ -3055,7 +3064,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         fileName: displayName,
         reportPath: finalReportPath
     });
-    log(`[系統] 分析結束！測試檔與最終報告已儲存至:\n${sessionDir}`);
+    log(localize("[系統] 分析結束！測試檔與最終報告已儲存至:\n{0}", sessionDir));
     
     if (!params.batchJournal) {
         const doc = await vscode.workspace.openTextDocument(finalReportPath);
@@ -3073,7 +3082,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             failure: message, failureCategory: category, failureStage: stage,
             diagnostic: error instanceof AnalysisStageError || error instanceof RepairResponseError ? error.diagnostic : undefined });
         recordRole(stage, 'failed', { reason: message, category });
-        finalReportMarkdown += `\n### 執行停止\n\n- **失敗分類**: ${category}\n- **失敗階段**: ${stage}\n\n${message}\n`;
+        finalReportMarkdown += localize("\n### 執行停止\n\n- **失敗分類**: {0}\n- **失敗階段**: {1}\n\n{2}\n", category, stage, message);
         if (!isExecutionCancelled()) {
             sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName,
                 file: displayFile, func: params.funcName || '', score: 'N/A',
@@ -3125,7 +3134,7 @@ function extractFocusContext(survivedMutants: string, targetCode: string): strin
             const start = Math.max(0, idx - 2);
             const end = Math.min(lines.length - 1, idx + 2);
             
-            let snippet = `【目標變異體】\n${mLine.trim()}\n【發生位置周遭程式碼 (第 ${start+1}~${end+1} 行)】\n\`\`\`python\n`;
+            let snippet = localize("【目標變異體】\n{0}\n【發生位置周遭程式碼 (第 {1}~{2} 行)】\n```python\n", mLine.trim(), start+1, end+1);
             for (let i = start; i <= end; i++) {
                 const prefix = (i === idx) ? '>> ' : '   ';
                 snippet += `${prefix}${i+1}: ${lines[i]}\n`;

@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
+import { setLanguage } from '../i18n/core';
 
 test('fallback history, measured boundary probes and incomplete roles survive real mutation rounds', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mutation-improvement-'));
@@ -20,7 +21,7 @@ test('fallback history, measured boundary probes and incomplete roles survive re
             return { dispose() {} };
         }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
-            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }), openTextDocument: async () => ({}) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : key === 'language' ? 'en' : fallback }), openTextDocument: async () => ({}) },
         commands: { registerCommand: (name: string, handler: (params: any) => Promise<void>) => { handlers.set(name, handler); return { dispose() {} }; } },
         env: { openExternal: async () => true }, Uri: { file: (file: string) => file }
     };
@@ -77,8 +78,9 @@ class Cases(unittest.TestCase):
         assert.equal(state.tierHistory.transitions[0].from, 2);
         assert.equal(state.tierHistory.transitions[0].to, 1);
         assert.equal(state.tierHistory.rounds[1].start, 2);
-        assert.match(report, /曾自動降級：是.*第 1 輪 Tier 2 → 1/);
-        assert.match(report, /目前保留候選：Tier 2/);
+        assert.match(report, /Automatic fallback occurred: Yes.*Round 1: Tier 2 → 1/);
+        assert.match(report, /Currently retained candidate: Tier 2/);
+        assert.match(report, /## Final outcome: /);
         const measured = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
         assert.ok(measured.length >= 2, logs.join('\n'));
         assert.ok(measured[1].detail.score > measured[0].detail.score, JSON.stringify(measured.map(event => event.detail.score)));
@@ -89,9 +91,10 @@ class Cases(unittest.TestCase):
         assert.equal(state.qualityAssessment.fullyPassed, false);
         assert.ok(state.mutationInputPlan.diagnostics.some((item: any) => item.status === 'conditional-equivalence' && item.excludedFromScore === false));
         assert.equal(state.mutation.counts.survived, 2, 'redundant-bound candidates are not silently excluded');
-        assert.match(logs.join('\n'), /審查未完成.*繼續工具量測/);
+        assert.match(logs.join('\n'), /Review incomplete.*continuing tool measurements/);
         assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), source);
     } finally {
+        setLanguage('zh-tw');
         globalThis.fetch = fetch; Module._load = load;
         fs.rmSync(directory, { recursive: true, force: true });
     }

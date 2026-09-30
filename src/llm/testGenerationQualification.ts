@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { extractPythonTestCode, validateUnittestStructure } from '../validation/generatedTestValidator';
 
 /** Provider-neutral result for the minimum safe unittest-generation contract. */
@@ -17,7 +18,7 @@ export function formatProbeResponsePreview(response: string): string {
     const cleaned = response.replace(/\u0000/g, '');
     return cleaned.length <= MAX_PROBE_RESPONSE_PREVIEW_CHARS
         ? cleaned
-        : `${cleaned.slice(0, MAX_PROBE_RESPONSE_PREVIEW_CHARS)}\n…（探測回應已截斷，共 ${cleaned.length} 字元）`;
+        : localize("{0}\n…（探測回應已截斷，共 {1} 字元）", cleaned.slice(0, MAX_PROBE_RESPONSE_PREVIEW_CHARS), cleaned.length);
 }
 
 export const STRUCTURED_OUTPUT_PROBE_PROMPT =
@@ -115,7 +116,7 @@ export function assessStructuredOutputProbe(payload: unknown): StructuredOutputP
         : undefined;
 
     if (typeof response !== 'string' || !response.trim()) {
-        return { capability: 'unverified', reason: '模型沒有回傳 JSON 內容。' };
+        return { capability: 'unverified', reason: localize("模型沒有回傳 JSON 內容。") };
     }
 
     try {
@@ -126,13 +127,13 @@ export function assessStructuredOutputProbe(payload: unknown): StructuredOutputP
             && !Array.isArray(parsed)
             && (parsed as { ok?: unknown }).ok === true
         ) {
-            return { capability: 'verified', reason: '模型已通過結構化 JSON 輸出驗證。' };
+            return { capability: 'verified', reason: localize("模型已通過結構化 JSON 輸出驗證。") };
         }
     } catch {
         // The caller only needs the safe fallback state below.
     }
 
-    return { capability: 'unverified', reason: '模型未能依 JSON 格式回傳預期內容。' };
+    return { capability: 'unverified', reason: localize("模型未能依 JSON 格式回傳預期內容。") };
 }
 
 export function assessTestGenerationProbe(payload: unknown): StructuredOutputProbeResult {
@@ -140,7 +141,7 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
         ? (payload as { response?: unknown }).response
         : undefined;
     if (typeof response !== 'string' || !response.trim()) {
-        return { capability: 'unverified', reason: '模型沒有回傳測試程式碼。' };
+        return { capability: 'unverified', reason: localize("模型沒有回傳測試程式碼。") };
     }
     const responsePreview = formatProbeResponsePreview(response);
     const reject = (reason: string): StructuredOutputProbeResult => ({
@@ -149,21 +150,21 @@ export function assessTestGenerationProbe(payload: unknown): StructuredOutputPro
     const code = extractQualificationProbeCode(response);
     const validation = validateUnittestStructure(code);
     if (!validation.valid) {
-        return reject(validation.reason || '模型沒有產生有效的 unittest 結構。');
+        return reject(validation.reason || localize("模型沒有產生有效的 unittest 結構。"));
     }
 
     const invokesFixture = code.split(/\r?\n/).some(line =>
         !/^\s*def\s+increment\s*\(/.test(line) && /\bincrement\s*\(/.test(line)
     );
     if (!invokesFixture) {
-        return reject('模型沒有產生可驗證的 increment 目標呼叫。');
+        return reject(localize("模型沒有產生可驗證的 increment 目標呼叫。"));
     }
     if (!hasProbeBehaviorAssertions(code)) {
-        return reject('模型未同時驗證已知行為 increment(1) == 2 與 increment(-1) == 0。');
+        return reject(localize("模型未同時驗證已知行為 increment(1) == 2 與 increment(-1) == 0。"));
     }
     return {
         capability: 'verified',
-        reason: '模型已通過 unittest 結構、目標呼叫與雙案例行為 assertion 驗證。',
+        reason: localize("模型已通過 unittest 結構、目標呼叫與雙案例行為 assertion 驗證。"),
         responsePreview
     };
 }

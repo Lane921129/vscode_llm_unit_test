@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface CandidateGateValidation {
     valid: boolean;
     reason?: string;
@@ -18,10 +19,10 @@ export function resolveTierTwoSubtaskGate(
     traceEvidenceValidation: CandidateGateValidation
 ): TierTwoSubtaskGateResult {
     if (!traceEvidenceValidation.valid) {
-        return { accepted: false, reason: traceEvidenceValidation.reason || 'Trace 證據驗證失敗' };
+        return { accepted: false, reason: traceEvidenceValidation.reason || localize("Trace 證據驗證失敗") };
     }
     if (!structuralValidation.valid) {
-        return { accepted: false, reason: structuralValidation.reason || 'Python/unittest 結構驗證失敗' };
+        return { accepted: false, reason: structuralValidation.reason || localize("Python/unittest 結構驗證失敗") };
     }
     return { accepted: true };
 }

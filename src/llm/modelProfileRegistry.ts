@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { ModelQualificationProfile, ModelQualificationRequest, qualificationForRequest, qualificationEndpointKey, QUALIFICATION_VERSION } from './modelQualification';
 
 export interface StoredModelProfile extends ModelQualificationProfile {
@@ -20,7 +21,7 @@ export function modelProfileKey(request: ModelQualificationRequest): string {
 function invalidateOldQualification(profile: StoredModelProfile): StoredModelProfile {
     if (profile.testGenerationReady === undefined || profile.qualificationVersion === QUALIFICATION_VERSION) { return profile; }
     return { ...profile, testGenerationReady: false,
-        testGenerationReason: `舊探針結果已過期（原格式：${profile.testGenerationMode || '未知'}）；請重新執行測試連線。` };
+        testGenerationReason: localize("舊探針結果已過期（原格式：{0}）；請重新執行測試連線。", profile.testGenerationMode || localize("未知")) };
 }
 
 export function isStoredModelProfile(value: unknown): value is StoredModelProfile {

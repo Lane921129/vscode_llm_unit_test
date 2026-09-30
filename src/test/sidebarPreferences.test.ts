@@ -2,6 +2,7 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as vm from 'node:vm';
 import { getWebviewContent } from '../ui/webviewContent';
+import { setLanguage, t } from '../i18n/core';
 import { normalizeExecutionSettings, DEFAULT_MAX_LOOPS, DEFAULT_MUTATION_TIMEOUT_SECONDS } from '../pipeline/executionSettings';
 
 test('all folder pickers restore independent selections after provider recreation and cancellation preserves history', async () => {
@@ -90,7 +91,8 @@ test('all folder pickers restore independent selections after provider recreatio
 });
 
 test('rendered Webview sends 5 loops and 20 seconds for both run modes, including empty input fallback', () => {
-    const html = getWebviewContent(key => key);
+    setLanguage('zh-tw');
+    const html = getWebviewContent(t);
     const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i)![1];
     const elements = new Map<string, any>();
     for (const match of html.matchAll(/<(?:input|select|button|textarea|p)[^>]*\bid="([^"]+)"[^>]*>/g)) {

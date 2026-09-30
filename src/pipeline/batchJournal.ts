@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -84,7 +85,7 @@ export class BatchJournal {
     private relative(file: string): string {
         const relative = path.relative(this.sourceRoot, file);
         if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) {
-            throw new Error('批次來源不在已選資料夾內。');
+            throw new Error(localize("批次來源不在已選資料夾內。"));
         }
         return relative.replace(/\\/g, '/') || '.';
     }
@@ -103,7 +104,7 @@ export class BatchJournal {
     attach(id: number, directory: string): void {
         const relative = path.relative(this.directory, directory);
         if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) {
-            throw new Error('批次報告不在本次輸出資料夾內。');
+            throw new Error(localize("批次報告不在本次輸出資料夾內。"));
         }
         this.targets[id].reportDirectory = relative.replace(/\\/g, '/'); this.save();
     }
@@ -188,7 +189,7 @@ export class BatchJournal {
         const failed = this.targets.filter(t => t.category !== 'environment'
             && ['failed', 'retained-after-failure', 'source-changed'].includes(t.terminalStatus || '')).length;
         const skipped = this.targets.filter(t => ['dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'no-mutation-candidates'].includes(t.terminalStatus || '')).length;
-        return `共 ${this.targets.length} 個目標；執行驗證通過 ${executed}、完整通過 ${passed}、環境受阻 ${blocked}、失敗 ${failed}、略過／未評分 ${skipped}、未完成 ${this.targets.length - executed - passed - blocked - failed - skipped}`;
+        return localize("共 {0} 個目標；執行驗證通過 {1}、完整通過 {2}、環境受阻 {3}、失敗 {4}、略過／未評分 {5}、未完成 {6}", this.targets.length, executed, passed, blocked, failed, skipped, this.targets.length - executed - passed - blocked - failed - skipped);
     }
     private save(): void {
         const counts: Record<string, number> = {};
@@ -225,23 +226,23 @@ export class BatchJournal {
         fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');
         fs.renameSync(temporary, path.join(this.directory, 'batch_manifest.json'));
         const safe = (value: string) => value.replace(/[|\r\n]/g, ' ');
-        const report = ['# 批次執行摘要', '', `## ${manifest.allTargetsPassed ? '完整通過'
-            : manifest.allTargetsExecutionVerified ? '全部執行驗證通過；完整品質尚未驗證' : '未全部通過'}`, '', this.summary(), '',
-            `- 驗證目標：${mode === 'execution' ? '執行驗證；Trace、覆蓋率、突變與品質審查未執行' : '完整品質驗證'}`,
-            `- 狀態：${this.status}（執行完成不代表測試通過）`,
-            ...(this.blockedModules ? [`- 前置預檢有 ${this.blockedModules} 個模組受阻：[原因與處理方式](preflight/import_check.md)。未開始的目標保持未完成。`] : []),
-            `- 預期目標：${this.targets.length}；已有終態：${manifest.finishedTargets}；完整通過：${passed}`,
-            `- 模型：${safe(this.identity.model)}；建置：${safe(this.identity.buildTimestamp)}`,
-            `- Python：${safe(this.identity.python)}`, '', '| 目標狀態 | 數量 |', '| --- | ---: |',
+        const report = [localize("# 批次執行摘要"), '', `## ${manifest.allTargetsPassed ? localize("完整通過")
+            : manifest.allTargetsExecutionVerified ? localize("全部執行驗證通過；完整品質尚未驗證") : localize("未全部通過")}`, '', this.summary(), '',
+            localize("- 驗證目標：{0}", mode === 'execution' ? localize("執行驗證；Trace、覆蓋率、突變與品質審查未執行") : localize("完整品質驗證")),
+            localize("- 狀態：{0}（執行完成不代表測試通過）", this.status),
+            ...(this.blockedModules ? [localize("- 前置預檢有 {0} 個模組受阻：[原因與處理方式](preflight/import_check.md)。未開始的目標保持未完成。", this.blockedModules)] : []),
+            localize("- 預期目標：{0}；已有終態：{1}；完整通過：{2}", this.targets.length, manifest.finishedTargets, passed),
+            localize("- 模型：{0}；建置：{1}", safe(this.identity.model), safe(this.identity.buildTimestamp)),
+            `- Python：${safe(this.identity.python)}`, '', localize("| 目標狀態 | 數量 |"), '| --- | ---: |',
             ...Object.entries(counts).map(([status, count]) => `| ${status} | ${count} |`), '',
-            '## 環境障礙', '', '| 分類 | 共同原因 | 受影響目標 | 處理方式 |', '| --- | --- | ---: | --- |',
+            localize("## 環境障礙"), '', localize("| 分類 | 共同原因 | 受影響目標 | 處理方式 |"), '| --- | --- | ---: | --- |',
             ...environmentIssues.map(issue => `| ${issue.kind} | ${safe(issue.issue)} | ${issue.affectedTargets} | ${safe(issue.advice || '')} |`), '',
-            '缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。',
-            '匯入副作用：在測試工具設定 llmUnitTest.importFixtures，明確模擬初始化相依，保持受測原檔不變。安裝套件不能解決目錄建立等副作用；API 不相容須核對原專案版本宣告。', '',
-            '## 未完成與略過', '',
-            ...this.discoveryFailures.map(item => `- 無法掃描 ${safe(item.file)}：${safe(item.stage)}`),
+            localize("缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。"),
+            localize("匯入副作用：在測試工具設定 llmUnitTest.importFixtures，明確模擬初始化相依，保持受測原檔不變。安裝套件不能解決目錄建立等副作用；API 不相容須核對原專案版本宣告。"), '',
+            localize("## 未完成與略過"), '',
+            ...this.discoveryFailures.map(item => localize("- 無法掃描 {0}：{1}", safe(item.file), safe(item.stage))),
             ...this.targets.filter(t => t.state !== 'finished').map(t => `- ${safe(t.file)} :: ${safe(t.target)}：${t.terminalStatus || t.state}`),
-            'Dummy／Stub、審查未完成、品質不足及缺報告皆不計為通過。逐目標輸出與模型請求數見 batch_manifest.json。', ''].join('\n');
+            localize("Dummy／Stub、審查未完成、品質不足及缺報告皆不計為通過。逐目標輸出與模型請求數見 batch_manifest.json。"), ''].join('\n');
         fs.writeFileSync(path.join(this.directory, 'batch_summary.md'), report, 'utf8');
     }
 }

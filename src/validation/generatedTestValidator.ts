@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface GeneratedTestValidation {
     valid: boolean;
     reason?: string;
@@ -417,19 +418,20 @@ function shadowsTargetModule(code: string, moduleName: string): boolean {
 }
 
 const UNSAFE_TEST_OPERATIONS: Array<{ pattern: RegExp; label: string }> = [
-    { pattern: /\b(?:os\.)?(?:system|popen)\s*\(/, label: '啟動 shell 指令' },
-    { pattern: /\bsubprocess\s*\.\s*(?:run|call|check_call|check_output|Popen)\s*\(/, label: '啟動子程序' },
-    { pattern: /\b(?:socket\s*\.\s*(?:create_connection|socket)|requests\s*\.\s*\w+|urllib\s*\.\s*request\s*\.\s*urlopen|http\s*\.\s*client)\s*\(/, label: '直接網路存取' },
-    { pattern: /\b(?:eval|exec|compile|__import__)\s*\(/, label: '動態執行程式碼' },
-    { pattern: /\bopen\s*\(/, label: '直接檔案存取' },
-    { pattern: /\b(?:pathlib\s*\.\s*)?Path\s*\([^\n]*\)\s*\.\s*(?:open|read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace)\s*\(/, label: '直接檔案存取' },
-    { pattern: /\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|unlink|rmdir)\s*\(/, label: '直接檔案存取' },
-    { pattern: /\b(?:shutil\s*\.\s*rmtree|os\s*\.\s*(?:remove|unlink|rmdir|replace)|pathlib\s*\.\s*Path\s*\([^\n]*\)\s*\.\s*(?:unlink|rmdir))\s*\(/, label: '破壞性檔案操作' },
-    { pattern: /\bsqlite3\s*\.\s*connect\s*\(\s*(?!['\"]:memory:['\"]\s*\))/, label: '非隔離 SQLite 資料庫連線' },
+    { pattern: /\b(?:os\.)?(?:system|popen)\s*\(/, label: "啟動 shell 指令" },
+    { pattern: /\bsubprocess\s*\.\s*(?:run|call|check_call|check_output|Popen)\s*\(/, label: "啟動子程序" },
+    { pattern: /\b(?:socket\s*\.\s*(?:create_connection|socket)|requests\s*\.\s*\w+|urllib\s*\.\s*request\s*\.\s*urlopen|http\s*\.\s*client)\s*\(/, label: "直接網路存取" },
+    { pattern: /\b(?:eval|exec|compile|__import__)\s*\(/, label: "動態執行程式碼" },
+    { pattern: /\bopen\s*\(/, label: "直接檔案存取" },
+    { pattern: /\b(?:pathlib\s*\.\s*)?Path\s*\([^\n]*\)\s*\.\s*(?:open|read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace)\s*\(/, label: "直接檔案存取" },
+    { pattern: /\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|unlink|rmdir)\s*\(/, label: "直接檔案存取" },
+    { pattern: /\b(?:shutil\s*\.\s*rmtree|os\s*\.\s*(?:remove|unlink|rmdir|replace)|pathlib\s*\.\s*Path\s*\([^\n]*\)\s*\.\s*(?:unlink|rmdir))\s*\(/, label: "破壞性檔案操作" },
+    { pattern: /\bsqlite3\s*\.\s*connect\s*\(\s*(?!['\"]:memory:['\"]\s*\))/, label: "非隔離 SQLite 資料庫連線" },
 ];
 
 function unsafeTestOperation(code: string): string | undefined {
-    return UNSAFE_TEST_OPERATIONS.find(operation => operation.pattern.test(code))?.label;
+    const label = UNSAFE_TEST_OPERATIONS.find(operation => operation.pattern.test(code))?.label;
+    return label ? localize(label) : undefined;
 }
 
 function unimportedPrivateHelperCall(code: string): string | undefined {
@@ -564,33 +566,33 @@ export function validateUnittestStructure(
 ): GeneratedTestValidation {
     const trimmed = code.trim();
     if (!trimmed) {
-        return { valid: false, reason: '輸出為空' };
+        return { valid: false, reason: localize("輸出為空") };
     }
     if (/^\s*\[\/?(?:pytest|python)\]\s*$/im.test(executablePythonText(trimmed))) {
-        return { valid: false, reason: '輸出含有不完整或未擷取的 code wrapper；請輸出單一完整 Python code fence' };
+        return { valid: false, reason: localize("輸出含有不完整或未擷取的 code wrapper；請輸出單一完整 Python code fence") };
     }
     if (/```|^\s*[-*]\s+/m.test(trimmed)) {
-        return { valid: false, reason: '輸出包含 Markdown，而不是純 Python 測試檔' };
+        return { valid: false, reason: localize("輸出包含 Markdown，而不是純 Python 測試檔") };
     }
     if (!/^\s*(?:from\s+unittest\s+import|import\s+unittest\b)/m.test(trimmed)) {
-        return { valid: false, reason: '缺少 unittest import' };
+        return { valid: false, reason: localize("缺少 unittest import") };
     }
     if (!hasUnittestTestCaseClass(trimmed)) {
-        return { valid: false, reason: '缺少已明確匯入的 unittest.TestCase 或 unittest.IsolatedAsyncioTestCase 類別' };
+        return { valid: false, reason: localize("缺少已明確匯入的 unittest.TestCase 或 unittest.IsolatedAsyncioTestCase 類別") };
     }
     if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
-        return { valid: false, reason: '缺少 test_ 測試方法' };
+        return { valid: false, reason: localize("缺少 test_ 測試方法") };
     }
     const mockCandidate = deferMockBehaviorToAst && /\.(?:assert_called(?:_once)?(?:_with)?|assert_any_call|assert_has_calls|assert_not_called|assert_awaited(?:_once)?(?:_with)?|assert_any_await|assert_has_awaits|assert_not_awaited)\s*\(/.test(executablePythonText(trimmed));
     let requiresMockBehaviorEvidence = !hasAssertion(trimmed) && mockCandidate;
     if (!hasAssertion(trimmed) && !mockCandidate) {
-        return { valid: false, reason: '缺少可驗證行為的 assertion 或 assertRaises' };
+        return { valid: false, reason: localize("缺少可驗證行為的 assertion 或 assertRaises") };
     }
     const unsafeOperation = unsafeTestOperation(trimmed);
     if (unsafeOperation) {
         return {
             valid: false,
-            reason: `測試包含不允許的${unsafeOperation}；請以 unittest.mock.patch 模擬外部或危險操作。`
+            reason: localize("測試包含不允許的{0}；請以 unittest.mock.patch 模擬外部或危險操作。", unsafeOperation)
         };
     }
     if (targetCallable) {
@@ -599,7 +601,7 @@ export function validateUnittestStructure(
         if (unsupportedException) {
             return {
                 valid: false,
-                reason: `assertRaises(${unsupportedException}) 沒有目標原始碼、已驗證行為觀測或 mock side_effect 的例外事實依據。`
+                reason: localize("assertRaises({0}) 沒有目標原始碼、已驗證行為觀測或 mock side_effect 的例外事實依據。", unsupportedException)
             };
         }
         const callReference = targetCallReference(executable, targetCallable, targetModule, targetClassName);
@@ -607,32 +609,32 @@ export function validateUnittestStructure(
         if (barePrivateHelper) {
             return {
                 valid: false,
-                reason: `測試呼叫未匯入的私有 helper ${barePrivateHelper}；請改用 module point-of-use patch 或明確匯入。`
+                reason: localize("測試呼叫未匯入的私有 helper {0}；請改用 module point-of-use patch 或明確匯入。", barePrivateHelper)
             };
         }
         const targetPrivateHelper = invokesTargetPrivateHelper(executable, targetCallable, callReference);
         if (targetPrivateHelper) {
             return {
                 valid: false,
-                reason: `測試直接呼叫被測模組私有 helper ${targetPrivateHelper}；請 patch 該使用點而非直接操作內部狀態。`
+                reason: localize("測試直接呼叫被測模組私有 helper {0}；請 patch 該使用點而非直接操作內部狀態。", targetPrivateHelper)
             };
         }
         if (definesCallable(executable, targetCallable)) {
-            return { valid: false, reason: '測試檔重新定義了被測函式 ' + targetCallable + '，可能沒有測到原始模組' };
+            return { valid: false, reason: localize("測試檔重新定義了被測函式 ") + targetCallable + localize("，可能沒有測到原始模組") };
         }
         const shadowedAlias = shadowsImportedAlias(executable, callReference.importedAliases);
         if (shadowedAlias) {
-            return { valid: false, reason: '測試檔重新定義了被測函式的匯入別名 ' + shadowedAlias + '，可能沒有測到原始模組' };
+            return { valid: false, reason: localize("測試檔重新定義了被測函式的匯入別名 ") + shadowedAlias + localize("，可能沒有測到原始模組") };
         }
         if (!deferMockBehaviorToAst && (targetUsage === 'property' ? !accessesProperty(executable, targetCallable) : !invokesTargetCall(executable, callReference))) {
             return { valid: false, reason: targetUsage === 'property'
-                ? '測試沒有讀取被測 property ' + targetCallable
-                : '測試沒有呼叫被測函式 ' + targetCallable };
+                ? localize("測試沒有讀取被測 property ") + targetCallable
+                : localize("測試沒有呼叫被測函式 ") + targetCallable };
         }
         if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && !mockCandidate && !deferMockBehaviorToAst) {
             return { valid: false, reason: targetUsage === 'property'
-                ? '沒有同時讀取被測 property 並驗證行為的 test_ 方法'
-                : '沒有同時呼叫被測函式並驗證行為的 test_ 方法' };
+                ? localize("沒有同時讀取被測 property 並驗證行為的 test_ 方法")
+                : localize("沒有同時呼叫被測函式並驗證行為的 test_ 方法") };
         }
         requiresMockBehaviorEvidence ||= !hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && mockCandidate;
         if (targetUsage === 'call' && testMethodBlocks(executable).some(block =>
@@ -640,7 +642,7 @@ export function validateUnittestStructure(
         )) {
             return {
                 valid: false,
-                reason: '測試只修改未傳入被測函式、也未注入 mock 的本地相依物件，無法驗證相依路徑'
+                reason: localize("測試只修改未傳入被測函式、也未注入 mock 的本地相依物件，無法驗證相依路徑")
             };
         }
         if (targetUsage === 'call') {
@@ -649,14 +651,14 @@ export function validateUnittestStructure(
                 if (unusedSetup) {
                     return {
                         valid: false,
-                        reason: `測試直接呼叫相依函式後將 ${unusedSetup} 存入未使用變數；請移除無效 setup，或在被測模組使用點以 mock.patch 注入相依行為。`
+                        reason: localize("測試直接呼叫相依函式後將 {0} 存入未使用變數；請移除無效 setup，或在被測模組使用點以 mock.patch 注入相依行為。", unusedSetup)
                     };
                 }
             }
         }
     }
     if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
-        return { valid: false, reason: '測試檔嘗試以動態模組替換被測模組 ' + targetModule };
+        return { valid: false, reason: localize("測試檔嘗試以動態模組替換被測模組 ") + targetModule };
     }
     return { valid: true, ...(requiresMockBehaviorEvidence ? { requiresMockBehaviorEvidence: true } : {}),
         ...(deferMockBehaviorToAst && targetCallable ? { requiresTargetBehaviorEvidence: true } : {}) };

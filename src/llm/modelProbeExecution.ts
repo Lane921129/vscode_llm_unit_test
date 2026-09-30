@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { spawn } from 'child_process';
 import { assessTestGenerationProbe, extractQualificationProbeCode, StructuredOutputProbeResult } from './testGenerationQualification';
 import { MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS } from './connectionTimeout';
@@ -102,7 +103,7 @@ export function assessIsolatedProbeCode(code: string): IsolatedProbeCodeAssessme
         ? { valid: true }
         : {
             valid: false,
-            reason: `模型探測碼含 ${unsupportedLines.length || 1} 行最小安全 fixture 不允許的語句。`
+            reason: localize("模型探測碼含 {0} 行最小安全 fixture 不允許的語句。", unsupportedLines.length || 1)
         };
 }
 
@@ -157,17 +158,17 @@ export async function verifyRunnableTestGenerationProbe(
     }
     const code = probeCode(payload);
     if (!code) {
-        return { capability: 'unverified', reason: '模型沒有可執行的測試程式碼。', responsePreview: assessment.responsePreview };
+        return { capability: 'unverified', reason: localize("模型沒有可執行的測試程式碼。"), responsePreview: assessment.responsePreview };
     }
     const safety = assessIsolatedProbeCode(code);
     if (!safety.valid) {
         return {
             capability: 'unverified',
-            reason: safety.reason || '模型探測碼未符合可安全隔離執行的最小 unittest fixture。',
+            reason: safety.reason || localize("模型探測碼未符合可安全隔離執行的最小 unittest fixture。"),
             responsePreview: assessment.responsePreview
         };
     }
     return await executor(code)
-        ? { capability: 'verified', reason: '模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。', responsePreview: assessment.responsePreview }
-        : { capability: 'unverified', reason: '模型輸出的 unittest 未能在隔離 Python 環境執行通過。', responsePreview: assessment.responsePreview };
+        ? { capability: 'verified', reason: localize("模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。"), responsePreview: assessment.responsePreview }
+        : { capability: 'unverified', reason: localize("模型輸出的 unittest 未能在隔離 Python 環境執行通過。"), responsePreview: assessment.responsePreview };
 }

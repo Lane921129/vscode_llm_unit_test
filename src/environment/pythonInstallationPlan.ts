@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -46,16 +47,16 @@ function readDeclarations(plan: PythonInstallationPlan, entry: string, root: str
             const real = fs.realpathSync(file);
             const realRoot = fs.realpathSync(root);
             if (!within(realRoot, real)) {
-                plan.blockers.push('requirements 引用了專案範圍外的清單，請改用專案內的相依清單後重新檢查。'); return;
+                plan.blockers.push(localize("requirements 引用了專案範圍外的清單，請改用專案內的相依清單後重新檢查。")); return;
             }
-            if (active.has(real)) { plan.blockers.push('requirements 清單有循環引用，請先修正。'); return; }
+            if (active.has(real)) { plan.blockers.push(localize("requirements 清單有循環引用，請先修正。")); return; }
             const key = JSON.stringify([real, constraint]);
             if (seen.has(key)) { return; }
-            if (depth > 8 || seen.size >= 64) { plan.blockers.push('requirements 引用過多，無法完成安裝清單。'); return; }
+            if (depth > 8 || seen.size >= 64) { plan.blockers.push(localize("requirements 引用過多，無法完成安裝清單。")); return; }
             seen.add(key); active.add(real);
             const size = fs.statSync(real).size;
             bytes += size;
-            if (bytes > 1024 * 1024) { plan.blockers.push('requirements 清單過大，無法完成預覽。'); return; }
+            if (bytes > 1024 * 1024) { plan.blockers.push(localize("requirements 清單過大，無法完成預覽。")); return; }
             const data = fs.readFileSync(real);
             plan.files.push({ path: file, realPath: real, hash: hash(data) });
             const source = label + '：' + path.relative(realRoot, real);
@@ -66,7 +67,7 @@ function readDeclarations(plan: PythonInstallationPlan, entry: string, root: str
                 if (include) {
                     const value = include[3].replace(/^(['"])(.*)\1$/, '$2');
                     if (/^[\w+.-]+:\/\//.test(value) || /\$\{|[\r\n\0]/.test(value)) {
-                        plan.blockers.push('requirements 引用了遠端或動態清單，請先改為本機清單再預覽。'); continue;
+                        plan.blockers.push(localize("requirements 引用了遠端或動態清單，請先改為本機清單再預覽。")); continue;
                     }
                     visit(path.resolve(path.dirname(real), value), constraint || include[1] === 'constraint' || include[2] === 'c', depth + 1);
                     continue;
@@ -79,13 +80,13 @@ function readDeclarations(plan: PythonInstallationPlan, entry: string, root: str
                     const version = /^(?:(?:===|==|~=|!=|<=|>=|<|>)\s*[0-9][A-Za-z0-9.*+!_-]*\s*,?\s*)*$/.test(tail) ? tail : '';
                     plan.declarations.push({ package: declaration[1] + (declaration[2] || ''), version,
                         conditional: line.includes(';'), source, constraint });
-                    if (tail && !version) { plan.notes.push('部分宣告使用外部來源或進階格式，來源內容不顯示，安裝仍依原 requirements。'); }
+                    if (tail && !version) { plan.notes.push(localize("部分宣告使用外部來源或進階格式，來源內容不顯示，安裝仍依原 requirements。")); }
                 } else {
-                    plan.notes.push('清單包含套件來源設定、本機套件或進階宣告；內容不顯示，安裝仍依原 requirements。');
+                    plan.notes.push(localize("清單包含套件來源設定、本機套件或進階宣告；內容不顯示，安裝仍依原 requirements。"));
                 }
             }
             active.delete(real);
-        } catch { plan.blockers.push('無法讀取 requirements 或其引用清單，請檢查檔案是否存在及讀取權限。'); }
+        } catch { plan.blockers.push(localize("無法讀取 requirements 或其引用清單，請檢查檔案是否存在及讀取權限。")); }
     };
     visit(entry, false, 0);
 }
@@ -101,16 +102,16 @@ export async function createPythonInstallationPlan(options: {
     for (const module of options.missing) {
         const locations = options.inventory?.imports.filter(item => item.kind === 'external' && item.module.split('.')[0] === module)
             .flatMap(item => item.references.map(ref => `${ref.file}:${ref.line}`)) || [];
-        let installation = '依專案 requirements';
+        let installation = localize("依專案 requirements");
         let sameNameCandidate = false;
         if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(module)) {
-            plan.blockers.push('缺少的模組名稱無法可靠對應外部套件，請檢查相依宣告。');
+            plan.blockers.push(localize("缺少的模組名稱無法可靠對應外部套件，請檢查相依宣告。"));
         } else if (!options.requirements) {
             const mapping = await options.packageName?.(module);
             const name = mapping ?? module;
             if (!safeName(name)) {
-                installation = '安裝名稱無效';
-                plan.blockers.push('安裝名稱必須是單一套件名稱，不接受網址、路徑或 pip 引數。');
+                installation = localize("安裝名稱無效");
+                plan.blockers.push(localize("安裝名稱必須是單一套件名稱，不接受網址、路徑或 pip 引數。"));
             } else {
                 sameNameCandidate = mapping === undefined;
                 installation = name;
@@ -124,20 +125,20 @@ export async function createPythonInstallationPlan(options: {
             mappingEditable: !options.requirements && /^[A-Za-z][A-Za-z0-9_]*$/.test(module), sameNameCandidate });
     }
     if (options.requirements && options.missing.length) {
-        plan.operations.push({ args: ['-r', options.requirements], cwd: path.dirname(options.requirements), label: '專案 requirements' });
+        plan.operations.push({ args: ['-r', options.requirements], cwd: path.dirname(options.requirements), label: localize("專案 requirements") });
     }
     if (options.needsTools) {
         plan.operations.push({ args: ['-r', options.toolRequirements, ...options.requirements ? ['-r', options.requirements] : []],
-            cwd: options.projectRoot, label: '測試工具相依' });
-        readDeclarations(plan, options.toolRequirements, path.dirname(options.toolRequirements), '測試工具');
+            cwd: options.projectRoot, label: localize("測試工具相依") });
+        readDeclarations(plan, options.toolRequirements, path.dirname(options.toolRequirements), localize("測試工具"));
     }
     if (options.requirements && (options.missing.length || options.needsTools)) {
-        readDeclarations(plan, options.requirements, options.projectRoot, '專案');
+        readDeclarations(plan, options.requirements, options.projectRoot, localize("專案"));
     }
     if (plan.missing.some(item => item.sameNameCandidate)) {
-        plan.notes.push('未宣告對應的缺項會以 import 同名套件嘗試 pip 安裝，尚未驗證套件對應；確認後才執行。安裝後仍須重新檢查 import，失敗時可修改名稱後重試，不會把同名候選自動保存為已確認映射。');
+        plan.notes.push(localize("未宣告對應的缺項會以 import 同名套件嘗試 pip 安裝，尚未驗證套件對應；確認後才執行。安裝後仍須重新檢查 import，失敗時可修改名稱後重試，不會把同名候選自動保存為已確認映射。"));
     }
-    plan.notes.push('這是直接宣告與已知缺項清單，並非 pip 最終解析結果。安裝可能補入間接相依或調整既有版本；條件宣告由 pip 依 Python／平台判定。');
+    plan.notes.push(localize("這是直接宣告與已知缺項清單，並非 pip 最終解析結果。安裝可能補入間接相依或調整既有版本；條件宣告由 pip 依 Python／平台判定。"));
     plan.notes = [...new Set(plan.notes)]; plan.blockers = [...new Set(plan.blockers)];
     plan.id = hash(JSON.stringify(plan));
     return plan;
@@ -152,14 +153,14 @@ export function installationPlanFilesUnchanged(plan: PythonInstallationPlan): bo
 
 export function installationPlanReport(plan: PythonInstallationPlan, approved: boolean, mappingsUpdated = false): string {
     const cell = (value: string) => value.replace(/[&<>|`\r\n\[\]]/g, char => `&#${char.charCodeAt(0)};`);
-    return ['## Python 安裝清單', '', `確認狀態：${mappingsUpdated ? '已儲存安裝名稱，重新產生清單；此清單未執行安裝' : approved ? '已確認此清單（安裝結果以本次終態為準）' : '未確認／取消，未執行此清單'}。`,
-        `Python：${cell(plan.python)}`, `檢查範圍：${cell(plan.target)}`, '',
+    return [localize("## Python 安裝清單"), '', localize("確認狀態：{0}。", mappingsUpdated ? localize("已儲存安裝名稱，重新產生清單；此清單未執行安裝") : approved ? localize("已確認此清單（安裝結果以本次終態為準）") : localize("未確認／取消，未執行此清單")),
+        `Python：${cell(plan.python)}`, localize("檢查範圍：{0}", cell(plan.target)), '',
         ...plan.blockers.map(value => '- ' + cell(value)),
-        '| 缺少的 import | 安裝依據 | 使用位置 |', '| --- | --- | --- |',
-        ...plan.missing.map(item => `| ${cell(item.module)} | ${cell(item.installation)}${item.sameNameCandidate ? '（同名候選，未驗證對應）' : ''} | ${item.locations.map(cell).join('<br>') || '單檔載入預檢'} |`), '',
-        '| Requirements 宣告 | 條件 | 來源 |', '| --- | --- | --- |',
-        ...plan.declarations.map(item => `| ${cell(item.package + item.version)} | ${item.constraint ? '版本限制；' : ''}${item.conditional ? '依環境條件' : '一般宣告'} | ${cell(item.source)} |`), '',
-        `本清單前已完成：${plan.previouslyInstalled.map(cell).join('、') || '無'}。`,
-        `條件／可選缺項（不據此補裝）：${plan.optionalMissing.map(cell).join('、') || '無'}。`,
+        localize("| 缺少的 import | 安裝依據 | 使用位置 |"), '| --- | --- | --- |',
+        ...plan.missing.map(item => `| ${cell(item.module)} | ${cell(item.installation)}${item.sameNameCandidate ? localize("（同名候選，未驗證對應）") : ''} | ${item.locations.map(cell).join('<br>') || localize("單檔載入預檢")} |`), '',
+        localize("| Requirements 宣告 | 條件 | 來源 |"), '| --- | --- | --- |',
+        ...plan.declarations.map(item => `| ${cell(item.package + item.version)} | ${item.constraint ? localize("版本限制；") : ''}${item.conditional ? localize("依環境條件") : localize("一般宣告")} | ${cell(item.source)} |`), '',
+        localize("本清單前已完成：{0}。", plan.previouslyInstalled.map(cell).join('、') || localize("無")),
+        localize("條件／可選缺項（不據此補裝）：{0}。", plan.optionalMissing.map(cell).join('、') || localize("無")),
         ...plan.notes.map(value => '- ' + cell(value)), ''].join('\n');
 }

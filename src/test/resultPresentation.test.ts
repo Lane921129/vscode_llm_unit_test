@@ -6,6 +6,7 @@ import { describeImportIssue } from '../environment/importDiagnostics';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
+import zhTw from '../i18n/zh-tw';
 
 test('progress explains rejection, incomplete review and intermediate acceptance without raw replies', () => {
     assert.match(describeStageEvent('structure', 'rejected', { reason: '沒有 test_ 方法', raw: 'PRIVATE_RESPONSE' }), /沒有 test_ 方法.*Writer/);
@@ -77,11 +78,11 @@ test('the actual result-card renderer keeps 100% neutral unless the final outcom
     const renderer = source.slice(source.indexOf('function escapeHtml('), source.indexOf('function toggleItemCheck('));
     for (const terminalStatus of ['failed', 'retained-after-failure', 'execution-passed-review-incomplete', 'running']) {
         const outcome = presentOutcome({ terminalStatus, qualityAssessment: { fullyPassed: true } });
-        const html = vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome });
+        const html = vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome, i18n: zhTw.ui });
         assert.doesNotMatch(html, /#2ea043/);
         assert.ok(html.includes(outcome.label));
         assert.match(html, /100%/);
     }
     const outcome = presentOutcome({ terminalStatus: 'passed', qualityAssessment: { fullyPassed: true } });
-    assert.match(vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome }), /#2ea043/);
+    assert.match(vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome, i18n: zhTw.ui }), /#2ea043/);
 });

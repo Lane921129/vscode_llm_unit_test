@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { MutationRun } from '../mutation/mutationResult';
 import { BehaviorObservations } from './evidenceContracts';
 import { evidenceHash } from './analysisJournal';
@@ -24,7 +25,7 @@ export async function planMutationProbes(source: string, target: string, mutatio
         input: JSON.stringify({ source, target, mutants: survivors, observations: observations?.examples || [] }),
         timeout: 5000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
-    if (run.code !== 0) { throw new Error('突變輸入規劃未完成；未產生斷言。'); }
+    if (run.code !== 0) { throw new Error(localize("突變輸入規劃未完成；未產生斷言。")); }
     const plan = JSON.parse(run.stdout) as MutationProbePlan;
     const ids = new Set(survivors.map(item => item.id));
     if (plan.version !== empty.version || plan.assertionOracle !== false || !Array.isArray(plan.inputs)
@@ -33,7 +34,7 @@ export async function planMutationProbes(source: string, target: string, mutatio
             || !item.args.every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER)
             || !item.kwargs || Object.keys(item.kwargs).length !== 0)
         || plan.diagnostics.some(item => item.excludedFromScore !== false || item.mutantId && !ids.has(item.mutantId))) {
-        throw new Error('突變輸入規劃契約無效；未使用候選。');
+        throw new Error(localize("突變輸入規劃契約無效；未使用候選。"));
     }
     return plan;
 }

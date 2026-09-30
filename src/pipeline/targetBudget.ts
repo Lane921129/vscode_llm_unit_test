@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentExecution } from './executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
@@ -70,7 +71,7 @@ export class TargetBudget {
 
     private exhausted(counter: 'deadline' | TargetBudgetCounter): AnalysisStageError {
         return new AnalysisStageError(counter === 'deadline' ? 'timeout' : 'budget', 'target-budget',
-            counter === 'deadline' ? '目標分析總時限已耗盡；保留已有成果並停止。' : `目標分析預算已耗盡（${counter}）；保留已有成果並停止。`,
+            counter === 'deadline' ? localize("目標分析總時限已耗盡；保留已有成果並停止。") : localize("目標分析預算已耗盡（{0}）；保留已有成果並停止。", counter),
             { exhausted: counter, metrics: this.snapshot() });
     }
 

@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 export interface DependencyInventory {
     schemaVersion: 'dependency-inventory-v1';
     filesScanned: number; excludedDirectories: number; complete: boolean; dynamicImports: number;
@@ -29,26 +30,26 @@ export function isDependencyInventory(value: unknown): value is DependencyInvent
 }
 
 export function inventorySummary(scan: DependencyInventory): string {
-    return `已掃描 ${scan.filesScanned} 個 Python 檔案、${scan.imports.length} 種 import；缺少 ${scan.missing.length} 個必要套件，`
-        + `${scan.optionalMissing.length} 個條件／可選套件；掃描${scan.complete ? '完成' : '不完整'}。`;
+    return localize("已掃描 {0} 個 Python 檔案、{1} 種 import；缺少 {2} 個必要套件，", scan.filesScanned, scan.imports.length, scan.missing.length)
+        + localize("{0} 個條件／可選套件；掃描{1}。", scan.optionalMissing.length, scan.complete ? localize("完成") : localize("不完整"));
 }
 
 /** Only module identifiers, project-relative references and stable diagnostic codes. */
-export function inventoryReport(scan: DependencyInventory, initialMissing: string[] = [], outcome = '僅完成靜態相依盤點。'): string {
+export function inventoryReport(scan: DependencyInventory, initialMissing: string[] = [], outcome = localize("僅完成靜態相依盤點。")): string {
     const cell = (value: string) => value.replace(/[&<>|`\r\n]/g, char => `&#${char.charCodeAt(0)};`);
-    const kinds = { external: '外部套件', stdlib: '標準庫', local: '專案模組', 'unresolved-local': '本地匯入待確認' };
-    const statuses = { available: '可找到頂層套件', missing: '缺少', unknown: '無法判定', 'not-checked': '未驗證載入' };
-    const contexts = { required: '必要', optional: '可選', typing: '型別檢查', conditional: '條件分支' };
-    return ['# Python 相依掃描', '', cell(outcome), '', inventorySummary(scan), '',
-        '此報告只解析所選範圍的 import 並檢查頂層套件是否存在，不執行專案或外部套件。套件版本、子模組、載入副作用與動態相依仍須由正式測試預檢驗證。', '',
-        `首次缺少：${initialMissing.map(cell).join('、') || '無'}。`,
-        `目前必要套件缺少：${scan.missing.map(cell).join('、') || '無'}。`,
-        `條件／可選／型別套件缺少：${scan.optionalMissing.map(cell).join('、') || '無'}；列入報告，不自動補裝。`,
-        `略過 ${scan.excludedDirectories} 個環境、建置、輸出或連結目錄；發現 ${scan.dynamicImports} 處常見動態 import 呼叫。計算得出的或別名動態 import 無法完整靜態辨識。`, '',
+    const kinds = { external: localize("外部套件"), stdlib: localize("標準庫"), local: localize("專案模組"), 'unresolved-local': localize("本地匯入待確認") };
+    const statuses = { available: localize("可找到頂層套件"), missing: localize("缺少"), unknown: localize("無法判定"), 'not-checked': localize("未驗證載入") };
+    const contexts = { required: localize("必要"), optional: localize("可選"), typing: localize("型別檢查"), conditional: localize("條件分支") };
+    return [localize("# Python 相依掃描"), '', cell(outcome), '', inventorySummary(scan), '',
+        localize("此報告只解析所選範圍的 import 並檢查頂層套件是否存在，不執行專案或外部套件。套件版本、子模組、載入副作用與動態相依仍須由正式測試預檢驗證。"), '',
+        localize("首次缺少：{0}。", initialMissing.map(cell).join('、') || localize("無")),
+        localize("目前必要套件缺少：{0}。", scan.missing.map(cell).join('、') || localize("無")),
+        localize("條件／可選／型別套件缺少：{0}；列入報告，不自動補裝。", scan.optionalMissing.map(cell).join('、') || localize("無")),
+        localize("略過 {0} 個環境、建置、輸出或連結目錄；發現 {1} 處常見動態 import 呼叫。計算得出的或別名動態 import 無法完整靜態辨識。", scan.excludedDirectories, scan.dynamicImports), '',
         ...scan.issues.map(issue => `- ${cell(issue.file)}：${issue.reason === 'local-import-root-unresolved'
-            ? '附近有同名本地模組，但匯入根尚未確認；請選擇對應子專案或修正測試載入路徑，不會補裝同名外部套件。' : cell(issue.reason)}`), '',
-        '| Import | 分類 | 檢查結果 | 使用位置（所選範圍相對路徑） |', '| --- | --- | --- | --- |',
+            ? localize("附近有同名本地模組，但匯入根尚未確認；請選擇對應子專案或修正測試載入路徑，不會補裝同名外部套件。") : cell(issue.reason)}`), '',
+        localize("| Import | 分類 | 檢查結果 | 使用位置（所選範圍相對路徑） |"), '| --- | --- | --- | --- |',
         ...scan.imports.map(item => `| ${cell(item.module)} | ${kinds[item.kind]} | ${statuses[item.availability]} | `
             + item.references.map(ref => `${cell(ref.file)}:${ref.line}（${contexts[ref.context]}）`).join('<br>') + ' |'), '',
-        '缺少必要套件時優先使用所選目錄至專案根目錄間最近的 requirements；沒有清單時採 llmUnitTest.packageMappings，未對應者列為 import 同名候選，確認後嘗試 pip 安裝並重新檢查。語法錯誤、讀取失敗或容量超限均不能算掃描成功。', ''].join('\n');
+        localize("缺少必要套件時優先使用所選目錄至專案根目錄間最近的 requirements；沒有清單時採 llmUnitTest.packageMappings，未對應者列為 import 同名候選，確認後嘗試 pip 安裝並重新檢查。語法錯誤、讀取失敗或容量超限均不能算掃描成功。"), ''].join('\n');
 }

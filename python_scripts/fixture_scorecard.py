@@ -120,18 +120,20 @@ def _read_policy_assessment(report_path, knowledge, manifest, target_file, targe
 def report_fields(report_path):
     """Extract only stable, user-visible facts from one final report."""
     text = Path(report_path).read_text(encoding='utf-8', errors='replace')
-    target_match = re.search(r'^- \*\*目標檔案\*\*:\s*(.+)$', text, re.MULTILINE)
-    function_match = re.search(r'^- \*\*測試函式\*\*:\s*(.+)$', text, re.MULTILINE)
+    target_match = re.search(r'^- \*\*(?:目標檔案|Target file)\*\*:\s*(.+)$', text, re.MULTILINE)
+    function_match = re.search(r'^- \*\*(?:測試函式|Target function)\*\*:\s*(.+)$', text, re.MULTILINE)
     tier_match = re.search(r'^- \*\*策略\*\*:\s*請求\s+([^，\n]+)，實際 Tier\s+(\d+)', text, re.MULTILINE)
     requested_match = re.search(r'^- \*\*起始策略\*\*:\s*請求\s+([^，\n]+)，起始 Tier\s+\d+', text, re.MULTILINE)
-    model_identity_match = re.search(r'^- \*\*模型識別\*\*:\s*`?([^`\n]+?)`?\s*$', text, re.MULTILINE)
+    if not requested_match:
+        requested_match = re.search(r'^- \*\*Initial strategy\*\*:\s*requested\s+([^,\n]+), initial Tier\s+\d+', text, re.MULTILINE)
+    model_identity_match = re.search(r'^- \*\*(?:模型識別|Model identity)\*\*:\s*`?([^`\n]+?)`?\s*$', text, re.MULTILINE)
     generation_mode_match = re.search(r'^- \*\*Tier 1 generation mode\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
-    failure_category_match = re.search(r'^- \*\*失敗分類\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
-    coverage = percentage_values(text, '覆蓋率')
-    mutation = percentage_values(text, '突變分數')
+    failure_category_match = re.search(r'^- \*\*(?:失敗分類|Failure category)\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
+    coverage = percentage_values(text, '覆蓋率') or percentage_values(text, 'Coverage')
+    mutation = percentage_values(text, '突變分數') or percentage_values(text, 'Mutation score')
     review_states = re.findall(r'^- \*\*Reviewer status\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     review_status = review_states[-1] if review_states else None
-    if review_status is None and 'Reviewer 審查未完成' in text:
+    if review_status is None and ('Reviewer 審查未完成' in text or 'Reviewer incomplete' in text):
         review_status = 'incomplete'
     terminal_status, quality_gaps, invalid_journal = None, [], False
     new_quality_policy, policy, quality_assessment = False, None, None
@@ -150,7 +152,7 @@ def report_fields(report_path):
             new_quality_policy = new_quality_policy or any(key in knowledge for key in ('qualityPolicy', 'qualityAssessment', 'qualityContractVersion'))
             terminal_status = knowledge.get('terminalStatus')
             review_status = knowledge.get('reviewStatus', review_status)
-            if not knowledge.get('reviewStatus') and any('審查未完成' in warning for warning in knowledge.get('reviewWarnings', [])):
+            if not knowledge.get('reviewStatus') and any('審查未完成' in warning or 'Reviewer incomplete' in warning for warning in knowledge.get('reviewWarnings', [])):
                 review_status = 'incomplete'
             quality_gaps = knowledge.get('qualityGaps', [])
             # Scores and review must describe the retained file from this run,
@@ -233,7 +235,8 @@ def report_fields(report_path):
         'new_quality_policy': new_quality_policy,
         'quality_policy': policy,
         'quality_assessment': quality_assessment,
-        'execution_error': '### ❌ 執行中斷' in text or '### 執行停止' in text,
+        'execution_error': any(marker in text for marker in ('### ❌ 執行中斷', '### 執行停止',
+                                                           '### ❌ Execution interrupted', '### Execution stopped')),
     }
 
 

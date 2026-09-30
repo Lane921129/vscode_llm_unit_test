@@ -1,3 +1,4 @@
+import { localize } from '../i18n/core';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -19,8 +20,29 @@ import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
     public webview?: vscode.Webview;
+    private view?: vscode.WebviewView;
+    private activeAnalysis?: string;
+    private languageRefreshPending = false;
 
     constructor(private readonly secretStorage: vscode.SecretStorage, private readonly uiState: vscode.Memento) {}
+
+    public beginAnalysis(id: string): void { this.activeAnalysis = id; }
+    public endAnalysis(id: string): void {
+        if (this.activeAnalysis !== id) { return; }
+        this.activeAnalysis = undefined;
+        if (this.languageRefreshPending) { this.languageRefreshPending = false; this.refreshLanguage(); }
+    }
+
+    public refreshLanguage(): void {
+        initI18n();
+        if (this.activeAnalysis) { this.languageRefreshPending = true; return; }
+        if (!this.webview) { return; }
+        if (this.view) { this.view.title = t('ui.modelSettings'); }
+        const config = vscode.workspace.getConfiguration('llmUnitTest');
+        const html = getWebviewContent(t, config.get('language', 'auto'), config.get('promptStrategy', 'auto'),
+            config.get('ollamaBaseUrl', 'http://127.0.0.1:11434'), config.get('validationMode', 'full'));
+        if (this.webview.html !== html) { this.webview.html = html; }
+    }
 
     /** Keep each picker independent; local UI history must not become project configuration. */
     private lastFolder(kind: 'project' | 'output' | 'batch', fallback = ''): string {
@@ -49,7 +71,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             const rawKeys = await this.secretStorage.get('llm_api_keys');
             return normalizeCloudCredentials(rawKeys ? JSON.parse(rawKeys) : {});
         } catch (error) {
-            console.error('無法解析 llm_api_keys：', error);
+            console.error(localize("無法解析 llm_api_keys："), error);
             return {};
         }
     }
@@ -59,13 +81,15 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             const rawCustomKeys = await this.secretStorage.get('llm_custom_keys');
             return rawCustomKeys ? JSON.parse(rawCustomKeys) : {};
         } catch (error) {
-            console.error('無法解析 llm_custom_keys：', error);
+            console.error(localize("無法解析 llm_custom_keys："), error);
             return {};
         }
     }
 
     public resolveWebviewView(webviewView: vscode.WebviewView) {
         initI18n();
+        this.view = webviewView;
+        this.view.title = t('ui.modelSettings');
         this.webview = webviewView.webview;
         this.webview.options = { enableScripts: true };
 
@@ -114,13 +138,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'setLanguage': {
-                    await config.update('language', message.lang, true);
-                    initI18n();
-                    if (this.webview) {
-                        const strategy = config.get<string>('promptStrategy', 'auto');
-                        const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-                        this.webview.html = getWebviewContent(t, message.lang, strategy, ollamaUrl, config.get('validationMode', 'full'));
-                    }
+                    if (!['auto', 'en', 'zh-tw'].includes(message.lang)) { break; }
+                    const setting = config.inspect?.('language');
+                    await config.update('language', message.lang, setting?.workspaceValue !== undefined
+                        ? vscode.ConfigurationTarget.Workspace : true);
+                    this.refreshLanguage();
                     break;
                 }
                 
@@ -143,7 +165,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'saveOllamaUrl': {
                     await config.update('ollamaBaseUrl', message.url, true);
-                    vscode.window.showInformationMessage(`✅ 已儲存 Ollama URL：${message.url}`);
+                    vscode.window.showInformationMessage(localize("✅ 已儲存 Ollama URL：{0}", message.url));
                     this.fetchLocalModels().then(models => {
                         this.webview?.postMessage({ command: 'setModels', models });
                     });
@@ -156,7 +178,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
-                        openLabel: '選擇專案資料夾',
+                        openLabel: localize("選擇專案資料夾"),
                         defaultUri: existingProject ? vscode.Uri.file(existingProject) : undefined
                     };
                     const fileUri = await vscode.window.showOpenDialog(options);
@@ -166,21 +188,21 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         try {
                             await config.update('projectPath', projectPath, true);
                         } catch (e) {
-                            console.error('更新 projectPath 設定失敗', e);
+                            console.error(localize("更新 projectPath 設定失敗"), e);
                         }
                         this.webview?.postMessage({ command: 'setProjectPath', path: projectPath });
                         
                         // 顯示載入中
-                        vscode.window.showInformationMessage(`正在掃描資料夾中的 Python 檔案，請稍候...`);
+                        vscode.window.showInformationMessage(localize("正在掃描資料夾中的 Python 檔案，請稍候..."));
 
                         // 重新掃描並更新檔案列表
                         const files = await this.findPythonFiles(projectPath);
                         this.webview?.postMessage({ command: 'setFiles', projectPath, files });
                         
                         if (files.length === 0) {
-                            vscode.window.showWarningMessage('在選擇的資料夾中沒有找到任何 .py 檔案。');
+                            vscode.window.showWarningMessage(localize("在選擇的資料夾中沒有找到任何 .py 檔案。"));
                         } else {
-                            vscode.window.showInformationMessage(`✅ 成功載入 ${files.length} 個 Python 檔案`);
+                            vscode.window.showInformationMessage(localize("✅ 成功載入 {0} 個 Python 檔案", files.length));
                         }
                     }
                     break;
@@ -192,7 +214,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
-                        openLabel: '選擇輸出資料夾',
+                        openLabel: localize("選擇輸出資料夾"),
                         defaultUri: existingOutput
                             ? vscode.Uri.file(existingOutput)
                             : existingProject2 ? vscode.Uri.file(existingProject2) : undefined
@@ -204,7 +226,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         try {
                             await config.update('outputPath', outputPath, true);
                         } catch (e) {
-                            console.error('更新 outputPath 設定失敗', e);
+                            console.error(localize("更新 outputPath 設定失敗"), e);
                         }
                         this.webview?.postMessage({ command: 'setOutputPath', path: outputPath });
                     }
@@ -217,7 +239,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const options: vscode.OpenDialogOptions = {
                         canSelectFolders: true,
                         canSelectFiles: false,
-                        openLabel: '選擇批次測試資料夾',
+                        openLabel: localize("選擇批次測試資料夾"),
                         defaultUri: existingBatch ? vscode.Uri.file(existingBatch) : undefined
                     };
                     const fileUri = await vscode.window.showOpenDialog(options);
@@ -258,7 +280,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 case 'openTestResult': {
                     const reportPath = typeof message.reportPath === 'string' ? message.reportPath : '';
                     if (!reportPath || path.basename(reportPath) !== 'final_report.md' || !fs.existsSync(reportPath)) {
-                        vscode.window.showWarningMessage('找不到此函式的測試結果報告。請先等待本次測試完成。');
+                        vscode.window.showWarningMessage(localize("找不到此函式的測試結果報告。請先等待本次測試完成。"));
                         break;
                     }
                     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(reportPath));
@@ -275,7 +297,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
                     this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(currentKeys) });
                     this.webview?.postMessage({ command: 'apiKeySaved', keyName: message.newName });
-                    vscode.window.showInformationMessage(`🔒 已安全儲存 API Key 至系統金鑰庫：${message.newName}`);
+                    vscode.window.showInformationMessage(localize("🔒 已安全儲存 API Key 至系統金鑰庫：{0}", message.newName));
                     break;
                 }
 
@@ -285,7 +307,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         delete currentKeys[message.name];
                         await this.secretStorage.store('llm_api_keys', JSON.stringify(currentKeys));
                         this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(currentKeys) });
-                        vscode.window.showInformationMessage(`🗑️ 已自安全金鑰庫移除：${message.name}`);
+                        vscode.window.showInformationMessage(localize("🗑️ 已自安全金鑰庫移除：{0}", message.name));
                     }
                     break;
                 }
@@ -298,7 +320,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     currentKeys[message.newName] = { url: message.url, model: message.model, key: message.key };
                     await this.secretStorage.store('llm_custom_keys', JSON.stringify(currentKeys));
                     this.webview?.postMessage({ command: 'setCustomKeys', keys: currentKeys });
-                    vscode.window.showInformationMessage(`🔒 已安全儲存自訂 API：${message.newName}`);
+                    vscode.window.showInformationMessage(localize("🔒 已安全儲存自訂 API：{0}", message.newName));
                     break;
                 }
 
@@ -308,7 +330,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         delete currentKeys[message.name];
                         await this.secretStorage.store('llm_custom_keys', JSON.stringify(currentKeys));
                         this.webview?.postMessage({ command: 'setCustomKeys', keys: currentKeys });
-                        vscode.window.showInformationMessage(`🗑️ 已自安全金鑰庫移除自訂 API：${message.name}`);
+                        vscode.window.showInformationMessage(localize("🗑️ 已自安全金鑰庫移除自訂 API：{0}", message.name));
                     }
                     break;
                 }
@@ -319,7 +341,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const keys = await this.getStoredCloudCredentials();
                         const credential = keys[params.cloudKeyName];
                         if (!credential) {
-                            vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
+                            vscode.window.showErrorMessage(localize("找不到此模型的 Google AI Studio API Key。"));
                             this.webview?.postMessage({ command: 'analysisFinished' });
                             break;
                         }
@@ -336,7 +358,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const keys = await this.getStoredCloudCredentials();
                         const credential = keys[params.cloudKeyName];
                         if (!credential) {
-                            vscode.window.showErrorMessage('找不到此模型的 Google AI Studio API Key。');
+                            vscode.window.showErrorMessage(localize("找不到此模型的 Google AI Studio API Key。"));
                             this.webview?.postMessage({ command: 'analysisFinished' });
                             break;
                         }
@@ -350,12 +372,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 case 'testConnection': {
                     const releasePython = pythonEnvironmentActivity.acquire('use');
                     if (!releasePython) {
-                        vscode.window.showInformationMessage('Python 環境準備中，請等待完成後再測試模型連線。');
+                        vscode.window.showInformationMessage(localize("Python 環境準備中，請等待完成後再測試模型連線。"));
                         break;
                     }
                     try { await vscode.window.withProgress({
                         location: vscode.ProgressLocation.Notification,
-                        title: "正在測試 API 連線...",
+                        title: localize("正在測試 API 連線..."),
                         cancellable: false
                     }, async () => {
                         try {
@@ -443,7 +465,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     testGenerationReady: capability.capability === 'verified',
                                                     testGenerationReason: capability.reason,
                                                     qualificationVersion: QUALIFICATION_VERSION,
-                                                    testGenerationMode: '純 Python unittest',
+                                                    testGenerationMode: 'plain-python',
                                                     roleQualification
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
@@ -452,11 +474,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 this.appendRoleQualificationLog(qualificationProfile);
                                                 if (capability.capability === 'verified') {
                                                     vscode.window.showInformationMessage(
-                                                        `✅ Local Ollama 連線成功！模型：${paramSize}，最大 Context：${contextLength.toLocaleString()} tokens；已通過純 Python unittest 驗證。`
+                                                        localize("✅ Local Ollama 連線成功！模型：{0}，最大 Context：{1} tokens；已通過純 Python unittest 驗證。", paramSize, contextLength.toLocaleString())
                                                     );
                                                 } else {
                                                     vscode.window.showWarningMessage(
-                                                        `⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。`
+                                                        localize("⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（{0}）。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。", capability.reason)
                                                     );
                                                 }
                                             } catch {
@@ -464,10 +486,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     ...profile,
                                                     qualificationVersion: QUALIFICATION_VERSION,
                                                     testGenerationReady: false,
-                                                    testGenerationReason: '測試連線逾時或無法完成 unittest 生成探針。',
-                                                    testGenerationMode: '未完成',
+                                                    testGenerationReason: localize("測試連線逾時或無法完成 unittest 生成探針。"),
+                                                    testGenerationMode: localize("未完成"),
                                                     roleQualification: buildRoleQualificationProfile(
-                                                        { state: 'unverified', reason: 'Writer 探針未完成，角色探針未執行。' }
+                                                        { state: 'unverified', reason: localize("Writer 探針未完成，角色探針未執行。") }
                                                     )
                                                 };
                                                 this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
@@ -475,24 +497,24 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                 this.appendModelQualificationLog(qualificationProfile);
                                                 this.appendRoleQualificationLog(qualificationProfile);
                                                 vscode.window.showWarningMessage(
-                                                    '⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。'
+                                                    localize("⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。")
                                                 );
                                             }
                                         } else {
-                                            vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                            vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));
                                         }
                                     } catch (probeError) {
                                         console.warn('[SidebarProvider] Local probe failed:', probeError);
-                                        vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                        vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));
                                     }
                                 } else {
-                                    vscode.window.showInformationMessage(`✅ Local Ollama 連線成功！`);
+                                    vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));
                                 }
                             } else if (message.envType === 'cloud') {
                                 const keys = await this.getStoredCloudCredentials();
                                 const credential = keys[message.cloudKeyName];
                                 if (!credential) {
-                                    throw new Error("找不到對應的 API Key");
+                                    throw new Error(localize("找不到對應的 API Key"));
                                 }
 
                                 const listedModels: unknown[] = [];
@@ -503,7 +525,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         headers: listRequest.headers
                                     }, CONNECTION_DISCOVERY_TIMEOUT_MS);
                                     if (!listResponse.ok) {
-                                        throw new Error(`無法讀取 Google 可用模型清單（HTTP ${listResponse.status}）`);
+                                        throw new Error(localize("無法讀取 Google 可用模型清單（HTTP {0}）", listResponse.status));
                                     }
                                     const modelList = await listResponse.json() as { models?: unknown[]; nextPageToken?: string };
                                     listedModels.push(...(modelList.models || []));
@@ -513,8 +535,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const usableModels = getGenerateContentModelNames(listedModels as any[]);
                                 const selectedModel = normalizeGoogleModelName(credential.model);
                                 if (!usableModels.includes(selectedModel)) {
-                                    const suggestions = usableModels.slice(0, 12).join(', ') || '無';
-                                    throw new Error(`模型「${selectedModel}」不存在、目前 API Key 無權使用，或不支援 generateContent。請改用可用模型：${suggestions}`);
+                                    const suggestions = usableModels.slice(0, 12).join(', ') || localize("無");
+                                    throw new Error(localize("模型「{0}」不存在、目前 API Key 無權使用，或不支援 generateContent。請改用可用模型：{1}", selectedModel, suggestions));
                                 }
                                 const connectionMetadata = getGoogleModelConnectionMetadata(listedModels as any[], credential.model);
                                 
@@ -554,7 +576,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
                                     qualificationVersion: QUALIFICATION_VERSION,
-                                    testGenerationMode: '純 Python unittest',
+                                    testGenerationMode: 'plain-python',
                                     roleQualification
                                 };
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
@@ -563,14 +585,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 this.appendRoleQualificationLog(profile);
                                 if (capability.capability === 'verified') {
                                     const contextMessage = connectionMetadata.contextLengthKnown
-                                        ? `最大輸入 Context：${connectionMetadata.contextLength.toLocaleString()} tokens`
-                                        : '最大輸入 Context：API 未公開（採保守 4,096-token 預算）';
+                                        ? localize("最大輸入 Context：{0} tokens", connectionMetadata.contextLength.toLocaleString())
+                                        : localize("最大輸入 Context：API 未公開（採保守 4,096-token 預算）");
                                     vscode.window.showInformationMessage(
-                                        `✅ Cloud AI Studio 連線成功！模型：${connectionMetadata.paramSize}；${contextMessage}；已通過純 Python unittest 驗證。`
+                                        localize("✅ Cloud AI Studio 連線成功！模型：{0}；{1}；已通過純 Python unittest 驗證。", connectionMetadata.paramSize, contextMessage)
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
-                                        `⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用。`
+                                        localize("⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（{0}）。Tier 1 的確定性測試仍可使用。", capability.reason)
                                     );
                                 }
                             } else if (message.envType === 'custom') {
@@ -612,7 +634,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     testGenerationReady: capability.capability === 'verified',
                                     testGenerationReason: capability.reason,
                                     qualificationVersion: QUALIFICATION_VERSION,
-                                    testGenerationMode: '純 Python unittest',
+                                    testGenerationMode: 'plain-python',
                                     roleQualification
                                 } as const;
                                 this.webview?.postMessage({ command: 'modelProbeResult', profile });
@@ -621,17 +643,17 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 this.appendRoleQualificationLog(profile);
                                 if (capability.capability === 'verified') {
                                     vscode.window.showInformationMessage(
-                                        `✅ Custom API 連線成功！已通過純 Python unittest 驗證。`
+                                        localize("✅ Custom API 連線成功！已通過純 Python unittest 驗證。")
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
-                                        `⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（${capability.reason}）。Tier 1 的確定性測試仍可使用。`
+                                        localize("⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（{0}）。Tier 1 的確定性測試仍可使用。", capability.reason)
                                     );
                                 }
                             }
                         } catch (error: any) {
-                            vscode.window.showErrorMessage(`❌ 連線失敗: ${error.message}`);
-                            this.webview?.postMessage({ command: 'appendLog', text: `[錯誤] 連線測試失敗: ${error.message}` });
+                            vscode.window.showErrorMessage(localize("❌ 連線失敗: {0}", error.message));
+                            this.webview?.postMessage({ command: 'appendLog', text: localize("[錯誤] 連線測試失敗: {0}", error.message) });
                         }
                     }); } finally { releasePython(); }
                     break;
@@ -689,7 +711,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 }
                             })
                             .catch((readError) => {
-                                console.warn(`[SidebarProvider] 無法讀取目錄 ${currentDir}:`, readError);
+                                console.warn(localize("[SidebarProvider] 無法讀取目錄 {0}:", currentDir), readError);
                             })
                             .finally(() => {
                                 activeCount--;
@@ -700,7 +722,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 checkNext();
             });
         } catch (e) {
-            console.error('掃描專案檔案失敗', e);
+            console.error(localize("掃描專案檔案失敗"), e);
         }
         return files.sort((left, right) => left.name.localeCompare(right.name));
     }
