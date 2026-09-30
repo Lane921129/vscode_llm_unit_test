@@ -18,6 +18,8 @@ export const PYTHON_TOOLS = {
     sourceExpectations: 'repair_source_expectations.py',
     rescue: 'rescue_unittest.py',
     scenarios: 'scenario_inventory.py',
+    traceDeduplication: 'deduplicate_trace_tests.py',
+    mutationInputs: 'mutation_probe_plan.py',
     mutation: 'basic_mutation_runner.py',
     coverage: 'coverage_read.py'
 } as const;

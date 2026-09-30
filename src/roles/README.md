@@ -33,6 +33,8 @@ Reviewer 只有原文引述而缺少具體原因／動作時屬無效回覆；`f
 
 品質分析使用 `quality-task-v3`：只接收一個程式選定的量測證據 ID、完整目標來源與目前測試，最多交付一項待執行情境。格式補正最多一次且共用原 deadline，傳輸錯誤或取消不啟動補正。歷史 `parseQualityTasks` 僅讀舊資料，正式流程使用 `requestFocusedQualityTask` 與 `parseFocusedQualityTask`。
 
+正式流程由 `QualityAnalystSession` 控制跨輪成本：連續兩次無效契約後停止本目標的額外請求，保留實測缺口及確定性補測指引；新分析重新計數。有界突變輸入規劃取得新隔離觀測時，直接交下一輪驗證及量測，無須再問分析師相同問題。這不改變品質門檻，也不把指引當成斷言結果。
+
 Bug Fixer 只接受 unittest 明確列出的一個失敗方法，不能從 traceback 中的方法名猜測；多方法、fixture、匯入或定位不明交 Writer。修改範圍驗證保留其他方法、class 屬性、signature、decorator 與 fixture，新增 import 不得遮蔽原 binding。
 
 Tier 3 的 scaffold 只是完整 Writer 語境中的 setup 指引；Writer 仍回傳完整測試檔並通過相同驗證。所有可執行候選先執行再審查，避免把 Reviewer 請求花在已知執行失敗的候選上。

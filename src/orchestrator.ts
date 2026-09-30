@@ -5,7 +5,7 @@ import {
     getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacementDetailed, canRepairTestMethod,
     fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReviewDetailed,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
-    getQualityAnalystSystemPrompt, selectQualityFocus, requestFocusedQualityTask, qualityStrategyHints,
+    getQualityAnalystSystemPrompt, selectQualityFocus, QualityAnalystSession, qualityStrategyHints,
     buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
 } from './roles';
 import { validateTestCandidate } from './pipeline/testCandidatePipeline';
@@ -23,7 +23,9 @@ import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
-import { presentOutcome, stageLabel, withOutcomeHeader } from './pipeline/resultPresentation';
+import { presentOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
+import { formatTierHistory, TierHistory } from './pipeline/tierHistory';
+import { planMutationProbes } from './pipeline/mutationProbePlan';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
 import {
@@ -1286,7 +1288,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let tier1GenerationModeRecorded = false;
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let currentTier = resolvedTier;
-    let finalReportMarkdown = `# ${mode === 'execution' ? '執行驗證與修復報告' : '突變測試與修復分析報告'}\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **生成方式**: ${mode === 'execution' ? '來源與明確 Mock 測試假設；採執行驗證流程' : 'Tier ' + currentTier}\n- **日期**: ${reportDateStr}\n\n`;
+    let finalReportMarkdown = `# ${mode === 'execution' ? '執行驗證與修復報告' : '突變測試與修復分析報告'}\n\n- **目標檔案**: ${params.filePath}\n- **測試函式**: ${params.funcName || '全檔案'}\n- **起始生成方式**: ${mode === 'execution' ? '來源與明確 Mock 測試假設；採執行驗證流程' : 'Tier ' + currentTier}\n- **日期**: ${reportDateStr}\n\n`;
     finalReportMarkdown += formatReportProvenance({
         ...extensionBuildIdentity,
         modelProvider: params.envType,
@@ -1335,7 +1337,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName,
         mode === 'full' ? qualityPolicy : undefined, mode);
     finalReportMarkdown += `- **驗證目標**: ${mode === 'execution' ? '執行驗證（Trace、覆蓋率、突變與品質審查延後）' : '完整品質驗證'}\n`;
-    const writeReport = (body = finalReportMarkdown) => fs.writeFileSync(existingReport, withOutcomeHeader(body, journal.snapshot()), 'utf8');
+    const tierHistory: TierHistory = { requested: userTierSetting, initial: resolvedTier, rounds: [], transitions: [] };
+    if (mode === 'full') { journal.knowledge({ tierHistory }); }
+    const qualityAnalystSession = new QualityAnalystSession();
+    const writeReport = (body = finalReportMarkdown) => fs.writeFileSync(existingReport,
+        withOutcomeHeader(formatTierHistory(journal.snapshot()) + body, journal.snapshot()), 'utf8');
     const importFixtures = currentImportFixtures();
     if (importFixtures) {
         fs.writeFileSync(path.join(sessionDir, 'import_fixtures.json'), JSON.stringify(importFixtures, null, 2), 'utf8');
@@ -1348,8 +1354,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     });
     const recordRole = (stage: string, status: string, detail: unknown) => {
         const diagnosticReport = journal.record(currentLoop, stage, status, detail);
-        log(`[${stage}] ${stageLabel(status)}`);
-        finalReportMarkdown += `- **角色事件**: ${stage} / ${stageLabel(status)}（完整證據：role_events.jsonl）\n`;
+        const description = describeStageEvent(stage, status, detail, mode);
+        log(`[${stage}] ${description}`);
+        finalReportMarkdown += `- **角色事件**: ${stage} / ${status}：${description}（完整證據：role_events.jsonl）\n`;
         finalReportMarkdown += diagnosticReport + (stage === 'repair-routing' ? formatRepairRouting(detail) : '');
         writeReport();
     };
@@ -1849,6 +1856,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
         log(`\n--- 🔄 第 ${currentLoop} 輪開始 ---`);
         currentTier = resolvedTier;
+        tierHistory.rounds.push({ loop: currentLoop, start: currentTier });
+        journal.knowledge({ tierHistory });
+        recordRole('tier', 'started', { tier: currentTier, requested: userTierSetting });
         finalReportMarkdown += `## 第 ${currentLoop} 輪測試\n`;
 
         let targetCode: string;
@@ -2294,10 +2304,19 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         { output: traceRun.stdout + traceRun.stderr, traceTestPath });
                 }
             }
-            const preserveTrace = (candidate: string): string => verifiedTrace?.code
-                ? restoreVerifiedTraceTestFile(candidate, verifiedTrace.code, verifiedTrace.methodCount, targetFuncName).code
-                : candidate;
-            finalCode = preserveTrace(finalCode);
+            const preserveTrace = async (candidate: string): Promise<string> => {
+                if (!verifiedTrace?.code) { return candidate; }
+                const restored = restoreVerifiedTraceTestFile(candidate, verifiedTrace.code, verifiedTrace.methodCount, targetFuncName).code;
+                const result = await runSpawn(pythonExecutable, ['-B', pythonToolPath('traceDeduplication')], {
+                    input: JSON.stringify({ code: restored, target: targetFuncName.replace(/\W+/g, '_') }),
+                    timeout: 5000, env: testExecutionEnv
+                });
+                if (result.code !== 0) { throw new Error('Trace 重複案例檢查未完成；未採用修改。'); }
+                const cleaned = JSON.parse(result.stdout) as { code: string; removed: number };
+                if (cleaned.removed > 0) { recordRole('trace-deduplication', 'normalized', { removed: cleaned.removed, baselinePreserved: true }); }
+                return cleaned.code;
+            };
+            finalCode = await preserveTrace(finalCode);
             if (verifiedTrace?.code) {
                 log(`[行為觀測保底] 已保留 ${verifiedTrace.methodCount} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。`);
             }
@@ -2336,7 +2355,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     generationMode: currentTier === 1 ? tier1GenerationMode : undefined,
                     dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })) || [] });
                 journal.knowledge({ executableBaseline: { path: 'executable_baseline.json', testFile: snapshot.testFile,
-                    codeHash: snapshot.codeHash, reviewStatus: snapshot.reviewStatus, mutationStatus: snapshot.mutationStatus } });
+                    codeHash: snapshot.codeHash, tier: snapshot.tier, reviewStatus: snapshot.reviewStatus, mutationStatus: snapshot.mutationStatus } });
                 recordRole('executable-baseline', 'checkpointed', { codeHash: snapshot.codeHash,
                     testFile: snapshot.testFile, reviewStatus: snapshot.reviewStatus, mutationScore: null });
                 writeReport(finalReportMarkdown
@@ -2534,6 +2553,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (currentTier > 1) {
                 const prevTier = currentTier;
                 currentTier--;
+                const transition = { loop: currentLoop, from: prevTier, to: currentTier,
+                    reason: tierErr instanceof RepairResponseError ? '局部修復回覆不符合契約' : '候選生成或驗證失敗' };
+                tierHistory.transitions.push(transition);
+                journal.knowledge({ tierHistory });
+                recordRole('tier', 'fallback', transition);
                 log(`[Tier 降階] ⚠️ Tier ${prevTier} 驗證失敗，自動觸發策略降階：Tier ${prevTier} → Tier ${currentTier} 重試...`);
                 finalReportMarkdown += `\n> [!WARNING]\n> ⚠️ **策略自動降階**: Tier ${prevTier} 驗證失敗，系統已自動切換降階至 **Tier ${currentTier}** 思考模式重試。\n\n`;
             } else {
@@ -2616,6 +2640,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const fallbackScript = pythonToolPath('mutation');
                 const perMutationTimeout = Math.min(5, mutationTimeoutSeconds);
                 const selectedClassName = (astContext?.class_name as string | undefined);
+                log(`[builtin] 正在隔離執行原始基線與完整突變集合；本階段預算 ${mutationTimeoutSeconds} 秒，完成後回報殺死／存活／逾時／錯誤數。`);
                 const fallbackRun = await runSpawn(
                     pythonExecutable,
                     [
@@ -2947,10 +2972,47 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         analystTasks = qualityStrategyHints(survivedMutants).join('\n');
         if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
             try {
+                // Measured comparison survivors can propose bounded numeric inputs
+                // without another model call. Only isolated observations become oracles.
+                let observedBoundary = false;
+                if (bestMutation && astContext && evidenceStillCurrent()) {
+                    const plan = await planMutationProbes(initialSource, params.funcName || targetFuncName,
+                        bestMutation, astContext.traceResult, pythonExecutable);
+                    if (plan.inputs.length || plan.diagnostics.length) {
+                        fs.writeFileSync(path.join(sessionDir, `loop${currentLoop}_mutation_input_plan.json`),
+                            JSON.stringify({ ...plan, sourceHash: journal.sourceHash, candidateSetId: bestMutation.candidateSetId }, null, 2), 'utf8');
+                        journal.knowledge({ mutationInputPlan: plan });
+                        recordRole('mutation-inputs', 'planned', { inputCount: plan.inputs.length, diagnostics: plan.diagnostics });
+                        if (plan.diagnostics.some(item => item.status === 'conditional-equivalence')) {
+                            finalReportMarkdown += '\n> 存活突變包含「前置分支可能使下限重複」的條件式等價候選；尚未證明自訂型別等所有路徑等價，仍保留分母與未達標狀態。詳見本輪 mutation_input_plan.json。\n';
+                        }
+                    }
+                    if (plan.inputs.length) {
+                        const observations = await runBehaviorProbe(params.filePath, params.funcName || targetFuncName,
+                            [], pythonExecutable, plan.inputs, sessionDir);
+                        if (!evidenceStillCurrent()) { throw new Error('來源或相依已變更，未採用補測觀測。'); }
+                        observedBoundary = Boolean(observations && !observations.load_error
+                            && [...observations.examples, ...observations.errors].some(item => item.call_assertable !== false
+                                && item.result_assertable !== false));
+                        if (observedBoundary && observations) {
+                            astContext.traceResult = mergeBehaviorProbeResults(astContext.traceResult, observations);
+                            writerEvidenceBundle.mergedTargetObservations = astContext.traceResult;
+                            journal.knowledge({ verifiedObservations: astContext.traceResult,
+                                nextTasks: [{ origin: 'measured-mutation-inputs', inputs: plan.inputs,
+                                    verification: '觀測僅支持相同輸入的斷言；下一輪仍須通過獨立基線、執行、審查與突變量測。' }],
+                                taskStatus: 'observed-inputs-require-quality-measurement' });
+                            analystTasks += '\nNew boundary inputs have isolated execution observations in TRACE evidence. '
+                                + 'The host preserves these tests. Keep model cases; do not copy TestVerifiedTrace methods into model classes. '
+                                + 'Do not invent output expectations.\n' + JSON.stringify(plan.inputs);
+                        }
+                        recordRole('mutation-inputs', observedBoundary ? 'observed' : 'unavailable', {
+                            inputCount: plan.inputs.length, summary: summarizeObservationPhase(observations || undefined) });
+                    }
+                }
                 const sys = getQualityAnalystSystemPrompt();
                 const focus = selectQualityFocus(loopAssessment, survivedMutants.split('\n').filter(Boolean), currentLoop);
-                if (focus) {
-                    const tasks = await requestFocusedQualityTask({ focus,
+                if (focus && !observedBoundary) {
+                    const tasks = await qualityAnalystSession.request({ focus,
                         context: `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
                             + `CURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
                             + `CONDITIONAL STRATEGIES (not output facts)\n${qualityStrategyHints(focus.evidence).join('\n')}`,
@@ -2964,6 +3026,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         analystTasks += '\n' + JSON.stringify(tasks);
                         journal.record(currentLoop, 'next-tasks', 'unverified', { tasks });
                         journal.knowledge({ nextTasks: tasks, taskStatus: 'hypotheses-require-execution' });
+                    } else {
+                        const fallback = { evidence: focus.evidence, origin: 'measured-gap-guidance',
+                            guidance: qualityStrategyHints(focus.evidence), assertionOracle: false };
+                        analystTasks += '\nMEASURED GAP (not an output oracle):\n' + JSON.stringify(fallback);
+                        journal.knowledge({ nextTasks: [fallback], taskStatus: 'hypotheses-require-execution' });
+                        recordRole('analyst-quality', 'measured-guidance', fallback);
                     }
                 }
             } catch (error: any) {

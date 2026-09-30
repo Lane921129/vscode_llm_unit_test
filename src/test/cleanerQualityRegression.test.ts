@@ -5,7 +5,7 @@ import { compareCoverageQuality, coverageGapIds } from '../pipeline/qualityRegre
 import { QualityProgress } from '../pipeline/analysisJournal';
 import { fitReviewPrompt, parseTestReviewDetailed, reviewConstraintDiagnostics } from '../roles/testReviewer';
 import { validateTestCandidate } from '../pipeline/testCandidatePipeline';
-import { parseFocusedQualityTask, requestFocusedQualityTask, selectQualityFocus } from '../roles/qualityAnalyst';
+import { parseFocusedQualityTask, requestFocusedQualityTask, selectQualityFocus, QualityAnalystSession, qualityStrategyHints } from '../roles/qualityAnalyst';
 import { responseSchemaForOutputFormat } from '../llm/customApi';
 import { assessReviewerQualification } from '../llm/roleQualification';
 import { formatTargetContract } from '../pipeline/targetContract';
@@ -159,4 +159,32 @@ test('expired deadline, transport failure and cancellation never launch extra qu
     calls = 0;
     await assert.rejects(requestFocusedQualityTask({ ...hooks, checkCancelled: () => { throw Error('cancelled'); } }), /cancelled/);
     assert.equal(calls, 0);
+});
+
+test('quality contract failures are bounded across rounds and boundary guidance never asserts an oracle', async () => {
+    const session = new QualityAnalystSession();
+    const focus = selectQualityFocus(coverage([]), ['mutation from Lt to LtE'], 1)!;
+    let calls = 0;
+    const events: string[] = [];
+    const input = { focus, context: '', deadlineAt: 100, now: () => 0,
+        checkCancelled: () => {}, event: (status: string) => events.push(status),
+        request: async () => { calls++; return 'invalid'; } };
+    for (let round = 0; round < 4; round++) { assert.equal(await session.request(input), undefined); }
+    assert.equal(calls, 2);
+    assert.equal(events.filter(status => status === 'suspended').length, 3);
+    const hints = qualityStrategyHints(focus.evidence).join('\n');
+    assert.match(hints, /exact comparison boundary/);
+    assert.match(hints, /only executed observations/);
+    assert.match(qualityStrategyHints('mutation from 7.5 to 0').join('\n'), /never a proven exclusion/);
+    let fresh = 0;
+    await new QualityAnalystSession().request({ ...input, request: async () => { fresh++; return '{"tasks":[]}'; } });
+    assert.equal(fresh, 1, 'new target analyses do not inherit a suspended role');
+    const interrupted = new QualityAnalystSession();
+    let attempts = 0;
+    await assert.rejects(interrupted.request({ ...input, request: async () => {
+        if (++attempts === 2) { throw Error('transport'); }
+        return 'invalid';
+    } }), /transport/);
+    await interrupted.request({ ...input, request: async () => { attempts++; return 'invalid'; } });
+    assert.equal(attempts, 3, 'one earlier invalid response leaves only one contract attempt after transport failure');
 });

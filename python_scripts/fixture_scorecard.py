@@ -123,6 +123,7 @@ def report_fields(report_path):
     target_match = re.search(r'^- \*\*目標檔案\*\*:\s*(.+)$', text, re.MULTILINE)
     function_match = re.search(r'^- \*\*測試函式\*\*:\s*(.+)$', text, re.MULTILINE)
     tier_match = re.search(r'^- \*\*策略\*\*:\s*請求\s+([^，\n]+)，實際 Tier\s+(\d+)', text, re.MULTILINE)
+    requested_match = re.search(r'^- \*\*起始策略\*\*:\s*請求\s+([^，\n]+)，起始 Tier\s+\d+', text, re.MULTILINE)
     model_identity_match = re.search(r'^- \*\*模型識別\*\*:\s*`?([^`\n]+?)`?\s*$', text, re.MULTILINE)
     generation_mode_match = re.search(r'^- \*\*Tier 1 generation mode\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     failure_category_match = re.search(r'^- \*\*失敗分類\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
@@ -216,7 +217,7 @@ def report_fields(report_path):
     return {
         'target_file': target_match.group(1).strip() if target_match else None,
         'target_function': function_match.group(1).strip() if function_match else None,
-        'requested_tier': tier_match.group(1).strip() if tier_match else None,
+        'requested_tier': requested_match.group(1).strip() if requested_match else tier_match.group(1).strip() if tier_match else None,
         'resolved_tier': retained_tier if retained_tier is not None else int(tier_match.group(2)) if tier_match else None,
         'model_identity': model_identity_match.group(1).strip() if model_identity_match else None,
         'tier1_generation_mode': generation_mode_match.group(1) if generation_mode_match else None,

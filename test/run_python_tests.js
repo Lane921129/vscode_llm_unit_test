@@ -22,6 +22,7 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_typed_caller_transport.py',
         'python_scripts/test_assertion_evidence.py',
         'python_scripts/test_source_expectations.py',
+        'python_scripts/test_mutation_improvement.py',
         'python_scripts/test_quality_policy.py',
         'python_scripts/test_runtime_policy.py',
         'python_scripts/test_import_fixtures.py',

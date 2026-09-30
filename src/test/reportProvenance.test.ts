@@ -20,7 +20,8 @@ test('report provenance identifies a portable extension build without local path
     assert.match(text, /模型識別\*\*: `local\/local-instruct`/);
     assert.match(text, /2026-09-02T00:00:00\.000Z/);
     assert.doesNotMatch(text, /[A-Z]:[\\/]/);
-    assert.match(text, /請求 tier3，實際 Tier 1/);
+    assert.match(text, /請求 tier3，起始 Tier 1/);
+    assert.doesNotMatch(text, /實際 Tier/);
     assert.match(text, /模型 unittest 生成能力（測試連線驗證）\*\*: 未通過/);
     assert.match(text, /驗證方式\*\*: 純 Python unittest/);
     assert.match(text, /驗證說明\*\*: 模型未驗證已知行為。/);

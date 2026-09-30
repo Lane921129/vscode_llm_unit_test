@@ -139,6 +139,12 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 
 ## 一次執行的主要結果
 
+`tierHistory.ts` 的摘要由每輪起始與降級事件更新，報告每次寫入時重新呈現；保留候選 Tier 取已量測候選，尚未量測時才取 executable checkpoint。機讀 `tierHistory` 不覆寫舊事件，scorecard 不從新版「起始策略」推定保留 Tier。
+
+`mutationProbePlan.ts`／`mutation_probe_plan.py` 只對同來源、完整內建突變量測規劃輸入。依實測成功呼叫作種子，使用有上限的 AST 算術反推找到比較邊界，每次最多 12 組，沒有輸出 oracle。正式流程用既有逐案隔離 Trace 實測，合併完整觀測後在下一輪獨立驗證 Trace 基線；若沒有可用新觀測，仍由品質分析師規劃。`QualityAnalystSession` 在連續兩次契約失敗後停止額外請求，保留缺口指引與未完成狀態。
+
+`deduplicate_trace_tests.py` 靜態核對模型副本與 runner-owned 方法的 AST；僅處理沒有 fixture／helper／decorator 的標準同步 TestCase，保留不同 setup、不同斷言與未知語意。條件式等價診斷保存於 `loop<n>_mutation_input_plan.json`，是未排除的候選，完整突變集合及品質政策不改變。
+
 | 檔案 | 用途 |
 |---|---|
 | `final_report.md` | 給人閱讀的結果、失敗原因與品質缺口 |

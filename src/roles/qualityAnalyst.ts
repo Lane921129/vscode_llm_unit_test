@@ -64,10 +64,11 @@ export async function requestFocusedQualityTask(input: {
     checkCancelled(): void;
     event(status: string, detail: unknown): void;
     now?: () => number;
+    maxAttempts?: number;
 }): Promise<QualityTask[] | undefined> {
     const prompt = `QUALITY_TASK_V3\nFOCUS\n${JSON.stringify(input.focus)}\n${input.context}`;
     let correction = '';
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < Math.min(2, input.maxAttempts ?? 2); attempt++) {
         input.checkCancelled();
         if ((input.now || Date.now)() >= input.deadlineAt) {
             input.event('deadline-exhausted', { attempt, evidenceId: input.focus.id });
@@ -83,6 +84,23 @@ export async function requestFocusedQualityTask(input: {
         correction = `\nFORMAT CORRECTION: ${parsed.diagnostics.join(', ')}. Return only {"tasks":[]} or one task with evidence_id="${input.focus.id}", hypothesis, scenario, verification. No other keys or prose.`;
     }
     return undefined;
+}
+
+/** A broken contract must not consume two more requests on every quality round. */
+export class QualityAnalystSession {
+    private invalidResponses = 0;
+    async request(input: Parameters<typeof requestFocusedQualityTask>[0]): Promise<QualityTask[] | undefined> {
+        input.checkCancelled();
+        if (this.invalidResponses >= 2) {
+            input.event('suspended', { reason: '品質分析連續兩次格式無效；停止額外請求，使用實測缺口補測指引。' });
+            return undefined;
+        }
+        return requestFocusedQualityTask({ ...input, maxAttempts: 2 - this.invalidResponses, event: (status, detail) => {
+            if (status === 'invalid-response') { this.invalidResponses++; }
+            if (status === 'parsed-hypotheses') { this.invalidResponses = 0; }
+            input.event(status, detail);
+        } });
+    }
 }
 
 /** Historical quality-task-v1 reader; new requests use ID-bound single-task parsing. */
@@ -104,6 +122,12 @@ export function parseQualityTasks(raw: string, measured: string): QualityTask[] 
 /** Small, conditional guidance. These are strategies, never asserted output facts. */
 export function qualityStrategyHints(survivors: string): string[] {
     const hints: string[] = [];
+    if (/mutation from (?:Lt|LtE|Gt|GtE) to (?:Lt|LtE|Gt|GtE)/.test(survivors)) {
+        hints.push('Comparison boundary survivor: reach the exact comparison boundary and both sides, including preceding branch constraints. Reuse only executed observations for those exact inputs as expected results. Do not repeat interior-only cases.');
+    }
+    if (/mutation from (?:[+-]?\d+(?:\.\d+)?) to (?:[+-]?\d+(?:\.\d+)?)/.test(survivors)) {
+        hints.push('Numeric threshold survivor: check preceding branches before proposing an experiment. A redundant bound may be a conditional-equivalence candidate, never a proven exclusion or a reason to change the mutation denominator.');
+    }
     if (/mutation from (?:And to Or|Or to And)/.test(survivors)) {
         hints.push('Boolean operator survivor: try mixed truth values for the subconditions, including required mock fields; verify original and mutant under identical setup.');
     }

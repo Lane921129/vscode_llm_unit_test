@@ -1,10 +1,39 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { presentOutcome, stageLabel, withOutcomeHeader } from '../pipeline/resultPresentation';
+import { presentOutcome, stageLabel, withOutcomeHeader, describeStageEvent } from '../pipeline/resultPresentation';
+import { formatTierHistory, TierHistory } from '../pipeline/tierHistory';
 import { describeImportIssue } from '../environment/importDiagnostics';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
+
+test('progress explains rejection, incomplete review and intermediate acceptance without raw replies', () => {
+    assert.match(describeStageEvent('structure', 'rejected', { reason: '沒有 test_ 方法', raw: 'PRIVATE_RESPONSE' }), /沒有 test_ 方法.*Writer/);
+    assert.doesNotMatch(describeStageEvent('structure', 'rejected', { raw: 'PRIVATE_RESPONSE' }), /PRIVATE_RESPONSE/);
+    assert.match(describeStageEvent('reviewer', 'invalid-response', { diagnostics: ['target-self-mock'], raw: 'PRIVATE_RESPONSE' }), /target-self-mock.*不採用/);
+    assert.match(describeStageEvent('reviewer', 'unavailable', {}), /審查未完成.*繼續工具量測/);
+    assert.match(describeStageEvent('validation', 'accepted', {}), /不代表完整通過/);
+    assert.match(describeStageEvent('validation', 'passed', {}, 'execution'), /本模式不執行品質審查與突變/);
+    assert.doesNotMatch(describeStageEvent('validation', 'accepted', {}, 'execution'), /繼續量測突變/);
+    for (const [stage, status] of [['structure', 'passed'], ['scenarios', 'observed'], ['coverage', 'measured'],
+        ['validation', 'passed'], ['executable-baseline', 'checkpointed'], ['model-request', 'requested'], ['model-request', 'completed']]) {
+        assert.notEqual(describeStageEvent(stage, status, {}), status);
+    }
+});
+
+test('tier summary preserves fallback history across a restart, rollback and interrupted measurement', () => {
+    const history: TierHistory = { requested: 'tier2', initial: 2,
+        rounds: [{ loop: 1, start: 2 }, { loop: 2, start: 2 }],
+        transitions: [{ loop: 1, from: 2, to: 1, reason: '候選驗證失敗' }] };
+    const state = { tierHistory: history, executableBaseline: { tier: 2 } };
+    const running = formatTierHistory(state);
+    assert.match(running, /曾自動降級：是.*第 1 輪 Tier 2 → 1/);
+    assert.match(running, /第 2 輪 Tier 2/);
+    assert.match(running, /目前保留候選：Tier 2/);
+    assert.match(formatTierHistory({ ...state, acceptedTest: 'loop1_test.py', resolvedTier: 1 }), /目前保留候選：Tier 1/);
+    assert.match(formatTierHistory({ tierHistory: history }), /尚無已驗證候選/);
+    assert.equal(formatTierHistory({ resolvedTier: 2 }), '', 'old reports must not invent a transition history');
+});
 
 test('final status cannot be promoted by a high-scoring retained candidate or partial stage success', () => {
     for (const terminalStatus of ['failed', 'retained-after-failure', 'execution-passed-review-incomplete',

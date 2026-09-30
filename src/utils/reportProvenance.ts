@@ -36,7 +36,7 @@ export function formatReportProvenance(provenance: ReportProvenance): string {
         `- **執行模式**: ${provenance.extensionMode}`,
         `- **模型識別**: \`${provenance.modelProvider}/${provenance.modelName}\``,
         `- **模型**: \`${provenance.modelName}\``,
-        `- **策略**: 請求 ${provenance.requestedTier}，實際 Tier ${provenance.resolvedTier}`, 
+        `- **起始策略**: 請求 ${provenance.requestedTier}，起始 Tier ${provenance.resolvedTier}（中途切換見策略執行摘要）`,
         `- **模型 unittest 生成能力（測試連線驗證）**: ${qualification}`,
         ...qualificationDetails,
         ...(provenance.roleQualification ? [
