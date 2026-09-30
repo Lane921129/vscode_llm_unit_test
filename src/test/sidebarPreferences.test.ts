@@ -93,9 +93,11 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     const html = getWebviewContent(key => key);
     const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i)![1];
     const elements = new Map<string, any>();
-    for (const match of html.matchAll(/<(?:input|select|button|textarea)[^>]*\bid="([^"]+)"[^>]*>/g)) {
+    for (const match of html.matchAll(/<(?:input|select|button|textarea|p)[^>]*\bid="([^"]+)"[^>]*>/g)) {
         elements.set(match[1], { value: match[0].match(/\bvalue="([^"]*)"/)?.[1] || '', style: {}, addEventListener: () => {} });
     }
+    const modeOptions = html.match(/<select id="validation-mode">([\s\S]*?)<\/select>/)![1];
+    elements.get('validation-mode').value = modeOptions.match(/value="([^"]+)" selected/)![1];
     const messages: any[] = [];
     let receive!: (event: unknown) => void;
     const context = vm.createContext({
@@ -104,6 +106,9 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
         acquireVsCodeApi: () => ({ postMessage: (message: unknown) => { messages.push(message); } })
     });
     vm.runInContext(script, context);
+    assert.equal(elements.get('validation-mode').value, 'full');
+    assert.match(elements.get('validation-scope').textContent, /包含突變測試/);
+    assert.equal(elements.get('mutpy-timeout').disabled, false);
     assert.equal(elements.get('max-loop').value, String(DEFAULT_MAX_LOOPS));
     assert.equal(elements.get('mutpy-timeout').value, String(DEFAULT_MUTATION_TIMEOUT_SECONDS));
     elements.get('env-type').value = 'local';
@@ -145,6 +150,13 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     receive({ data: { command: 'setFunctions', filePath: '/project/target.py', funcs: ['target'] } });
     assert.equal(elements.get('func-select').disabled, false);
     for (const empty of [false, true]) {
+        const mode = empty ? 'execution' : 'full';
+        elements.get('validation-mode').value = mode;
+        elements.get('validation-mode').onchange({ target: { value: mode } });
+        assert.equal(messages.at(-1).mode, mode);
+        assert.match(elements.get('validation-scope').textContent, mode === 'full' ? /包含突變測試/ : /不執行突變/);
+        assert.equal(elements.get('mutpy-timeout').disabled, mode === 'execution');
+        assert.equal(elements.get('max-loop').disabled, mode === 'execution');
         if (empty) { elements.get('max-loop').value = ''; elements.get('mutpy-timeout').value = ''; }
         for (const file of ['/project/target.py', '']) {
             elements.get('file-select').value = file;
@@ -160,10 +172,13 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
             assert.equal(message.maxLoops, DEFAULT_MAX_LOOPS);
             assert.equal(message.mutpyTimeout, DEFAULT_MUTATION_TIMEOUT_SECONDS);
             assert.equal(message.timeoutSeconds, 60);
+            assert.equal(message.validationMode, mode, 'both single-file and batch requests carry the displayed mode');
+            assert.equal(elements.get('validation-mode').disabled, true, 'the active run cannot change modes');
             const count = messages.length;
             elements.get('btn-run').onclick();
             assert.equal(messages.length, count, 'running analysis prevents duplicate start');
             receive({ data: { command: 'analysisFinished' } });
+            assert.equal(elements.get('validation-mode').disabled, false);
         }
     }
     elements.get('file-select').value = '/project/target.py';

@@ -50,7 +50,7 @@ test('real batch command records grouped failures and cancellation, then passes 
         const { activate } = require('../orchestrator');
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        const params = { envType: 'local', modelName: 'fixture', batchPath: root, validationMode: 'full', promptStrategy: 'tier2',
+        const params = { envType: 'local', modelName: 'fixture', batchPath: root, promptStrategy: 'tier2',
             maxLoops: 1, timeoutSeconds: 30, outputPath: path.join(root, 'results') };
         const run = handlers.get('llm-unit-test.runBatchAnalysis')!;
         const manifests = () => fs.readdirSync(params.outputPath).map(name => {

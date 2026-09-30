@@ -4,7 +4,7 @@
 
 ## 目前驗收優先順序
 
-- 依使用者 2026-09-29 決定，預設以正確執行為主，速度優化延後。`validationMode=execution` 是獨立的執行驗收；`full` 保留原完整品質政策。以下要求 Trace oracle、coverage、mutation、Reviewer 與 Tier 分支的規則適用於 full，不能用來將 execution 未量測的項目補成通過。
+- 依使用者 2026-09-30 澄清，正常流程必須包含突變測試，預設 `validationMode=full`，正確性優先、速度優化延後。`execution` 僅供明確選用的單元測試執行診斷，不驗證整個專案可正常運作，也不可代替完整品質驗收。以下要求 Trace oracle、coverage、mutation、Reviewer 與 Tier 分支的規則適用於 full，不能用來將 execution 未量測的項目補成通過。已保存的明確模式選擇保留，介面必須顯示是否包含突變；切回 full 必須重新執行。
 - execution 保留靜態語境、同環境匯入預檢、明確初始化 fixture、結構／AST／簽名／目標 binding 與斷言檢查、隔離執行及修復範圍限制。可提出來源支持的確定性關係、可達 literal 或同測試控制之 Mock 行為作為待執行測試假設；不可憑空發明需求、依賴 API、例外、環境常值，或 mock／複製受測目標。測試通過只驗證實際案例，不證明完整需求正確。
 - 模式在執行前固定並記入 manifest。只有同一版 source/test/run 的真實目標呼叫、至少一個未略過且成功的案例、完整且成功的隔離紀錄均核對後，才可標示「執行驗證通過」。空測試、全 skip／expectedFailure、匯入受阻、來源變更與缺少證據不得算通過。批次重新讀取證據；結果不得冒充完整品質通過。
 - execution 的 Auto Writer 仍須通過生成資格；未合格時提示測試連線或手動 Tier，不啟用 Trace fallback。Reviewer、覆蓋率、突變與深度 Trace 延後，未量測保存 null／deferred；full 的政策與 gate 不變。既有程式／函式兩層結果及原檔不變規則仍適用。

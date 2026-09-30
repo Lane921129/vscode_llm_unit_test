@@ -64,6 +64,7 @@ test('environment preparation uses the target workspace setting, remembers selec
         await controller.prepare();
         assert.equal(prepared.projectRoot, root);
         assert.equal(prepared.file, file);
+        assert.equal(prepared.requireQualityTools, true, 'default full mode prepares coverage and mutation dependencies');
         assert.equal(await prepared.packageName('undeclared_project_helper'), undefined);
         settings.set('packageMappings', { neutral_import: 'neutral-distribution' });
         assert.equal(await prepared.packageName('neutral_import'), 'neutral-distribution');

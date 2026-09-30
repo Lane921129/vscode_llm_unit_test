@@ -147,7 +147,7 @@ class Cases(unittest.TestCase):
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
-            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
         const outputFor = (root: string, target = 'target'): string => {
             const matches = fs.readdirSync(root, { recursive: true }).map(String)
@@ -163,6 +163,7 @@ class Cases(unittest.TestCase):
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
         assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
+        assert.equal(manifest.validationMode, 'full', 'omitting mode still requires the complete mutation pipeline');
         assert.equal(manifest.promptVersion, 'role-contracts-v7');
         assert.equal(manifest.roleContracts.reviewer, 'review-v7');
         assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');

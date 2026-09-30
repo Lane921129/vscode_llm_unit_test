@@ -392,7 +392,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.filePath),
-                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'execution')) };
+                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 if (runParams.funcName) {
                     await executeSingleFileAnalysis(runParams, log, view);
@@ -429,7 +429,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.batchPath, params.batchPath),
-                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'execution')) };
+                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 const projectName = path.basename(runParams.batchPath);
                 const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,

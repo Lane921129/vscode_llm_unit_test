@@ -17,7 +17,7 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
         return { state, label: '完整通過', kind: 'passed' };
     }
     if (state === 'execution-passed' && value.validationMode === 'execution' && value.executionVerified === true) {
-        return { state, label: '執行驗證通過；完整品質尚未驗證', kind: 'executed' };
+        return { state, label: '執行驗證通過；未執行突變，完整品質尚未驗證', kind: 'executed' };
     }
     const labels: Record<string, [string, OutcomePresentation['kind']]> = {
         running: ['執行中，尚未判定', 'pending'],
@@ -41,6 +41,8 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
 export function withOutcomeHeader(body: string, evidence: OutcomeEvidence): string {
     const outcome = presentOutcome(evidence);
     return `## 最終結果：${outcome.label}\n\n`
+        + (evidence.validationMode === 'execution'
+            ? '> **突變測試未執行：本次選擇「僅執行驗證」。** 需要突變測試時，請將「驗證目標」切換成「完整品質驗證（含突變）」並重新執行；不能把本次結果直接改標為完整通過。\n\n' : '')
         + '> 下方 passed／OK 僅描述個別階段或一次測試執行；覆蓋率與突變分數不是整體通過判定。\n\n'
         + body;
 }

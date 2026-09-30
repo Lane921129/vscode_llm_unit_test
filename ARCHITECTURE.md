@@ -14,7 +14,7 @@
 
 ## 主流程
 
-預設 `llmUnitTest.validationMode=execution`，完整品質流程以 `full` 明確選取。模式在命令開始時固定並寫入 run／batch manifest。共同步驟保留 AST、匯入預檢、相依來源與 caller 語境；execution 不啟動任何 `runBehaviorProbe`，在 coverage 預檢之前交給 `executionVerification.ts`。Writer 提示位於 `roles/unittestWriter.ts`，生成與修復共用原有結構、AST、簽名、目標 binding 與 Bug Fixer 範圍 gate。Auto Writer 尚未合格時停止，不暗中啟用 Trace fallback。
+預設 `llmUnitTest.validationMode=full`，正常流程包含突變、覆蓋率與品質審查；`execution` 僅供明確選用的單元測試執行診斷。模式在命令開始時固定並寫入 run／batch manifest，介面顯示是否包含突變，執行中不可切換；已保存的明確選擇不會被預設值覆蓋。共同步驟保留 AST、匯入預檢、相依來源與 caller 語境；execution 不啟動任何 `runBehaviorProbe`，在 coverage 預檢之前交給 `executionVerification.ts`。Writer 提示位於 `roles/unittestWriter.ts`，生成與修復共用原有結構、AST、簽名、目標 binding 與 Bug Fixer 範圍 gate。Auto Writer 尚未合格時停止，不暗中啟用 Trace fallback。
 
 執行模式直接使用 `generated_test_runner.py`，不帶 coverage 參數。runner 保存本次 unittest 案例統計、真實目標 frame 與隔離始末；`executionEvidence.ts` 核對 source/test/run、檔案身分、未跳過且真正成功的案例及完整隔離紀錄。每次候選以獨立 `execN_test.py` 保存；成功寫入 `execution_baseline.json`。BatchJournal 重新讀取同一組證據，分別計算 `allTargetsExecutionVerified` 與既有 `allTargetsPassed`，不能只憑狀態字串計入通過。詳見 [執行驗證模式](docs/執行驗證模式.md)。
 

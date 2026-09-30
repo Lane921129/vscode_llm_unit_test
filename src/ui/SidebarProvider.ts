@@ -73,7 +73,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const lang = config.get<string>('language', 'auto');
         const strategy = config.get<string>('promptStrategy', 'auto');
         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-        this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'execution'));
+        this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'full'));
 
         this.webview.onDidReceiveMessage(async (message) => {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -119,7 +119,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     if (this.webview) {
                         const strategy = config.get<string>('promptStrategy', 'auto');
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-                        this.webview.html = getWebviewContent(t, message.lang, strategy, ollamaUrl, config.get('validationMode', 'execution'));
+                        this.webview.html = getWebviewContent(t, message.lang, strategy, ollamaUrl, config.get('validationMode', 'full'));
                     }
                     break;
                 }
@@ -129,7 +129,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     if (this.webview) {
                         const lang = config.get<string>('language', 'auto');
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-                        this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'execution'));
+                        this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'full'));
                     }
                     break;
                 }

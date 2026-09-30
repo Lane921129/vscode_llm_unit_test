@@ -23,6 +23,16 @@ test('final status cannot be promoted by a high-scoring retained candidate or pa
     assert.match(stageLabel('passed'), /非最終結果/);
 });
 
+test('execution-only outcomes explain absent mutation even after a successful run', () => {
+    const evidence = { validationMode: 'execution', terminalStatus: 'execution-passed', executionVerified: true };
+    assert.match(presentOutcome(evidence).label, /未執行突變/);
+    const report = withOutcomeHeader('# Saved evidence', evidence);
+    assert.match(report, /突變測試未執行：本次選擇/);
+    assert.match(report, /完整品質驗證（含突變）.*重新執行/);
+    assert.ok(report.endsWith('# Saved evidence'));
+    assert.doesNotMatch(withOutcomeHeader('# Full run', { validationMode: 'full', terminalStatus: 'running' }), /本次選擇「僅執行驗證」/);
+});
+
 test('API incompatibility and unsafe initialization have different bounded advice', () => {
     const api = describeImportIssue({ exception_type: 'AttributeError', dependency_api: { module: 'vendor', attribute: 'launch' } }, 'module-import');
     assert.equal(api.kind, 'dependency-api'); assert.equal(api.issue, 'vendor.launch');

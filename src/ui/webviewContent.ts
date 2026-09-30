@@ -1,4 +1,4 @@
-export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'execution') {
+export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full') {
     return `
 <!DOCTYPE html>
 <html lang="en">
@@ -246,10 +246,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         <div class="content">
             <label for="validation-mode">驗證目標</label>
             <select id="validation-mode">
-                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>執行驗證（預設）</option>
-                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>完整品質驗證</option>
+                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>完整品質驗證（含突變，預設）</option>
+                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>僅執行驗證（不跑突變）</option>
             </select>
-            <p>執行驗證會確認已產生的測試能隔離執行並呼叫真實目標；Trace、覆蓋率、突變與品質審查留待完整驗證。</p>
+            <p id="validation-scope" role="status" aria-live="polite"></p>
             <label>🧠 ${t('ui.promptStrategy')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
                 <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>Auto — 依模型自動路由</option>
@@ -662,6 +662,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     }
                     break;
                 case 'analysisFinished':
+                    document.getElementById('validation-mode').disabled = false;
                     const runBtn = document.getElementById('btn-run');
                     if (runBtn) {
                         runBtn.disabled = environmentBusy;
@@ -683,7 +684,18 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('prompt-strategy').onchange = (e) => {
             vscode.postMessage({ command: 'setPromptStrategy', strategy: e.target.value });
         };
+        function updateValidationScope() {
+            const full = document.getElementById('validation-mode').value === 'full';
+            const hint = document.getElementById('validation-scope');
+            if (hint) hint.textContent = full
+                ? '本次包含突變測試、覆蓋率與品質審查；通過前置驗證後執行，全部符合門檻才算完整通過。'
+                : '本次不執行突變、覆蓋率與品質審查。只診斷生成的單元測試能否通過，不代表整個專案可正常運作。需要突變請切換完整品質驗證並重新執行。';
+            document.getElementById('max-loop').disabled = !full;
+            document.getElementById('mutpy-timeout').disabled = !full;
+        }
+        updateValidationScope();
         document.getElementById('validation-mode').onchange = (e) => {
+            updateValidationScope();
             vscode.postMessage({ command: 'setValidationMode', mode: e.target.value });
         };
 
@@ -819,6 +831,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
 
         function setRunningState(isBatch) {
+            document.getElementById('validation-mode').disabled = true;
             document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-prepare-env-scope').disabled = true;
             document.getElementById('btn-import-setup').disabled = true;

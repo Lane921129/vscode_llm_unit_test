@@ -16,7 +16,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
     const runner = require('../utils/processRunner'), originalSpawn = runner.runSpawn;
     const handlers = new Map<string, (...args: any[]) => any>(), messages: any[] = [], requests: any[] = [];
     let replies: string[] = [], changeSource = false, cancel = false;
-    const settings: Record<string, unknown> = {};
+    const settings: Record<string, unknown> = { validationMode: 'execution' };
     const file = path.join(root, 'sample.py');
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -60,7 +60,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         const { activate } = require('../orchestrator');
         activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        assert.equal(verificationMode(), 'execution'); assert.throws(() => verificationMode('fast'));
+        assert.equal(verificationMode(), 'full'); assert.throws(() => verificationMode('fast'));
         const passed = await run('pass');
         assert.equal(passed.knowledge.terminalStatus, 'execution-passed', JSON.stringify(passed.knowledge.lastFailure));
         assert.equal(passed.knowledge.validationMode, 'execution');
