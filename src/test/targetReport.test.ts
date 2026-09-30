@@ -38,12 +38,11 @@ test('mutation code table follows the unchanged summary with one row per variant
             assert.match(original, /\| 8:27 \| 100 \| 0 \| SURVIVED \|/);
             const rows = detail.split('\n').filter(line => /^\| \d+:/.test(line));
             assert.equal(rows.length, 4);
-            assert.ok(rows[0].includes('height&#95;m&nbsp;=&nbsp;height&#95;cm&nbsp;//&nbsp;100'));
-            assert.ok(rows[1].includes('height&#95;m&nbsp;=&nbsp;height&#95;cm&nbsp;/&nbsp;0'));
-            assert.ok(rows.every(row => row.split('|').length === 7), 'code cannot inject extra table cells');
-            assert.match(rows[2], /<br>/);
-            assert.match(rows[2], /&#60;script&#62;&#124;&#96;&#42;&#95;&#91;&#93;&#38;/);
-            assert.doesNotMatch(detail, /<script>/);
+            assert.ok(rows[0].includes('`height_m = height_cm // 100`'));
+            assert.ok(rows[1].includes('`height_m = height_cm / 0`'));
+            assert.ok(rows.every(row => row.split(/(?<!\\)\|/).length === 7), 'code cannot inject extra table cells');
+            assert.ok(rows[2].includes('`if True:` ↵ ``return "<script>\\|`*_[]&"``'));
+            assert.doesNotMatch(detail, /<\/?code>|<br>|&nbsp;|&#\d+;/);
             assert.match(rows[3], language === 'en' ? /Code was not saved/ : /此筆紀錄未保存程式碼/);
             if (language === 'en') { assert.doesNotMatch(report, /[\u4e00-\u9fff]/); }
             assert.ok(!renderFinalReport(identity, { ...summary, mutants: [] }, false).includes(heading));

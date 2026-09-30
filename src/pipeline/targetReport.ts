@@ -134,9 +134,13 @@ function fence(code: string): string {
 }
 
 function codeTableCell(code: string): string {
-    return code.split(/\r\n|\r|\n/).map(line => '<code>' + reportCell(line)
-        .replace(/[*_~\\]/g, char => `&#${char.charCodeAt(0)};`)
-        .replace(/ /g, '&nbsp;').replace(/\t/g, '&nbsp;'.repeat(4)) + '</code>').join('<br>');
+    return code.split(/\r\n|\r|\n/).map(line => {
+        const text = line.trim();
+        if (!text) { return ''; }
+        const delimiter = '`'.repeat(Math.max(1, ...[...text.matchAll(/`+/g)].map(m => m[0].length + 1)));
+        const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+        return delimiter + padding + text.replace(/\|/g, '\\|') + padding + delimiter;
+    }).join(' ↵ ');
 }
 
 /** Keep the compact table intact; show each recorded variant separately underneath. */
