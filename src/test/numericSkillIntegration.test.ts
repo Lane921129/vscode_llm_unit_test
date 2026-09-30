@@ -17,6 +17,10 @@ test('full mode calculates laboratory BMI failures, verifies exact calls, reruns
         + '\n    def test_seventy(self):\n        bmi, status = calculate_bmi(70, 170)\n'
         + '        self.assertEqual(bmi, 24.9)\n        self.assertEqual(status, "健康體位")\n'
         + '    def test_zero_weight(self):\n        with self.assertRaises(ZeroDivisionError):\n            calculate_bmi(0, 1)\n'
+        + '    def test_type_checks(self):\n        bmi, status = calculate_bmi(50, 160)\n'
+        + '        self.assertEqual(type(bmi), float)\n        self.assertEqual(type(status), str)\n        self.assertEqual(bmi, 22.22)\n'
+        + '    def test_zero_inputs(self):\n        bmi, status = calculate_bmi(0, 0)\n        self.assertEqual(bmi, 0)\n'
+        + '    def test_string_inputs(self):\n        bmi, status = calculate_bmi("50", "160")\n        self.assertEqual(bmi, 22.22)\n'
         + correctException;
     fs.writeFileSync(file, source);
     const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, language: 'en' };
@@ -63,17 +67,20 @@ test('full mode calculates laboratory BMI failures, verifies exact calls, reruns
         assert.equal(writers, 1, 'tool correction must not require another model generation');
         assert.equal(fixes, 0, 'verified arithmetic correction precedes model repair');
         const proof = JSON.parse(fs.readFileSync(path.join(roundDirectory(directory, 1), numeric.detail.file), 'utf8'));
-        assert.equal(proof.corrections.length, 8, 'five numeric mismatches, two classifications and zero-weight expectation');
-        assert.equal(new Set(proof.corrections.map((item: any) => JSON.stringify(item.basis.call))).size, 6);
-        assert.ok(proof.trace.cases.length >= 6);
-        assert.equal(proof.trace.cases.filter((item: any) => item.source.kind === 'semantic_guided'
-            && item.source.detail === 'numeric-calculation').length, 6, 'model-selected inputs must not be labeled as source callers');
+        assert.equal(proof.corrections.length, 11, 'numeric, classification, type-checked result and both exception directions');
+        assert.equal(new Set(proof.corrections.map((item: any) => JSON.stringify(item.basis.call))).size, 8);
+        assert.equal(proof.traces.length, 2, 'eight inputs are verified in two bounded probe batches');
+        assert.equal(proof.traces.flatMap((trace: any) => trace.cases).filter((item: any) => item.source.kind === 'semantic_guided'
+            && item.source.detail === 'numeric-calculation').length, 8, 'model-selected inputs must not be labeled as source callers');
         const baseline = JSON.parse(fs.readFileSync(path.join(directory, 'executable_baseline.json'), 'utf8'));
         const actual = fs.readFileSync(path.join(directory, baseline.testFile), 'utf8');
         assert.equal(baseline.codeHash, proof.candidateTestHash);
         assert.ok(actual.includes(correctException.trimEnd()));
         assert.match(actual, /self.assertEqual\(bmi, 24.22\)/);
         assert.match(actual, /self.assertEqual\(calculate_bmi\(0, 1\), \(0.0, '體重過輕'\)\)/);
+        assert.match(actual, /self.assertEqual\(type\(bmi\), float\)/);
+        assert.match(actual, /with self.assertRaises\(TypeError\):\s+calculate_bmi\("50", "160"\)/);
+        assert.match(actual, /with self.assertRaises\(ZeroDivisionError\):\s+calculate_bmi\(0, 0\)/);
         assert.ok(events.some(e => e.stage === 'mutation' && e.status === 'measured'));
         assert.ok(fs.existsSync(path.join(roundDirectory(directory, 1), 'loop1_mutation.json')));
         const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));

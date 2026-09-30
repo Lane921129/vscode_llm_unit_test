@@ -73,13 +73,42 @@ test('numeric skill requires completed exact typed observations and preserves fa
         assert.equal(await repairWithNumericSkill({ ...options, source: 'def metric(amount, scale):\n    return open("never")\n',
             observe: async () => { assert.fail('unsupported source must never reach Trace'); } }), undefined);
         assert.equal(events.at(-1).status, 'unsupported');
-        const many = Array.from({ length: 7 }, (_, i) => `    def test_${i}(self):\n        value = metric(${i + 1}, 2)\n        self.assertEqual(value, 99)\n`).join('');
+        const many = Array.from({ length: 13 }, (_, i) => `    def test_${i}(self):\n        value = metric(${i + 1}, 2)\n        self.assertEqual(value, 99)\n`).join('');
         assert.equal(await repairWithNumericSkill({ ...options,
             code: 'import unittest\nfrom sample import metric\nclass Cases(unittest.TestCase):\n' + many,
-            failure: Array.from({ length: 7 }, (_, i) => `FAIL: test_${i} (generated.Cases.test_${i})`).join('\n'),
+            failure: Array.from({ length: 13 }, (_, i) => `FAIL: test_${i} (generated.Cases.test_${i})`).join('\n'),
             observe: async () => { assert.fail('case budget must stop before Trace'); }
         }), undefined);
         assert.equal(events.at(-1).detail.reason, 'case-budget');
+        for (const [inputs, exception] of [['3, 0', 'ZeroDivisionError'], ['"3", "2"', 'TypeError']]) {
+            const exceptional = await repairWithNumericSkill({ ...options,
+                code: code.replace('value = metric(3.0, 2)', `value = metric(${inputs})`),
+                failure: 'ERROR: test_value (generated.Cases.test_value)\n' + exception
+            });
+            assert.ok(exceptional);
+            assert.ok(exceptional.code.includes(`with self.assertRaises(${exception}):`));
+            const calculations = (exceptional.evidence as any).corrections.map((item: any) => item.basis);
+            assert.equal(verifyNumericObservations(calculations, observations, 'metric'), true);
+            const event = observations.errors.find((item: any) => item.exception === exception);
+            assert.ok(event);
+            for (const corrupt of [
+                (t: any) => { t.errors.find((e: any) => e.case_id === event.case_id).exception_module = 'application'; },
+                (t: any) => { t.errors.find((e: any) => e.case_id === event.case_id).exception_qualname = 'ValueError'; },
+                (t: any) => { t.errors.find((e: any) => e.case_id === event.case_id).call_assertable = false; },
+                (t: any) => { t.errors.find((e: any) => e.case_id === event.case_id).oracle_reason = 'uncontrolled-ambient-read'; },
+                (t: any) => { t.cases.find((e: any) => e.case_id === event.case_id).status = 'setup_error'; },
+                (t: any) => { t.cases.find((e: any) => e.case_id === event.case_id).inputs_mutated = true; },
+                (t: any) => { t.complete = false; }
+            ]) {
+                const changed = structuredClone(observations); corrupt(changed);
+                assert.equal(verifyNumericObservations(calculations, changed, 'metric'), false, corrupt.toString());
+            }
+            assert.equal(await repairWithNumericSkill({ ...options,
+                code: code.replace('value = metric(3.0, 2)', `value = metric(${inputs})`),
+                failure: 'ERROR: test_value (generated.Cases.test_value)\n' + exception,
+                observe: async () => null
+            }), undefined, 'an observed runner error alone must never become success');
+        }
         assert.equal(fs.readFileSync(file, 'utf8'), source);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

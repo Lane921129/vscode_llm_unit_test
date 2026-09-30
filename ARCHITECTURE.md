@@ -26,9 +26,9 @@
 
 完整模式的數值計算技能由 `testRuleDispatcher.ts` 選取 `numeric_calculation` 規則卡，Writer 與修復角色使用相同指引。LLM 負責選擇具體輸入、組織測試；實際 assertion 失敗後，`numericTestSkill.ts` 先呼叫 `repair_source_expectations.py` 的受限 AST 計算器，再將候選中的原始 typed args／kwargs 交給既有隔離 Trace。只有相同來源／相依版本、同一組輸入、完整且可 assertion 的回傳快照與計算結果一致，才能採用修正；不需要模型支援原生 tool calling，也不增加模型請求。
 
-目前支援同步頂層純算術、`round`／`abs`、比較分支、tuple 拆解與簡單 `self` 資料 fixture。只改失敗方法的預期值；單一目標呼叫的錯誤 `assertRaises` 可在同輸入已證實正常回傳時改為精確回傳斷言。複合例外測試、mock、class／async、外部 I/O、動態執行、不明語法或超過計算／案例預算都保留原修復路徑。來源公式是計算假設，並非獨立需求規格。修正後仍走結構、實際 unittest、coverage、Reviewer 與 mutation，不能消除 Reviewer 未完成狀態。execution 模式維持原有來源算術修正，不啟用這條 Trace 流程。
+目前支援同步頂層純算術、`round`／`abs`、比較分支、tuple 拆解與簡單 `self` 資料 fixture。只改失敗方法的預期值；正確的 `type`／`assertIsInstance` 檢查保持原文，不阻止後方數值修正。單一目標呼叫的錯誤 `assertRaises` 可在同輸入已證實正常回傳時改為精確回傳斷言；實際 unittest `ERROR` 若同時經受限運算與同輸入隔離 Trace 確認為內建 `ZeroDivisionError`／`TypeError`，可改成對應 `assertRaises`。只替換失敗呼叫及其不可達的回傳斷言，保留輸入、setup、先前成功斷言與其他方法；獨立工作、複合例外測試、mock、class／async、外部 I/O、動態執行、不明語法或超過計算／案例預算都保留原修復路徑。來源公式是計算假設，並非獨立需求規格。修正後仍走結構、實際 unittest、coverage、Reviewer 與 mutation，不能消除 Reviewer 未完成狀態。execution 模式維持原有來源算術修正，不啟用這條 Trace 流程。
 
-每次技能檢查在當輪保存 `numeric_001.json` 等獨立紀錄：run／source／前後測試 hash、輸入、計算步驟、觀測、修正與未採用原因；`numeric-skill` 事件及中英文進度納入當輪 `failure_report.md` 與共用完整流程。`verified` 只表示計算與觀測核對完成，不代表測試或整體品質通過。每次最多補測 6 組輸入、修正 32 處，計算器及 Trace 保留既有時限並受目標總預算限制。
+每次技能檢查在當輪保存 `numeric_001.json` 等獨立紀錄：run／source／前後測試 hash、輸入、計算步驟、觀測、修正與未採用原因；`numeric-skill` 事件及中英文進度納入當輪 `failure_report.md` 與共用完整流程。`numeric-test-skill-v2` 分別記錄回傳快照與例外型別；`verified` 只表示計算與觀測核對完成，不代表測試或整體品質通過。每次最多補測 12 組輸入，分成每批至多 6 組，修正至多 32 處。候選驗證至多嘗試兩次工具修正，有效工具候選不占模型修訂次數；計算器及 Trace 保留既有時限，所有候選仍計入目標總預算。
 
 Python 環境準備入口與結果置於專案資料夾欄位下方。「檢查此專案相依」把已選資料夾直接交給 `pythonEnvironmentController.ts`，不重問範圍；「其他範圍…」仍可選整個專案、資料夾或單一 Python 檔案，分別保存最近選擇。資料夾／專案模式經 `environment_probe.py` 呼叫 `dependency_inventory.py`，只以 AST 盤點所選樹內 import，依所選 Python 的標準庫與頂層套件位置彙整缺項；不執行應用或外部套件的 import。`dependencyInventory.ts` 驗證並呈現 `dependency-inventory-v1` 報告，保留逐檔行號、條件／可選／型別相依、首次與最近缺項及不完整掃描原因。必要缺項優先採 requirements／明確 packageMappings，否則預填同名候選供確認補裝；條件缺項只列出。靜態可找到套件不代表正式模組載入成功，原有單檔隔離預檢與測試 gate 不變。詳細操作及範圍限制見 [專案相依掃描](docs/Python相依掃描.md)。
 

@@ -22,7 +22,7 @@ export interface CandidatePipelineHooks {
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number): Promise<string>;
     repairRole?(code: string, failure: string): 'writer' | 'bug-fixer';
-    /** Host-only literal correction with source evidence; still subject to all execution gates. */
+    /** Host-only expectation correction with evidence; still subject to all execution gates. */
     repairExpectations?(code: string, failure: string): Promise<{ code: string; evidence: unknown } | undefined>;
     validateRevision?(previousCode: string, candidateCode: string, failure: string,
         role: 'writer' | 'bug-fixer'): Promise<string | { reason: string; reasonCode: string } | undefined>;
@@ -52,6 +52,7 @@ export async function validateTestCandidate(
     let writerRecoveryUsed = false;
     let writerRecoveryPending = false;
     let executionFailure = false;
+    let toolRepairAttempts = 0;
     // One reserved handoff, only after a demonstrated no-op method repair.
     // It still consumes the enclosing target's candidate/request/time budgets.
     const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change'): boolean => {
@@ -76,7 +77,8 @@ export async function validateTestCandidate(
         const writerRecoveryAttempt = writerRecoveryPending;
         writerRecoveryPending = false;
         if (attempt > 0) {
-            const arithmetic = executionFailure ? await hooks.repairExpectations?.(code, lastFailure) : undefined;
+            const arithmetic = executionFailure && toolRepairAttempts < 2 && hooks.repairExpectations
+                ? (toolRepairAttempts++, await hooks.repairExpectations(code, lastFailure)) : undefined;
             executionFailure = false;
             hooks.checkCancelled();
             if (!arithmetic && role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
@@ -108,6 +110,11 @@ export async function validateTestCandidate(
                 }
                 if (writerRecoveryAttempt) { break; }
                 continue;
+            }
+            if (arithmetic) {
+                // Tool work has its own bounded allowance; retain the model's
+                // revisions while still charging the target candidate/time budget.
+                revisionLimit++;
             }
             const scopeStarted = Date.now();
             const revisionViolation = arithmetic ? undefined : await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);

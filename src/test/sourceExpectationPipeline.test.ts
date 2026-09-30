@@ -29,14 +29,28 @@ test('source corrections consume candidate budget and must pass structure, real 
     assert.equal(budget.snapshot().used.candidateAttempts, 2);
     assert.ok(events.includes('source-expectation-repair'));
     await assert.rejects(validateTestCandidate('wrong', hooks({
-        validate: async code => code === 'fixed' ? 'target replaced' : undefined
+        validate: async code => code === 'fixed' ? 'target replaced' : undefined, revise: async () => 'fixed'
     }), 1), /target replaced/);
     await assert.rejects(validateTestCandidate('wrong', hooks({
-        execute: async code => ({ ok: code === 'fixed', out: code === 'fixed' ? 'OK' : 'test_keep (exec.Cases.test_keep) ... ok\nFAIL: test_value (exec.Cases.test_value)', qualityGaps: [], testModule: 'exec' })
+        execute: async code => ({ ok: code === 'fixed', out: code === 'fixed' ? 'OK' : 'test_keep (exec.Cases.test_keep) ... ok\nFAIL: test_value (exec.Cases.test_value)', qualityGaps: [], testModule: 'exec' }), revise: async () => 'fixed'
     }), 1), /Previously passing tests/);
     await assert.rejects(validateTestCandidate('wrong', hooks({
-        execute: async () => ({ ok: false, out: 'FAIL: test_value (exec.Cases.test_value)', qualityGaps: [] })
+        execute: async () => ({ ok: false, out: 'FAIL: test_value (exec.Cases.test_value)', qualityGaps: [] }), revise: async () => 'fixed'
     }), 1), /FAIL: test_value/);
+});
+
+test('two bounded tool attempts preserve both model revisions and cannot keep extending the loop', async () => {
+    let tools = 0, models = 0;
+    const budget = new TargetBudget({ candidateAttempts: 5 });
+    const result = await runWithTargetBudget(budget, () => validateTestCandidate('wrong', hooks({
+        repairRole: () => 'writer',
+        repairExpectations: async () => ({ code: 'tool-' + ++tools, evidence: {} }),
+        revise: async () => ++models === 2 ? 'fixed' : 'model-1'
+    }), 2));
+    assert.equal(result.code, 'fixed');
+    assert.equal(tools, 2);
+    assert.equal(models, 2);
+    assert.equal(budget.snapshot().used.candidateAttempts, 5);
 });
 
 test('unsupported arithmetic returns to model; cancellation and exhausted budget cannot authorize correction', async () => {

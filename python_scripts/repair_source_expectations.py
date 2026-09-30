@@ -1,10 +1,12 @@
 """Bounded, source-derived arithmetic correction of failed test expectations.
 
 Interprets a deliberately small AST subset; never imports/executes submitted
-source, reads observations as an oracle, or edits inputs/assertion operators.
+source or changes inputs. Full-mode return/exception proposals require the
+host's independent exact-input execution before adoption.
 This verifies agreement with source, not independent business requirements.
 """
 import ast
+import copy
 import json
 import math
 import operator
@@ -15,6 +17,11 @@ from trace_value_codec import snapshot_value
 
 
 class Unsupported(ValueError):
+    pass
+
+
+class PredictedArithmeticError(Exception):
+    """A bounded builtin operation raised; still requires independent Trace."""
     pass
 
 
@@ -82,13 +89,28 @@ class Calculator:
             return Value(bounded(op(value.data)))
         if isinstance(node, ast.BinOp):
             left, right = self.expression(node.left, values, builtins), self.expression(node.right, values, builtins)
-            if left.origin or right.origin or type(left.data) not in (int, float) or type(right.data) not in (int, float):
+            if left.origin or right.origin:
                 raise Unsupported('arithmetic operands')
             ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
                    ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow}
+            if type(left.data) not in (int, float) or type(right.data) not in (int, float):
+                # These operators cannot format/repeat strings or invoke user code.
+                # Unsupported syntax, custom objects and other operations are not exceptions.
+                if builtins and type(node.op) in (ast.Sub, ast.Div, ast.FloorDiv, ast.Pow) and all(
+                        type(item.data) in (int, float, str, type(None)) for item in (left, right)):
+                    try:
+                        ops[type(node.op)](left.data, right.data)
+                    except TypeError:
+                        raise PredictedArithmeticError('TypeError') from None
+                raise Unsupported('arithmetic operands')
             if type(node.op) not in ops or (isinstance(node.op, ast.Pow) and abs(right.data) > 8):
                 raise Unsupported('operator limit')
-            return Value(bounded(ops[type(node.op)](left.data, right.data)))
+            try:
+                return Value(bounded(ops[type(node.op)](left.data, right.data)))
+            except ZeroDivisionError:
+                if builtins:
+                    raise PredictedArithmeticError('ZeroDivisionError') from None
+                raise
         if isinstance(node, ast.Compare):
             operands = [self.expression(item, values, builtins) for item in [node.left, *node.comparators]]
             if any(item.origin for item in operands):
@@ -159,12 +181,17 @@ def source_result(function, args, kwargs, calculator):
                 raise Unsupported('source statement')
         return False, None
 
-    found, result = visit(function.body)
+    call = snapshot_value({'args': tuple(arg.data for arg in args),
+                           'kwargs': {key: value.data for key, value in kwargs.items()}})
+    try:
+        found, result = visit(function.body)
+    except PredictedArithmeticError as error:
+        return Value(None, {'inputs': inputs, 'steps': steps, 'call': call,
+                           'exception': {'module': 'builtins', 'qualname': str(error)}})
     if not found:
         raise Unsupported('no explicit return')
     return Value(result, {'inputs': inputs, 'steps': steps, 'result': result,
-        'call': snapshot_value({'args': tuple(arg.data for arg in args),
-                                'kwargs': {key: value.data for key, value in kwargs.items()}}),
+        'call': call,
         'result_snapshot': snapshot_value(result)})
 
 
@@ -174,8 +201,10 @@ def repair(payload):
     numeric_skill = payload.get('numericSkill') is True
     if max(len(code), len(source), len(failure)) > 200000:
         return empty
-    # Only actual unittest assertion failures authorize constant correction.
-    failed = re.findall(r'^FAIL: (test_\w+) \(([^)\n]+)\)', failure, re.M)
+    # ERROR is eligible only in full mode, with a source-supported exception
+    # proposal that the host must independently verify for the identical inputs.
+    failed = re.findall(r'^(?:FAIL|ERROR): (test_\w+) \(([^)\n]+)\)' if numeric_skill
+                        else r'^FAIL: (test_\w+) \(([^)\n]+)\)', failure, re.M)
     if not failed:
         return empty
     tree, source_tree = ast.parse(code), ast.parse(source)
@@ -227,6 +256,15 @@ def repair(payload):
             unit_aliases.update(item.asname or item.name for item in node.names if item.name == 'TestCase')
     if not aliases:
         return empty
+    builtin_names = {'type', 'int', 'float', 'str', 'bool', 'tuple', 'list', 'TypeError', 'ZeroDivisionError'}
+    if numeric_skill and any(
+            isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in builtin_names
+            or isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in builtin_names
+            or isinstance(node, ast.arg) and node.arg in builtin_names
+            or isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                (item.asname or item.name.split('.')[0]) in builtin_names or item.name == '*' for item in node.names)
+            for node in ast.walk(tree)):
+        return empty
     if numeric_skill and (len({node.name for node in tree.body if isinstance(node, ast.ClassDef)})
             != len([node for node in tree.body if isinstance(node, ast.ClassDef)])):
         return empty
@@ -259,8 +297,45 @@ def repair(payload):
                         raise Unsupported('target call')
                     if len({item.arg for item in call.keywords}) != len(call.keywords):
                         raise Unsupported('duplicate keywords')
-                    return source_result(function, [calculator.expression(arg, values) for arg in call.args],
+                    value = source_result(function, [calculator.expression(arg, values) for arg in call.args],
                         {item.arg: calculator.expression(item.value, values) for item in call.keywords}, calculator)
+                    if value.origin.get('exception') and not numeric_skill:
+                        raise Unsupported('exception requires isolated verification')
+                    return value
+
+                def exception_edit(statement, call, value, tail):
+                    # Preserve setup/inputs/passing assertions. Replace only the failed
+                    # call and its unreachable return assertions, never unrelated work.
+                    if statement not in method.body:
+                        raise Unsupported('shared fixture exception')
+                    if isinstance(statement, ast.Assign):
+                        destinations = [node for dest in statement.targets for node in ast.walk(dest)
+                                        if isinstance(node, ast.Name)]
+                        if not destinations or any(not isinstance(node, (ast.Name, ast.Tuple, ast.List, ast.Store))
+                                                  for dest in statement.targets for node in ast.walk(dest)):
+                            raise Unsupported('exception result binding')
+                        outputs = {node.id for node in destinations}
+                        if not tail:
+                            raise Unsupported('missing result assertions')
+                        for item in tail:
+                            assertion = item.value if isinstance(item, ast.Expr) else None
+                            if not (isinstance(assertion, ast.Call) and ast.unparse(assertion.func)
+                                    in ('self.assertEqual', 'self.assertAlmostEqual') and len(assertion.args) >= 2
+                                    and isinstance(assertion.args[0], ast.Name) and assertion.args[0].id in outputs):
+                                raise Unsupported('independent or compound exception tail')
+                            for argument in [*assertion.args[1:], *(kw.value for kw in assertion.keywords)]:
+                                if calculator.expression(argument, values).origin:
+                                    raise Unsupported('target-derived expectation')
+                    elif tail:
+                        raise Unsupported('exception scope')
+                    span = copy.copy(statement)
+                    if tail:
+                        span.end_lineno, span.end_col_offset = tail[-1].end_lineno, tail[-1].end_col_offset
+                    exception = value.origin['exception']['qualname']
+                    replacement = ('with self.assertRaises(' + exception + '):\n'
+                                   + ' ' * (statement.col_offset + 4) + ast.get_source_segment(code, call))
+                    return (span, {'method': cls.name + '.' + method.name, 'line': statement.lineno,
+                                   'kind': 'return-to-exception', 'basis': value.origin}, replacement)
 
                 fixture = [node for node in methods if node.name == 'setUp']
                 if len(fixture) > 1 or any(node.decorator_list for node in fixture):
@@ -273,11 +348,15 @@ def repair(payload):
                                 isinstance(dest, ast.Name) for target_node in item.targets for dest in ast.walk(target_node)
                                 if isinstance(dest, ast.Name) and isinstance(dest.ctx, ast.Store)):
                             raise Unsupported('fixture must only assign instance data')
-                for statement in [*(fixture[0].body if fixture else []), *method.body]:
+                statements = [*(fixture[0].body if fixture else []), *method.body]
+                for index, statement in enumerate(statements):
                     if isinstance(statement, ast.Assign):
                         call = statement.value
                         if isinstance(call, ast.Call) and ast.unparse(call.func) in aliases:
                             value = target_value(call)
+                            if value.origin.get('exception'):
+                                pending.append(exception_edit(statement, call, value, statements[index + 1:]))
+                                break
                         else:
                             value = calculator.expression(statement.value, values)
                         for dest in statement.targets:
@@ -296,6 +375,8 @@ def repair(payload):
                                 and isinstance(body, ast.Expr)):
                             raise Unsupported('exception assertion')
                         value = target_value(body.value)
+                        if value.origin.get('exception'):
+                            raise Unsupported('existing exception assertion')
                         # This is a proposal only. Full mode must independently
                         # observe this exact call returning before adopting it.
                         pending.append((statement, {'method': cls.name + '.' + method.name, 'line': statement.lineno,
@@ -306,6 +387,16 @@ def repair(payload):
                         continue
                     elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
                         call = statement.value
+                        if numeric_skill and ast.unparse(call.func) in ('self.assertEqual', 'self.assertIs', 'self.assertIsInstance') and len(call.args) == 2 and not call.keywords:
+                            actual_node, expected_type = call.args
+                            type_call = (isinstance(actual_node, ast.Call) and ast.unparse(actual_node.func) == 'type'
+                                         and len(actual_node.args) == 1 and not actual_node.keywords)
+                            if type_call or ast.unparse(call.func) == 'self.assertIsInstance':
+                                types = {'int': int, 'float': float, 'str': str, 'bool': bool, 'tuple': tuple, 'list': list}
+                                actual = calculator.expression(actual_node.args[0] if type_call else actual_node, values)
+                                if not isinstance(expected_type, ast.Name) or expected_type.id not in types or type(actual.data) is not types[expected_type.id]:
+                                    raise Unsupported('unproven type assertion')
+                                continue  # Keep the original type assertion verbatim.
                         if not (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == 'self'
                                 and call.func.attr in ('assertEqual', 'assertAlmostEqual') and len(call.args) >= 2):
                             raise Unsupported('assertion')
@@ -315,6 +406,9 @@ def repair(payload):
                         extras = [*call.args[2:], *(item.value for item in call.keywords)]
                         if any(calculator.expression(item, values).origin for item in extras) or expected.origin:
                             raise Unsupported('oracle')
+                        if actual.origin and actual.origin.get('exception'):
+                            pending.append(exception_edit(statement, call.args[0], actual, statements[index + 1:]))
+                            break
                         if actual.origin and actual.data != expected.data:
                             if call.func.attr == 'assertAlmostEqual' and (type(actual.data) not in (int, float) or type(expected.data) not in (int, float)):
                                 raise Unsupported('numeric assertion')

@@ -34,6 +34,49 @@ class NumericSkillTests(unittest.TestCase):
     def test_zero_denominator_exception_is_preserved(self):
         self.assertFalse(self.proposal('with self.assertRaises(ZeroDivisionError):\n    metric(10, 0)')['changed'])
 
+    def test_type_assertions_are_preserved_while_later_expectation_is_corrected(self):
+        checks = 'self.assertEqual(type(score), float)\nself.assertIs(type(label), str)\nself.assertIsInstance(score, float)'
+        result = self.proposal('score, label = metric(50, 160)\n' + checks + '\nself.assertEqual(score, 22.22)')
+        self.assertTrue(result['changed'])
+        for line in checks.splitlines():
+            self.assertIn(line, result['code'])
+        self.assertIn('self.assertEqual(score, 19.53)', result['code'])
+        for extra in ('type = lambda x: float\n', 'float = str\n'):
+            self.assertFalse(self.proposal(extra + 'score, label = metric(50, 160)\n' + checks + '\nself.assertEqual(score, 22.22)')['changed'])
+        self.assertFalse(self.proposal('score, label = metric(50, 160)\nself.assertEqual(type(score), int)\nself.assertEqual(score, 22.22)')['changed'])
+
+    def test_error_outcomes_propose_exact_input_exceptions_and_preserve_setup(self):
+        for inputs, exception in [('0, 0', 'ZeroDivisionError'), ('50, 0', 'ZeroDivisionError'), ('"50", "160"', 'TypeError')]:
+            with self.subTest(inputs=inputs):
+                code = suite('expected = 0\nself.assertEqual(expected, 0)\nscore, label = metric(' + inputs
+                             + ')\nself.assertAlmostEqual(score, expected)\nself.assertEqual(label, "low")')
+                result = repair({'code': code, 'source': SOURCE, 'target': 'metric', 'module': 'metrics',
+                                 'numericSkill': True, 'failure': 'ERROR: test_value (generated.TestMetric.test_value)'})
+                self.assertTrue(result['changed'])
+                self.assertIn('self.assertEqual(expected, 0)', result['code'])
+                self.assertIn('with self.assertRaises(' + exception + '):\n            metric(' + inputs + ')', result['code'])
+                proof = result['corrections'][0]['basis']
+                self.assertEqual(proof['exception'], {'module': 'builtins', 'qualname': exception})
+                self.assertNotIn('result_snapshot', proof)
+                ast.parse(result['code'])
+
+    def test_exception_proposal_cannot_remove_independent_or_compound_work(self):
+        for tail in ('self.assertEqual(1, 2)', 'self.assertEqual(score, 0)\nprint("hidden")',
+                     'self.assertEqual(score, metric(1, 1))', 'self.assertEqual(score, 0, msg=print("hidden"))',
+                     'self.assertEqual(score, 0)\nself.assertEqual(metric(1, 1), (1, "low"))'):
+            self.assertFalse(self.proposal('score, label = metric(50, 0)\n' + tail)['changed'])
+        self.assertFalse(self.proposal('self.assertEqual(metric(50, 0), 99)\nself.assertEqual(1, 2)')['changed'])
+        self.assertFalse(self.proposal('ZeroDivisionError = Exception\nself.assertEqual(metric(50, 0), 99)')['changed'])
+        self.assertFalse(self.proposal('self.assertEqual(metric(50, 0), 99)', 'def metric(weight, height):\n    return unknown + 1\n')['changed'])
+        self.assertFalse(self.proposal('self.assertEqual(metric(50, 0), 99)', 'def metric(weight, height):\n    return weight / missing\n')['changed'])
+
+    def test_direct_exception_and_fixture_error_scopes(self):
+        result = self.proposal('self.assertEqual(metric(50, 0), 99)')
+        self.assertIn('with self.assertRaises(ZeroDivisionError)', result['code'])
+        code = suite('self.assertEqual(self.score, 99)').replace('    def test_value',
+            '    def setUp(self):\n        self.score = metric(50, 0)\n    def test_value')
+        self.assertFalse(self.proposal('', code=code)['changed'])
+
     def test_typed_keywords_and_signed_zero_preserved(self):
         result = self.proposal('self.assertEqual(metric(height=100.0, weight=-0.0), (9, "high"))')
         call = result['corrections'][0]['basis']['call']
