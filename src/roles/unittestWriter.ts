@@ -148,7 +148,7 @@ Guidelines:
 - Use unittest.mock (patch, MagicMock) for external dependencies.
 - Cover branches, boundaries, and exception paths that are supported by the source code, selected test-generation rule cards, or verified execution facts. Do not add None or empty-input tests merely by habit.
 - Do NOT copy the source code into your output.
-- assertRaises syntax: ONLY \`with self.assertRaises(ValueError):\` — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!
+- assertRaises syntax: use \`with self.assertRaises(ExceptionType):\` with the exact evidence-supported exception class — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!
 - ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values.
 - Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.
 `;

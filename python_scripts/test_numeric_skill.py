@@ -34,6 +34,31 @@ class NumericSkillTests(unittest.TestCase):
     def test_zero_denominator_exception_is_preserved(self):
         self.assertFalse(self.proposal('with self.assertRaises(ZeroDivisionError):\n    metric(10, 0)')['changed'])
 
+    def test_correct_exception_blocks_do_not_hide_later_wrong_expectations(self):
+        prefix = ('with self.assertRaises(TypeError):\n    metric("a", "a")\n'
+                  'with self.assertRaises(ZeroDivisionError):\n    metric(1, 0)\n')
+        result = self.proposal(prefix + 'with self.assertRaises(TypeError):\n    metric(1.2, 1.2)')
+        self.assertTrue(result['changed'])
+        self.assertIn(suite(prefix).split('    def test_value(self):\n')[1], result['code'])
+        self.assertEqual(len(result['corrections']), 1)
+        self.assertEqual(result['corrections'][0]['calculated'], (8333.33, 'high'))
+
+    def test_boolean_numeric_inputs_keep_their_type_in_verification_proposals(self):
+        for value in (True, False):
+            result = self.proposal(f'with self.assertRaises(TypeError):\n    metric({value}, 100)')
+            self.assertTrue(result['changed'])
+            call = restore_value(result['corrections'][0]['basis']['call'])
+            self.assertIs(call['args'][0], value)
+            self.assertEqual(result['corrections'][0]['calculated'], (float(value), 'low'))
+
+    def test_mismatched_or_shadowed_exception_and_compound_scope_still_abort(self):
+        for prefix in ('with self.assertRaises(TypeError):\n    metric(1, 0)\n',
+                       'with self.assertRaises(ZeroDivisionError) as caught:\n    metric(1, 0)\n',
+                       'with self.assertRaises(ZeroDivisionError):\n    metric(1, 0)\n    metric(2, 0)\n',
+                       'TypeError = ValueError\nwith self.assertRaises(TypeError):\n    metric("a", "a")\n'):
+            with self.subTest(prefix=prefix):
+                self.assertFalse(self.proposal(prefix + 'self.assertEqual(metric(1, 1), (9, "low"))')['changed'])
+
     def test_type_assertions_are_preserved_while_later_expectation_is_corrected(self):
         checks = 'self.assertEqual(type(score), float)\nself.assertIs(type(label), str)\nself.assertIsInstance(score, float)'
         result = self.proposal('score, label = metric(50, 160)\n' + checks + '\nself.assertEqual(score, 22.22)')

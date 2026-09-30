@@ -6,6 +6,10 @@
 
 結果呈現由 `src/pipeline/targetReport.ts` 分流：`final_report.md` 只保留選定目標的結果、模型、失敗原因、保留測資及其覆蓋／突變；`workflow_report.md` 保留執行細節，失敗或曾失敗時另產生含完整流程的 `failure_report.md`。`batchJournal.ts` 的摘要只列已開始的非 Dummy／Stub 目標，完整清單留在 manifest／batch_workflow，批次 failure_report 連向各目標完整流程。`run_manifest.report` 保存新報告身分，scorecard 仍核對同一保留候選與政策證據，不從精簡 Markdown 推定通過。操作見 [結果與失敗報告](docs/結果與失敗報告.md)。
 
+Demo 摘要使用 `presentSummaryOutcome`，僅在執行及量測達標時省略 Reviewer 未完成標籤；`presentOutcome`、品質政策與批次評分仍保留原始終態。final_report 重算同一候選的品質量測後才採用精簡標頭；failure_report／workflow／JSON 保存完整審查診斷。Reviewer 收到完整證據與已通過隔離執行的明示事實，輸出仍需 review-v7 證據行與語意檢查。
+
+數值技能遇到正確的單呼叫內建例外斷言時保留原文並繼續，支援布林值參與 Python 數值運算但不變更輸入型別；不確定或複合例外保持拒絕。Bug Fixer 的 RepairResponseError 由候選狀態機交 Writer 接手一次，沿用現有總預算與重新驗證，接手失敗才交外層決定終止／降級。
+
 ## 為什麼有 TypeScript 和 Python？
 
 - `src/`：在 VS Code 中執行，負責介面、模型請求、角色交接與報告。

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { CandidatePipelineHooks, validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { TargetBudget, runWithTargetBudget } from '../pipeline/targetBudget';
 import { RepairFeedback } from '../validation/repairFeedback';
-import { formatRepairRouting } from '../pipeline/repairDiagnostics';
+import { formatRepairRouting, RepairResponseError, repairHash } from '../pipeline/repairDiagnostics';
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 
 const failure = 'FAIL: test_value (exec1_test.Cases.test_value)\nAssertionError: 19.53 != 18.5';
@@ -89,4 +89,37 @@ test('candidate filenames do not hide retained, dropped or failed passing cases'
     assert.equal(feedback.record('test_keep (exec4_test.Cases.test_keep) ... FAIL', 'exec4_test').accepted, false);
     assert.match(getBugFixerSystemPrompt(), /simple source-supported deterministic relationships/);
     assert.match(getBugFixerSystemPrompt(), /actual output alone is not proof/);
+});
+
+
+test('invalid Bug Fixer response hands original failure to Writer once before outer Tier fallback', async () => {
+    for (const recovered of [true, false]) {
+        const roles: string[] = [];
+        const { hooks, events } = setup({
+            validate: async () => undefined,
+            revise: async (code, feedback, role) => {
+                roles.push(role);
+                assert.equal(code, 'wrong');
+                if (role === 'bug-fixer') {
+                    throw new RepairResponseError({ version: 'repair-diagnostics-v1', gate: 'response-format',
+                        reasonCodes: ['extra-text'], previousTestHash: repairHash(code), previousTestUnchanged: true });
+                }
+                assert.match(feedback, /19.53 != 18.5/);
+                return recovered ? 'corrected' : 'still-wrong';
+            }
+        });
+        if (recovered) { assert.equal((await validateTestCandidate('wrong', hooks, 1)).code, 'corrected'); }
+        else { await assert.rejects(validateTestCandidate('wrong', hooks, 5), /已使用一次 Writer 接手/); }
+        assert.deepEqual(roles, ['bug-fixer', 'writer']);
+        assert.equal(events.filter(e => e.detail?.action === 'writer-recovery').length, 1);
+        assert.equal(events.find(e => e.detail?.action === 'writer-recovery').detail.reasonCode, 'response-format');
+    }
+});
+
+test('transport errors are not disguised as format recovery and no-revision mode stays bounded', async () => {
+    const { hooks, events } = setup({ validate: async () => undefined,
+        revise: async () => { throw Error('transport timeout'); } });
+    await assert.rejects(validateTestCandidate('wrong', hooks), /transport timeout/);
+    assert.equal(events.some(e => e.detail?.action === 'writer-recovery'), false);
+    await assert.rejects(validateTestCandidate('wrong', hooks, 0), /修訂上限 0/);
 });

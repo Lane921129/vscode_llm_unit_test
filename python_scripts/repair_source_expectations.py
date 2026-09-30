@@ -93,11 +93,11 @@ class Calculator:
                 raise Unsupported('arithmetic operands')
             ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
                    ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow}
-            if type(left.data) not in (int, float) or type(right.data) not in (int, float):
+            if type(left.data) not in (int, float, bool) or type(right.data) not in (int, float, bool):
                 # These operators cannot format/repeat strings or invoke user code.
                 # Unsupported syntax, custom objects and other operations are not exceptions.
                 if builtins and type(node.op) in (ast.Sub, ast.Div, ast.FloorDiv, ast.Pow) and all(
-                        type(item.data) in (int, float, str, type(None)) for item in (left, right)):
+                        type(item.data) in (int, float, bool, str, type(None)) for item in (left, right)):
                     try:
                         ops[type(node.op)](left.data, right.data)
                     except TypeError:
@@ -376,6 +376,13 @@ def repair(payload):
                             raise Unsupported('exception assertion')
                         value = target_value(body.value)
                         if value.origin.get('exception'):
+                            exception = value.origin['exception']
+                            if (exception.get('module') == 'builtins'
+                                    and context.args[0].id == exception.get('qualname')
+                                    and context.args[0].id in ('TypeError', 'ZeroDivisionError')):
+                                # Keep the proven exception block verbatim and inspect
+                                # later statements. The whole candidate still reexecutes.
+                                continue
                             raise Unsupported('existing exception assertion')
                         # This is a proposal only. Full mode must independently
                         # observe this exact call returning before adopting it.

@@ -48,7 +48,8 @@ class Cases(unittest.TestCase):
 `;
     let writers = 0, quality = 0, fixer = 0;
     // Keep exercising model repair/fallback: compound contexts are outside the
-    // numeric skill. Simple arithmetic correction has its own full-mode test.
+    // numeric skill. The reserved Writer repeats the failure so this test still
+    // exercises outer Tier fallback. Arithmetic correction is covered separately.
     const unsupportedWrong = valid.replace('        self.assertEqual',
         '        with self.subTest():\n            self.assertEqual').replace('(20.0,', '(19.0,');
     globalThis.fetch = async (_url, options) => {
@@ -58,7 +59,7 @@ class Cases(unittest.TestCase):
         else if (request.system.includes('You are the test Reviewer')) { response = 'invalid reviewer reply'; }
         else if (request.system.includes('Analyst after successful')) { quality++; response = 'invalid quality reply'; }
         else if (request.system.includes('Python unittest Bug Fixer')) { fixer++; response = '```python\npass\n```'; }
-        else { writers++; response = '```python\n' + (writers === 1 ? unsupportedWrong : valid) + '\n```'; }
+        else { writers++; response = '```python\n' + (writers <= 2 ? unsupportedWrong : valid) + '\n```'; }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
     };
     try {
@@ -80,11 +81,16 @@ class Cases(unittest.TestCase):
         const events = fs.readFileSync(path.join(output, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         const report = fs.readFileSync(path.join(functionReportDirectory(output), 'final_report.md'), 'utf8');
         const failureReport = fs.readFileSync(path.join(output, 'workflow_report.md'), 'utf8');
-        const writerEvents = events.filter(event => event.stage === 'writer' && event.status === 'candidate');
+        const writerEvents = events.filter(event => event.stage === 'writer' && event.status === 'candidate'
+            && event.detail.tier !== undefined);
         assert.ok(writerEvents.length > 0);
         assert.ok(writerEvents.every(event => !Object.hasOwn(event.detail, 'raw')
             && /^[a-f0-9]{64}$/.test(event.detail.responseHash) && event.detail.responseCharacters >= 0));
         assert.equal(fixer, 1, JSON.stringify({ state: state.terminalStatus, first: state.firstFailure, last: state.lastFailure }));
+        const recovery = events.filter(event => event.stage === 'repair-routing' && event.detail.action === 'writer-recovery');
+        assert.equal(recovery.length, 1);
+        assert.equal(recovery[0].detail.reasonCode, 'response-format');
+        assert.ok(recovery[0].sequence < events.find(event => event.stage === 'tier' && event.status === 'fallback').sequence);
         assert.equal(state.tierHistory.transitions[0].from, 2);
         assert.equal(state.tierHistory.transitions[0].to, 1);
         assert.equal(state.tierHistory.rounds[1].start, 2);

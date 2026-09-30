@@ -11,7 +11,8 @@ import { validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { evidenceHash } from '../pipeline/analysisJournal';
 
 for (const [fixture, expectedCount, expectedCorrections] of [
-    ['bmi_lab_20260930_2023.py', 20, 11], ['bmi_lab_20260930_2015.py', 27, 2]
+    ['bmi_lab_20260930_2023.py', 20, 11], ['bmi_lab_20260930_2015.py', 27, 2],
+    ['bmi_lab_20260930_2130.py', 18, 8]
 ] as const) {
     test(`laboratory replay ${fixture}: real exception assertions succeed without another model request`, async () => {
         const repo = path.resolve(__dirname, '../..');
@@ -59,14 +60,14 @@ for (const [fixture, expectedCount, expectedCorrections] of [
             });
             assert.equal(executions.length, 2);
             assert.equal(executions[0].ok, false);
-            assert.match(executions[0].out, /ERROR: test_calculate_bmi_with_/);
+            assert.match(executions[0].out, /(?:FAIL|ERROR): test_calculate_bmi/);
             assert.equal(result.execution.ok, true, result.execution.out);
             assert.match(result.execution.out, new RegExp(`Ran ${expectedCount} tests`));
             assert.match(result.execution.out, /\nOK\s*$/);
             assert.equal(evidence.length, 1);
             assert.equal(evidence[0].corrections.length, expectedCorrections);
             assert.ok(checkedBatches.every(count => count <= 6));
-            assert.equal(checkedBatches.length, fixture.includes('2023') ? 2 : 1);
+            assert.equal(checkedBatches.length, fixture.includes('2015') ? 1 : 2);
             assert.match(result.code, /with self.assertRaises\(ZeroDivisionError\):/);
             assert.match(result.code, /with self.assertRaises\(TypeError\):/);
             if (fixture.includes('2023')) {

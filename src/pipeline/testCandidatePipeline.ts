@@ -4,7 +4,7 @@ import { TestReview } from '../roles/testReviewer';
 import { ReviewStatus } from '../roles/reviewSession';
 import { currentTargetBudget } from './targetBudget';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
-import { RepairDiagnostic, repairHash, repairReasonCode } from './repairDiagnostics';
+import { RepairDiagnostic, RepairResponseError, repairHash, repairReasonCode } from './repairDiagnostics';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 
 export interface CandidateExecution {
@@ -53,9 +53,9 @@ export async function validateTestCandidate(
     let writerRecoveryPending = false;
     let executionFailure = false;
     let toolRepairAttempts = 0;
-    // One reserved handoff, only after a demonstrated no-op method repair.
+    // One reserved handoff after a no-op or unusable method repair response.
     // It still consumes the enclosing target's candidate/request/time budgets.
-    const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change'): boolean => {
+    const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change' | 'response-format'): boolean => {
         if (writerRecoveryUsed || maxRevisions < 1) { return false; }
         writerRecoveryUsed = true;
         writerRecoveryPending = true;
@@ -93,7 +93,16 @@ export async function validateTestCandidate(
                 attemptedBugFixFailures.add(failureKey);
             }
             const previousCode = code;
-            const candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt);
+            let candidate: string;
+            try {
+                candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt);
+            } catch (error) {
+                hooks.checkCancelled();
+                if (role === 'bug-fixer' && error instanceof RepairResponseError) {
+                    if (recoverWithWriter(attempt, 'response-format')) { continue; }
+                }
+                throw error;
+            }
             hooks.checkCancelled();
             hooks.event(arithmetic ? 'source-expectation-repair' : role, 'candidate', {
                 attempt, code: candidate, ...(arithmetic ? { evidence: arithmetic.evidence } : {}) });

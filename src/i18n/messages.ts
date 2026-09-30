@@ -19,6 +19,8 @@ export const englishMessages: Record<string, string> = {
     "仍有 {0} 個存活突變。": "{0} surviving mutants remain.",
     "- **首次失敗**: {0}\n- **最近失敗**: {1}\n": "- **First failure**: {0}\n- **Last failure**: {1}\n",
     "未執行": "Not run",
+    "測試執行與量測達標": "Test execution and measurements met the thresholds",
+    "- **覆蓋率**: {0}\n- **突變分數**: {1}\n": "- **Coverage**: {0}\n- **Mutation score**: {1}\n",
     "Reviewer 審查未完成": "Reviewer incomplete",
     "N/A（沒有突變候選）": "N/A (no mutation candidates)",
     "- **目標檔案**: {0}\n- **測試函式**: {1}\n- **模型識別**: {2}\n": "- **Target file**: {0}\n- **Target function**: {1}\n- **Model identity**: {2}\n",

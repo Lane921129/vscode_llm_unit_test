@@ -3,8 +3,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { localize } from '../i18n/core';
 import { evidenceHash } from './analysisJournal';
-import { validateQualityPolicy } from './qualityPolicy';
-import { presentOutcome, withOutcomeHeader } from './resultPresentation';
+import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
+import { presentOutcome, presentSummaryOutcome, withOutcomeHeader } from './resultPresentation';
 import { formatTierHistory } from './tierHistory';
 import { readStoredMutationRun, MutationRun } from '../mutation/mutationResult';
 
@@ -15,6 +15,7 @@ export interface ReportIdentity {
 export interface TargetReportSummary {
     included: boolean; outcome: string; reason: string; coverage: string; mutation: string;
     testFile?: string; code?: string; mutants?: MutationRun['mutants'];
+    summaryOutcome?: string; summaryReason?: string;
 }
 const excluded = new Set(['dummy-skipped', 'stub-skipped', 'stub-smoke-generated']);
 export const isReportExcluded = (status: unknown): boolean => typeof status === 'string' && excluded.has(status);
@@ -48,12 +49,16 @@ export function summarizeTarget(directory: string, state: any, identity: ReportI
         const gaps = Array.isArray(state.qualityGaps) ? state.qualityGaps.filter((v: unknown) => typeof v === 'string') : [];
         reason = [outcome.label, ...gaps, state.reviewStatus === 'incomplete' ? localize('Reviewer 審查未完成') : ''].filter(Boolean).join('；');
     }
+    const publicReason = state.failure || state.reason || [state.terminalStatus === 'execution-passed-review-incomplete'
+        ? localize('未完成：缺少完整通過證據') : outcome.label,
+        ...(Array.isArray(state.qualityGaps) ? state.qualityGaps.filter((v: unknown) => typeof v === 'string') : [])].join('；');
     const result: TargetReportSummary = { included: !isReportExcluded(state.terminalStatus), outcome: outcome.label,
-        reason, coverage: `N/A (${unavailable})`, mutation: `N/A (${unavailable})` };
+        reason, summaryReason: ['passed', 'executed'].includes(outcome.kind) ? reason : publicReason, coverage: `N/A (${unavailable})`, mutation: `N/A (${unavailable})` };
     const incomplete = (): TargetReportSummary => {
         if (outcome.kind === 'passed' || outcome.kind === 'executed') {
             result.outcome = localize('未完成：缺少完整通過證據');
             result.reason = localize('目標、保留測資或量測證據無法核對。');
+            result.summaryReason = result.reason;
         }
         return result;
     };
@@ -99,9 +104,24 @@ export function summarizeTarget(directory: string, state: any, identity: ReportI
         } else if (status === 'no-candidates') { result.mutation = localize('N/A（沒有突變候選）'); }
         if (counts.survived && outcome.kind !== 'passed' && !thresholdMet) {
             result.reason += '；' + localize('仍有 {0} 個存活突變。', counts.survived);
+            result.summaryReason += '；' + localize('仍有 {0} 個存活突變。', counts.survived);
         }
     }
-    return result.coverage.startsWith('N/A') || result.mutation.startsWith('N/A') ? incomplete() : result;
+    if (result.coverage.startsWith('N/A') || result.mutation.startsWith('N/A')) { return incomplete(); }
+    const presentation = presentSummaryOutcome(state);
+    if (presentation.label !== outcome.label && state.qualityAssessment?.toolsSatisfied === true) {
+        const targetScope = { kind: 'function' as const, qualifiedName: identity.target };
+        const assessment = evaluateQuality(state.qualityPolicy, {
+            identity: { sourcePath: identity.sourcePath, sourceHash, testHash: state.acceptedCodeHash,
+                targetScope, policyHash: state.qualityPolicy?.policyHash },
+            executionPassed: Boolean(state.execution),
+            coverage: { sourceHash, testHash: state.acceptedCodeHash, targetScope, assessment: retained.coverage?.assessment },
+            mutation: retained.mutation, reviewStatus: state.reviewStatus, qualityGaps: state.qualityGaps,
+            generationMode: state.generationMode
+        });
+        if (assessment.toolsSatisfied) { result.summaryOutcome = presentation.label; }
+    }
+    return result;
 }
 
 function identityLines(identity: ReportIdentity): string {
@@ -114,9 +134,12 @@ function fence(code: string): string {
 }
 
 export function renderFinalReport(identity: ReportIdentity, summary: TargetReportSummary, hasFailures: boolean): string {
-    return localize('## 最終結果：{0}\n\n', summary.outcome) + identityLines(identity)
-        + localize('- **失敗原因**: {0}\n- **覆蓋率**: {1}\n- **突變分數**: {2}\n',
-            reportCell(conciseReason(summary.reason)), summary.coverage, summary.mutation)
+    return localize('## 最終結果：{0}\n\n', summary.summaryOutcome || (summary.outcome === localize('未完成：執行達標，審查未完成')
+        ? localize('未完成：缺少完整通過證據') : summary.outcome)) + identityLines(identity)
+        + (summary.summaryOutcome
+            ? localize('- **覆蓋率**: {0}\n- **突變分數**: {1}\n', summary.coverage, summary.mutation)
+            : localize('- **失敗原因**: {0}\n- **覆蓋率**: {1}\n- **突變分數**: {2}\n',
+                reportCell(conciseReason(summary.summaryReason || summary.reason)), summary.coverage, summary.mutation))
         + (hasFailures ? localize('- [失敗報告與完整流程](failure_report.md)\n') : '')
         + '\n' + localize('### 測資\n\n')
         + (summary.testFile ? `[${reportCell(summary.testFile)}](${reportLink(summary.testFile)})\n\n${fence(summary.code!)}`

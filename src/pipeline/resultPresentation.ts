@@ -3,7 +3,7 @@ export interface OutcomeEvidence {
     terminalStatus?: unknown;
     failureCategory?: unknown;
     evidenceValid?: unknown;
-    qualityAssessment?: { fullyPassed?: unknown };
+    qualityAssessment?: { fullyPassed?: unknown; toolsSatisfied?: unknown };
     validationMode?: unknown;
     executionVerified?: unknown;
 }
@@ -37,6 +37,16 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
     };
     const [label, kind] = labels[state] || [localize("未完成：缺少完整通過證據"), 'pending'];
     return { state, label, kind };
+}
+
+/** Concise demo surface. Audit status and pass accounting remain unchanged. */
+export function presentSummaryOutcome(value: OutcomeEvidence): OutcomePresentation {
+    const outcome = presentOutcome(value);
+    if (outcome.state === 'execution-passed-review-incomplete' && outcome.kind === 'pending') {
+        return { ...outcome, label: value.validationMode !== 'execution' && value.qualityAssessment?.toolsSatisfied === true
+            ? localize("測試執行與量測達標") : localize("未完成：缺少完整通過證據") };
+    }
+    return outcome;
 }
 
 export function withOutcomeHeader(body: string, evidence: OutcomeEvidence): string {

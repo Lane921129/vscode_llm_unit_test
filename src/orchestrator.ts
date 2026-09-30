@@ -27,7 +27,7 @@ import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
-import { presentOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
+import { presentOutcome, presentSummaryOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
 import { TierHistory } from './pipeline/tierHistory';
 import { ReportIdentity, writeTargetReports } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
@@ -2411,7 +2411,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         return undefined;
                     }
                     const sys = getTestReviewerSystemPrompt();
-                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence },
+                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence, executionVerified: true },
                         Number.MAX_SAFE_INTEGER);
                     if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt, activeModelProfile.budgetTokens)) {
                         recordRole('reviewer', 'budget-exceeded', { reason: localize("完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。") });
@@ -3118,7 +3118,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         journal.knowledge({ targetBudget: currentTargetBudget()?.snapshot() });
         writeReport();
         sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
-            func: params.funcName || '', reportPath: existingReport, outcome: presentOutcome(journal.snapshot()) });
+            func: params.funcName || '', reportPath: existingReport, outcome: presentSummaryOutcome(journal.snapshot()) });
     }
 }
 

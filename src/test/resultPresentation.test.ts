@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { presentOutcome, stageLabel, withOutcomeHeader, describeStageEvent } from '../pipeline/resultPresentation';
+import { presentOutcome, presentSummaryOutcome, stageLabel, withOutcomeHeader, describeStageEvent } from '../pipeline/resultPresentation';
 import { formatTierHistory, TierHistory } from '../pipeline/tierHistory';
 import { describeImportIssue } from '../environment/importDiagnostics';
 import * as fs from 'node:fs';
@@ -85,4 +85,18 @@ test('the actual result-card renderer keeps 100% neutral unless the final outcom
     }
     const outcome = presentOutcome({ terminalStatus: 'passed', qualityAssessment: { fullyPassed: true } });
     assert.match(vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome, i18n: zhTw.ui }), /#2ea043/);
+});
+
+
+test('demo summary omits incomplete review without claiming full approval or hiding real failures', () => {
+    const evidence = { terminalStatus: 'execution-passed-review-incomplete',
+        qualityAssessment: { toolsSatisfied: true, fullyPassed: false } };
+    assert.match(presentSummaryOutcome(evidence).label, /測試執行與量測達標/);
+    assert.equal(presentSummaryOutcome(evidence).kind, 'pending');
+    assert.match(presentOutcome(evidence).label, /審查未完成/);
+    for (const extra of [{ evidenceValid: false }, { failureCategory: 'environment' },
+        { terminalStatus: 'failed' }, { terminalStatus: 'retained-after-failure' },
+        { qualityAssessment: { toolsSatisfied: false, fullyPassed: false } }]) {
+        assert.notEqual(presentSummaryOutcome({ ...evidence, ...extra }).label, presentSummaryOutcome(evidence).label);
+    }
 });
