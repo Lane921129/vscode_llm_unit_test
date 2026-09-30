@@ -9,6 +9,7 @@ import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 import { describeImportIssue } from '../environment/importDiagnostics';
 import { verifyExecutionEvidence } from './executionEvidence';
 import { VerificationMode } from './verificationMode';
+import { conciseReason, isReportExcluded, reportCell, reportLink, summarizeTarget, TargetReportSummary } from './targetReport';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -78,6 +79,7 @@ export class BatchJournal {
     private readonly targets: BatchTarget[] = [];
     private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
     private readonly files: string[] = [];
+    private readonly reportSummaries = new Map<number, TargetReportSummary>();
     constructor(readonly directory: string, private readonly sourceRoot: string,
         private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode }) {
         this.save();
@@ -113,7 +115,10 @@ export class BatchJournal {
         const target = this.targets[id];
         const directory = target.reportDirectory && path.join(this.directory, target.reportDirectory);
         try {
-            if (!directory || !fs.existsSync(path.join(directory, 'final_report.md'))) { throw Error('missing-report'); }
+            if (!directory) { throw Error('missing-report'); }
+            const hasFinal = fs.existsSync(path.join(directory, 'final_report.md'));
+            const hasWorkflow = fs.existsSync(path.join(directory, 'workflow_report.md'));
+            if (!hasFinal && !hasWorkflow) { throw Error('missing-report'); }
             if (target.terminalStatus !== 'dummy-skipped') {
                 const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
                 const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'run_manifest.json'), 'utf8'));
@@ -122,6 +127,7 @@ export class BatchJournal {
                     || knowledge.terminalStatus === 'running') { throw Error('incomplete-provenance'); }
                 if ((manifest.validationMode ?? 'full') !== (this.identity.validationMode ?? 'full')
                     || (knowledge.validationMode ?? 'full') !== (manifest.validationMode ?? 'full')) { throw Error('mode-mismatch'); }
+                if (!hasFinal && !isReportExcluded(knowledge.terminalStatus)) { throw Error('missing-report'); }
                 if (knowledge.terminalStatus === 'passed') {
                     if (manifest.validationMode === 'execution' || knowledge.validationMode === 'execution') { throw Error('mode-mismatch'); }
                     const hasQualityContract = [manifest, knowledge].some(artifact =>
@@ -165,9 +171,14 @@ export class BatchJournal {
                     throw Error('incomplete-provenance');
                 }
                 target.modelRequests = events.filter(event => event.stage === 'model-request' && event.status === 'requested').length;
+                this.reportSummaries.set(id, summarizeTarget(directory, knowledge, {
+                    schemaVersion: 'target-report-v1', sourcePath: path.resolve(this.sourceRoot, target.file),
+                    sourceFile: target.file, target: target.target, modelIdentity: this.identity.model, requestedTier: ''
+                }, knowledge.sourceHash));
             }
             target.state = 'finished';
         } catch {
+            this.reportSummaries.delete(id);
             target.state = 'running';
             target.terminalStatus = 'incomplete-report';
             delete target.environment;
@@ -243,6 +254,32 @@ export class BatchJournal {
             ...this.discoveryFailures.map(item => localize("- 無法掃描 {0}：{1}", safe(item.file), safe(item.stage))),
             ...this.targets.filter(t => t.state !== 'finished').map(t => `- ${safe(t.file)} :: ${safe(t.target)}：${t.terminalStatus || t.state}`),
             localize("Dummy／Stub、審查未完成、品質不足及缺報告皆不計為通過。逐目標輸出與模型請求數見 batch_manifest.json。"), ''].join('\n');
-        fs.writeFileSync(path.join(this.directory, 'batch_summary.md'), report, 'utf8');
+        // The audit inventory stays complete; the user-facing result list contains only attempted test targets.
+        fs.writeFileSync(path.join(this.directory, 'batch_workflow.md'), report, 'utf8');
+        const visible = this.targets.filter(t => t.state !== 'pending' && !isReportExcluded(t.terminalStatus));
+        const failureTargets = visible.filter(t => t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'failure_report.md')));
+        const failures = this.discoveryFailures.length > 0 || ['cancelled', 'failed', 'incomplete'].includes(this.status)
+            || visible.some(t => t.terminalStatus && !['passed', 'execution-passed'].includes(t.terminalStatus)) || failureTargets.length > 0;
+        const concise = [localize('# 批次測試結果'), '', localize('- **模型識別**: {0}', reportCell(this.identity.model)),
+            localize('- 狀態：{0}（執行完成不代表測試通過）', this.status), '',
+            localize('| 目標 | 結果／失敗原因 | 覆蓋率 | 突變分數 | 測資與突變測資 |'), '| --- | --- | --- | --- | --- |',
+            ...visible.map(t => {
+                const summary = this.reportSummaries.get(t.id);
+                const link = t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'final_report.md'))
+                    ? `[${localize('查看結果')}](${reportLink(t.reportDirectory + '/final_report.md')})` : '—';
+                return `| ${reportCell(t.file)} :: ${reportCell(t.target)} | ${reportCell(summary ? `${summary.outcome} / ${conciseReason(summary.reason)}` : t.terminalStatus || t.state)} | ${summary?.coverage || 'N/A'} | ${summary?.mutation || 'N/A'} | ${link} |`;
+            }), '', ...(visible.length ? [] : [localize('本次沒有可列入的測試目標。'), '']),
+            ...(failures ? [localize('[失敗報告與完整流程](failure_report.md)'), ''] : [])].join('\n');
+        fs.writeFileSync(path.join(this.directory, 'batch_summary.md'), concise, 'utf8');
+        if (failures) {
+            fs.writeFileSync(path.join(this.directory, 'failure_report.md'), [localize('# 批次失敗報告'), '', report,
+                localize('## 各目標完整流程'), '', ...visible.map(t => {
+                    const file = t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'failure_report.md'))
+                        ? 'failure_report.md' : 'workflow_report.md';
+                    return t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, file))
+                        ? `- [${reportCell(t.file)} :: ${reportCell(t.target)}](${reportLink(t.reportDirectory + '/' + file)})`
+                        : `- ${reportCell(t.file)} :: ${reportCell(t.target)}：${localize('尚無流程報告；未計入通過。')}`;
+                }), ''].join('\n'), 'utf8');
+        }
     }
 }

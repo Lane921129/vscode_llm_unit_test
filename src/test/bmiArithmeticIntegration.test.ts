@@ -64,7 +64,7 @@ test('laboratory unpacked BMI candidate reaches execution and all arithmetic cor
         assert.ok(actual.endsWith(keep.trimEnd()));
         assert.equal(read(baseline.invocationFile).testResult.testsRun, 5);
         assert.equal(read(baseline.invocationFile).testResult.failures, 0);
-        assert.match(fs.readFileSync(path.join(directory, 'final_report.md'), 'utf8'), /預期值修正/);
+        assert.match(fs.readFileSync(path.join(directory, 'workflow_report.md'), 'utf8'), /預期值修正/);
         assert.equal(fs.readFileSync(file, 'utf8'), source);
     } finally {
         Module._load = originalLoad; globalThis.fetch = originalFetch;

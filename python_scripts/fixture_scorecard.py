@@ -129,6 +129,9 @@ def report_fields(report_path):
     model_identity_match = re.search(r'^- \*\*(?:模型識別|Model identity)\*\*:\s*`?([^`\n]+?)`?\s*$', text, re.MULTILINE)
     generation_mode_match = re.search(r'^- \*\*Tier 1 generation mode\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
     failure_category_match = re.search(r'^- \*\*(?:失敗分類|Failure category)\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
+    requested_tier = requested_match.group(1).strip() if requested_match else tier_match.group(1).strip() if tier_match else None
+    generation_mode = generation_mode_match.group(1) if generation_mode_match else None
+    failure_category = failure_category_match.group(1) if failure_category_match else None
     coverage = percentage_values(text, '覆蓋率') or percentage_values(text, 'Coverage')
     mutation = percentage_values(text, '突變分數') or percentage_values(text, 'Mutation score')
     review_states = re.findall(r'^- \*\*Reviewer status\*\*:\s*([^\s]+)\s*$', text, re.MULTILINE)
@@ -158,6 +161,22 @@ def report_fields(report_path):
             # Scores and review must describe the retained file from this run,
             # never independently selected maxima from different repair loops.
             manifest = json.loads(journal_path.with_name('run_manifest.json').read_text(encoding='utf-8'))
+            report_identity = manifest.get('report')
+            source_path = target_match.group(1).strip() if target_match else None
+            if report_identity is not None:
+                from html import unescape
+                if (not isinstance(report_identity, dict) or report_identity.get('schemaVersion') != 'target-report-v1'
+                        or not target_match or unescape(source_path) != report_identity.get('sourceFile')
+                        or not function_match or unescape(function_match.group(1).strip()) != report_identity.get('target')
+                        or report_identity.get('target') != manifest.get('target')
+                        or not model_identity_match or unescape(model_identity_match.group(1).strip()) != report_identity.get('modelIdentity')
+                        or not isinstance(report_identity.get('sourcePath'), str) or not report_identity['sourcePath']
+                        or not isinstance(report_identity.get('requestedTier'), str)):
+                    raise ValueError('mismatched concise report identity')
+                source_path = report_identity['sourcePath']
+                requested_tier = report_identity['requestedTier']
+                generation_mode = knowledge.get('generationMode')
+                failure_category = knowledge.get('failureCategory')
             new_quality_policy = new_quality_policy or 'qualityPolicy' in manifest or 'qualityContractVersion' in manifest
             accepted = knowledge.get('acceptedTest', '')
             if not accepted or Path(accepted).name != accepted or '/' in accepted or '\\' in accepted:
@@ -194,14 +213,14 @@ def report_fields(report_path):
             mutation = [score] if isinstance(score, (int, float)) and not isinstance(score, bool) and 0 <= score <= 100 else []
             if new_quality_policy:
                 policy, quality_assessment = _read_policy_assessment(report_path, knowledge, manifest,
-                    target_match.group(1).strip() if target_match else None,
+                    source_path,
                     function_match.group(1).strip() if function_match else None)
                 counts = quality_assessment['counts']
                 coverage = [100 * counts['lines']['executed'] / counts['lines']['total']] if counts['lines'] else []
                 mutation = [100 * counts['mutation']['killed'] / counts['mutation']['total']] \
                     if counts['mutation'] and counts['mutation']['total'] and quality_assessment['measurementStatus'] == 'complete' else []
                 coverage_scope = 'selected-target'
-                if retained_tier == 1 and knowledge.get('generationMode') != (generation_mode_match.group(1) if generation_mode_match else None):
+                if retained_tier == 1 and knowledge.get('generationMode') != generation_mode:
                     raise ValueError('quality generation mode mismatch')
         except (OSError, ValueError, TypeError, AttributeError, KeyError):
             invalid_journal = True
@@ -219,11 +238,11 @@ def report_fields(report_path):
     return {
         'target_file': target_match.group(1).strip() if target_match else None,
         'target_function': function_match.group(1).strip() if function_match else None,
-        'requested_tier': requested_match.group(1).strip() if requested_match else tier_match.group(1).strip() if tier_match else None,
+        'requested_tier': requested_tier,
         'resolved_tier': retained_tier if retained_tier is not None else int(tier_match.group(2)) if tier_match else None,
         'model_identity': model_identity_match.group(1).strip() if model_identity_match else None,
-        'tier1_generation_mode': generation_mode_match.group(1) if generation_mode_match else None,
-        'failure_category': failure_category_match.group(1) if failure_category_match else None,
+        'tier1_generation_mode': generation_mode,
+        'failure_category': failure_category,
         'coverage': coverage[-1] if coverage else None,
         'coverage_scope': coverage_scope,
         'module_coverage': module_coverage,

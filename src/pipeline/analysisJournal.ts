@@ -7,6 +7,7 @@ import { classifyExecutionFailure } from '../utils/executionFailureCategory';
 import type { QualityPolicySnapshot } from './qualityPolicy';
 import { formatRepairDiagnostic, RepairDiagnostic } from './repairDiagnostics';
 import { VerificationMode } from './verificationMode';
+import type { ReportIdentity } from './targetReport';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -19,7 +20,7 @@ export class AnalysisJournal {
     readonly sourceHash: string;
     snapshot(): Record<string, unknown> { return { ...this.knowledgeState }; }
     constructor(private readonly directory: string, source: string, target: string, model: string,
-        qualityPolicy?: QualityPolicySnapshot, validationMode: VerificationMode = 'full') {
+        qualityPolicy?: QualityPolicySnapshot, validationMode: VerificationMode = 'full', report?: ReportIdentity) {
         this.sourceHash = evidenceHash(source);
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
@@ -27,6 +28,7 @@ export class AnalysisJournal {
             sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v7',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS,
             repairDiagnosticsVersion: 'repair-diagnostics-v1',
+            ...(report ? { report } : {}),
             ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {})
         }, null, 2), { encoding: 'utf8', flag: 'wx' });
         this.knowledge({ target, terminalStatus: 'running', stage: 'starting', validationMode,

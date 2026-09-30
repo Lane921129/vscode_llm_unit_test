@@ -206,7 +206,9 @@ class Cases(unittest.TestCase):
         assert.equal(knowledge.coverage.selectedTarget.qualifiedName, 'target');
         assert.deepEqual(knowledge.coverage.selectedTarget.missingLines, []);
         assert.equal(knowledge.resolvedTier, 1);
-        assert.match(report, /Reviewer status\*\*: completed/);
+        assert.match(fs.readFileSync(path.join(output, 'workflow_report.md'), 'utf8'), /Reviewer status\*\*: completed/);
+        assert.doesNotMatch(report, /Reviewer status|### AST|### 語意分析師/);
+        assert.match(report, /\*\*覆蓋率\*\*: 100.00%/);
 
         reviewerAvailable = false;
         expectedMutationSeconds = 40;
@@ -487,7 +489,7 @@ class Cases(unittest.TestCase):
             const eventText = fs.readFileSync(path.join(repairOutput, 'role_events.jsonl'), 'utf8');
             const repairEvents = eventText.trim().split('\n').map(line => JSON.parse(line));
             const repairKnowledge = JSON.parse(fs.readFileSync(path.join(repairOutput, 'function_knowledge.json'), 'utf8'));
-            const repairReport = fs.readFileSync(path.join(repairOutput, 'final_report.md'), 'utf8');
+            const repairReport = fs.readFileSync(path.join(repairOutput, 'failure_report.md'), 'utf8');
             if (mode === 'format') {
                 assert.equal(fixerCalls, 1);
                 assert.ok(repairEvents.some(event => event.stage === 'bug-fixer' && event.status === 'format-normalized'));

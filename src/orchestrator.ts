@@ -26,7 +26,8 @@ import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analys
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
 import { presentOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
-import { formatTierHistory, TierHistory } from './pipeline/tierHistory';
+import { TierHistory } from './pipeline/tierHistory';
+import { ReportIdentity, writeTargetReports } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
@@ -1324,7 +1325,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const sessionDir = createAnalysisDirectory(baseDir, dateStr, params.filePath, safeFuncName, params.projectName, projectRoot,
         params.batchJournal?.directory);
     if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, sessionDir); }
-    const existingReport = path.join(sessionDir, 'final_report.md');
+    let existingReport = path.join(sessionDir, 'final_report.md');
+    const reportIdentity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: params.filePath,
+        sourceFile: path.relative(projectRoot, params.filePath).replace(/\\/g, '/'),
+        target: params.funcName || 'file', modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: userTierSetting };
 
     // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
     // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
@@ -1334,6 +1338,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += localize("- **測試狀態**: 已略過（Dummy／雜訊函式）\n");
         finalReportMarkdown += localize("- **突變分數**: N/A（使用者標記為 Dummy／雜訊函式）\n");
         throwIfExecutionCancelled();
+        existingReport = path.join(sessionDir, 'workflow_report.md');
         fs.writeFileSync(existingReport, withOutcomeHeader(finalReportMarkdown, { terminalStatus: 'dummy-skipped' }), 'utf-8');
         sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
             func: params.funcName || '', reportPath: existingReport, outcome: presentOutcome({ terminalStatus: 'dummy-skipped' }) });
@@ -1344,13 +1349,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
     const qualityPolicy = createStrictQualityPolicy();
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName,
-        mode === 'full' ? qualityPolicy : undefined, mode);
+        mode === 'full' ? qualityPolicy : undefined, mode, reportIdentity);
     finalReportMarkdown += localize("- **驗證目標**: {0}\n", mode === 'execution' ? localize("執行驗證（Trace、覆蓋率、突變與品質審查延後）") : localize("完整品質驗證"));
     const tierHistory: TierHistory = { requested: userTierSetting, initial: resolvedTier, rounds: [], transitions: [] };
     if (mode === 'full') { journal.knowledge({ tierHistory }); }
     const qualityAnalystSession = new QualityAnalystSession();
-    const writeReport = (body = finalReportMarkdown) => fs.writeFileSync(existingReport,
-        withOutcomeHeader(formatTierHistory(journal.snapshot()) + body, journal.snapshot()), 'utf8');
+    const writeReport = (body = finalReportMarkdown) => {
+        existingReport = writeTargetReports(sessionDir, reportIdentity, journal.sourceHash, journal.runId, journal.snapshot(), body);
+    };
     const importFixtures = currentImportFixtures();
     if (importFixtures) {
         fs.writeFileSync(path.join(sessionDir, 'import_fixtures.json'), JSON.stringify(importFixtures, null, 2), 'utf8');
@@ -1580,9 +1586,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const reason = localize("類別 {0} 的建構子需要 {1}，但找不到可驗證的 caller literal 設定。", className, requiredConstructorParams.join(', '));
             finalReportMarkdown += localize("## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：{0} 未產生測試，也未呼叫 LLM。\n", reason);
             throwIfExecutionCancelled();
+            journal.knowledge({ terminalStatus: 'stub-skipped', reason });
             writeReport();
             log(localize("[快速通道] ⏭️ {0} 已安全略過。", reason));
-            journal.knowledge({ terminalStatus: 'stub-skipped', reason });
             return;
         }
         const smokeAssertion = buildStubSmokeAssertion(astContext?.code || '');
@@ -1623,9 +1629,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += `\`\`\`python\n${smokeTest}\n\`\`\`\n`;
 
         throwIfExecutionCancelled();
+        journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false });
         writeReport();
         log(localize("[快速通道] ✅ Stub 函式 {0} 處理完成！Smoke Test 已寫入 {1}", params.funcName, testPath));
-        journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false });
         // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
         return;
     }
@@ -2227,15 +2233,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 }
             }
 
-            const isDeterministicTier1Output = rawCode.startsWith('[Tier 1 deterministic fallback]');
-            const generatedOutputTitle = isDeterministicTier1Output
-                ? localize("### 🧩 Tier 1 確定性備援產物")
-                : localize("### 🤖 LLM 原始輸出與思考過程");
-            const generatedOutputSummary = isDeterministicTier1Output
-                ? localize("點擊展開由已驗證行為觀測組裝的產物（非 LLM）")
-                : localize("點擊展開 AI 完整回應");
-            finalReportMarkdown += `${generatedOutputTitle}\n\n`;
-            finalReportMarkdown += `<details>\n<summary>${generatedOutputSummary}</summary>\n\n\`\`\`text\n${rawCode}\n\`\`\`\n\n</details>\n\n`;
+            // Reports retain validated test artifacts and diagnostic events, never full provider replies.
 
             let finalCode = sanitizedCode;
             
@@ -2330,7 +2328,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 log(localize("[行為觀測保底] 已保留 {0} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。", verifiedTrace.methodCount));
             }
 
-            recordRole('writer', 'candidate', { tier: currentTier, raw: rawCode, code: finalCode });
+            recordRole('writer', 'candidate', { tier: currentTier, responseHash: evidenceHash(rawCode),
+                responseCharacters: rawCode.length, code: finalCode });
             const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
                 code, failure, targetFuncName, astContext?.args || [], astContext?.code || targetCode,
                 astContext, targetImportModule, undefined,
@@ -2557,7 +2556,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 recordRole('repair-routing', 'selected', { action: currentTier > 1 ? 'tier-fallback' : 'stop-tier-fallback',
                     fromTier: currentTier, toTier: currentTier > 1 ? currentTier - 1 : currentTier });
             } else {
-                recordRole('writer', 'tier-failed', { tier: currentTier, reason: tierErr.message, raw: rawCode });
+                recordRole('writer', 'tier-failed', { tier: currentTier, reason: tierErr.message,
+                    responseHash: evidenceHash(rawCode), responseCharacters: rawCode.length });
             }
             if (currentTier > 1) {
                 const prevTier = currentTier;
@@ -2957,10 +2957,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             finalReportMarkdown += localize("**錯誤訊息**: {0}\n\n", message);
             if (stack && stack !== message) {
                 finalReportMarkdown += localize("**錯誤堆疊**:\n```\n{0}\n```\n\n", stack);
-            }
-            // 記錄 AI 原始輸出（如果有的話）
-            if (rawCode) {
-                finalReportMarkdown += localize("**AI 實際輸出內容（前 500 字元）**:\n```\n{0}\n```\n\n", rawCode.substring(0, 500));
             }
             writeReport();
             sidebarProvider.webview?.postMessage({

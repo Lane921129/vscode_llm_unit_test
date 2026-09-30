@@ -279,7 +279,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'openTestResult': {
                     const reportPath = typeof message.reportPath === 'string' ? message.reportPath : '';
-                    if (!reportPath || path.basename(reportPath) !== 'final_report.md' || !fs.existsSync(reportPath)) {
+                    if (!reportPath || !['final_report.md', 'workflow_report.md', 'failure_report.md'].includes(path.basename(reportPath)) || !fs.existsSync(reportPath)) {
                         vscode.window.showWarningMessage(localize("找不到此函式的測試結果報告。請先等待本次測試完成。"));
                         break;
                     }

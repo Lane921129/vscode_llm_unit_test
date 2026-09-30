@@ -65,7 +65,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         const passed = await run('pass');
         const englishReport = fs.readFileSync(path.join(passed.directory, 'final_report.md'), 'utf8');
         assert.match(englishReport, /## Final outcome: Execution verified/);
-        assert.match(englishReport, /Mutation was not run/);
+        assert.match(englishReport, /\*\*Mutation score\*\*: N\/A \(Not run\)/);
         assert.match(englishReport, /\*\*Target function\*\*: target/);
         assert.doesNotMatch(englishReport, /\*\*(?:目標檔案|測試函式|驗證目標)\*\*/);
         assert.equal(passed.knowledge.terminalStatus, 'execution-passed', JSON.stringify(passed.knowledge.lastFailure));

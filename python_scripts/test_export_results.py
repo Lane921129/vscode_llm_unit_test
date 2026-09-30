@@ -10,6 +10,21 @@ from python_scripts import export_results as tool
 
 
 class ResultExportTests(unittest.TestCase):
+    def test_skipped_workflows_are_not_missing_final_reports_but_real_targets_still_require_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            targets = []
+            for index, status in enumerate(['dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'failed', 'passed']):
+                folder = root / str(index)
+                folder.mkdir()
+                (folder / 'workflow_report.md').write_text('audit')
+                targets.append({'file': 'sample.py', 'target': str(index), 'terminalStatus': status,
+                                'reportDirectory': str(index)})
+            (root / 'batch_manifest.json').write_text(json.dumps({'targets': targets}))
+            self.assertEqual([item['target'] for item in tool.missing_reports(root)], ['3', '4'])
+            (root / '0/workflow_report.md').unlink()
+            self.assertEqual([item['target'] for item in tool.missing_reports(root)], ['0', '3', '4'])
+
     def test_zip_preserves_relative_paths_bytes_and_reports_missing_source_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary)

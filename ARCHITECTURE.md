@@ -4,6 +4,8 @@
 
 本頁描述目前工作區已接線的路徑，不表示 [完整完善計畫](docs/專案完善計畫_2026_09_21.md) 已全部完成。第一批 P0、Trace 觀測、突變／coverage 與總預算已交付；完成範圍、未關閉問題與正式測試結果以 [實作與驗收追蹤](docs/完善實作進度_2026_09_21.md) 為準。
 
+結果呈現由 `src/pipeline/targetReport.ts` 分流：`final_report.md` 只保留選定目標的結果、模型、失敗原因、保留測資及其覆蓋／突變；`workflow_report.md` 保留執行細節，失敗或曾失敗時另產生含完整流程的 `failure_report.md`。`batchJournal.ts` 的摘要只列已開始的非 Dummy／Stub 目標，完整清單留在 manifest／batch_workflow，批次 failure_report 連向各目標完整流程。`run_manifest.report` 保存新報告身分，scorecard 仍核對同一保留候選與政策證據，不從精簡 Markdown 推定通過。操作見 [結果與失敗報告](docs/結果與失敗報告.md)。
+
 ## 為什麼有 TypeScript 和 Python？
 
 - `src/`：在 VS Code 中執行，負責介面、模型請求、角色交接與報告。

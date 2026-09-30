@@ -31,6 +31,35 @@ def report(target_file, target_function, coverage, mutation, error=False, genera
 
 
 class FixtureScorecardTests(unittest.TestCase):
+    def test_concise_report_uses_bound_manifest_and_retained_evidence_not_markdown_maxima(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            report_path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            expected = report_fields(report_path)
+            manifest_path = report_path.with_name('run_manifest.json')
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['report'] = {'schemaVersion': 'target-report-v1', 'sourcePath': expected['target_file'],
+                                  'sourceFile': pathlib.Path(expected['target_file']).name,
+                                  'target': expected['target_function'], 'modelIdentity': expected['model_identity'],
+                                  'requestedTier': expected['requested_tier']}
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+            concise = (f"- **Target file**: {manifest['report']['sourceFile']}\n"
+                       f"- **Target function**: {expected['target_function']}\n"
+                       f"- **Model identity**: {expected['model_identity']}\n"
+                       '- **Coverage**: 1%\n- **Mutation score**: 2%\n')
+            report_path.write_text(concise, encoding='utf-8')
+            fields = report_fields(report_path)
+            self.assertFalse(fields['invalid_journal'])
+            self.assertEqual(fields, {**expected, 'target_file': manifest['report']['sourceFile']})
+            for field in ['sourcePath', 'sourceFile', 'modelIdentity', 'target']:
+                bad = copy.deepcopy(manifest)
+                bad['report'][field] = 'other-project-or-model'
+                manifest_path.write_text(json.dumps(bad), encoding='utf-8')
+                self.assertTrue(report_fields(report_path)['invalid_journal'], field)
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+            report_path.with_name('quality_baseline.json').unlink()
+            self.assertTrue(report_fields(report_path)['invalid_journal'])
+
     def test_english_report_preserves_scores_identity_failures_and_retained_tier(self):
         with tempfile.TemporaryDirectory() as root:
             path = pathlib.Path(root) / 'final_report.md'

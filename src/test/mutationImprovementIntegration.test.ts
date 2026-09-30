@@ -74,12 +74,23 @@ class Cases(unittest.TestCase):
         const state = JSON.parse(fs.readFileSync(path.join(output, 'function_knowledge.json'), 'utf8'));
         const events = fs.readFileSync(path.join(output, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         const report = fs.readFileSync(path.join(output, 'final_report.md'), 'utf8');
+        const failureReport = fs.readFileSync(path.join(output, 'failure_report.md'), 'utf8');
+        const writerEvents = events.filter(event => event.stage === 'writer' && event.status === 'candidate');
+        assert.ok(writerEvents.length > 0);
+        assert.ok(writerEvents.every(event => !Object.hasOwn(event.detail, 'raw')
+            && /^[a-f0-9]{64}$/.test(event.detail.responseHash) && event.detail.responseCharacters >= 0));
         assert.equal(fixer, 1, JSON.stringify({ state: state.terminalStatus, first: state.firstFailure, last: state.lastFailure }));
         assert.equal(state.tierHistory.transitions[0].from, 2);
         assert.equal(state.tierHistory.transitions[0].to, 1);
         assert.equal(state.tierHistory.rounds[1].start, 2);
-        assert.match(report, /Automatic fallback occurred: Yes.*Round 1: Tier 2 → 1/);
-        assert.match(report, /Currently retained candidate: Tier 2/);
+        assert.match(failureReport, /Automatic fallback occurred: Yes.*Round 1: Tier 2 → 1/);
+        assert.match(failureReport, /Currently retained candidate: Tier 2/);
+        assert.match(failureReport, /Full workflow \(event order\)/);
+        assert.doesNotMatch(report, /Automatic fallback|Role event|Semantic Analyst report/);
+        assert.match(report, /failure_report.md/);
+        assert.match(report, /### Test cases/);
+        assert.match(report, /### Mutation cases/);
+        assert.match(report, /89.47% \(17\/19\)/);
         assert.match(report, /## Final outcome: /);
         const measured = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
         assert.ok(measured.length >= 2, logs.join('\n'));

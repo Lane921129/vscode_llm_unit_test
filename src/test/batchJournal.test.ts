@@ -70,6 +70,7 @@ test('batch cancellation and discovery failures preserve pending work without cl
         assert.deepEqual(manifest.statusCounts, { running: 1, pending: 1 });
         assert.equal(manifest.complete, false);
         assert.equal(manifest.discoveryFailures[0].file, 'broken.py');
-        assert.match(fs.readFileSync(path.join(root, 'batch_summary.md'), 'utf8'), /無法掃描 broken.py/);
+        assert.doesNotMatch(fs.readFileSync(path.join(root, 'batch_summary.md'), 'utf8'), /broken.py/);
+        assert.match(fs.readFileSync(path.join(root, 'failure_report.md'), 'utf8'), /無法掃描 broken.py/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
