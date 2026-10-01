@@ -19,8 +19,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from import_fixtures import mutation_environment, read_plan as import_fixture_plan
+from mutation_operators_v2 import VERSION as OPERATOR_SET_VERSION_V2, iter_mutations
 
 
 COMPARISON_REPLACEMENTS = {
@@ -462,8 +464,33 @@ def trial_environment(temp_root, source_file):
     }, temp_root, source_file)
 
 
+def read_trial_result(path):
+    """Read the guarded runner's bounded report; never infer failures from text."""
+    try:
+        if path.stat().st_size > 512000:
+            return None
+        result = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(result, dict) or result.get('schemaVersion') != 'generated-test-result-v1'
+            or type(result.get('testsRun')) is not int or result['testsRun'] <= 0
+            or not isinstance(result.get('testFailures'), list) or len(result['testFailures']) > 1000):
+        return None
+    for failure in result['testFailures']:
+        if not isinstance(failure, dict) or failure.get('kind') not in ('failure', 'error', 'unexpected-success'):
+            return None
+        if failure.get('phase') == 'test':
+            identifier = failure.get('testId')
+            if not isinstance(identifier, str) or len(identifier) > 1024 or not all(part.isidentifier() for part in identifier.split('.')):
+                return None
+        elif failure.get('phase') != 'fixture-or-load':
+            return None
+    return result
+
+
 def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
-                        target_function=None, target_class=None, stage_timeout_seconds=None):
+                        target_function=None, target_class=None, stage_timeout_seconds=None,
+                        operator_version=OPERATOR_SET_VERSION_V2, workers=2, candidate_provider=None):
     """Measure selected mutants without treating incomplete execution as a kill.
 
     ``total``/``errors`` remain legacy display fields. Consumers must use the
@@ -471,6 +498,10 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     """
     if type(max_mutations) is not int or max_mutations < 0:
         raise ValueError('max_mutations must be a non-negative integer (zero selects all candidates)')
+    if type(workers) is not int or not 1 <= workers <= 4:
+        raise ValueError('workers must be an integer from 1 to 4')
+    if candidate_provider is None and operator_version not in (OPERATOR_SET_VERSION, OPERATOR_SET_VERSION_V2):
+        raise ValueError('Unsupported builtin operator version')
     for label, value in [('timeout_seconds', timeout_seconds), ('stage_timeout_seconds', stage_timeout_seconds)]:
         if value is None and label == 'timeout_seconds':
             raise ValueError('timeout_seconds must be a finite positive number')
@@ -491,7 +522,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         'schemaVersion': 1,
         'importFixtureId': (import_fixture_plan() or {}).get('id'),
         'engine': 'builtin',
-        'operatorSetVersion': OPERATOR_SET_VERSION,
+        'operatorSetVersion': operator_version,
+        'executionBackend': 'isolated-unittest-v1',
+        'workers': workers,
         'scopeVersion': FUNCTION_SCOPE_VERSION if target_function else MODULE_SCOPE_VERSION,
         'candidateSetId': None,
         'candidateIds': [],
@@ -523,40 +556,76 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     candidates = []
     original_ast = ast.dump(tree, include_attributes=False)
     normalized_source = ast.unparse(tree)
-    seen_variants = set()
-    for index, candidate in enumerate(mutation_candidates(tree, scope)):
-        if deadline is not None and time.monotonic() >= deadline:
-            result['counts']['available'] = None
-            result['diagnostic'] = 'Stage budget exhausted while enumerating mutation candidates; universe is unknown'
-            return result
-        variant = apply_mutation(tree, index, target_function, target_class)
-        ast.fix_missing_locations(variant)
-        variant_ast = ast.dump(variant, include_attributes=False)
-        if variant_ast == original_ast:
-            result['excluded']['noop'] += 1
-            continue
-        if variant_ast in seen_variants:
-            result['excluded']['duplicate'] += 1
-            continue
+    seen_variants, seen_ids = set(), set()
+    if candidate_provider is not None:
         try:
-            compile(variant, str(source_file), 'exec')
-        except (SyntaxError, TypeError, ValueError):
-            result['excluded']['invalid'] += 1
-            continue
-        seen_variants.add(variant_ast)
-        # Nested expressions can share the same start line/column and operator
-        # description. Bind identity to the actual changed AST as well, without
-        # changing the operator set or depending on the tests. This deliberately
-        # replaces the old colliding IDs; old candidate sets are not reused.
-        variant_hash = hashlib.sha256(variant_ast.encode('utf-8')).hexdigest()
-        identity = json.dumps([OPERATOR_SET_VERSION, result['scopeVersion'], source_hash, scope_name, candidate, variant_hash],
-                              sort_keys=True, separators=(',', ':'))
-        record = {**candidate, 'id': hashlib.sha256(identity.encode('utf-8')).hexdigest()}
-        mutant_source = ast.unparse(variant) + '\n'
-        code_change = mutation_code_change(normalized_source, mutant_source)
-        if code_change is not None:
-            record['codeChange'] = code_change
-        candidates.append((record, mutant_source))
+            provided = candidate_provider(tree, scope, source_hash, scope_name, result['scopeVersion'])
+            if not isinstance(provided, dict) or provided.get('engine') not in ('mutatest', 'mutmut', 'builtin'):
+                raise ValueError('Invalid candidate provider engine')
+            version = provided.get('operatorSetVersion')
+            if not isinstance(version, str) or not re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', version):
+                raise ValueError('Invalid candidate provider version')
+            result.update(engine=provided['engine'], operatorSetVersion=version)
+            excluded = provided.get('excluded', {})
+            if isinstance(excluded, dict):
+                for key in result['excluded']:
+                    if type(excluded.get(key)) is int and excluded[key] >= 0:
+                        result['excluded'][key] += excluded[key]
+            if isinstance(provided.get('engineVersion'), str) and re.fullmatch(r'[a-zA-Z0-9_.+-]{1,100}', provided['engineVersion']):
+                result['engineVersion'] = provided['engineVersion']
+            candidate_stream = ((record, ast.parse(source), source) for record, source in provided['candidates'])
+        except Exception as error:
+            result['counts']['available'] = None
+            result['diagnostic'] = 'Candidate provider failed: ' + type(error).__name__
+            reason_code = getattr(error, 'reason_code', None)
+            if isinstance(reason_code, str) and re.fullmatch(r'[a-z0-9-]{1,100}', reason_code):
+                result['diagnosticCode'] = reason_code
+            return result
+    elif operator_version == OPERATOR_SET_VERSION:
+        candidate_stream = ((candidate, apply_mutation(tree, index, target_function, target_class), None)
+                            for index, candidate in enumerate(mutation_candidates(tree, scope)))
+    else:
+        candidate_stream = ((candidate, variant, None) for candidate, variant in iter_mutations(tree, scope))
+    try:
+        for candidate, variant, provided_source in candidate_stream:
+            if deadline is not None and time.monotonic() >= deadline:
+                result['counts']['available'] = None
+                result['diagnostic'] = 'Stage budget exhausted while enumerating mutation candidates; universe is unknown'
+                return result
+            ast.fix_missing_locations(variant)
+            variant_ast = ast.dump(variant, include_attributes=False)
+            if variant_ast == original_ast:
+                result['excluded']['noop'] += 1
+                continue
+            if variant_ast in seen_variants:
+                result['excluded']['duplicate'] += 1
+                continue
+            try:
+                compile(variant, str(source_file), 'exec')
+            except (SyntaxError, TypeError, ValueError):
+                result['excluded']['invalid'] += 1
+                continue
+            seen_variants.add(variant_ast)
+            variant_hash = hashlib.sha256(variant_ast.encode('utf-8')).hexdigest()
+            identity = json.dumps([operator_version, result['scopeVersion'], source_hash, scope_name, candidate, variant_hash],
+                                  sort_keys=True, separators=(',', ':'))
+            record = {**candidate, 'id': candidate['id'] if candidate_provider is not None else hashlib.sha256(identity.encode('utf-8')).hexdigest()}
+            for runtime_field in ('status', 'output', 'killedBy', 'testFailures', 'elapsedMs'):
+                record.pop(runtime_field, None)
+            if not isinstance(record['id'], str) or not re.fullmatch(r'[a-f0-9]{64}', record['id']) or record['id'] in seen_ids:
+                raise ValueError('Candidate provider IDs must be distinct SHA-256 values')
+            seen_ids.add(record['id'])
+            mutant_source = provided_source if provided_source is not None else ast.unparse(variant) + '\n'
+            # Always derive display evidence from the actual executed variant.
+            code_change = mutation_code_change(normalized_source, ast.unparse(variant))
+            record.pop('codeChange', None)
+            if code_change is not None:
+                record['codeChange'] = code_change
+            candidates.append((record, mutant_source))
+    except Exception as error:
+        result['counts']['available'] = None
+        result['diagnostic'] = 'Candidate enumeration failed: ' + type(error).__name__
+        return result
     result['counts']['available'] = len(candidates)
     result['candidateIds'] = [candidate['id'] for candidate, _ in candidates]
     result['candidateSetId'] = hashlib.sha256('\n'.join(sorted(result['candidateIds'])).encode('ascii')).hexdigest()
@@ -588,8 +657,10 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             if budget_exhausted():
                 result['baseline_output'] = 'Stage budget exhausted before baseline'
                 return result
+            baseline_result_path = baseline_root / 'runner-result.json'
             baseline = subprocess.run(
-                [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem],
+                [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem,
+                 '--result-json', str(baseline_result_path)],
                 cwd=baseline_root,
                 env=baseline_environment,
                 capture_output=True,
@@ -598,11 +669,13 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 errors='replace',
                 timeout=trial_timeout(),
             )
-            if baseline.returncode:
+            baseline_result = read_trial_result(baseline_result_path)
+            if (baseline.returncode or baseline_result is None or baseline_result.get('status') != 'passed'
+                    or baseline_result['testFailures']):
                 result.update({
                     'total': 0,
                     'baseline_passed': False,
-                    'baselineStatus': 'error' if baseline.returncode == 86 else 'failed',
+                    'baselineStatus': 'error' if baseline.returncode == 86 or baseline_result is None else 'failed',
                     'baseline_output': (baseline.stdout + baseline.stderr).strip()[-500:],
                     'mutants': [],
                 })
@@ -630,16 +703,27 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         result['baselineStatus'] = 'passed'
         result['mutants'] = [{**candidate, 'status': 'NOT_RUN', 'output': ''} for candidate, _ in candidates]
 
-        for index, (candidate, mutant_source) in enumerate(candidates):
+        def execute_candidate(index):
             if budget_exhausted():
-                break
+                return None
+            candidate, mutant_source = candidates[index]
+            trial_started = time.monotonic()
             mutant_root = temp_root / f'mutant_{index:04d}'
-            mutant_test = prepare_trial_directory(source_file, snapshot_test, mutant_root, mutant_source)
-            mutant_environment = trial_environment(mutant_root, source_file)
+            try:
+                mutant_test = prepare_trial_directory(source_file, snapshot_test, mutant_root, mutant_source)
+                mutant_environment = trial_environment(mutant_root, source_file)
+            except (OSError, ValueError) as error:
+                return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
+                        'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
+            if budget_exhausted():
+                return None
+            trial_result_path = mutant_root / 'runner-result.json'
+            detail = None
 
             try:
                 completed = subprocess.run(
-                    [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), mutant_test.stem],
+                    [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), mutant_test.stem,
+                     '--result-json', str(trial_result_path)],
                     cwd=mutant_root,
                     env=mutant_environment,
                     capture_output=True,
@@ -650,7 +734,14 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 )
                 # A forbidden external operation is missing test isolation,
                 # never proof that an assertion killed the mutant.
-                status = 'SURVIVED' if completed.returncode == 0 else 'KILLED' if completed.returncode == 1 else 'ERROR'
+                detail = read_trial_result(trial_result_path)
+                status = 'ERROR'
+                if detail is not None:
+                    if completed.returncode == 0 and detail.get('status') == 'passed' and not detail['testFailures']:
+                        status = 'SURVIVED'
+                    elif (completed.returncode == 1 and detail.get('status') == 'failed' and detail['testFailures']
+                          and all(item['phase'] == 'test' for item in detail['testFailures'])):
+                        status = 'KILLED'
                 output = (completed.stdout + completed.stderr).strip()[-500:]
             except subprocess.TimeoutExpired as error:
                 status = 'TIMEOUT'
@@ -659,29 +750,65 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 status = 'ERROR'
                 output = str(error)
 
-            record = {**candidate, 'status': status, 'output': output}
+            record = {**candidate, 'status': status, 'output': output,
+                      'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
+            if status == 'KILLED':
+                record['killedBy'] = sorted({item['testId'] for item in detail['testFailures']})
+                record['testFailures'] = detail['testFailures']
+            return record
+
+        def save_record(index, record):
+            if record is None:
+                return
             result['mutants'][index] = record
             result['counts']['executed'] += 1
             result['counts']['notRun'] -= 1
-            result['counts'][{'KILLED': 'killed', 'SURVIVED': 'survived', 'TIMEOUT': 'timeout', 'ERROR': 'error'}[status]] += 1
+            result['counts'][{'KILLED': 'killed', 'SURVIVED': 'survived', 'TIMEOUT': 'timeout', 'ERROR': 'error'}[record['status']]] += 1
+
+        # Only workers concurrent ordinary child processes; do not detach or
+        # create a new process group. runSpawn owns cancellation of this whole
+        # process tree (taskkill /T on Windows, group kill on POSIX).
+        if workers == 1:
+            for index in range(len(candidates)):
+                if budget_exhausted():
+                    break
+                save_record(index, execute_candidate(index))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pending = {}
+                next_index = 0
+                while pending or next_index < len(candidates):
+                    while len(pending) < workers and next_index < len(candidates) and not budget_exhausted():
+                        pending[pool.submit(execute_candidate, next_index)] = next_index
+                        next_index += 1
+                    if not pending:
+                        break
+                    completed_futures, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in completed_futures:
+                        index = pending.pop(future)
+                        save_record(index, future.result())
     counts = result['counts']
     result.update(killed=counts['killed'], survived=counts['survived'], errors=counts['error'])
     result['scoreAvailable'] = bool(counts['selected'] and counts['notRun'] == 0 and counts['error'] == 0 and counts['timeout'] == 0)
     result['status'] = ('failed' if counts['error'] else 'no-candidates' if counts['available'] == 0
                         else 'complete' if result['scoreAvailable'] and counts['selected'] == counts['available'] else 'partial')
+    result['elapsedMs'] = max(0, round((time.monotonic() - started) * 1000))
     return result
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class] [stage_timeout_seconds]'}))
+        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class] [stage_timeout_seconds] [workers] [operator_version]'}))
         sys.exit(2)
     maximum = int(sys.argv[3]) if len(sys.argv) >= 4 else 30
     timeout = float(sys.argv[4]) if len(sys.argv) >= 5 else 10
     function_name = sys.argv[5] if len(sys.argv) >= 6 and sys.argv[5] else None
     class_name = sys.argv[6] if len(sys.argv) >= 7 and sys.argv[6] else None
     stage_timeout = float(sys.argv[7]) if len(sys.argv) >= 8 else None
+    workers = int(sys.argv[8]) if len(sys.argv) >= 9 else 2
+    operator_version = sys.argv[9] if len(sys.argv) >= 10 else OPERATOR_SET_VERSION_V2
     print(json.dumps(
-        run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name, stage_timeout),
+        run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name, stage_timeout,
+                            operator_version=operator_version, workers=workers),
         ensure_ascii=True
     ))

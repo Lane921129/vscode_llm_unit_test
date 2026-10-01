@@ -2,6 +2,20 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-01
+
+### 可選外部突變引擎、內建 v2 與隔離並行量測
+
+- 設定與中英文側欄新增 `llmUnitTest.mutationEngine`（builtin／Mutatest）及 `llmUnitTest.mutationWorkers`（1–4，預設 2）；單檔與批次共用、記住選擇，執行中鎖定。Mutmut 明確標示尚未支援。外部引擎在模型請求前核對所選 Python、套件版本與 API，失敗停止並說明原因，不再靜默改用內建。
+- Mutatest 3.1.0 提供真實外部 AST 變異規則，搭配共用隔離執行器；採 AST-only 安裝 `python -m pip install --no-deps mutatest==3.1.0`，不啟動舊 CLI 或導入其舊 coverage 相依。其他版本尚未驗收；其連鎖比較只變第一個運算子的限制仍保留。
+- 內建新執行改用 `builtin-ast-v2`，增加數值鄰界、算術／比較／一元運算、字串、容器與索引變異；排除 docstring、巢狀 callable、default／decorator 與範圍外程式，保留 v1 歷史讀取及重建。全集先經 noop／AST 去重／編譯篩選，不同版本或集合不直接比較分數。
+- 每個 mutant 使用獨立目錄與 guarded unittest 子程序，並行共用階段 deadline 與父程序樹取消。新預設突變預算 60 秒，明確保存的自訂時間不覆蓋；未測／逾時／錯誤不得算 killed。
+- 新增結構化逐測試失敗歸因與耗時。只有實際方法失敗可記 KILLED；loader、fixture（含 asyncSetUp／fixture subTest）、背景錯誤、隔離阻擋、缺紀錄與零測試皆不算 killed。TypeScript 與 Python 以共享引擎版本契約核對，v2／外部 killed 缺歸因不得評分。
+- 最終報告保留原突變表及純文字程式碼對照表，另顯示實際引擎／規則版本與逐項失敗測試、耗時。被拒絕的外部來源／測資證據先保存再停止，避免錯誤被版本訊息掩蓋。
+- 同一份 22:13 BMI 保留測資唯讀重播：v2 96／96 完整量測、85 killed、11 survived（88.54%），2 workers 約 24.7 秒，無 timeout／error；來源／測資 hash 與原批次相同。舊 v1 為 19 候選，分母不同不宣稱分數退步；原始結果未改寫。
+- 驗證：隔離交付副本 Node 直接相關 60／60；Python 直接相關 67／67（含真實 Mutatest 13 項及背景錯誤分類補強）；型別、lint、生產建置、Webview 語法、提交範圍密鑰掃描及差異檢查通過。真實 Python／coverage／內建 v2 與 Mutatest 完整生成整合使用固定模型回覆，並驗證不可用引擎在生成前停止、錯誤 hash 拒絕、候選改善／回退與批次重讀。
+- 本次依加速開發安排未跑全套回歸；尚未重新執行實驗室模型／雲端 API，不將固定回覆整合或舊測資重播當作模型新一輪通過。原有未提交型態／Trace 工作保留，未混入本次提交。
+
 ## 2026-09-30
 
 ### 突變對照改為簡單文字格式

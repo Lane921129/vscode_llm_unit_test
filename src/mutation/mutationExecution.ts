@@ -1,6 +1,7 @@
 import { pythonToolPath } from '../pipeline/pythonTools';
 
 export type ExternalMutationEngine = 'mutatest' | 'mutmut';
+export type MutationEngineSelection = ExternalMutationEngine | 'builtin';
 
 export interface ExternalMutationExecution {
     command: string;

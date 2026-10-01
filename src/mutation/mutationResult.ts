@@ -4,7 +4,10 @@ import { ExternalMutationEngine } from './mutationExecution';
 
 export type MutationEngine = ExternalMutationEngine | 'builtin';
 export type MutationOutcome = 'KILLED' | 'SURVIVED' | 'TIMEOUT' | 'ERROR' | 'NOT_RUN';
-export const BUILTIN_MUTATION_OPERATOR_SET_VERSION = 'builtin-ast-v1';
+export const BUILTIN_MUTATION_OPERATOR_SET_VERSION = 'builtin-ast-v2';
+const mutationEngines = require('../../contracts/mutation-engines-v1.json') as {
+    executionBackend: string; operatorSets: Record<MutationEngine, string[]>;
+};
 export const FUNCTION_BODY_MUTATION_SCOPE_VERSION = 'selected-function-body-v1';
 export const MODULE_MUTATION_SCOPE_VERSION = 'module-ast-v1';
 export interface MutationScope {
@@ -48,6 +51,8 @@ export interface MutationRecord {
     output?: string;
     /** Display-only snapshot from the actual AST variant, never a test oracle. */
     codeChange?: MutationCodeChange;
+    killedBy?: string[];
+    elapsedMs?: number;
 }
 export interface MutationRun extends MutationContext {
     schemaVersion: 1;
@@ -66,6 +71,10 @@ export interface MutationRun extends MutationContext {
     scoreAvailable: boolean;
     diagnostic?: string;
     excluded?: { noop: number; duplicate: number; invalid: number };
+    executionBackend?: string;
+    engineVersion?: string;
+    workers?: number;
+    elapsedMs?: number;
 }
 
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
@@ -105,8 +114,13 @@ function countStatus(counts: MutationCounts, baselinePassed: boolean): Pick<Muta
 
 /** Parse a fresh result; malformed or stale evidence never inherits an old score. */
 export function parseBuiltinMutationRun(raw: unknown, context: MutationContext): MutationRun {
+    return parseIsolatedMutationRun(raw, context, 'builtin');
+}
+
+export function parseIsolatedMutationRun(raw: unknown, context: MutationContext, expectedEngine: MutationEngine): MutationRun {
     const result = readBuiltinMutationRun(raw, context);
-    return result.ok ? result.run : failedMutationRun('builtin', context, result.reason);
+    if (result.ok && result.run.engine === expectedEngine) { return result.run; }
+    return failedMutationRun(expectedEngine, context, result.ok ? 'Mutation engine does not match the selected engine' : result.reason);
 }
 
 function readBuiltinMutationRun(raw: unknown, context: MutationContext): MutationReadResult {
@@ -115,9 +129,14 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
     if (typeof raw === 'string') {
         try { value = JSON.parse(raw); } catch { return fail('Invalid builtin mutation JSON'); }
     }
-    if (!record(value) || value.schemaVersion !== 1 || value.engine !== 'builtin') { return fail('Unsupported builtin mutation contract'); }
+    if (!record(value) || value.schemaVersion !== 1 || (typeof value.engine !== 'string' || !['builtin', 'mutatest', 'mutmut'].includes(value.engine))) {
+        return fail('Unsupported isolated mutation contract');
+    }
+    const engine = value.engine as MutationEngine;
     const scopeVersion = context.targetScope.kind === 'function' ? FUNCTION_BODY_MUTATION_SCOPE_VERSION : MODULE_MUTATION_SCOPE_VERSION;
-    if (value.operatorSetVersion !== BUILTIN_MUTATION_OPERATOR_SET_VERSION
+    if (typeof value.operatorSetVersion !== 'string' || !mutationEngines.operatorSets[engine].includes(value.operatorSetVersion)
+        || (value.operatorSetVersion !== 'builtin-ast-v1' && value.executionBackend !== mutationEngines.executionBackend)
+        || (engine === 'mutatest' && value.engineVersion !== '3.1.0')
         || value.scopeVersion !== scopeVersion) {
         return fail('Unsupported mutation operator set or scope version');
     }
@@ -169,7 +188,15 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         seen.add(item.id);
         if (item.id !== candidateIds[mutants.length]) { return fail('Selected mutant does not match the enumerated candidate universe'); }
         observedCounts[item.status as MutationOutcome]++;
-        mutants.push({ ...item, codeChange: readMutationCodeChange(item.codeChange) } as unknown as MutationRecord);
+        const killedBy = Array.isArray(item.killedBy) && item.killedBy.length <= 1000
+            && item.killedBy.every(id => typeof id === 'string' && id.length > 0 && id.length <= 1024 && !/[\r\n\0]/.test(id))
+            && new Set(item.killedBy).size === item.killedBy.length ? item.killedBy as string[] : undefined;
+        if ((item.killedBy !== undefined && (!killedBy || (item.status !== 'KILLED' && killedBy.length)))
+            || (value.operatorSetVersion !== 'builtin-ast-v1' && item.status === 'KILLED' && !killedBy?.length)) {
+            return fail('Invalid mutation failure attribution');
+        }
+        mutants.push({ ...item, codeChange: readMutationCodeChange(item.codeChange), killedBy,
+            elapsedMs: integer(item.elapsedMs) ? item.elapsedMs : undefined } as unknown as MutationRecord);
     }
     if (value.baseline_passed && (observedCounts.KILLED !== counts.killed || observedCounts.SURVIVED !== counts.survived
         || observedCounts.TIMEOUT !== counts.timeout || observedCounts.ERROR !== counts.error || observedCounts.NOT_RUN !== counts.notRun)) {
@@ -182,8 +209,12 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         return fail('Invalid excluded mutation counts');
     }
     return { ok: true, run: { ...context, targetScope: { ...value.targetScope } as unknown as MutationScope,
-        schemaVersion: 1, engine: 'builtin', ...state, baselinePassed: value.baseline_passed,
-        operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION, scopeVersion,
+        schemaVersion: 1, engine, ...state, baselinePassed: value.baseline_passed,
+        operatorSetVersion: value.operatorSetVersion, scopeVersion,
+        executionBackend: value.executionBackend === mutationEngines.executionBackend ? value.executionBackend : undefined,
+        engineVersion: typeof value.engineVersion === 'string' && /^[0-9][\w.+-]{0,60}$/.test(value.engineVersion) ? value.engineVersion : undefined,
+        workers: integer(value.workers) && value.workers >= 1 && value.workers <= 4 ? value.workers : undefined,
+        elapsedMs: integer(value.elapsedMs) ? value.elapsedMs : undefined,
         candidateSetId: value.candidateSetId as string | null, candidateIds: [...candidateIds],
         baselineStatus: value.baselineStatus as MutationRun['baselineStatus'], counts, mutants,
         excluded: { ...value.excluded } as MutationRun['excluded'],
@@ -191,14 +222,14 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
 }
 
 /** Validate persisted camelCase evidence against caller-owned identity, without
- * confusing a valid failed measurement with malformed tool output. External
- * reports lack a verified persisted full-universe contract and stay unscored. */
+ * confusing a valid failed measurement with malformed tool output. Legacy native external
+ * reports remain unscored; verified adapters use the same full-universe contract. */
 export function readStoredMutationRun(raw: unknown, context: MutationContext): MutationReadResult {
     let value: unknown = raw;
     if (typeof value === 'string') {
         try { value = JSON.parse(value); } catch { return { ok: false, reason: 'Invalid stored mutation JSON' }; }
     }
-    if (!record(value) || value.engine !== 'builtin' || typeof value.baselinePassed !== 'boolean'
+    if (!record(value) || (typeof value.engine !== 'string' || !['builtin', 'mutatest', 'mutmut'].includes(value.engine)) || typeof value.baselinePassed !== 'boolean'
         || !record(value.counts)) { return { ok: false, reason: 'Unsupported stored mutation contract' }; }
     return readBuiltinMutationRun({ ...value, baseline_passed: value.baselinePassed,
         scope_found: value.counts.available !== null }, context);

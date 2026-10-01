@@ -43,7 +43,7 @@ import {
 import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from './validation/scenarioIdentity';
 import { dispatchTestRules } from './pipeline/testRuleDispatcher';
 import { pythonToolPath } from './pipeline/pythonTools';
-import { extractFunctionsWithAst, findPythonFilesInDir, detectMutationEngine } from './utils/utils';
+import { extractFunctionsWithAst, findPythonFilesInDir } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
@@ -71,8 +71,9 @@ import { ImportSetupController } from './environment/importSetupController';
 import { inspectProjectImports, ImportCheckTarget } from './environment/projectImportCheck';
 import { ImportFixtureRule } from './pipeline/importFixtures';
 import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
-import { buildExternalMutationExecution, externalIsolationVerified } from './mutation/mutationExecution';
-import { MutationRun, MutationContext, parseBuiltinMutationRun, parseExternalMutationRun,
+import { MutationEngineSelection } from './mutation/mutationExecution';
+import { SelectedMutationEngine, selectMutationEngine, mutationArguments } from './mutation/mutationSelection';
+import { MutationRun, MutationContext, parseIsolatedMutationRun,
     mutationScore as measuredMutationScore } from './mutation/mutationResult';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
@@ -287,6 +288,8 @@ interface AnalysisParams {
     ollamaUrl?: string;
     maxLoops: number;
     mutpyTimeout?: number;
+    mutationEngine?: MutationEngineSelection;
+    mutationWorkers?: number;
     timeoutSeconds: number;
     outputPath: string;
     customUrl?: string;
@@ -406,7 +409,9 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.filePath),
-                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')) };
+                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')),
+                mutationEngine: params.mutationEngine ?? vscode.workspace.getConfiguration('llmUnitTest').get<MutationEngineSelection>('mutationEngine', 'builtin'),
+                mutationWorkers: params.mutationWorkers ?? vscode.workspace.getConfiguration('llmUnitTest').get<number>('mutationWorkers', 2) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 if (runParams.funcName) {
                     await executeSingleFileAnalysis(runParams, log, view);
@@ -443,7 +448,9 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const paramsWithPython = { ...params, pythonExecutable: configuredPythonForResource(params.batchPath, params.batchPath),
-                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')) };
+                validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')),
+                mutationEngine: params.mutationEngine ?? vscode.workspace.getConfiguration('llmUnitTest').get<MutationEngineSelection>('mutationEngine', 'builtin'),
+                mutationWorkers: params.mutationWorkers ?? vscode.workspace.getConfiguration('llmUnitTest').get<number>('mutationWorkers', 2) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 const projectName = path.basename(runParams.batchPath);
                 const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,
@@ -1331,7 +1338,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let existingReport = path.join(reportRoot, 'final_report.md');
     const reportIdentity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: params.filePath,
         sourceFile: path.relative(projectRoot, params.filePath).replace(/\\/g, '/'),
-        target: params.funcName || 'file', modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: userTierSetting };
+        target: params.funcName || 'file', modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: userTierSetting,
+        requestedMutationEngine: params.mutationEngine || 'builtin', mutationWorkers: params.mutationWorkers ?? 2 };
 
     // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
     // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
@@ -1473,6 +1481,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         roleQualification: roleQualification || null });
     if (!preflight) { await checkEnvironment(astContext); }
     const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
+    let mutationSelection: SelectedMutationEngine | undefined;
+    if (mode === 'full') {
+        try {
+            mutationSelection = await selectMutationEngine(params.mutationEngine, params.mutationWorkers,
+                args => runSpawn(pythonExecutable, args, { timeout: 10000 }));
+            journal.knowledge({ mutationSelection });
+            recordRole('mutation-engine', 'selected', mutationSelection);
+            log(localize('[突變引擎] 指定 {0}；使用 {1}（{2}），並行數 {3}。',
+                mutationSelection.requested, mutationSelection.actual, mutationSelection.operatorSetVersion, mutationSelection.workers));
+        } catch (error) {
+            recordRole('mutation-engine', 'failed', { requested: params.mutationEngine || 'builtin', category: 'environment',
+                reason: error instanceof AnalysisStageError ? error.message : localize('外部突變引擎預檢失敗，請核對所選 Python、套件版本與平台。') });
+            throw error;
+        }
+    }
+
 
     if (mode === 'execution') {
         if (!astContext || !params.funcName) {
@@ -2601,141 +2625,40 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     } // end while (currentTier >= 1)
 
 
-            // 動態偵測 mutation engine；無外部工具時使用安全的 AST 後備引擎。
-            let engine: 'mutatest' | 'mutmut' | 'builtin' = params.funcName || importFixtures ? 'builtin' : 'mutatest';
-            let pyVer = '';
-            // Native adapters currently certify module scope only. Selected functions
-            // must use the engine that can prove the exact qualified scope.
-            if (!params.funcName && !importFixtures) {
-            try {
-                // 取得 Python 版本
-                const { stdout: pyVerRaw } = await runSpawn(pythonExecutable, ['--version'], {
-                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-                });
-                pyVer = pyVerRaw.trim().replace('Python ', '');
-                const preferredEngine = detectMutationEngine(pyVer);
-                if (!preferredEngine) {
-                    engine = 'builtin';
-                    log(localize("[系統] Python {0} 的原生環境沒有相容的外部突變工具，使用內建 AST 基本突變引擎。建議在 WSL 或 Python 3.11 安裝完整引擎以取得更廣的突變覆蓋。", pyVer));
-                } else if (preferredEngine === 'mutmut') {
-                    log(localize("[系統] 偵測到 Python {0}，建議引擎：{1}", pyVer, preferredEngine));
-                    // Python 3.12+ uses mutmut because mutatest requires coverage < 6.
-                    const mutmutCheck = await runSpawn(pythonExecutable, ['-m', 'mutmut', '--version'], {});
-                    if (mutmutCheck.code === 0) {
-                        engine = 'mutmut';
-                        log(localize("[系統] mutmut 可用，使用 mutmut 進行突變測試。"));
-                    } else {
-                        engine = 'mutatest';
-                        log(localize("[系統] mutmut 不可用，退回使用 mutatest。"));
-                    }
-                } else {
-                    log(localize("[系統] 偵測到 Python {0}，建議引擎：{1}", pyVer, preferredEngine));
-                    // Windows 或 Python < 3.12 優先使用 mutatest
-                    const mutatestCheck = await runSpawn(pythonExecutable, ['-c', 'from mutatest.cli import cli_main'], {});
-                    if (mutatestCheck.code === 0) {
-                        engine = 'mutatest';
-                        log(localize("[系統] mutatest 可用，使用 mutatest 進行突變測試。"));
-                    } else {
-                        const mutmutCheck = await runSpawn(pythonExecutable, ['-m', 'mutmut', '--version'], {});
-                        if (mutmutCheck.code === 0) {
-                            engine = 'mutmut';
-                            log(localize("[系統] mutatest 不可用，改用 mutmut。"));
-                        } else {
-                            log(localize("[系統] mutatest/mutmut 均不可用，使用內建 AST 基本突變引擎。"));
-                            engine = 'builtin';
-                        }
-                    }
-                }
-            } catch (e) {
-                engine = 'builtin';
-                log(localize("[系統] 無法取得 Python 版本或外部突變工具狀態，使用內建 AST 基本突變引擎。"));
-            }
-            }
-
-            log(localize("[{0}] 正在建構突變測試指令...", engine));
+            const selectedMutation = mutationSelection!;
+            const engine = selectedMutation.actual;
             const mutationTimeoutSeconds = normalizeExecutionSettings(params).mutpyTimeout;
-            log(localize("[{0}] 正式啟動分析 (突變階段超時限制: {1}秒) ... 這可能會花費數十秒，請稍候！", engine, mutationTimeoutSeconds));
-
-            if (isExecutionCancelled()) {throw new Error(localize("使用者強制中止"));}
-
-            let mutationRun: MutationRun;
-            let noMutationCandidates = false;
-            let mutpyResult: string;
+            throwIfExecutionCancelled();
             const measuredCandidate = checkpoints.executable;
             if (!measuredCandidate || evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
-                throw new AnalysisStageError('validation', 'candidate-changed', localize("測試檔已改變，不能沿用先前執行結果進行突變測量。"));
+                throw new AnalysisStageError('validation', 'candidate-changed', localize('測試檔已改變，不能沿用先前執行結果進行突變測量。'));
             }
             const mutationContext: MutationContext = { sourcePath: params.filePath,
                 sourceHash: journal.sourceHash, testHash: measuredCandidate.codeHash,
                 targetScope: { kind: params.funcName ? 'function' : 'module', qualifiedName: params.funcName || 'module' },
                 stageTimeoutSeconds: mutationTimeoutSeconds };
-            if (engine === 'builtin') {
-                const fallbackScript = pythonToolPath('mutation');
-                const perMutationTimeout = Math.min(5, mutationTimeoutSeconds);
-                const selectedClassName = (astContext?.class_name as string | undefined);
-                log(localize("[builtin] 正在隔離執行原始基線與完整突變集合；本階段預算 {0} 秒，完成後回報殺死／存活／逾時／錯誤數。", mutationTimeoutSeconds));
-                const fallbackRun = await runSpawn(
-                    pythonExecutable,
-                    [
-                        fallbackScript,
-                        params.filePath,
-                        testPath,
-                        '0',
-                        String(perMutationTimeout),
-                        targetFuncName || '',
-                        selectedClassName || '',
-                        String(mutationTimeoutSeconds)
-                    ],
-                    { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: (mutationTimeoutSeconds + 5) * 1000 }
-                );
-                if (fallbackRun.code !== 0) {
-                    throw new Error(localize("內建 AST 突變引擎執行失敗：{0}", (fallbackRun.stderr || fallbackRun.stdout).slice(0, 500)));
-                }
-                mutationRun = parseBuiltinMutationRun(fallbackRun.stdout, mutationContext);
-                mutpyResult = JSON.stringify(mutationRun, null, 2);
-            } else {
-                const targetDir = path.dirname(params.filePath);
-                const parentDir = path.dirname(targetDir);
-                const grandParentDir = path.dirname(parentDir);
-                const testDir = path.dirname(testPath);
-                const testModule = path.basename(testPath, '.py');
-                const isolationReport = path.join(testDir, `loop${currentLoop}_mutation_isolation.jsonl`);
-                const mutationPlan = buildExternalMutationExecution(
-                    engine,
-                    params.filePath,
-                    testModule,
-                    reportDir,
-                    undefined, // Engine multipliers are distinct from the UI's seconds budget.
-                    pythonExecutable,
-                    isolationReport
-                );
-                const mutationEnvironment = buildGeneratedTestEnvironment(process.env, [
-                    targetDir, parentDir, grandParentDir, testDir
-                ]);
-                const externalRun = await runSpawn(mutationPlan.command, mutationPlan.args, {
-                    cwd: testDir,
-                    env: mutationEnvironment,
-                    timeout: mutationTimeoutSeconds * 1000
-                });
-                if (isExecutionCancelled()) {
-                    throw new Error(localize("使用者強制中止"));
-                }
-                if (!fs.existsSync(isolationReport) || !externalIsolationVerified(fs.readFileSync(isolationReport, 'utf8'))) {
-                    throw new AnalysisStageError('mutation', 'mutation-isolation',
-                        localize("突變測試缺少完整隔離執行證據，或觸發未隔離操作；不接受引擎分數。"));
-                }
-                if (externalRun.code !== 0) {
-                    mutpyResult = localize("[{0} 系統錯誤訊息]\n結束碼: {1}\n[Stderr]\n{2}\n[Stdout]\n{3}", engine, externalRun.code ?? 'unknown', externalRun.stderr, externalRun.stdout);
-                } else {
-                    mutpyResult = externalRun.stdout || externalRun.stderr || localize("無輸出內容");
-                }
-                const nativeReport = `${reportDir}.rst`;
-                mutationRun = parseExternalMutationRun(engine,
-                    engine === 'mutatest' && fs.existsSync(nativeReport) ? fs.readFileSync(nativeReport, 'utf8') : mutpyResult,
-                    externalRun.code, { ...mutationContext, baselinePassed: true, isolationVerified: true });
+            recordRole('mutation', 'started', { engine, operatorSetVersion: selectedMutation.operatorSetVersion,
+                workers: selectedMutation.workers, stageTimeoutSeconds: mutationTimeoutSeconds });
+            log(localize('[{0}] 正在隔離執行完整突變集合；本階段預算 {1} 秒，並行數 {2}。',
+                engine, mutationTimeoutSeconds, selectedMutation.workers));
+            const mutationExecution = await runSpawn(pythonExecutable,
+                mutationArguments(selectedMutation, params.filePath, testPath, targetFuncName || '',
+                    astContext?.class_name || '', mutationTimeoutSeconds),
+                { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: (mutationTimeoutSeconds + 5) * 1000 });
+            throwIfExecutionCancelled();
+            if (mutationExecution.code !== 0) {
+                throw new AnalysisStageError('mutation', 'mutation-execution',
+                    localize('突變引擎 {0} 執行失敗；已停止，不改用其他引擎。', engine));
             }
-
+            let mutationRun: MutationRun = parseIsolatedMutationRun(mutationExecution.stdout, mutationContext, engine);
+            // Persist rejected evidence before any gate can stop this round.
             fs.writeFileSync(path.join(loopDir, `loop${currentLoop}_mutation.json`), JSON.stringify(mutationRun, null, 2), 'utf8');
+            if (mutationRun.operatorSetVersion !== null && mutationRun.operatorSetVersion !== selectedMutation.operatorSetVersion) {
+                journal.knowledge({ latestMutation: mutationRun });
+                throw new AnalysisStageError('mutation', 'mutation-execution', localize('突變規則版本與預檢不一致；不接受量測結果。'));
+            }
+            let noMutationCandidates = false;
+            const mutpyResult = JSON.stringify(mutationRun, null, 2);
             if (!['complete', 'no-candidates'].includes(mutationRun.status)) {
                 journal.knowledge({ latestMutation: mutationRun });
                 throw new AnalysisStageError('mutation', 'mutation-execution',
@@ -2797,7 +2720,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 throw new AnalysisStageError('validation', 'candidate-changed', localize("測試檔在突變期間改變；保留先前已驗證快照。"));
             }
             recordRole('mutation', 'measured', { code: measuredCandidate.code,
-                score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps });
+                score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps,
+                engine: mutationRun.engine, operatorSetVersion: mutationRun.operatorSetVersion,
+                workers: mutationRun.workers, elapsedMs: mutationRun.elapsedMs });
             if (!reintroduced && !lostQuality && mutationScore >= bestScore) {
                 // Validate identities and persist the full snapshot before publishing any best* state.
                 const qualitySnapshot = checkpoints.saveQuality(measuredCandidate, mutationRun);

@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 
 DEFINITION = json.loads((Path(__file__).resolve().parent.parent / 'contracts' / 'quality-policy-v1.json').read_text(encoding='utf-8'))
+MUTATION_ENGINES = json.loads((Path(__file__).resolve().parent.parent / 'contracts' / 'mutation-engines-v1.json').read_text(encoding='utf-8'))
 MAX_SAFE_INTEGER = 9007199254740991
 
 
@@ -132,9 +133,13 @@ def read_stored_mutation_run(raw, context):
             raw = json.loads(raw)
         except (ValueError, TypeError):
             return failure
-    if type(raw) is not dict or not _integer(raw.get('schemaVersion')) or raw.get('schemaVersion') != 1 or raw.get('engine') != 'builtin' \
+    if type(raw) is not dict or not _integer(raw.get('schemaVersion')) or raw.get('schemaVersion') != 1 \
+            or type(raw.get('engine')) is not str or raw['engine'] not in MUTATION_ENGINES['operatorSets'] \
             or type(raw.get('baselinePassed')) is not bool \
-            or any(raw.get(key) != value for key, value in DEFINITION['mutationVersions'].items()):
+            or raw.get('operatorSetVersion') not in MUTATION_ENGINES['operatorSets'][raw['engine']] \
+            or raw.get('scopeVersion') != DEFINITION['mutationVersions']['scopeVersion'] \
+            or (raw['operatorSetVersion'] != 'builtin-ast-v1' and raw.get('executionBackend') != MUTATION_ENGINES['executionBackend']) \
+            or (raw['engine'] == 'mutatest' and raw.get('engineVersion') != '3.1.0'):
         return failure
     if any(not _digest(raw.get(key)) or raw[key] != context.get(key) for key in ('sourceHash', 'testHash')) \
             or type(raw.get('sourcePath')) is not str or type(context.get('sourcePath')) is not str \
@@ -179,6 +184,15 @@ def read_stored_mutation_run(raw, context):
                 or type(item.get('status')) is not str or item['status'] not in outcomes \
                 or ('output' in item and type(item['output']) is not str):
             return failure
+        if raw['operatorSetVersion'] != 'builtin-ast-v1' and item['status'] == 'KILLED' and not item.get('killedBy'):
+            return failure
+        if 'killedBy' in item:
+            ids_of_failures = item['killedBy']
+            if type(ids_of_failures) is not list or len(ids_of_failures) > 1000 \
+                    or not all(type(name) is str and 0 < len(name) <= 1024 and not any(c in name for c in '\r\n\0') for name in ids_of_failures) \
+                    or len(set(ids_of_failures)) != len(ids_of_failures) \
+                    or (item['status'] != 'KILLED' and ids_of_failures):
+                return failure
         observed[item['status']] += 1
     if raw['baselinePassed'] and any(observed[outcome] != counts[key] for outcome, key in outcomes.items()):
         return failure

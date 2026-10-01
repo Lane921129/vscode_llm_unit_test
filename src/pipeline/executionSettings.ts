@@ -1,5 +1,5 @@
 export const DEFAULT_MAX_LOOPS = 5;
-export const DEFAULT_MUTATION_TIMEOUT_SECONDS = 20;
+export const DEFAULT_MUTATION_TIMEOUT_SECONDS = 60;
 
 function positiveInteger(value: unknown, fallback: number): number {
     return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : fallback;

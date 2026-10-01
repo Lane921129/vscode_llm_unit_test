@@ -10,13 +10,17 @@ test('all folder pickers restore independent selections after provider recreatio
     const originalLoad = Module._load;
     const stored = new Map<string, unknown>();
     const settings = new Map<string, unknown>([['projectPath', '/old-project'], ['outputPath', '/old-output']]);
+    const settingScopes = new Map<string, 'workspaceValue' | 'workspaceFolderValue'>();
+    const settingUpdates: Array<{ key: string; value: unknown; target: unknown }> = [];
     const dialogs: any[] = [], executed: any[] = [];
     const choices: Array<Array<{ fsPath: string }> | undefined> = [];
     const state = { get: (key: string) => stored.get(key), update: async (key: string, value: unknown) => { stored.set(key, value); } };
     const vscode = {
         commands: { executeCommand: async (...args: any[]) => { executed.push(args); } },
         workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => settings.get(key) ?? fallback,
-            update: async (key: string, value: unknown) => { settings.set(key, value); } }) },
+            inspect: (key: string) => settingScopes.has(key) ? { [settingScopes.get(key)!]: settings.get(key) } : {},
+            update: async (key: string, value: unknown, target: unknown) => { settings.set(key, value); settingUpdates.push({ key, value, target }); } }) },
+        ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
         env: { language: 'zh-tw' }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         window: { showOpenDialog: async (options: unknown) => { dialogs.push(options); return choices.shift(); },
             showInformationMessage: () => {}, showWarningMessage: () => {} }
@@ -33,10 +37,11 @@ test('all folder pickers restore independent selections after provider recreatio
             let receive!: (message: unknown) => Promise<void>;
             provider.findPythonFiles = async (folder: string) => { scans.push(folder); return []; };
             provider.fetchLocalModels = async () => [];
-            provider.resolveWebviewView({ webview: { options: {}, html: '',
+            const webview = { options: {}, html: '',
                 postMessage: (message: unknown) => { messages.push(message); },
-                onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } } });
-            return { receive, messages, scans };
+                onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } };
+            provider.resolveWebviewView({ webview });
+            return { receive, messages, scans, provider, webview };
         };
         let view = attach();
         await view.receive({ command: 'prepareProjectEnvironment', projectRoot: '/selected-project', filePath: '/stale.py' });
@@ -85,12 +90,43 @@ test('all folder pickers restore independent selections after provider recreatio
         await view.receive({ command: 'browseProjectFolder' });
         assert.equal(stored.get('llmUnitTest.lastFolders.v1.batch'), '/batches/new');
         assert.equal(stored.get('llmUnitTest.lastFolders.v1.output'), '/results/new');
+
+        await view.receive({ command: 'setMutationEngine', engine: 'mutatest' });
+        assert.deepEqual(settingUpdates.at(-1), { key: 'mutationEngine', value: 'mutatest', target: true });
+        settings.set('mutationWorkers', 2);
+        settingScopes.set('mutationWorkers', 'workspaceValue');
+        await view.receive({ command: 'setMutationWorkers', workers: 3 });
+        assert.deepEqual(settingUpdates.at(-1), { key: 'mutationWorkers', value: 3, target: 2 });
+        settingScopes.set('mutationEngine', 'workspaceFolderValue');
+        await view.receive({ command: 'setMutationEngine', engine: 'builtin' });
+        assert.deepEqual(settingUpdates.at(-1), { key: 'mutationEngine', value: 'builtin', target: 3 });
+        await view.receive({ command: 'setMutationEngine', engine: 'mutatest' });
+        view = attach();
+        assert.match(view.webview.html, /value="mutatest" selected/);
+        assert.match(view.webview.html, /id="mutation-workers" value="3"/);
+        for (const message of [{ command: 'setMutationEngine', engine: 'unknown' },
+            ...[0, 5, 1.5, '3', NaN].map(workers => ({ command: 'setMutationWorkers', workers }))]) {
+            const count = settingUpdates.length;
+            await view.receive(message);
+            assert.equal(settingUpdates.length, count);
+        }
+        view.provider.beginAnalysis('active');
+        const count = settingUpdates.length;
+        await view.receive({ command: 'setMutationEngine', engine: 'builtin' });
+        await view.receive({ command: 'setMutationWorkers', workers: 1 });
+        assert.equal(settingUpdates.length, count, 'active analysis cannot change persisted mutation settings');
+        view.provider.endAnalysis('active');
+        for (const command of ['startAnalysis', 'startBatchAnalysis']) {
+            await view.receive({ command, envType: 'local', mutationEngine: 'mutatest', mutationWorkers: 3 });
+            assert.equal(executed.at(-1)[1].mutationEngine, 'mutatest');
+            assert.equal(executed.at(-1)[1].mutationWorkers, 3);
+        }
     } finally {
         Module._load = originalLoad;
     }
 });
 
-test('rendered Webview sends 5 loops and 20 seconds for both run modes, including empty input fallback', () => {
+test('rendered Webview sends 5 loops and 60 seconds for both run modes, including empty input fallback', () => {
     setLanguage('zh-tw');
     const html = getWebviewContent(t);
     const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i)![1];
@@ -100,6 +136,9 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     }
     const modeOptions = html.match(/<select id="validation-mode">([\s\S]*?)<\/select>/)![1];
     elements.get('validation-mode').value = modeOptions.match(/value="([^"]+)" selected/)![1];
+    const engineOptions = html.match(/<select id="mutation-engine">([\s\S]*?)<\/select>/)![1];
+    elements.get('mutation-engine').value = engineOptions.match(/value="([^"]+)" selected/)![1];
+    assert.match(engineOptions, /value="mutmut"[^>]*disabled/);
     const messages: any[] = [];
     let receive!: (event: unknown) => void;
     const context = vm.createContext({
@@ -111,6 +150,23 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     assert.equal(elements.get('validation-mode').value, 'full');
     assert.match(elements.get('validation-scope').textContent, /包含突變測試/);
     assert.equal(elements.get('mutpy-timeout').disabled, false);
+    assert.equal(elements.get('mutation-engine').value, 'builtin');
+    assert.equal(elements.get('mutation-engine').disabled, false);
+    assert.equal(elements.get('mutation-workers').value, '2');
+    elements.get('mutation-engine').value = 'mutatest';
+    elements.get('mutation-engine').onchange({ target: { value: 'mutatest' } });
+    assert.equal(messages.at(-1).command, 'setMutationEngine');
+    assert.equal(messages.at(-1).engine, 'mutatest');
+    for (const value of ['', '0', '5', '1.5', 'NaN']) {
+        elements.get('mutation-workers').value = value;
+        elements.get('mutation-workers').onchange();
+        assert.equal(messages.at(-1).workers, 2);
+        assert.equal(elements.get('mutation-workers').value, '2');
+    }
+    elements.get('mutation-workers').value = '3';
+    elements.get('mutation-workers').onchange();
+    assert.equal(messages.at(-1).command, 'setMutationWorkers');
+    assert.equal(messages.at(-1).workers, 3);
     assert.equal(elements.get('max-loop').value, String(DEFAULT_MAX_LOOPS));
     assert.equal(elements.get('mutpy-timeout').value, String(DEFAULT_MUTATION_TIMEOUT_SECONDS));
     elements.get('env-type').value = 'local';
@@ -159,6 +215,8 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
         assert.match(elements.get('validation-scope').textContent, mode === 'full' ? /包含突變測試/ : /不執行突變/);
         assert.equal(elements.get('mutpy-timeout').disabled, mode === 'execution');
         assert.equal(elements.get('max-loop').disabled, mode === 'execution');
+        assert.equal(elements.get('mutation-engine').disabled, mode === 'execution');
+        assert.equal(elements.get('mutation-workers').disabled, mode === 'execution');
         if (empty) { elements.get('max-loop').value = ''; elements.get('mutpy-timeout').value = ''; }
         for (const file of ['/project/target.py', '']) {
             elements.get('file-select').value = file;
@@ -175,12 +233,20 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
             assert.equal(message.mutpyTimeout, DEFAULT_MUTATION_TIMEOUT_SECONDS);
             assert.equal(message.timeoutSeconds, 60);
             assert.equal(message.validationMode, mode, 'both single-file and batch requests carry the displayed mode');
+            assert.equal(message.mutationEngine, 'mutatest');
+            assert.equal(message.mutationWorkers, 3);
             assert.equal(elements.get('validation-mode').disabled, true, 'the active run cannot change modes');
+            assert.equal(elements.get('mutation-engine').disabled, true);
+            assert.equal(elements.get('mutation-workers').disabled, true);
             const count = messages.length;
+            elements.get('mutation-engine').onchange({ target: { value: 'builtin' } });
+            elements.get('mutation-workers').onchange();
             elements.get('btn-run').onclick();
             assert.equal(messages.length, count, 'running analysis prevents duplicate start');
             receive({ data: { command: 'analysisFinished' } });
             assert.equal(elements.get('validation-mode').disabled, false);
+            assert.equal(elements.get('mutation-engine').disabled, mode === 'execution');
+            assert.equal(elements.get('mutation-workers').disabled, mode === 'execution');
         }
     }
     elements.get('file-select').value = '/project/target.py';
@@ -189,16 +255,21 @@ test('rendered Webview sends 5 loops and 20 seconds for both run modes, includin
     receive({ data: { command: 'setFiles', projectPath: '/project', files: [{ path: '/project/a.py', name: 'a.py' }] } });
     assert.equal(elements.get('file-select').value, '');
     assert.equal(elements.get('func-select').disabled, true);
+    elements.get('mutpy-timeout').value = '20';
+    elements.get('btn-run').onclick();
+    assert.equal(messages.at(-1).mutpyTimeout, 20, 'an explicit mutation timeout is not replaced by the new default');
+    receive({ data: { command: 'analysisFinished' } });
     elements.get('project-path').value = '';
     elements.get('btn-run').onclick();
     assert.equal(messages.at(-1).command, 'appendLog');
 });
 
 test('backend commands use the same defaults for missing/invalid limits and preserve explicit overrides', () => {
-    assert.deepEqual(normalizeExecutionSettings({}), { maxLoops: 5, mutpyTimeout: 20 });
+    assert.deepEqual(normalizeExecutionSettings({}), { maxLoops: 5, mutpyTimeout: 60 });
     for (const invalid of [undefined, null, 0, -1, NaN, Infinity, '20', 1.5]) {
-        assert.deepEqual(normalizeExecutionSettings({ maxLoops: invalid, mutpyTimeout: invalid }), { maxLoops: 5, mutpyTimeout: 20 });
+        assert.deepEqual(normalizeExecutionSettings({ maxLoops: invalid, mutpyTimeout: invalid }), { maxLoops: 5, mutpyTimeout: 60 });
     }
     assert.deepEqual(normalizeExecutionSettings({ maxLoops: 9, mutpyTimeout: 40 }), { maxLoops: 9, mutpyTimeout: 40 });
     assert.deepEqual(normalizeExecutionSettings({ maxLoops: 1, mutpyTimeout: 10 }), { maxLoops: 1, mutpyTimeout: 10 });
+    assert.deepEqual(normalizeExecutionSettings({ mutpyTimeout: 20 }), { maxLoops: 5, mutpyTimeout: 20 });
 });

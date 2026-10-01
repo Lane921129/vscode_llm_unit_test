@@ -10,6 +10,16 @@ Demo 摘要使用 `presentSummaryOutcome`，僅在執行及量測達標時省略
 
 數值技能遇到正確的單呼叫內建例外斷言時保留原文並繼續，支援布林值參與 Python 數值運算但不變更輸入型別；不確定或複合例外保持拒絕。Bug Fixer 的 RepairResponseError 由候選狀態機交 Writer 接手一次，沿用現有總預算與重新驗證，接手失敗才交外層決定終止／降級。
 
+## 可選突變規則與共用隔離執行器（2026-10-01）
+
+`llmUnitTest.mutationEngine` 預設 `builtin`，亦可選 `mutatest`；`mutmut` 在介面明示尚未支援。`mutationSelection.ts` 在 full 模式、模型請求前檢查所選 Python 與引擎版本。缺套件、不相容或執行失敗會停止並保留診斷，不再依 Python／OS 自動切換引擎。單檔、批次共用設定；execution 模式不啟動突變。
+
+內建 `mutation_operators_v2.py` 擴充數值鄰界、算術、比較、單元運算、字串、簡單容器與索引，規則版本為 `builtin-ast-v2`。枚舉限定所選函式本體，排除巢狀 callable、default 與 decorator；AST 去重、noop 與無法編譯者列 excluded。固定來源與版本產生穩定候選集合，不隨機灌入新變異。`builtin-ast-v1` 歷史證據保留相容。
+
+`external_mutation_runner.py` 使用真正 Mutatest 3.1.0 的 `MutateAST`／operator API 枚舉該版本完整可用變異；其規則版本為 `mutatest-ast-3.1.0-v1`。這是外部變異規則搭配本專案隔離執行器，並非原生 CLI。以所選 Python 執行 `python -m pip install --no-deps mutatest==3.1.0` 安裝 AST-only 套件，避免舊 CLI 的 coverage 相依衝突；預檢會做 API 自我檢查。該版本對連鎖比較只變第一個比較運算子，不能宣稱比內建 v2 更全面。其他版本需另行驗收。
+
+兩者均由 `basic_mutation_runner.py` 完成獨立 baseline、每 mutant 獨立檔案系統與 `generated_test_runner.py` 防護。預設 2 workers，上限 4，正常子程序沿用父程序樹取消與共用 deadline；新預設階段預算 60 秒。`--result-json` 保存實際 unittest 失敗方法及 phase，只有方法失敗可當 killed；fixture／loader／隔離錯誤與缺失、零案例保持錯誤。結果帶 `executionBackend=isolated-unittest-v1`、規則／引擎版本、`killedBy` 與耗時；TypeScript 與 Python 由 `contracts/mutation-engines-v1.json` 核對相容版本。新 v2／外部 KILLED 缺歸因不能計分。最終報告保留既有兩張表，另列實際測試歸因與耗時。不同引擎／版本的分數分母不同，不可直接當品質進步或退步。
+
 ## 為什麼有 TypeScript 和 Python？
 
 - `src/`：在 VS Code 中執行，負責介面、模型請求、角色交接與報告。
@@ -91,7 +101,7 @@ caller AST 現在先以同一 codec 編碼整筆 `args`／`kwargs` 與已證明�
 
 `CandidateCheckpointStore` 分開保存 executable 與 quality 基線。通過執行 gate 的候選先存成按 code hash 命名的不可變檔案；只有本候選的完整有效 mutation 才可提交 quality checkpoint。首輪審查／突變失敗仍能開啟可執行測試，未知分數保持 null。rollback 同步還原同版本的測試、案例、執行、coverage、mutation、Tier 與 review 狀態；來源或已解析相依改變時保存歷史成果但使當前證據失效。
 
-`mutationResult.ts` 驗證 `MutationRun` 的來源／測試 hash、operator/scope version、candidateSetId、候選 ID、計數與完成狀態。內建引擎先建立所選函式 body 的完整有效集合，排除 noop／重複／不可編譯變更；正式函式路徑選測全集。TIMEOUT／ERROR／NOT_RUN 不得算 killed，部分測量不可假裝完整，零候選為 N/A；達標使用精確計數而非四捨五入百分比。外部 module-scope 或無法證實的結果不能替代函式分數；真實外部引擎版本矩陣與完整環境身分契約仍待驗收／擴充。
+`mutationResult.ts` 驗證 `MutationRun` 的來源／測試 hash、operator/scope version、candidateSetId、候選 ID、計數與完成狀態。內建引擎先建立所選函式 body 的完整有效集合，排除 noop／重複／不可編譯變更；正式函式路徑選測全集。TIMEOUT／ERROR／NOT_RUN 不得算 killed，部分測量不可假裝完整，零候選為 N/A；達標使用精確計數而非四捨五入百分比。外部 module-scope 或無法證實的結果不能替代函式分數；Mutatest 3.1.0 的 AST adapter 以相同隔離執行器產生可核對的函式級結果；未驗證的原生 CLI／Mutmut 結果仍不接受。
 
 `contracts/quality-policy-v1.json` 是 TypeScript `qualityPolicy.ts` 與 Python `quality_policy.py` 共用的政策定義。正式新執行在測量前固定 `standard80-v1`（突變至少 80%、目標行覆蓋 100%、分支完整覆蓋）；歷史 `strict100-v1` 仍按原 100% 門檻重讀，不回溯改標。達到突變門檻後仍保留存活突變與原分母，停止額外品質補測；Reviewer 未完成維持獨立未完成狀態。最終報告顯示本次突變門檻，中英文一致；corpus 使用預先固定的 fixture manifest ID／hash 與原門檻，不依成績換政策。政策以精確比例判定目標行覆蓋、完整分支、完整突變集合及審查來源，分開保存 measurement／policy／review 狀態。checkpoint、批次與 scorecard 核對同一政策、候選與證據後重算 assessment；舊報告保持相容讀取，不自動升格。取消或回合耗盡不因保留了一份好基線而變成整次通過。
 

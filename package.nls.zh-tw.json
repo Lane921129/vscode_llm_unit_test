@@ -1,4 +1,9 @@
 {
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0": "內建變異規則與隔離執行（預設）。",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1": "使用 Mutatest 變異規則，由擴充套件隔離執行。須先安裝並通過版本與環境檢查。",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2": "Mutmut 尚未支援，選取後會在預檢停止。",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.description": "完整品質驗證使用的突變引擎。外部引擎須先通過相容性檢查；失敗時停止，不會自動改用內建規則。",
+  "contributes.configuration.properties.llmUnitTest.mutationWorkers.description": "完整品質模式使用的突變隔離執行程序數量（1–4）。",
   "contributes.viewsContainers.activitybar.0.title": "突變測試分析",
   "contributes.views.mutation-test-explorer.0.name": "模型與測試設定",
   "contributes.commands.0.title": "執行自動化測試循環",

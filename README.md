@@ -132,7 +132,7 @@ The gate requires every Tier 1 fixture to have an `llm-evidence-bound`, actual T
 
 - LLM quality varies. Tier 2–4 output is validated but cannot make an incapable model reason correctly.
 - Dynamic Trace deliberately ignores ambiguous call-site data flow rather than guessing values.
-- Native `mutatest` / `mutmut` support depends on Python version and OS; Windows with Python 3.12+ uses the built-in AST fallback unless WSL or another compatible environment is used.
+- Select Builtin v2 or Mutatest in the mutation engine dropdown. Mutatest 3.1.0 supplies external AST operators; our shared guarded executor runs all trials. Install in the selected Python with `python -m pip install --no-deps mutatest==3.1.0`. Missing or unsupported engines stop before generation; no silent fallback. Mutmut is not yet supported.
 - The extension currently targets Python `unittest`, not pytest-specific test syntax.
 - Use test connection and cloud models with awareness of provider cost, network access, and your organisation's privacy policy.
 
@@ -181,7 +181,7 @@ Auto 模式會保守處理未探測模型，優先走可重現的 Tier 1。若�
 - 開發 extension 需要 Node.js `20+`。
 - 分析腳本需要 Python `3.9+`；CI 使用 Python `3.12`。
 - 本機模型可選擇安裝 Ollama。
-- Windows + Python 3.12+ 若要使用原生 mutation tool，建議使用 WSL；沒有相容工具時會退回內建 AST mutation runner。
+- 介面可選內建 v2 或 Mutatest；Mutatest 使用外部 AST 規則及共用隔離執行器，支援本次已驗證的 Windows／Python 3.13 環境。缺少工具或版本不符會停止，不再靜默回退；Mutmut 尚未支援。
 - 未設定 `llmUnitTest.pythonPath` 時，系統會自動選擇工作區標準 `.venv`（Windows 為 `.venv/Scripts/python.exe`，其他系統為 `.venv/bin/python`）。只有要使用自訂 virtual environment 或實驗室直譯器時，才需要設定 `llmUnitTest.pythonPath`；明確設定會優先供 AST、Trace、驗證、coverage 與 mutation 全程使用。
 
 ### 本機開發
@@ -261,7 +261,7 @@ Coverage 是必要的品質閘門，不是可省略的顯示欄位。若 VS Code
 
 - Tier 2–4 的輸出會被驗證，但無法讓能力不足的模型具備正確推理。
 - Dynamic Trace 遇到不明確呼叫端資料流會保守略過，不會猜值。
-- 原生 `mutatest`／`mutmut` 取決於 Python 版本與 OS；Windows + Python 3.12+ 在未使用 WSL 或相容環境時會使用內建 AST fallback。
+- 以所選 Python 安裝外部 AST 規則：`python -m pip install --no-deps mutatest==3.1.0`。這個模式不啟動舊版 Mutatest CLI，不安裝其舊 coverage 相依。預檢會核對 API；不相容時停止並說明原因。
 - 目前支援 Python `unittest`，尚未支援 pytest 專屬語法。
 - 使用雲端模型前請評估費用、網路與組織隱私政策。
 
@@ -272,3 +272,7 @@ Coverage 是必要的品質閘門，不是可省略的顯示欄位。若 VS Code
 ## 授權
 
 [MIT](LICENSE)
+
+Mutation trials default to 2 isolated workers (1–4) and a 60-second shared stage budget. Existing explicit time settings are preserved. Builtin v2 adds numeric boundaries, operator alternatives, strings, containers, and indices. Scores from different operator versions have different denominators; existing v1 reports remain readable.
+
+突變預設 2 個隔離程序（可選 1–4）、60 秒共用階段預算；已保存的明確時間選擇維持原值。新版內建增加數值鄰界、運算子、字串、容器與索引變異；舊 v1 報告仍可讀取，但不同版本的分數分母不可直接比較。

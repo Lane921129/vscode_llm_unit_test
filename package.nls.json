@@ -1,4 +1,9 @@
 {
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0": "Built-in mutation rules with isolated execution (default).",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1": "Mutatest mutation rules, executed in isolation by the extension. Requires installation and a supported version and environment.",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2": "Mutmut is not yet supported; selecting it stops the run during preflight.",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.description": "Mutation engine for full quality verification. External engines are checked before use; failures stop the run without silently switching to built-in rules.",
+  "contributes.configuration.properties.llmUnitTest.mutationWorkers.description": "Number of isolated mutation workers used in full quality mode (1–4).",
   "contributes.viewsContainers.activitybar.0.title": "Mutation Test Analysis",
   "contributes.views.mutation-test-explorer.0.name": "Model and Test Settings",
   "contributes.commands.0.title": "Run Automated Test Cycle",

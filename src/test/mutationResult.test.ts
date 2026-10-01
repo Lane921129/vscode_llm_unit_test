@@ -6,7 +6,7 @@ import { createHash } from 'crypto';
 import { spawnSync } from 'child_process';
 import { test } from 'node:test';
 import { MutationContext, MutationRun, mutationMeetsThreshold, mutationScore, parseBuiltinMutationRun,
-    parseExternalMutationRun, mutationCandidateSetId, BUILTIN_MUTATION_OPERATOR_SET_VERSION,
+    parseExternalMutationRun, mutationCandidateSetId,
     FUNCTION_BODY_MUTATION_SCOPE_VERSION, readStoredMutationRun } from '../mutation/mutationResult';
 
 const context: MutationContext = { sourcePath: path.resolve('sample.py'), sourceHash: 'a'.repeat(64), testHash: 'b'.repeat(64),
@@ -14,7 +14,8 @@ const context: MutationContext = { sourcePath: path.resolve('sample.py'), source
 
 function builtin() {
     return { ...context, schemaVersion: 1, engine: 'builtin', status: 'complete', scope_found: true,
-        operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION, scopeVersion: FUNCTION_BODY_MUTATION_SCOPE_VERSION,
+        // Historical fixture: attribution/backend were introduced with v2.
+        operatorSetVersion: 'builtin-ast-v1', scopeVersion: FUNCTION_BODY_MUTATION_SCOPE_VERSION,
         candidateIds: ['c'.repeat(64)], candidateSetId: mutationCandidateSetId(['c'.repeat(64)]),
         baseline_passed: true, baselineStatus: 'passed', scoreAvailable: true,
         excluded: { noop: 0, duplicate: 0, invalid: 0 },

@@ -40,7 +40,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         if (this.view) { this.view.title = t('ui.modelSettings'); }
         const config = vscode.workspace.getConfiguration('llmUnitTest');
         const html = getWebviewContent(t, config.get('language', 'auto'), config.get('promptStrategy', 'auto'),
-            config.get('ollamaBaseUrl', 'http://127.0.0.1:11434'), config.get('validationMode', 'full'));
+            config.get('ollamaBaseUrl', 'http://127.0.0.1:11434'), config.get('validationMode', 'full'),
+            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2));
         if (this.webview.html !== html) { this.webview.html = html; }
     }
 
@@ -52,6 +53,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
     private async rememberFolder(kind: 'project' | 'output' | 'batch', folder: string): Promise<void> {
         await this.uiState.update(`llmUnitTest.lastFolders.v1.${kind}`, folder);
+    }
+
+    private async rememberRunPreference(config: vscode.WorkspaceConfiguration, key: string, value: string | number): Promise<void> {
+        const setting = config.inspect?.(key);
+        const target = setting?.workspaceFolderValue !== undefined ? vscode.ConfigurationTarget.WorkspaceFolder
+            : setting?.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : true;
+        await config.update(key, value, target);
     }
 
     private appendModelQualificationLog(profile: ModelQualificationProfile, responsePreview?: string): void {
@@ -97,7 +105,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const lang = config.get<string>('language', 'auto');
         const strategy = config.get<string>('promptStrategy', 'auto');
         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-        this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'full'));
+        this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'full'),
+            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2));
 
         this.webview.onDidReceiveMessage(async (message) => {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -151,14 +160,29 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     if (this.webview) {
                         const lang = config.get<string>('language', 'auto');
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-                        this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'full'));
+                        this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'full'),
+                            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2));
                     }
                     break;
                 }
 
                 case 'setValidationMode': {
-                    if (message.mode === 'execution' || message.mode === 'full') {
-                        await config.update('validationMode', message.mode, true);
+                    if (!this.activeAnalysis && (message.mode === 'execution' || message.mode === 'full')) {
+                        await this.rememberRunPreference(config, 'validationMode', message.mode);
+                    }
+                    break;
+                }
+
+                case 'setMutationEngine': {
+                    if (!this.activeAnalysis && ['builtin', 'mutatest', 'mutmut'].includes(message.engine)) {
+                        await this.rememberRunPreference(config, 'mutationEngine', message.engine);
+                    }
+                    break;
+                }
+
+                case 'setMutationWorkers': {
+                    if (!this.activeAnalysis && Number.isInteger(message.workers) && message.workers >= 1 && message.workers <= 4) {
+                        await this.rememberRunPreference(config, 'mutationWorkers', message.workers);
                     }
                     break;
                 }

@@ -67,10 +67,23 @@ class Cases(unittest.TestCase):
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768 });
+        settings.mutationEngine = 'mutmut';
+        const blockedOutput = path.join(root, 'blocked');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
+            funcName: 'calculate_bmi', outputPath: blockedOutput, promptStrategy: 'tier2', validationMode: 'full',
+            maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 120 });
+        const blockedRelative = fs.readdirSync(blockedOutput, { recursive: true }).map(String)
+            .find(p => path.basename(p) === 'function_knowledge.json')!;
+        const blocked = JSON.parse(fs.readFileSync(path.join(blockedOutput, blockedRelative), 'utf8'));
+        assert.equal(blocked.firstFailure.category, 'environment');
+        assert.equal(writers, 0, 'an unavailable selected engine must stop before model generation');
+        assert.equal(fixes, 0);
+        assert.equal(blocked.mutation, undefined, 'cannot silently measure with builtin');
+        settings.mutationEngine = 'builtin';
         const outputPath = path.join(root, 'results');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
             funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', validationMode: 'full',
-            maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 30 });
+            maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 120 });
         const report = fs.readdirSync(outputPath, { recursive: true }).map(String).find(p => path.basename(p) === 'function_knowledge.json')!;
         assert.ok(report, logs.join('\n'));
         const directory = path.dirname(path.join(outputPath, report));
@@ -80,15 +93,19 @@ class Cases(unittest.TestCase):
         assert.equal(knowledge.qualityPolicy.policyId, 'standard80-v1');
         assert.equal(knowledge.qualityAssessment.fullyPassed, true);
         assert.equal(knowledge.reviewStatus, 'completed');
-        assert.equal(knowledge.mutation.counts.killed, 17);
-        assert.equal(knowledge.mutation.counts.selected, 19);
-        assert.equal(knowledge.mutation.counts.survived, 2, 'all surviving mutants remain reported and scored');
+        assert.equal(knowledge.mutation.operatorSetVersion, 'builtin-ast-v2');
+        assert.ok(knowledge.mutation.counts.selected > 19);
+        assert.ok(knowledge.mutation.counts.survived > 0, 'surviving mutants remain in the full denominator');
+        assert.equal(knowledge.mutation.counts.killed + knowledge.mutation.counts.survived, knowledge.mutation.counts.available);
+        assert.ok(knowledge.mutation.mutants.filter((m: any) => m.status === 'KILLED').every((m: any) => m.killedBy.length));
         assert.equal(writers, 1, 'meeting the policy must not trigger a second generation');
         assert.equal(fixes, 0);
         assert.equal(events.filter(e => e.stage === 'mutation' && e.status === 'measured').length, 1);
         const final = fs.readFileSync(path.join(functionReportDirectory(directory), 'final_report.md'), 'utf8');
         assert.match(final, /Final outcome: Fully passed/);
-        assert.match(final, /89.47%.*17\/19.*threshold ≥ 80%/);
+        assert.match(final, /threshold ≥ 80%/);
+        assert.match(final, /builtin-ast-v2/);
+        assert.match(final, /Mutation execution diagnostics/);
         assert.match(final, /SURVIVED/);
         const batch = new BatchJournal(outputPath, root, { model: 'local/neutral-fixture', buildTimestamp: 'fixture', python: String(settings.pythonPath) });
         batch.discover(file, ['calculate_bmi']); batch.start(); batch.begin(0);

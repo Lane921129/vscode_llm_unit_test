@@ -4,14 +4,32 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from functools import partial
 
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 from mock_scaffold_generator import generate_scaffold
 from dynamic_tracer import trace_function
-from basic_mutation_runner import run_mutation_trials
+from basic_mutation_runner import run_mutation_trials as run_versioned_mutation_trials
 from complexity_assessor import assess_complexity
+
+# These fixtures assert the historical v1 universe. v2 has separate coverage.
+run_mutation_trials = partial(run_versioned_mutation_trials, operator_version='builtin-ast-v1', workers=1)
+
+
+def mock_mutation_process_results(*results):
+    pending = iter(results)
+    def invoke(args, **kwargs):
+        result = next(pending, results[-1])
+        if isinstance(result, BaseException):
+            raise result
+        if '--result-json' in args:
+            pathlib.Path(args[args.index('--result-json') + 1]).write_text(json.dumps({
+                'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                'status': 'passed' if result.returncode == 0 else 'runner-error', 'testFailures': []}), encoding='utf-8')
+        return result
+    return invoke
 
 
 class AstPipelineTests(unittest.TestCase):
@@ -1961,7 +1979,7 @@ class MutationReliabilityTests(unittest.TestCase):
     def test_chained_comparison_ids_distinguish_positions_and_do_not_depend_on_tests(self):
         from unittest.mock import patch
         success = subprocess.CompletedProcess([], 0, '', '')
-        with patch('basic_mutation_runner.subprocess.run', return_value=success):
+        with patch('basic_mutation_runner.subprocess.run', side_effect=mock_mutation_process_results(success)):
             first = self.measure('def target(value):\n    return 0 < value < 10\n', 'self.assertTrue(target(1))')
             second = self.measure('def target(value):\n    return 0 < value < 10\n', 'self.assertTrue(target(2))')
         comparisons = [item for item in first['mutants'] if item['kind'] == 'compare']
@@ -2053,7 +2071,7 @@ def target(value: Literal[7] = 7) -> Literal[8]:
     def test_mutant_timeout_is_not_a_kill_or_a_quality_score(self):
         from unittest.mock import patch
         success = subprocess.CompletedProcess([], 0, '', '')
-        with patch('basic_mutation_runner.subprocess.run', side_effect=[success, subprocess.TimeoutExpired('trial', 1)]):
+        with patch('basic_mutation_runner.subprocess.run', side_effect=mock_mutation_process_results(success, subprocess.TimeoutExpired('trial', 1))):
             result = self.measure('def target():\n    return True\n', 'self.assertTrue(target())', max_mutations=1)
         self.assertEqual(result['mutants'][0]['status'], 'TIMEOUT')
         self.assertEqual(result['counts']['timeout'], 1)
@@ -2065,7 +2083,7 @@ def target(value: Literal[7] = 7) -> Literal[8]:
         from unittest.mock import patch
         success = subprocess.CompletedProcess([], 0, '', '')
         invalid_runner = subprocess.CompletedProcess([], 2, '', 'runner arguments invalid')
-        with patch('basic_mutation_runner.subprocess.run', side_effect=[success, invalid_runner]):
+        with patch('basic_mutation_runner.subprocess.run', side_effect=mock_mutation_process_results(success, invalid_runner)):
             result = self.measure('def target():\n    return True\n', 'self.assertTrue(target())', max_mutations=1)
         self.assertEqual(result['mutants'][0]['status'], 'ERROR')
         self.assertEqual(result['counts']['error'], 1)
@@ -2089,8 +2107,13 @@ def target(value: Literal[7] = 7) -> Literal[8]:
     def test_stage_budget_preserves_not_run_records_after_baseline(self):
         from unittest.mock import patch
         success = subprocess.CompletedProcess([], 0, '', '')
-        with patch('basic_mutation_runner.subprocess.run', return_value=success), \
-                patch('basic_mutation_runner.time.monotonic', side_effect=[0, 0, 0, 0, 0, 2]):
+        clock = [0]
+        def baseline(args, **kwargs):
+            result = mock_mutation_process_results(success)(args, **kwargs)
+            clock[0] = 2
+            return result
+        with patch('basic_mutation_runner.subprocess.run', side_effect=baseline), \
+                patch('basic_mutation_runner.time.monotonic', side_effect=lambda: clock[0]):
             result = self.measure('def target():\n    return True\n', 'self.assertTrue(target())', stage_timeout_seconds=1)
         self.assertTrue(result['baseline_passed'])
         self.assertEqual(result['counts']['executed'], 0)

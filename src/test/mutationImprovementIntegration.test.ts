@@ -72,7 +72,7 @@ class Cases(unittest.TestCase):
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture',
             filePath: path.join(directory, 'sample.py'), funcName: 'categorize', promptStrategy: 'tier2',
-            validationMode: 'full', maxLoops: 4, mutpyTimeout: 30, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
+            validationMode: 'full', maxLoops: 4, mutpyTimeout: 120, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
         const relative = fs.readdirSync(path.join(directory, 'results'), { recursive: true }).map(String)
             .find(name => path.basename(name) === 'function_knowledge.json');
         assert.ok(relative, logs.join('\n'));
@@ -95,6 +95,7 @@ class Cases(unittest.TestCase):
         assert.equal(state.tierHistory.transitions[0].to, 1);
         assert.equal(state.tierHistory.rounds[1].start, 2);
         assert.match(failureReport, /Automatic fallback occurred: Yes.*Round 1: Tier 2 → 1/);
+        assert.equal(state.terminalStatus, 'execution-passed-review-incomplete', JSON.stringify({last:state.lastFailure, first:state.firstFailure, tiers:state.tierHistory}));
         assert.match(failureReport, /Currently retained candidate: Tier 2/);
         assert.match(failureReport, /Full workflow \(event order\)/);
         assert.doesNotMatch(report, /Automatic fallback|Role event|Semantic Analyst report/);
@@ -107,7 +108,8 @@ class Cases(unittest.TestCase):
         assert.deepEqual(fs.readdirSync(functionReportDirectory(output)).sort(), ['failure_report.md', 'final_report.md', 'loop']);
         assert.match(report, /### Test cases/);
         assert.match(report, /### Mutation cases/);
-        assert.match(report, /89.47% \(17\/19\)/);
+        assert.match(report, /threshold ≥ 80%/);
+        assert.match(report, /builtin-ast-v2/);
         assert.match(report, /## Final outcome: /);
         const measured = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
         assert.ok(measured.length >= 2, logs.join('\n'));
@@ -123,7 +125,11 @@ class Cases(unittest.TestCase):
         assert.equal(state.reviewStatus, 'incomplete');
         assert.equal(state.qualityAssessment.fullyPassed, false);
         assert.ok(state.mutationInputPlan.diagnostics.some((item: any) => item.status === 'conditional-equivalence' && item.excludedFromScore === false));
-        assert.equal(state.mutation.counts.survived, 2, 'redundant-bound candidates are not silently excluded');
+        const survivedIds = new Set(state.mutation.mutants.filter((m: any) => m.status === 'SURVIVED').map((m: any) => m.id));
+        assert.equal(state.mutation.counts.survived, survivedIds.size);
+        for (const item of state.mutationInputPlan.diagnostics.filter((d: any) => d.status === 'conditional-equivalence')) {
+            assert.ok(survivedIds.has(item.mutantId), 'conditional-equivalence candidates remain in the measured survivors');
+        }
         assert.match(logs.join('\n'), /Review incomplete.*continuing tool measurements/);
         assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), source);
     } finally {

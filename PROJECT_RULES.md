@@ -56,7 +56,7 @@
 
 - 通用初始化建議只能依真實隔離例外、原始 AST 與已載入 callable 身分產生；不得硬編碼框架名稱或以一般 module-import 失敗猜測替身。自動外部入口只接受回傳值未使用的直接模組頂層呼叫，綁定觀測行號及已確認來源版本；來源變更後須重新預覽。應用 helper／callback、需要回傳值、缺套件／API、逾時與歧義來源保持受阻。突變副本行號只能依相同未變更 AST 呼叫重新定位，不能擴大替身範圍。
 
-- 使用者可透過 `llmUnitTest.importFixtures` 明確宣告匯入前測試設定；禁止修改受測原檔或刪除初始化 AST 來取得通過。只有綁定來源雜湊之模組頂層外部操作可被替換，一般函式執行仍受原隔離規則限制。預檢、Trace、unittest／coverage 與突變 baseline／mutant 必須共用同一份設定；來源變更拒絕舊設定，報告保留設定 ID 及實際 mock 證據。使用 fixture 時僅採已支援該契約的內建突變引擎；不可宣稱真實目錄、正式設定或 GUI 啟動已驗證。
+- 使用者可透過 `llmUnitTest.importFixtures` 明確宣告匯入前測試設定；禁止修改受測原檔或刪除初始化 AST 來取得通過。只有綁定來源雜湊之模組頂層外部操作可被替換，一般函式執行仍受原隔離規則限制。預檢、Trace、unittest／coverage 與突變 baseline／mutant 必須共用同一份設定；來源變更拒絕舊設定，報告保留設定 ID 及實際 mock 證據。使用 fixture 時僅採已支援該契約的共用隔離突變執行器（內建或已驗證 Mutatest AST adapter）；不可宣稱真實目錄、正式設定或 GUI 啟動已驗證。
 
 - 正式 unittest、coverage 與突變試驗必須使用 `generated_test_runner.py` 的執行防護；沒有明確 mock 的檔案／網路／shell 與非隔離 SQLite 操作須失敗，遭吞掉的安全例外也不能算通過。工具載入／traceback 的必要來源讀取與 coverage 自身寫檔須和應用執行分開。
 - 突變觸發隔離阻擋時列為執行錯誤，不得算成 killed；內建／外部引擎都必須拒絕含這類錯誤的品質分數。獨立 `:memory:` SQLite 可用，共享 URI、ATTACH／VACUUM INTO、extension loading 與替換隔離 authorizer 不可用。
@@ -175,6 +175,8 @@
 - 依使用者 2026-09-30 指示，新執行採 `standard80-v1`：突變分數至少 80%，目標行覆蓋維持 100%、分支完整覆蓋，且仍須完整執行／量測與 Reviewer 完成。存活突變保留在分母與報告；已達門檻不再只為追求 100% 重複生成。歷史 `strict100-v1` 及 fixture manifest 的原政策保留，不回溯改標舊報告。
 - Trace／預檢／正式 unittest／mutation 共用版本化 runtime policy；所有違規持續記錄，即使被目標捕捉亦不得通過。只保留必要 import／traceback／async plumbing 例外，不准任意一般讀檔或 loopback。
 - 正式 coverage 使用原生 statement／branch 與來源實體核對；目標呼叫證據綁本次 source/test/run 與 coverage hash。單行定義被匯入不等於目標執行，舊文字 parser 僅作歷史相容。
+- 突變引擎依使用者選擇固定為 builtin 或已驗證 Mutatest AST adapter；模型請求前預檢版本與可用性，失敗不得靜默改用其他引擎。Mutmut 尚未支援。內建新執行使用 builtin-ast-v2，舊 v1 僅保留證據讀取／重建；不同規則版本或候選集合不能直接比較。
+- 共用隔離執行器最多 4 個獨立 trial，預設 2；共用階段 deadline，新預設 60 秒，使用者已選時間不覆蓋。KILLED 必須有 guarded runner 的實際測試方法失敗證據；載入、fixture、隔離、缺紀錄與零測試不得算 killed。
 - 正式突變以 qualified function body 範圍、完整候選集合與精確計數驗收；工具錯誤、timeout、未測候選及未知外部格式不得當 killed 或完整通過。百分比只作顯示，抽樣 100% 不等於完整集合 100%。
 - 同一目標共用 wall-clock、logical request、transport attempt、估算輸入 tokens 及 candidate 預算。Tier／格式／傳輸重試不重設；每次實際傳送重計輸入估算，預算耗盡保留成果並明示未完成。
 - caller 探索排除具有本工具版本化 run manifest 的產物目錄，不以生成測試再次製造來源呼叫事實。完整快照保存於 artifact，角色 prompt 只投影斷言所需事實，不丟失安全／不可斷言標記。

@@ -1,4 +1,6 @@
-export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full') {
+export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2) {
+    const selectedEngine = ['builtin', 'mutatest', 'mutmut'].includes(mutationEngine) ? mutationEngine : 'builtin';
+    const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
     return `
 <!DOCTYPE html>
 <html lang="${t('ui.documentLanguage')}">
@@ -283,7 +285,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <input type="number" id="max-loop" value="5" min="1">
                 
                 <label>${t('ui.mutpyTimeout')}${t('ui.fullModeSuffix')}</label>
-                <input type="number" id="mutpy-timeout" value="20" min="1" style="width:100%;">
+                <input type="number" id="mutpy-timeout" value="60" min="1" style="width:100%;">
+
+                <label for="mutation-engine">${t('ui.mutationEngine')}${t('ui.fullModeSuffix')}</label>
+                <select id="mutation-engine">
+                    <option value="builtin" ${selectedEngine === 'builtin' ? 'selected' : ''}>${t('ui.mutationBuiltin')}</option>
+                    <option value="mutatest" ${selectedEngine === 'mutatest' ? 'selected' : ''}>${t('ui.mutationMutatest')}</option>
+                    <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''} disabled>${t('ui.mutationMutmut')}</option>
+                </select>
+                <p>${t('ui.mutationEngineHint')}</p>
+                <label for="mutation-workers">${t('ui.mutationWorkers')}${t('ui.fullModeSuffix')}</label>
+                <input type="number" id="mutation-workers" value="${selectedWorkers}" min="1" max="4" step="1">
 
                 <label>${t('ui.apiTimeout')}</label>
                 <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
@@ -374,6 +386,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         const resultsMap = new Map();
         let currentViewMode = 'flat';
         let environmentBusy = false;
+        let analysisRunning = false;
 
         const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
@@ -660,8 +673,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     }
                     break;
                 case 'analysisFinished':
+                    analysisRunning = false;
                     document.getElementById('lang-select').disabled = false;
                     document.getElementById('validation-mode').disabled = false;
+                    updateValidationScope();
                     const runBtn = document.getElementById('btn-run');
                     if (runBtn) {
                         runBtn.disabled = environmentBusy;
@@ -689,13 +704,29 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (hint) hint.textContent = full
                 ? i18n.fullScopeHint
                 : i18n.executionScopeHint;
-            document.getElementById('max-loop').disabled = !full;
-            document.getElementById('mutpy-timeout').disabled = !full;
+            for (const id of ['max-loop', 'mutpy-timeout', 'mutation-engine', 'mutation-workers']) {
+                document.getElementById(id).disabled = !full || analysisRunning;
+            }
         }
         updateValidationScope();
         document.getElementById('validation-mode').onchange = (e) => {
+            if (analysisRunning) return;
             updateValidationScope();
             vscode.postMessage({ command: 'setValidationMode', mode: e.target.value });
+        };
+        document.getElementById('mutation-engine').onchange = (e) => {
+            if (analysisRunning) return;
+            vscode.postMessage({ command: 'setMutationEngine', engine: e.target.value });
+        };
+        function mutationWorkerCount() {
+            const workers = Number(document.getElementById('mutation-workers').value);
+            return Number.isInteger(workers) && workers >= 1 && workers <= 4 ? workers : 2;
+        }
+        document.getElementById('mutation-workers').onchange = () => {
+            if (analysisRunning) return;
+            const workers = mutationWorkerCount();
+            document.getElementById('mutation-workers').value = String(workers);
+            vscode.postMessage({ command: 'setMutationWorkers', workers });
         };
 
         document.getElementById('btn-save-ollama-url').onclick = () => {
@@ -820,8 +851,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 ollamaUrl: document.getElementById('ollama-url').value,
                 promptStrategy: document.getElementById('prompt-strategy').value,
                 validationMode: document.getElementById('validation-mode').value,
+                mutationEngine: document.getElementById('mutation-engine').value,
+                mutationWorkers: mutationWorkerCount(),
                 maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 5,
-                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 20,
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 60,
                 timeoutSeconds: parseInt(document.getElementById('timeout-sec').value, 10) || 60,
                 outputPath: document.getElementById('output-path').value,
                 customUrl: document.getElementById('custom-url').value,
@@ -830,6 +863,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
 
         function setRunningState(isBatch) {
+            analysisRunning = true;
+            updateValidationScope();
             document.getElementById('lang-select').disabled = true;
             document.getElementById('validation-mode').disabled = true;
             document.getElementById('btn-prepare-env').disabled = true;

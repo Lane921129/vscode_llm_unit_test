@@ -98,7 +98,7 @@ class MutationCodeChangeTests(unittest.TestCase):
                             'class TestTarget(unittest.TestCase):\n'
                             '    def test_value(self):\n        self.assertEqual(calculate(150), 1.5)\n', encoding='utf-8')
             completed = subprocess.run([sys.executable, str(Path(runner.__file__)), str(source), str(test),
-                                        '0', '10', 'calculate'], capture_output=True, text=True,
+                                        '0', '10', 'calculate', '', '30', '1', 'builtin-ast-v1'], capture_output=True, text=True,
                                        encoding='utf-8', check=True, timeout=30)
             output = root / 'mutations.json'
             output.write_text(completed.stdout, encoding='utf-8')
@@ -114,7 +114,8 @@ class MutationCodeChangeTests(unittest.TestCase):
             # Optional display metadata cannot participate in candidate identity
             # or affect trial outcomes, even when no snippet can be captured.
             with patch.object(runner, 'mutation_code_change', return_value=None):
-                without_display = runner.run_mutation_trials(source, test, max_mutations=0, target_function='calculate')
+                without_display = runner.run_mutation_trials(source, test, max_mutations=0, target_function='calculate',
+                                                            operator_version='builtin-ast-v1', workers=1)
             for key in ['counts', 'status', 'candidateSetId', 'candidateIds', 'sourceHash', 'testHash']:
                 self.assertEqual(result[key], without_display[key])
             self.assertTrue(all('codeChange' not in m for m in without_display['mutants']))
@@ -125,9 +126,16 @@ class MutationCodeChangeTests(unittest.TestCase):
             source, test = root / 'sample.py', root / 'test_sample.py'
             source.write_text('def calculate():\n    return True\n', encoding='utf-8')
             test.write_text('import unittest\n', encoding='utf-8')
-            with patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')), \
-                    patch.object(runner.time, 'monotonic', side_effect=[0, 0, 0, 0, 0, 2]):
-                result = runner.run_mutation_trials(source, test, target_function='calculate', stage_timeout_seconds=1)
+            clock = [0]
+            def baseline(args, **kwargs):
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                clock[0] = 2
+                return subprocess.CompletedProcess(args, 0, '', '')
+            with patch.object(runner.subprocess, 'run', side_effect=baseline), \
+                    patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]):
+                result = runner.run_mutation_trials(source, test, target_function='calculate', stage_timeout_seconds=1,
+                                                    operator_version='builtin-ast-v1', workers=1)
         self.assertEqual(result['counts']['executed'], 0)
         self.assertFalse(result['scoreAvailable'])
         self.assertTrue(all(m['status'] == 'NOT_RUN' and m['codeChange']['before'] == '    return True'

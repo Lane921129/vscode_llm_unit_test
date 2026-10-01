@@ -7,6 +7,27 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import zhTw from '../i18n/zh-tw';
+import { getLanguage, setLanguage } from '../i18n/core';
+
+test('mutation progress is localized and never describes selection as a completed measurement', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const selected = describeStageEvent('mutation-engine', 'selected', { actual: 'mutatest', raw: 'PRIVATE_RESPONSE' });
+            const failed = describeStageEvent('mutation-engine', 'failed', { reason: 'package-missing', raw: 'PRIVATE_RESPONSE' });
+            const started = describeStageEvent('mutation', 'started', { engine: 'mutatest', raw: 'PRIVATE_RESPONSE' });
+            assert.match(selected, lang === 'en' ? /awaiting measurement/ : /等待量測/);
+            assert.match(failed, lang === 'en' ? /package-missing; stopped without switching/ : /package-missing；已停止，未更換/);
+            assert.match(started, lang === 'en' ? /after completion/ : /完成後才能判定/);
+            for (const label of [selected, failed, started]) {
+                assert.doesNotMatch(label, /PRIVATE_RESPONSE/);
+                if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            }
+            assert.doesNotMatch(describeStageEvent('mutation-engine', 'failed', { raw: 'PRIVATE_RESPONSE' }), /PRIVATE_RESPONSE/);
+        }
+    } finally { setLanguage(originalLanguage); }
+});
 
 test('progress explains rejection, incomplete review and intermediate acceptance without raw replies', () => {
     assert.match(describeStageEvent('structure', 'rejected', { reason: '沒有 test_ 方法', raw: 'PRIVATE_RESPONSE' }), /沒有 test_ 方法.*Writer/);

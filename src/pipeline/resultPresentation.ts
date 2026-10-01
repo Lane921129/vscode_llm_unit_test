@@ -69,6 +69,9 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
     const diagnostics = Array.isArray(value?.diagnostics)
         ? value.diagnostics.filter(item => typeof item === 'string' && /^[a-z0-9-]+$/.test(item)).join(', ') : '';
     const labels: Record<string, string> = {
+        'mutation-engine:selected': localize("已選定突變引擎，等待量測"),
+        'mutation-engine:failed': localize("突變引擎預檢失敗：{0}；已停止，未更換引擎", reason || localize("請查看報告中的拒絕原因")),
+        'mutation:started': localize("正在隔離執行突變；完成後才能判定分數"),
         'numeric-skill:planned': localize("正在以數值計算技能核對失敗測資"),
         'numeric-skill:verified': localize("計算與同輸入隔離觀測一致；修正候選仍須重新執行、審查與突變驗證"),
         'numeric-skill:unverified': localize("計算缺少一致的同輸入觀測；保留原測資與修復流程"),

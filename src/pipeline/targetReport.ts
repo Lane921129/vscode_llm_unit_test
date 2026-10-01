@@ -11,11 +11,13 @@ import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../m
 export interface ReportIdentity {
     schemaVersion: 'target-report-v1'; sourcePath: string; sourceFile: string;
     target: string; modelIdentity: string; requestedTier: string;
+    requestedMutationEngine?: string; mutationWorkers?: number;
 }
 export interface TargetReportSummary {
     included: boolean; outcome: string; reason: string; coverage: string; mutation: string;
     testFile?: string; code?: string; mutants?: MutationRun['mutants'];
     summaryOutcome?: string; summaryReason?: string;
+    mutationEngine?: string; mutationOperatorSet?: string; mutationElapsedMs?: number;
 }
 const excluded = new Set(['dummy-skipped', 'stub-skipped', 'stub-smoke-generated']);
 export const isReportExcluded = (status: unknown): boolean => typeof status === 'string' && excluded.has(status);
@@ -90,6 +92,9 @@ export function summarizeTarget(directory: string, state: any, identity: ReportI
         testHash: retained.acceptedCodeHash, targetScope: { kind: 'function', qualifiedName: identity.target } });
     if (measured.ok) {
         result.mutants = measured.run.mutants;
+        result.mutationEngine = measured.run.engine;
+        result.mutationOperatorSet = measured.run.operatorSetVersion || undefined;
+        result.mutationElapsedMs = measured.run.elapsedMs;
         const { counts, status, scoreAvailable } = measured.run;
         let thresholdMet = false;
         const policy = validateQualityPolicy(state.qualityPolicy);
@@ -156,6 +161,15 @@ export function renderMutationCodeTable(mutants: NonNullable<TargetReportSummary
             }), ''].join('\n');
 }
 
+/** Attribution comes only from the guarded runner's structured unittest result. */
+export function renderMutationDiagnostics(mutants: MutationRun['mutants'], elapsedMs?: number): string {
+    if (!mutants.some(m => m.elapsedMs !== undefined || m.killedBy?.length)) { return ''; }
+    return '\n' + localize('### 突變執行診斷\n\n')
+        + (elapsedMs !== undefined ? localize('本輪量測耗時：{0} 秒。\n\n', (elapsedMs / 1000).toFixed(2)) : '')
+        + [localize('| 位置 | 突變 | 觸發失敗的測試 | 耗時（毫秒） |'), '| --- | --- | --- | --- |',
+            ...mutants.map(m => `| ${m.line}:${m.column} | ${reportCell(m.from)} → ${reportCell(m.to)} | ${m.killedBy?.length ? m.killedBy.map(reportCell).join('; ') : '—'} | ${m.elapsedMs ?? '—'} |`), ''].join('\n');
+}
+
 export function renderFinalReport(identity: ReportIdentity, summary: TargetReportSummary, hasFailures: boolean): string {
     return localize('## 最終結果：{0}\n\n', summary.summaryOutcome || (summary.outcome === localize('未完成：執行達標，審查未完成')
         ? localize('未完成：缺少完整通過證據') : summary.outcome)) + identityLines(identity)
@@ -163,6 +177,9 @@ export function renderFinalReport(identity: ReportIdentity, summary: TargetRepor
             ? localize('- **覆蓋率**: {0}\n- **突變分數**: {1}\n', summary.coverage, summary.mutation)
             : localize('- **失敗原因**: {0}\n- **覆蓋率**: {1}\n- **突變分數**: {2}\n',
                 reportCell(conciseReason(summary.summaryReason || summary.reason)), summary.coverage, summary.mutation))
+        + (summary.mutationEngine ? localize('- **突變引擎／規則版本**: {0} / {1}\n',
+            reportCell(summary.mutationEngine), reportCell(summary.mutationOperatorSet))
+            : identity.requestedMutationEngine ? localize('- **指定突變引擎**: {0}（尚無可核對量測）\n', reportCell(identity.requestedMutationEngine)) : '')
         + (hasFailures ? localize('- [失敗報告與完整流程](failure_report.md)\n') : '')
         + '\n' + localize('### 測資\n\n')
         + (summary.testFile ? `[${reportCell(summary.testFile)}](${reportLink(summary.testFile)})\n\n${fence(summary.code!)}`
@@ -171,7 +188,8 @@ export function renderFinalReport(identity: ReportIdentity, summary: TargetRepor
         + (summary.mutants?.length ? [localize('| 位置 | 突變前 | 突變後 | 結果 |'), '| --- | --- | --- | --- |',
             ...summary.mutants.map(m => `| ${m.line}:${m.column} | ${reportCell(m.from)} | ${reportCell(m.to)} | ${m.status} |`), ''].join('\n')
             : localize('沒有已完成且綁定上述測資的突變案例。\n'))
-        + renderMutationCodeTable(summary.mutants || []);
+        + renderMutationCodeTable(summary.mutants || [])
+        + renderMutationDiagnostics(summary.mutants || [], summary.mutationElapsedMs);
 }
 
 /** All events are read from this run only. Large code and provider payloads stay out of the timeline. */
@@ -185,7 +203,7 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
     return [localize('### 完整流程（依事件順序）'), '', localize('| 序號 | 時間 | 輪次 | 階段 | 狀態 | 摘要 |'),
         '| --- | --- | --- | --- | --- | --- |', ...events.map(event => {
             const detail = event.detail || {};
-            const summary = ['role', 'category', 'reason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus', 'codeHash']
+            const summary = ['role', 'category', 'reason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus', 'codeHash', 'requested', 'actual', 'engine', 'operatorSetVersion', 'workers']
                 .filter(key => typeof detail[key] === 'string' || typeof detail[key] === 'number')
                 .map(key => `${key}: ${String(detail[key]).slice(0, 600)}`).join('; ')
                 + (Array.isArray(detail.diagnostics) ? '; ' + detail.diagnostics.filter((v: unknown) => typeof v === 'string').join(', ') : '');
