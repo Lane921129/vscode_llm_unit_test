@@ -10,6 +10,7 @@ import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 import { describeImportIssue } from '../environment/importDiagnostics';
 import { verifyExecutionEvidence } from './executionEvidence';
 import { VerificationMode } from './verificationMode';
+import { SOURCE_VERSIONS_VERSION, validSourceVersions, sourceVersionsCurrent } from './sourceVersions';
 import { conciseReason, isReportExcluded, reportCell, reportLink, summarizeTarget, TargetReportSummary } from './targetReport';
 
 interface BatchTarget {
@@ -36,6 +37,13 @@ function verifyQualityPass(directory: string, sourcePath: string, target: string
         || !isDeepStrictEqual(manifest.qualityPolicy, knowledge.qualityPolicy)
         || knowledge.evidenceValid === false) { return invalid(); }
     const snapshot = JSON.parse(fs.readFileSync(path.join(directory, 'quality_baseline.json'), 'utf8'));
+    if (snapshot.dependencyEvidenceVersion !== SOURCE_VERSIONS_VERSION
+        || knowledge.dependencyEvidenceVersion !== SOURCE_VERSIONS_VERSION
+        || !validSourceVersions(snapshot.dependencyVersions)
+        || !isDeepStrictEqual(snapshot.dependencyVersions, knowledge.dependencyVersions)) {
+        throw Error('incomplete-dependency-provenance');
+    }
+    if (!sourceVersionsCurrent(snapshot.dependencyVersions)) { throw Error('source-changed'); }
     const test = knowledge.acceptedTest;
     const immutableTest = snapshot.testFile;
     if (snapshot.schemaVersion !== 'quality-baseline-v1'
@@ -137,15 +145,9 @@ export class BatchJournal {
                     if (hasQualityContract) {
                         verifyQualityPass(directory, path.resolve(this.sourceRoot, target.file), target.target, manifest, knowledge);
                     } else {
-                        const test = knowledge.acceptedTest;
-                        if (typeof test !== 'string' || path.basename(test) !== test || /[\\/]/.test(test)
-                            || !['completed', 'not-required'].includes(knowledge.reviewStatus)
-                            || !Array.isArray(knowledge.qualityGaps) || knowledge.qualityGaps.length
-                            || typeof knowledge.execution !== 'string' || !knowledge.execution.trim()
-                            || knowledge.mutationScore !== 100 || !Array.isArray(knowledge.survivors) || knowledge.survivors.length
-                            || evidenceHash(fs.readFileSync(resultArtifactPath(directory, test), 'utf8')) !== knowledge.acceptedCodeHash) {
-                            throw Error('incomplete-provenance');
-                        }
+                        // Preserve historical artifacts, but never certify their
+                        // current source dependencies from a legacy display score.
+                        throw Error('incomplete-dependency-provenance');
                     }
                 }
                 if (knowledge.terminalStatus === 'execution-passed') {
@@ -179,10 +181,14 @@ export class BatchJournal {
                 }, knowledge.sourceHash));
             }
             target.state = 'finished';
-        } catch {
+        } catch (error) {
             this.reportSummaries.delete(id);
-            target.state = 'running';
-            target.terminalStatus = 'incomplete-report';
+            const changed = error instanceof Error && error.message === 'source-changed';
+            target.state = changed ? 'finished' : 'running';
+            target.terminalStatus = changed ? 'source-changed' : 'incomplete-report';
+            target.stage = error instanceof Error && ['source-changed', 'incomplete-dependency-provenance'].includes(error.message)
+                ? error.message : 'report-verification';
+            target.category = changed ? 'validation' : undefined;
             delete target.environment;
             delete target.modelRequests;
             // A failed/missing checkpoint is not a completed target, even when
@@ -191,6 +197,10 @@ export class BatchJournal {
         this.save();
     }
     finish(status: 'completed' | 'cancelled' | 'failed'): void {
+        // Earlier targets may have changed while later targets were running.
+        for (const target of this.targets) {
+            if (['passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
+        }
         this.status = status === 'completed' && (this.discoveryFailures.length || this.targets.some(target => target.state !== 'finished'))
             ? 'incomplete' : status;
         this.finishedAt = new Date().toISOString(); this.save();

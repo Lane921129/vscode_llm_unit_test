@@ -7,6 +7,7 @@ import { ScenarioIdentity } from '../validation/scenarioIdentity';
 import { MutationRun, MutationScope, mutationScore } from '../mutation/mutationResult';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { evaluateQuality, QualityAssessment, QualityPolicySnapshot } from './qualityPolicy';
+import { SOURCE_VERSIONS_VERSION } from './sourceVersions';
 
 export interface CandidateCoverage {
     assessment?: TargetCoverageAssessment;
@@ -26,7 +27,9 @@ export interface ExecutableCandidate {
     reviewWarnings: string[];
     tier: number;
     generationMode?: string;
-    dependencyVersions: Array<{ module: string; hash: string }>;
+    dependencyVersions: Array<{ module?: string; file?: string; hash: string }>;
+    /** Missing on historical checkpoints, which cannot certify current dependencies. */
+    dependencyEvidenceVersion?: typeof SOURCE_VERSIONS_VERSION;
 }
 
 export interface ExecutableCheckpoint extends ExecutableCandidate {

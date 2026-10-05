@@ -1,3 +1,5 @@
+import { AnalysisStageError } from '../utils/executionFailureCategory';
+
 /** Minimum 30-second allowance for provider discovery and basic probes. */
 export const CONNECTION_DISCOVERY_TIMEOUT_MS = 30_000;
 export const MODEL_QUALIFICATION_TIMEOUT_MS = 60_000;
@@ -125,7 +127,7 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
             });
             await wait(delayMs);
         } catch (error) {
-            if (options.isCancelled?.() || attempt >= maxAttempts) {
+            if (error instanceof AnalysisStageError || options.isCancelled?.() || attempt >= maxAttempts) {
                 throw error;
             }
             const delayMs = retryDelay(attempt, random);

@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { currentImportFixtures } from './importFixtures';
+import { SourceVersion, SOURCE_VERSIONS_VERSION, validSourceVersions } from './sourceVersions';
 
 export interface ResolvedDependency {
     module: string; name: string; level?: number; file?: string; resolvedModule?: string; reason?: string;
@@ -17,6 +18,8 @@ export interface PreflightResult {
     ok: true;
     module: string;
     importPaths: string[];
+    sourceVersionsVersion: typeof SOURCE_VERSIONS_VERSION;
+    sourceVersions: SourceVersion[];
     dependencies?: ResolvedDependency[];
     importFixtures?: { id: string; operations: Array<{ file: string; operation: string; line: number }> };
 }
@@ -106,6 +109,10 @@ async function executePreflight(python: string, file: string, module: string, im
                 cache?.failures.set(key, error);
             }
             throw error;
+        }
+        if (value.sourceVersionsVersion !== SOURCE_VERSIONS_VERSION || !validSourceVersions(value.sourceVersions)) {
+            throw new AnalysisStageError('environment', 'module-preflight',
+                localize('模組預檢無法完成：{0}', 'missing-or-invalid-source-versions'));
         }
         return value as PreflightResult;
     } catch (error) {

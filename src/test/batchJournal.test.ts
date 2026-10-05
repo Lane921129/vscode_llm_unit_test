@@ -46,8 +46,9 @@ test('batch inventory distinguishes completion, verified passes, skips and incom
         assert.equal(result.status, 'incomplete');
         assert.equal(result.complete, false);
         assert.equal(result.allTargetsPassed, false);
-        assert.equal(result.finishedTargets, 3);
-        assert.deepEqual(result.statusCounts, { passed: 1, 'incomplete-report': 6, 'stub-smoke-generated': 1, 'dummy-skipped': 1 });
+        assert.equal(result.finishedTargets, 2);
+        // Legacy display scores lack source-dependency evidence and cannot be recertified.
+        assert.deepEqual(result.statusCounts, { 'incomplete-report': 7, 'stub-smoke-generated': 1, 'dummy-skipped': 1 });
         assert.ok(result.targets.every((target: any) => target.file === 'pkg/sample.py' && !path.isAbsolute(target.reportDirectory)));
         assert.ok(result.targets.every((target: any) => target.reportDirectory.split('/').length === 2));
         assert.equal(new Set(result.targets.map((target: any) => target.reportDirectory.split('/')[0])).size, 1);

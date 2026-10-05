@@ -675,7 +675,11 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 result.update({
                     'total': 0,
                     'baseline_passed': False,
-                    'baselineStatus': 'error' if baseline.returncode == 86 or baseline_result is None else 'failed',
+                    'baselineStatus': ('failed' if baseline.returncode == 1 and baseline_result is not None
+                                       and baseline_result.get('status') == 'failed'
+                                       and baseline_result['testFailures']
+                                       and all(item['phase'] == 'test' for item in baseline_result['testFailures'])
+                                       else 'error'),
                     'baseline_output': (baseline.stdout + baseline.stderr).strip()[-500:],
                     'mutants': [],
                 })

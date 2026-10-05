@@ -19,6 +19,7 @@ import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './role
 import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
+import { SOURCE_VERSIONS_VERSION, sourceVersionsCurrent } from './pipeline/sourceVersions';
 import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget } from './pipeline/targetBudget';
 import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObservations } from './pipeline/behaviorObservations';
 import { buildProbeInputs, TypedProbeInputsV1 } from './pipeline/probeInputs';
@@ -73,6 +74,7 @@ import { ImportFixtureRule } from './pipeline/importFixtures';
 import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
 import { MutationEngineSelection } from './mutation/mutationExecution';
 import { SelectedMutationEngine, selectMutationEngine, mutationArguments } from './mutation/mutationSelection';
+import { mutationProcessFailure } from './mutation/mutationProcessFailure';
 import { MutationRun, MutationContext, parseIsolatedMutationRun,
     mutationScore as measuredMutationScore } from './mutation/mutationResult';
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
@@ -1108,7 +1110,7 @@ async function resolveAstAndDependencies(
     const environment = await beforeBehavior(astContext);
     astContext.dependencyResolution = environment.dependencies || [];
     astContext.dependencyContexts = [...(astContext.localDependencyContexts || [])];
-    astContext.sourceVersions = [];
+    astContext.sourceVersions = environment.sourceVersions.map(item => ({ ...item }));
     if (astContext.retrieval?.selected) {
         log(localize("[AST] 已檢索 {0} 個同模組 helper，僅作來源語境，不新增執行觀測。", astContext.retrieval.selected));
     }
@@ -1121,7 +1123,6 @@ async function resolveAstAndDependencies(
                 && item.name === dep.name && (item.level || 0) === (dep.level || 0));
             const depFilePath = resolved?.file;
             if (depFilePath && fs.existsSync(depFilePath)) {
-                astContext.sourceVersions.push({ file: depFilePath, hash: evidenceHash(fs.readFileSync(depFilePath, 'utf8')) });
                 const depAst = await extractAstContext(depFilePath, dep.name, pythonExecutable);
                 if (depAst && !depAst.error) {
                     depAst.sourceHash = evidenceHash(depAst.code);
@@ -1480,6 +1481,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         initialTargetObservations: astContext?.traceResult || null, importContract: testBindingContext,
         roleQualification: roleQualification || null });
     if (!preflight) { await checkEnvironment(astContext); }
+    journal.knowledge({ dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
+        dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions });
     const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
     let mutationSelection: SelectedMutationEngine | undefined;
     if (mode === 'full') {
@@ -1687,8 +1690,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const evidenceStillCurrent = () => {
         try {
             return evidenceHash(fs.readFileSync(params.filePath, 'utf8')) === journal.sourceHash
-                && (astContext?.sourceVersions || []).every(version => fs.existsSync(version.file)
-                    && evidenceHash(fs.readFileSync(version.file, 'utf8')) === version.hash);
+                && sourceVersionsCurrent(astContext?.sourceVersions || preflight!.sourceVersions);
         } catch { return false; }
     };
     const invalidateSourceEvidence = () => {
@@ -2391,7 +2393,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     scenarios: acceptedScenarios, qualityGaps: gaps, measuredQualityGaps: gaps,
                     reviewStatus: status, reviewWarnings: warnings, tier: currentTier,
                     generationMode: currentTier === 1 ? tier1GenerationMode : undefined,
-                    dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })) || [] });
+                    dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
+                    dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions });
                 journal.knowledge({ executableBaseline: { path: 'executable_baseline.json', testFile: snapshot.testFile,
                     codeHash: snapshot.codeHash, tier: snapshot.tier, reviewStatus: snapshot.reviewStatus, mutationStatus: snapshot.mutationStatus } });
                 recordRole('executable-baseline', 'checkpointed', { codeHash: snapshot.codeHash,
@@ -2644,11 +2647,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const mutationExecution = await runSpawn(pythonExecutable,
                 mutationArguments(selectedMutation, params.filePath, testPath, targetFuncName || '',
                     astContext?.class_name || '', mutationTimeoutSeconds),
-                { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: (mutationTimeoutSeconds + 5) * 1000 });
+                { cwd: testDir, env: testExecutionEnv, timeout: (mutationTimeoutSeconds + 5) * 1000 });
             throwIfExecutionCancelled();
             if (mutationExecution.code !== 0) {
-                throw new AnalysisStageError('mutation', 'mutation-execution',
-                    localize('突變引擎 {0} 執行失敗；已停止，不改用其他引擎。', engine));
+                throw mutationProcessFailure(engine, mutationExecution);
             }
             let mutationRun: MutationRun = parseIsolatedMutationRun(mutationExecution.stdout, mutationContext, engine);
             // Persist rejected evidence before any gate can stop this round.
@@ -2776,7 +2778,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 selectedRules: ruleSelection,
                 acceptedTest: checkpoints.quality!.testFile,
                 acceptedCodeHash: evidenceHash(fs.readFileSync(testPath, 'utf8')),
-                dependencyVersions: astContext?.sourceVersions?.map(item => ({ module: path.basename(item.file), hash: item.hash })),
+                dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
+                dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions,
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
                 survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
                 reviewWarnings, reviewStatus,

@@ -1,5 +1,6 @@
 """Load the canonical target in a fresh, side-effect-guarded process before LLM work."""
 import importlib
+import hashlib
 import io
 import json
 import keyword
@@ -66,6 +67,8 @@ def preflight(payload):
             return {'ok': False, 'category': 'environment', 'stage': 'module-resolution',
                     'reason': f'Canonical import {module_name} does not resolve to the selected source file.'}
         return {'ok': True, 'module': module_name, 'importPaths': roots, 'policy_version': POLICY_VERSION,
+                'sourceVersionsVersion': 'loaded-project-sources-v1',
+                'sourceVersions': loaded_source_versions(payload.get('sourceRoot') or package_root),
                 'importFixtures': import_fixture_evidence(),
                 'dependencies': resolve_loaded_dependencies(module, payload.get('dependencies', []),
                                                             payload.get('sourceRoot') or package_root)}
@@ -88,6 +91,37 @@ def preflight(payload):
         return {'ok': False, 'category': 'environment', 'stage': 'module-import',
                 'importFixtures': import_fixture_evidence(),
                 'reason': f'{safe_type_name(error)}: {exception_message(error)}', 'diagnostic': diagnostic, 'policy_version': POLICY_VERSION}
+
+
+def loaded_source_versions(source_root):
+    """Snapshot loaded project sources without importing or evaluating attributes.
+
+    The prompt's callable inventory is intentionally narrower: constants, module
+    aliases, reexports and transitive imports still affect execution provenance.
+    Function-local imports not executed by preflight are outside this snapshot.
+    """
+    root = os.path.normcase(os.path.realpath(source_root))
+    versions = {}
+    for module in tuple(sys.modules.values()):
+        if type(module) is not types.ModuleType:
+            continue
+        origin = vars(module).get('__file__')
+        if type(origin) is not str:
+            continue
+        file = os.path.realpath(origin)
+        try:
+            if os.path.commonpath([root, os.path.normcase(file)]) != root:
+                continue
+        except ValueError:
+            continue
+        if not file.endswith('.py'):
+            # Native dependencies are interpreter/environment provenance, not
+            # Python source. Do not guess a source path from their module names.
+            continue
+        with open(file, 'rb') as stream:
+            source = stream.read()
+        versions[os.path.normcase(file)] = {'file': file, 'hash': hashlib.sha256(source).hexdigest()}
+    return [versions[key] for key in sorted(versions)]
 
 
 if __name__ == '__main__':
