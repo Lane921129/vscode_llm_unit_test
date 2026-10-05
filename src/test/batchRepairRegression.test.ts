@@ -210,8 +210,10 @@ test('preflight resolves nested absolute/relative imports and package initialize
         const result = await preflightTargetModule(python, file, 'pkg.service', [project, directory], directory, dependencies, directory);
         assert.equal(result.dependencies?.[0].file && fs.realpathSync(result.dependencies[0].file), fs.realpathSync(path.join(pkg, 'helper.py')));
         assert.equal(result.dependencies?.[1].file && fs.realpathSync(result.dependencies[1].file), fs.realpathSync(path.join(pkg, '__init__.py')));
-        const restricted = await preflightTargetModule(python, file, 'pkg.service', [project], directory, dependencies, path.join(directory, 'unrelated'));
-        assert.ok(restricted.dependencies?.every(item => item.reason === 'outside-selected-source-tree'));
+        // An unrelated source root cannot provide even the selected module's
+        // version evidence; the new provenance contract must fail closed.
+        await assert.rejects(preflightTargetModule(python, file, 'pkg.service', [project], directory, dependencies,
+            path.join(directory, 'unrelated')), /missing-or-invalid-source-versions/);
         fs.writeFileSync(path.join(pkg, 'helper.py'), 'from pkg import exported as normalize\n');
         const rebound = await preflightTargetModule(python, file, 'pkg.service', [project], directory, dependencies, directory);
         assert.equal(rebound.dependencies?.[0].reason, 'reexported-or-rebound-function');
