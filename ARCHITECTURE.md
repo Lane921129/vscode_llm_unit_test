@@ -1,5 +1,20 @@
 # 專案閱讀入口
 
+## 初版整合流程與交付邊界（2026-10-06）
+
+本輪以 `all_test_2026_10_06_13_59` 的實測缺口為驗收依據，保留既有單一 orchestrator，將範圍準備、角色契約修正、候選紀錄與品質實驗抽成小模組，不建立第二套執行管線。以下為本輪固定的流程契約；實際交付與驗證結果另記於 CHANGELOG。
+
+1. **範圍與環境**：選取專案後保留所選根目錄及來源範圍，提供相依檢查和模組初始化預檢。批次先確認來源清單、合併重複的來源／限定目標身分，再做已存在的逐模組預檢。備份、測試 fixture 與業務程式的取捨由範圍選擇明示；同名重複定義只記一次歧義，不能猜選第一份定義。安裝和初始化替身仍須使用既有具體清單確認；關閉或取消不啟動生成。
+2. **來源與證據固定**：保留單次執行的 Python、來源／相依版本、限定目標、角色資格、Tier、品質政策與引擎選擇。AST、預檢、受控 Trace、生成與量測使用同一環境；切換來源或設定不能沿用過期就緒狀態。
+3. **Writer seed**：首次模型請求先要求一個有證據支持的最小案例及必要 setup。模型自己的候選通過結構、binding、簽名、assertion evidence 及隔離執行後，立即保存 executable checkpoint，審查仍為 incomplete、突變仍未量測。不能藉自動附加 Trace 把無效模型候選升格通過。
+4. **合併、審查與量測**：只有獨立通過的 Trace 基線才合併到 seed。合併後重走相同 gate；Reviewer 的契約無效回覆最多修正一次，兩次共用原 absolute deadline 與總預算，不重新傳送壞回覆，不在傳輸／取消／預算失敗後再啟動契約修正。未完成審查維持 incomplete。覆蓋及完整所選突變集合確認同一來源／測試身分後保存品質基線。
+5. **單一實測缺口補強**：每輪選一個已量測 coverage gap 或存活 mutant。支援範圍內，由本機產生有上限、純資料、沒有 expected value 的輸入／狀態實驗；以 fingerprint 避免相同實驗重送。數值邊界同時支援 builtin 與 Mutatest 的可核對 AST 位置。物件狀態初版只支援可重播的同步實例建構、目標呼叫和普通資料，未知 descriptor、動態 setup、外部 I/O、async 等保留明確 unsupported，不猜測結果。
+6. **觀測轉測試**：只有同版來源、同一組 constructor／輸入／呼叫順序、完整隔離且可 assertion 的回傳、例外或狀態觀測能產生 host 測試。新增測試先獨立執行，再與已通過案例合併。模型可在未支援範圍提出新假設，但仍須實際驗證；新方法名稱、重複測試與未執行提案不能算改善。
+7. **接受、保留與停止**：同候選重新量測 coverage、branch、mutation，沿用既有非退步檢查、總預算與停滯上限。擴充失敗保留已驗證基線；source 變更使舊證據失效。80% 只適用突變，目標行覆蓋及分支完整性、Reviewer 和所有隔離 gate 維持。
+8. **可重現診斷**：在丟棄／降階前保存有界 Python 候選與階段、Tier、attempt、gate、固定原因碼及 hash；沒有可辨識 Python、包含憑證或原始碼複製的回覆僅保留安全 metadata。候選不使用 test_ 名稱，不自動執行；事件不保存完整 provider 回應。final_report 保留同一候選的結果，failure_report 可追溯 seed、修訂、實驗、審查修正與回滾。
+
+本輪驗收包含：環境取消不生成／切專案不沿用設定、seed 失敗不擴充、seed 成功才合併、Reviewer 同時限修正與未完成狀態、拒絕候選追溯與憑證拒存、Mutatest 邊界規劃、普通容器狀態和例外實測、重複實驗不量測、baseline 失敗不合併，以及真實隔離執行／coverage／mutation 的小批次整合。固定模型回覆與本機實驗不冒充實驗室模型的新一輪通過。
+
 先看本頁，再依「想改什麼」打開對應檔案。角色提示詞只有一份正式實作，集中在 `src/roles/`。
 
 本頁描述目前工作區已接線的路徑，不表示 [完整完善計畫](docs/專案完善計畫_2026_09_21.md) 已全部完成。第一批 P0、Trace 觀測、突變／coverage 與總預算已交付；完成範圍、未關閉問題與正式測試結果以 [實作與驗收追蹤](docs/完善實作進度_2026_09_21.md) 為準。
@@ -65,11 +80,19 @@ flowchart TD
     Analyst --> Rules[程式依 AST 分派測試生成規則]
     Rules --> SupplementalProbe[執行分析師提出的安全純量輸入]
     SupplementalProbe --> Bundle[合併 Writer 證據包]
-    Bundle --> Writer[Writer 撰寫測試]
-    Writer --> Structure[結構與證據檢查]
+    Bundle --> Writer[Writer 撰寫 seed 或補強測試]
+    Writer --> SeedGate{首次模型候選}
+    SeedGate -->|是| SeedCheck[獨立結構與隔離執行驗證]
+    SeedCheck -->|通過| SeedCheckpoint[保存 seed：審查及突變尚未完成]
+    SeedCheck -->|失敗| Repair
+    SeedCheckpoint --> TraceBaseline[獨立驗證 Trace 後合併並保留 seed]
+    SeedGate -->|否| TraceBaseline
+    TraceBaseline --> Structure[合併候選的結構與證據檢查]
     Structure --> Validation[受控 unittest 與原生目標 coverage]
     Validation -->|執行通過| Checkpoint[立即保存可執行基線]
     Checkpoint --> Reviewer[Reviewer 審查]
+    Reviewer -->|契約無效且尚有預算| ReviewRepair[原期限內最多修正一次]
+    ReviewRepair --> Reviewer
     Reviewer -->|具體審查問題| Writer
     Structure -->|結構問題| Writer
     Validation -->|數值 assertion 失敗| Calculator[受限計算器提出候選]
@@ -84,7 +107,11 @@ flowchart TD
     Reviewer -->|審查完成或明示未完成| Quality[完整所選範圍突變測量]
     Quality -->|證據完整且不退步| QualityCheckpoint[提交同候選最佳品質基線]
     Quality -->|失敗或證據不足| Report
-    QualityCheckpoint -->|仍有缺口且預算足夠| QualityAnalyst[品質分析師提出下一輪任務]
+    QualityCheckpoint -->|仍有缺口且預算足夠| Focus[選取單一實測缺口]
+    Focus --> Experiments[有界數值或普通物件狀態實驗]
+    Experiments -->|可重播觀測且獨立基線通過| ToolMerge[保留既有案例並合併工具測試]
+    ToolMerge --> Structure
+    Experiments -->|不支援或沒有新證據| QualityAnalyst[品質分析師提出下一輪任務]
     QualityAnalyst --> Writer
     QualityCheckpoint -->|達標或達停止條件| Report
 ```
@@ -113,7 +140,7 @@ caller AST 現在先以同一 codec 編碼整筆 `args`／`kwargs` 與已證明�
 
 `review-v7` 把最多五個 findings 的分類、TEST_FILE 行號、原因與動作固定在同一份 schema／parser 契約；程式依行號還原精確原文，缺漏情境不會自行升格為 blocking。明確與目標 binding 矛盾、要求修改來源或 mock 目標本身的回覆保持未完成，不能交 Writer 或轉成通過。這是有界的矛盾檢查，不是模型意見的正確性證明。Writer 修訂保留最新拒絕原因；只有 unittest 唯一列出的一個失敗方法可交 Bug Fixer。Tier 3 scaffold 回傳完整測試檔，不再做第二層 class／縮排包裝。
 
-`src/roles/reviewSession.ts` 以完整審查 prompt 的雜湊重用同候選／同證據評估；連續兩次無法取得合格審查後，停止該目標分析的額外審查請求。Reviewer 格式不合格不再另以文字模式重問；供應商傳輸層錯誤仍遵循既有有限重試。新目標分析重新開始，未知結果絕不改成空問題通過。
+`src/roles/reviewSession.ts` 以完整審查 prompt 的雜湊重用同候選／同證據評估；連續兩次無法取得合格審查後，停止該目標分析的額外審查。每次評估由 `reviewContractRepair.ts` 在原期限與目標預算內容許一次契約修正，使用同一輸出格式，不把無效原文放回 prompt。傳輸錯誤不觸發契約修正，仍遵循既有有限傳輸重試。新目標分析重新開始，未知結果絕不改成空問題通過。
 
 `src/pipeline/qualityRegression.ts` 以實測未覆蓋行與分支集合比較候選；部分缺口縮小可保留，新增缺口或已知證據變未知仍回滾。分數與存活突變體的既有保護維持。停滯計數同樣採個別缺口身份，不比較翻譯後的完整清單。
 
@@ -222,11 +249,11 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 
 ## 尚未實作與尚待驗收的界線
 
-本輪沒有完成型態樹、型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、多步狀態案例、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／快取，以及逐筆輸入 UI／設定遷移。Writer 仍使用現有完整 Python fence 契約，不能把新增 checkpoint 或 codec 說成已完成增量生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
+本次提交沒有包含型態樹、型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗目前只支援普通同步實例的同一目標最多兩次呼叫；實驗去重不等同突變量測快取。Writer 仍使用現有完整 Python fence 契約，seed 與補強提示不等同已完成增量格式生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
 
 共用版本化 `QualityPolicy` 已交付；新執行的 standard80、歷史 strict100 與 fixture manifest 各自保存明確政策欄位。N/A、未知、未完成審查與未完成測量不因此升格通過。固定模型 A/B、完整 corpus／保留評估集，以及外部引擎的真實支援環境驗收均未執行。
 
-CI workflow 已設定 Windows／Ubuntu 與 Python 3.12／3.13 矩陣；設定存在不代表遠端工作已成功。本輪本機 Node 392／Python 200 項、型別、lint、生產 build、Webview 及 secret scan 均通過；遠端 CI 與模型／外部引擎實驗仍待驗收，詳見實作追蹤文件。
+CI workflow 已設定 Windows／Ubuntu 與 Python 3.12／3.13 矩陣；設定存在不代表遠端工作已成功。最新本機驗證以 CHANGELOG 對應日期為準；遠端 CI 與實驗室模型仍需獨立驗收，詳見實作追蹤文件。
 
 
 ## 分輪結果輸出（function-loops-v1）

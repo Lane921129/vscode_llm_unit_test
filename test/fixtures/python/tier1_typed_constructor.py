@@ -7,4 +7,4 @@ class BytePrefix:
 
 
 def examples():
-    return BytePrefix(b'A').join((b'Z',)), BytePrefix(b'B').join((b'Z',))
+    return BytePrefix(b'A').join((b'Z', b'Y')), BytePrefix(b'B').join((b'Z', b'Y'))

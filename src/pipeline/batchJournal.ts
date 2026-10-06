@@ -1,5 +1,5 @@
 import { resultDataDirectory, resultArtifactPath } from './resultLayout';
-import { localize } from '../i18n/core';
+import { localize, t } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +12,7 @@ import { verifyExecutionEvidence } from './executionEvidence';
 import { VerificationMode } from './verificationMode';
 import { SOURCE_VERSIONS_VERSION, validSourceVersions, sourceVersionsCurrent } from './sourceVersions';
 import { conciseReason, isReportExcluded, reportCell, reportLink, summarizeTarget, TargetReportSummary } from './targetReport';
+import { BatchScopeSelection, canonicalScopeRoot, createBatchScopeSelection } from './batchScope';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -89,6 +90,7 @@ export class BatchJournal {
     private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
     private readonly files: string[] = [];
     private readonly reportSummaries = new Map<number, TargetReportSummary>();
+    private scope?: BatchScopeSelection;
     constructor(readonly directory: string, private readonly sourceRoot: string,
         private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode }) {
         this.save();
@@ -100,8 +102,21 @@ export class BatchJournal {
         }
         return relative.replace(/\\/g, '/') || '.';
     }
+    selectScope(selection: BatchScopeSelection): void {
+        if (this.files.length || this.targets.length || this.status !== 'discovering') { throw new Error('Batch scope is fixed before target discovery'); }
+        const expected = createBatchScopeSelection(this.sourceRoot, selection.knownFiles, selection.selectedFiles);
+        if (canonicalScopeRoot(selection.root) !== canonicalScopeRoot(this.sourceRoot) || !isDeepStrictEqual(expected, selection)) {
+            throw new Error('Batch scope identity or selection is invalid');
+        }
+        this.scope = structuredClone(expected);
+        this.save();
+    }
     discover(file: string, targets: string[]): void {
         const relative = this.relative(file);
+        const identity = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+        if (this.scope && !this.scope.selectedFiles.some(selected => identity(selected) === identity(relative))) {
+            throw new Error('Batch source was excluded from the confirmed scope');
+        }
         this.files.push(relative);
         for (const target of targets) { this.targets.push({ id: this.targets.length, file: relative, target, state: 'pending' }); }
         this.save();
@@ -242,6 +257,7 @@ export class BatchJournal {
             preflightBlockedModules: this.blockedModules,
             model: this.identity.model, buildTimestamp: this.identity.buildTimestamp,
             pythonExecutable: this.identity.python, roleContracts: ROLE_CONTRACT_VERSIONS,
+            ...(this.scope ? { scope: this.scope } : {}),
             discoveredFiles: this.files, discoveryFailures: this.discoveryFailures,
             expectedTargets: this.targets.length, finishedTargets: this.targets.filter(t => t.state === 'finished').length,
             statusCounts: counts, environmentIssues, targets: this.targets };
@@ -253,6 +269,7 @@ export class BatchJournal {
             : manifest.allTargetsExecutionVerified ? localize("全部執行驗證通過；完整品質尚未驗證") : localize("未全部通過")}`, '', this.summary(), '',
             localize("- 驗證目標：{0}", mode === 'execution' ? localize("執行驗證；Trace、覆蓋率、突變與品質審查未執行") : localize("完整品質驗證")),
             localize("- 狀態：{0}（執行完成不代表測試通過）", this.status),
+            ...(this.scope ? [t('ui.batchScopeSummary', this.scope.selectedFiles.length, this.scope.knownFiles.length, this.scope.excludedFiles.length)] : []),
             ...(this.blockedModules ? [localize("- 前置預檢有 {0} 個模組受阻：[原因與處理方式](preflight/import_check.md)。未開始的目標保持未完成。", this.blockedModules)] : []),
             localize("- 預期目標：{0}；已有終態：{1}；完整通過：{2}", this.targets.length, manifest.finishedTargets, passed),
             localize("- 模型：{0}；建置：{1}", safe(this.identity.model), safe(this.identity.buildTimestamp)),

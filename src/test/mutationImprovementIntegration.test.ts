@@ -116,7 +116,12 @@ class Cases(unittest.TestCase):
         assert.ok(measured[1].detail.score > measured[0].detail.score, JSON.stringify(measured.map(event => event.detail.score)));
         assert.ok(events.some(event => event.stage === 'mutation-inputs' && event.status === 'observed'));
         assert.equal(quality, 0, 'meeting the 80% policy must stop further quality-model requests');
-        assert.equal(measured.length, 2, 'stop once the complete measurement meets the fixed threshold');
+        assert.ok(measured.length >= 2 && measured.length <= 4, 'one measured gap is improved per round within the configured limit');
+        assert.equal(writers, 3, 'after fallback establishes the seed, observed boundary additions need no further Writer');
+        for (let round = 1; round < measured.length; round++) {
+            const plan = JSON.parse(fs.readFileSync(path.join(roundDirectory(output, round), `loop${round}_mutation_input_plan.json`), 'utf8'));
+            assert.equal(new Set(plan.inputs.map((input: any) => input.mutantId)).size, 1, 'only one selected gap is probed per round');
+        }
         assert.equal(state.qualityPolicy.policyId, 'standard80-v1');
         assert.equal(state.qualityAssessment.toolsSatisfied, true);
         assert.equal(state.terminalStatus, 'execution-passed-review-incomplete');

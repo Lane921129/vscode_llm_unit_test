@@ -1,5 +1,19 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "補測觀測含疑似憑證，未保存觀測或建立測試。": "Supplemental observations contain a suspected credential; observations were not saved and tests were not created.",
+    "模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。": "The model response contains a suspected credential; it was neither saved nor executed.",
+    "先獨立執行模型的最小測試，尚未合併 Trace": "Running the model seed independently before merging Trace",
+    "模型測試已獨立通過；接著合併觀測測試並進行完整量測": "The model seed passed independently; merging observed tests before full measurement",
+    "已取得補測觀測；仍須通過獨立測試與完整品質量測": "Supplemental observations obtained; independent tests and full quality measurement are still required",
+    "補測案例已獨立通過；下一輪重新量測覆蓋率與突變": "Supplemental tests passed independently; coverage and mutations will be measured again next round",
+    "實測確認品質缺口減少": "Measurement confirmed fewer quality gaps",
+    "實測缺口未減少；保留既有基線": "Measured gaps did not decrease; retaining the existing baseline",
+    "沒有新的測試情境；停止重複量測並保留基線": "No new test scenario; stopping duplicate measurement and retaining the baseline",
+    "審查契約無效；在原時限內僅要求一次修正": "The review contract is invalid; requesting one correction within the original deadline",
+    "已記錄拒絕原因；可保存的測試候選附於失敗報告": "Rejection recorded; eligible test candidates are linked in the failure report",
+
+    "處理初始化設定": "Configure initialization",
+    "候選僅重複或重新命名既有測試，未新增可驗證情境；保留已測量基線。": "The candidate only repeats or renames existing tests without a new verifiable scenario; the measured baseline is retained.",
     "所選 Python 尚未安裝此外部引擎。請先在同一環境執行 python -m pip install --no-deps mutatest==3.1.0，再重新執行。": "The selected Python environment does not have this external engine. Run python -m pip install --no-deps mutatest==3.1.0 in that environment, then retry.",
     "### 突變執行診斷\n\n": "### Mutation execution diagnostics\n\n",
     "本輪量測耗時：{0} 秒。\n\n": "Measurement time for this round: {0} seconds.\n\n",

@@ -177,6 +177,13 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
     assert.equal(elements.has('batch-path'), false);
     assert.equal(elements.get('file-select').value, '');
     assert.equal(elements.get('func-select').disabled, true);
+    elements.get('btn-batch-scope').onclick();
+    assert.equal(messages.at(-1).command, 'previewBatchScope');
+    assert.equal(messages.at(-1).projectRoot, '/project');
+    receive({ data: { command: 'batchScopeSelected', projectRoot: '/project', text: '2 / 3 selected' } });
+    assert.equal(elements.get('batch-scope-status').textContent, '2 / 3 selected');
+    receive({ data: { command: 'batchScopeSelected', projectRoot: '/old-project', text: 'stale selection' } });
+    assert.equal(elements.get('batch-scope-status').textContent, '2 / 3 selected');
     elements.get('file-select').value = '/project/target.py';
     elements.get('btn-prepare-env').onclick();
     assert.equal(messages.at(-1).command, 'prepareProjectEnvironment');
@@ -194,6 +201,7 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
     assert.equal(elements.get('btn-run').disabled, true);
     assert.equal(elements.get('btn-prepare-env').disabled, true);
     assert.equal(elements.get('btn-prepare-env-scope').disabled, true);
+    assert.equal(elements.get('btn-batch-scope').disabled, true);
     assert.equal(elements.get('python-environment-status').value, 'Checking environment');
     receive({ data: { command: 'analysisFinished' } });
     assert.equal(elements.get('btn-run').disabled, true);
@@ -238,6 +246,7 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
             assert.equal(elements.get('validation-mode').disabled, true, 'the active run cannot change modes');
             assert.equal(elements.get('mutation-engine').disabled, true);
             assert.equal(elements.get('mutation-workers').disabled, true);
+            assert.equal(elements.get('btn-batch-scope').disabled, true);
             const count = messages.length;
             elements.get('mutation-engine').onchange({ target: { value: 'builtin' } });
             elements.get('mutation-workers').onchange();

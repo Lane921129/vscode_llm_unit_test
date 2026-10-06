@@ -7,6 +7,8 @@ import { currentExecution, ExecutionContext } from '../pipeline/executionContext
 
 test('abort and immediate restart suppress stale completion and freeze model facts per batch', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-lifecycle-'));
+    const source = path.join(directory, 'constants.py');
+    fs.writeFileSync(source, 'VALUE = 1\n');
     const params = { batchPath: directory, outputPath: path.join(directory, 'results'), envType: 'local', modelName: 'fixture' };
     const Module = require('module');
     const originalLoad = Module._load;
@@ -14,12 +16,20 @@ test('abort and immediate restart suppress stale completion and freeze model fac
     const messages: Array<{ command: string }> = [];
     const warnings: string[] = [];
     const scans: Array<{ resume: () => void; context: ExecutionContext<any> }> = [];
+    let scopePreviews = 0;
     const utilities = require('../utils/utils');
     const originalScan = utilities.findPythonFilesInDir;
+    const originalExtract = utilities.extractFunctionsWithAst;
+    utilities.extractFunctionsWithAst = async () => [];
     utilities.findPythonFilesInDir = () => new Promise<string[]>(resolve => {
-        scans.push({ resume: () => resolve([]), context: currentExecution()! });
+        scans.push({ resume: () => resolve([source]), context: currentExecution()! });
     });
     const vscode = {
+        CancellationTokenSource: class {
+            token = { isCancellationRequested: false };
+            cancel() { this.token.isCancellationRequested = true; }
+            dispose() {}
+        },
         ExtensionMode: { Development: 2, Test: 3 },
         Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [], getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }),
@@ -32,6 +42,7 @@ test('abort and immediate restart suppress stale completion and freeze model fac
                 } };
                 return { dispose() {} };
             },
+            showQuickPick: async (items: any[]) => { scopePreviews++; return items.filter(item => item.picked); },
             showInformationMessage: async (message: string) => { warnings.push(message); },
             showTextDocument: async () => {}
         },
@@ -70,9 +81,11 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         scans[0].resume();
         await oldBatch;
         assert.strictEqual(messages.length, beforeOldCompletion);
+        assert.strictEqual(scopePreviews, 0, 'a cancelled source scan must not open or invalidate a new scope picker');
         assert.strictEqual(scans[1].context.cancelled, false);
         scans[1].resume();
         await newBatch;
+        assert.strictEqual(scopePreviews, 1);
         assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 2);
         const records = fs.readdirSync(params.outputPath).map(name => JSON.parse(
             fs.readFileSync(path.join(params.outputPath, name, 'batch_manifest.json'), 'utf8')));
@@ -81,6 +94,7 @@ test('abort and immediate restart suppress stale completion and freeze model fac
     } finally {
         Module._load = originalLoad;
         utilities.findPythonFilesInDir = originalScan;
+        utilities.extractFunctionsWithAst = originalExtract;
         for (const scan of scans) { scan.resume(); }
         fs.rmSync(directory, { recursive: true, force: true });
     }

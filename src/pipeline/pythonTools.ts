@@ -20,6 +20,7 @@ export const PYTHON_TOOLS = {
     scenarios: 'scenario_inventory.py',
     traceDeduplication: 'deduplicate_trace_tests.py',
     mutationInputs: 'mutation_probe_plan.py',
+    qualityExperiments: 'quality_experiment_runner.py',
     mutation: 'basic_mutation_runner.py',
     externalMutation: 'external_mutation_runner.py',
     coverage: 'coverage_read.py'

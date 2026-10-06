@@ -25,12 +25,15 @@ Return one JSON object with tasks. A task has exactly evidence_id, hypothesis, s
 export interface QualityFocus { id: string; kind: 'coverage' | 'survivor'; evidence: string }
 
 /** Rotate one deterministic measured gap per round; no model selects or invents evidence. */
-export function selectQualityFocus(coverage: TargetCoverageAssessment, survivors: string[], round: number): QualityFocus | undefined {
+export function selectQualityFocus(coverage: TargetCoverageAssessment, survivors: string[], round: number,
+    preferredSurvivors: readonly string[] = []): QualityFocus | undefined {
     const items = [
         ...coverageGapIds(coverage).map(evidence => ({ kind: 'coverage' as const, evidence })),
         ...[...new Set(survivors)].filter(Boolean).map(evidence => ({ kind: 'survivor' as const, evidence }))
     ];
-    const item = items[(Math.max(1, round) - 1) % items.length];
+    const supported = items.filter(item => item.kind === 'survivor' && preferredSurvivors.includes(item.evidence));
+    const pool = supported.length ? supported : items;
+    const item = pool[(Math.max(1, round) - 1) % pool.length];
     return item ? { ...item, id: 'E' + createHash('sha256').update(item.kind + ':' + item.evidence).digest('hex').slice(0, 16) } : undefined;
 }
 

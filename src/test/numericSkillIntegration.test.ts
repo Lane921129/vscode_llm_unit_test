@@ -73,8 +73,11 @@ test('full mode calculates laboratory BMI failures, verifies exact calls, reruns
         assert.equal(proof.traces.flatMap((trace: any) => trace.cases).filter((item: any) => item.source.kind === 'semantic_guided'
             && item.source.detail === 'numeric-calculation').length, 8, 'model-selected inputs must not be labeled as source callers');
         const baseline = JSON.parse(fs.readFileSync(path.join(directory, 'executable_baseline.json'), 'utf8'));
-        const actual = fs.readFileSync(path.join(directory, baseline.testFile), 'utf8');
-        assert.equal(baseline.codeHash, proof.candidateTestHash);
+        const seedEnd = events.findIndex(e => e.stage === 'writer-seed' && e.status === 'accepted');
+        const seedCheckpoint = events.slice(0, seedEnd).filter(e => e.stage === 'executable-baseline').at(-1);
+        assert.equal(seedCheckpoint.detail.codeHash, proof.candidateTestHash, 'numeric corrections bind to the independently executed model seed');
+        const actual = fs.readFileSync(path.join(directory, seedCheckpoint.detail.testFile), 'utf8');
+        assert.ok(fs.existsSync(path.join(directory, baseline.testFile)), 'merged executable baseline also remains available');
         assert.ok(actual.includes(correctException.trimEnd()));
         assert.match(actual, /self.assertEqual\(bmi, 24.22\)/);
         assert.match(actual, /self.assertEqual\(calculate_bmi\(0, 1\), \(0.0, '體重過輕'\)\)/);

@@ -77,7 +77,10 @@ test('English stage, rejection, fallback and repair messages preserve non-passin
         assert.equal(rejected.valid, false); assert.doesNotMatch(rejected.reason!, /\p{Script=Han}/u);
         assert.match(describeStageEvent('structure', 'rejected', { reason: rejected.reason }), /Writer/);
         for (const [stage, status] of [['structure', 'passed'], ['reviewer', 'invalid-response'], ['reviewer', 'unavailable'],
-            ['validation', 'accepted'], ['coverage', 'measured'], ['model-request', 'completed']]) {
+            ['validation', 'accepted'], ['coverage', 'measured'], ['model-request', 'completed'], ['writer-seed', 'started'], ['writer-seed', 'accepted'],
+            ['quality-experiment', 'observed'], ['quality-experiment', 'improved'], ['quality-experiment', 'unchanged'],
+            ['quality-experiment-baseline', 'passed'], ['quality-novelty', 'duplicate'], ['reviewer', 'repair-requested'],
+            ['candidate-artifact', 'rejected']]) {
             assert.doesNotMatch(describeStageEvent(stage, status, {}), /\p{Script=Han}/u);
         }
         assert.match(withOutcomeHeader('原始證據{1}', { validationMode: 'execution', terminalStatus: 'execution-passed', executionVerified: true }),

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { BatchJournal } from '../pipeline/batchJournal';
 import { createAnalysisDirectory, createBatchDirectory } from '../pipeline/analysisOutput';
 import { AnalysisJournal, evidenceHash } from '../pipeline/analysisJournal';
+import { createBatchScopeSelection } from '../pipeline/batchScope';
 
 test('batch inventory distinguishes completion, verified passes, skips and incomplete provenance across reruns', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-journal-'));
@@ -74,4 +75,42 @@ test('batch cancellation and discovery failures preserve pending work without cl
         assert.doesNotMatch(fs.readFileSync(path.join(root, 'batch_summary.md'), 'utf8'), /broken.py/);
         assert.match(fs.readFileSync(path.join(root, 'failure_report.md'), 'utf8'), /無法掃描 broken.py/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('batch manifest preserves confirmed source scope without counting excluded files as failed targets', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-scope-journal-'));
+    try {
+        const batch = new BatchJournal(root, root, { model: 'fixture', buildTimestamp: 'build', python: 'python' });
+        const selection = createBatchScopeSelection(root, ['main.py', 'old backup/main.py'], ['main.py']);
+        batch.selectScope(selection);
+        selection.selectedFiles.push('old backup/main.py');
+        assert.throws(() => batch.discover(path.join(root, 'old backup', 'main.py'), ['backup_target']), /excluded/);
+        batch.discover(path.join(root, 'main.py'), ['target']);
+        assert.throws(() => batch.selectScope(selection), /fixed/);
+        batch.finish('cancelled');
+        const manifest = JSON.parse(fs.readFileSync(path.join(root, 'batch_manifest.json'), 'utf8'));
+        assert.deepEqual(manifest.scope.selectedFiles, ['main.py']);
+        assert.deepEqual(manifest.scope.excludedFiles, ['old backup/main.py']);
+        assert.deepEqual(manifest.scope.knownFiles, ['main.py', 'old backup/main.py']);
+        assert.match(manifest.scope.scopeId, /^[a-f0-9]{64}$/);
+        assert.deepEqual(manifest.discoveredFiles, ['main.py']);
+        assert.equal(manifest.expectedTargets, 1);
+        assert.deepEqual(manifest.statusCounts, { pending: 1 });
+        assert.equal(manifest.allTargetsPassed, false);
+        assert.match(fs.readFileSync(path.join(root, 'batch_workflow.md'), 'utf8'), /排除的 1 個來源不列入測試目標/);
+        assert.doesNotMatch(fs.readFileSync(path.join(root, 'batch_summary.md'), 'utf8'), /old backup/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('batch rejects scope from another root or a modified selection hash', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-scope-root-'));
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-scope-other-'));
+    try {
+        const batch = new BatchJournal(root, root, { model: 'fixture', buildTimestamp: 'build', python: 'python' });
+        assert.throws(() => batch.selectScope(createBatchScopeSelection(other, ['main.py'], ['main.py'])), /invalid/);
+        const selection = createBatchScopeSelection(root, ['main.py', 'other.py'], ['main.py']);
+        assert.throws(() => batch.selectScope({ ...selection, scopeId: '0'.repeat(64) }), /invalid/);
+        assert.throws(() => batch.selectScope({ ...selection, excludedFiles: [] }), /invalid/);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'batch_manifest.json'), 'utf8')).scope, undefined);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true }); }
 });

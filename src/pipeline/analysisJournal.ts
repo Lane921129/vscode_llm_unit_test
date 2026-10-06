@@ -8,33 +8,66 @@ import type { QualityPolicySnapshot } from './qualityPolicy';
 import { formatRepairDiagnostic, RepairDiagnostic } from './repairDiagnostics';
 import { VerificationMode } from './verificationMode';
 import type { ReportIdentity } from './targetReport';
+import { normalizeKnownSecrets, redactCredentialStrings } from './artifactSafety';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+const providerReplyFields = new Set(['raw', 'providerresponse', 'rawresponse', 'responsetext',
+    'modelresponse', 'llmresponse', 'rawproviderresponse', 'providerpayload', 'fullresponse']);
+
+/** Preserve parsed evidence and candidate code, but never journal a complete provider envelope. */
+function summarizeProviderReplies(value: unknown): unknown {
+    if (Array.isArray(value)) { return value.map(summarizeProviderReplies); }
+    if (!value || typeof value !== 'object') { return value; }
+    const result: Record<string, unknown> = {};
+    const summaries: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (providerReplyFields.has(key.replace(/[_-]/g, '').toLowerCase())) {
+            if (item === undefined) { continue; }
+            const text = typeof item === 'string' ? item : JSON.stringify(item);
+            const prefix = key === 'raw' ? 'response' : key;
+            summaries[`${prefix}Hash`] = evidenceHash(text);
+            summaries[`${prefix}Characters`] = text.length;
+        } else { result[key] = summarizeProviderReplies(item); }
+    }
+    // Computed evidence wins over untrusted pre-existing summary fields.
+    return { ...result, ...summaries };
+}
 
 /** Append-only artifacts survive fallback, rollback and interrupted model requests. */
 export class AnalysisJournal {
     private sequence = 0;
     private knowledgeState: Record<string, unknown> = {};
     private repairFailureCounts: Record<string, number> = {};
+    private readonly secrets: readonly string[];
     readonly runId = randomUUID();
     readonly sourceHash: string;
     snapshot(): Record<string, unknown> { return { ...this.knowledgeState }; }
     constructor(private readonly directory: string, source: string, target: string, model: string,
-        qualityPolicy?: QualityPolicySnapshot, validationMode: VerificationMode = 'full', report?: ReportIdentity) {
+        qualityPolicy?: QualityPolicySnapshot, validationMode: VerificationMode = 'full', report?: ReportIdentity,
+        knownSecrets: readonly string[] = []) {
+        this.secrets = normalizeKnownSecrets(knownSecrets);
         this.sourceHash = evidenceHash(source);
         fs.mkdirSync(directory, { recursive: true });
-        fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify({
+        fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify(this.protect({
             schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(), validationMode,
             sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v7',
+            workflowVersion: 'seed-expand-v1', writerSeedVersion: 'writer-seed-v1',
+            writerExpansionVersion: 'writer-expansion-v1', reviewRepairVersion: 'review-contract-repair-v1',
+            qualityExperimentVersion: 'quality-experiment-result-v1',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS,
             repairDiagnosticsVersion: 'repair-diagnostics-v1',
             ...(report ? { report } : {}),
             ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {})
-        }, null, 2), { encoding: 'utf8', flag: 'wx' });
+        }), null, 2), { encoding: 'utf8', flag: 'wx' });
         this.knowledge({ target, terminalStatus: 'running', stage: 'starting', validationMode,
             ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {}) });
     }
+    private protect(value: unknown): unknown {
+        return redactCredentialStrings(summarizeProviderReplies(value), this.secrets);
+    }
     record(loop: number, stage: string, status: string, detail: unknown): string {
+        detail = this.protect(detail);
         const repair = detail as { diagnostic?: RepairDiagnostic; attempt: number; elapsedMs?: number } | undefined;
         const isRepair = repair?.diagnostic?.version === 'repair-diagnostics-v1';
         if (isRepair) {
@@ -42,7 +75,7 @@ export class AnalysisJournal {
         }
         const event = { sequence: ++this.sequence, runId: this.runId, sourceHash: this.sourceHash,
             time: new Date().toISOString(), loop, stage, status, detail };
-        fs.appendFileSync(path.join(this.directory, 'role_events.jsonl'), JSON.stringify(event) + '\n', 'utf8');
+        fs.appendFileSync(path.join(this.directory, 'role_events.jsonl'), JSON.stringify(this.protect(event)) + '\n', 'utf8');
         const progress: Record<string, unknown> = { stage, lastEvent: { sequence: this.sequence, status, time: event.time } };
         if (/(?:failed|rejected|error|invalid-response|budget-exceeded|retained-baseline)$/.test(status)) {
             const value = detail as { reason?: string; out?: string; category?: string; diagnostics?: string[] } | null;
@@ -66,7 +99,7 @@ export class AnalysisJournal {
         return isRepair ? formatRepairDiagnostic(loop, detail as Parameters<typeof formatRepairDiagnostic>[1]) : '';
     }
     knowledge(value: Record<string, unknown>): void {
-        this.knowledgeState = { ...this.knowledgeState, ...value };
+        this.knowledgeState = this.protect({ ...this.knowledgeState, ...value }) as Record<string, unknown>;
         const output = JSON.stringify({ schemaVersion: 2, runId: this.runId, sourceHash: this.sourceHash,
             ...this.knowledgeState }, null, 2);
         const temporary = path.join(this.directory, 'function_knowledge.pending.json');

@@ -192,6 +192,24 @@ export function renderFinalReport(identity: ReportIdentity, summary: TargetRepor
         + renderMutationDiagnostics(summary.mutants || [], summary.mutationElapsedMs);
 }
 
+/** Only immutable rejected Python from this run can become a report link. */
+function rejectedCandidateLink(directory: string, detail: any, runId: string, sourceHash: string, loop?: number): string {
+    const match = typeof detail.artifactPath === 'string'
+        ? /^rejected_candidates\/candidate_([a-f0-9]{64})\.py$/.exec(detail.artifactPath) : undefined;
+    if (!match || detail.schemaVersion !== 'rejected-candidate-v1' || detail.status !== 'saved'
+        || detail.executable !== false || detail.codeHash !== match[1] || detail.sourceHash !== sourceHash
+        || (detail.runId !== undefined && detail.runId !== runId)) { return ''; }
+    try {
+        const folder = path.join(directory, 'rejected_candidates');
+        const file = path.join(directory, detail.artifactPath);
+        if (!fs.lstatSync(folder).isDirectory() || fs.realpathSync(folder) !== path.resolve(folder)
+            || !fs.lstatSync(file).isFile() || fs.realpathSync(file) !== path.resolve(file)
+            || fs.statSync(file).size !== detail.bytes
+            || evidenceHash(fs.readFileSync(file, 'utf8')) !== detail.codeHash) { return ''; }
+        return ` [candidate_${match[1].slice(0, 16)}.py](${loop === undefined ? '' : '../_run/'}${detail.artifactPath})`;
+    } catch { return ''; }
+}
+
 /** All events are read from this run only. Large code and provider payloads stay out of the timeline. */
 function eventTimeline(directory: string, runId: string, sourceHash: string, loop?: number): string {
     let events: any[];
@@ -203,11 +221,11 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
     return [localize('### 完整流程（依事件順序）'), '', localize('| 序號 | 時間 | 輪次 | 階段 | 狀態 | 摘要 |'),
         '| --- | --- | --- | --- | --- | --- |', ...events.map(event => {
             const detail = event.detail || {};
-            const summary = ['role', 'category', 'reason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus', 'codeHash', 'requested', 'actual', 'engine', 'operatorSetVersion', 'workers']
+            const summary = ['role', 'category', 'reason', 'reasonCode', 'gate', 'phase', 'tier', 'withheldReason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus', 'codeHash', 'requested', 'actual', 'engine', 'operatorSetVersion', 'workers']
                 .filter(key => typeof detail[key] === 'string' || typeof detail[key] === 'number')
                 .map(key => `${key}: ${String(detail[key]).slice(0, 600)}`).join('; ')
                 + (Array.isArray(detail.diagnostics) ? '; ' + detail.diagnostics.filter((v: unknown) => typeof v === 'string').join(', ') : '');
-            return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)} |`;
+            return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)}${rejectedCandidateLink(directory, detail, runId, sourceHash, loop)} |`;
         }), '', `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
 }
 

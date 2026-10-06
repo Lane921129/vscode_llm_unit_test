@@ -23,6 +23,11 @@ test('real batch command records grouped failures and cancellation, then passes 
     let modelCalls = 0;
     let cancelFirstTarget = false;
     const vscode = {
+        CancellationTokenSource: class {
+            token = { isCancellationRequested: false };
+            cancel() { this.token.isCancellationRequested = true; }
+            dispose() {}
+        },
         ExtensionMode: { Development: 2, Test: 3 },
         window: { registerWebviewViewProvider: (_: string, provider: any) => {
             provider.webview = { postMessage: async (message: any) => {
@@ -32,6 +37,7 @@ test('real batch command records grouped failures and cancellation, then passes 
                 return true;
             } }; return { dispose() {} };
         }, showInformationMessage: async () => {}, showTextDocument: async () => {},
+        showQuickPick: async (items: any[]) => items.filter(item => item.picked),
         showWarningMessage: async () => '繼續測試並記錄失敗' },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }],
             getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }), openTextDocument: async () => ({}) },
@@ -127,6 +133,9 @@ class Cases(unittest.TestCase):
             return new Response(JSON.stringify({ response }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         };
         utilities.detectMutationEngine = () => null;
+        // This fixture exercises execution/report provenance, not unknown-context fallback.
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture',
+            paramSize: '13B', contextLength: 32768 });
         await run({ ...params, batchPath: clockRoot });
         const clockRun = manifests().find(item => item.manifest.targets[0]?.file === 'clock_sample.py')!;
         assert.ok(clockRun);

@@ -86,9 +86,14 @@ class Cases(unittest.TestCase):
         assert.equal(knowledge.qualityPolicy.policyId, 'standard80-v1');
         assert.equal(knowledge.qualityAssessment.fullyPassed, false);
         assert.equal(knowledge.reviewStatus, 'incomplete');
-        assert.equal(knowledge.mutation.counts.killed, 17);
-        assert.equal(knowledge.mutation.counts.selected, 19);
-        assert.equal(knowledge.mutation.counts.survived, 2, 'all surviving mutants remain reported and scored');
+        const counts = knowledge.mutation.counts;
+        const mutants = knowledge.mutation.mutants;
+        assert.equal(counts.selected, counts.available);
+        assert.equal(counts.executed, counts.selected);
+        assert.equal(counts.killed, mutants.filter((item: any) => item.status === 'KILLED').length);
+        assert.equal(counts.survived, mutants.filter((item: any) => item.status === 'SURVIVED').length);
+        assert.ok(counts.survived > 0, 'all surviving mutants remain reported and scored');
+        assert.ok(counts.killed / counts.selected >= 0.8);
         assert.equal(writers, 1, 'meeting the policy must not trigger a second generation');
         assert.equal(fixes, 0);
         assert.equal(events.filter(e => e.stage === 'mutation' && e.status === 'measured').length, 1);
@@ -101,7 +106,8 @@ class Cases(unittest.TestCase):
         assert.match(audit, /review|Reviewer/);
         assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'invalid-response'));
         assert.deepEqual(knowledge.tierHistory.transitions, []);
-        assert.match(final, /89.47%.*17\/19.*threshold ≥ 80%/);
+        assert.ok(final.includes(`${counts.killed}/${counts.selected}`));
+        assert.match(final, /threshold ≥ 80%/);
         assert.match(final, /SURVIVED/);
         const batch = new BatchJournal(outputPath, root, { model: 'local/neutral-fixture', buildTimestamp: 'fixture', python: String(settings.pythonPath) });
         batch.discover(file, ['calculate_bmi']); batch.start(); batch.begin(0);

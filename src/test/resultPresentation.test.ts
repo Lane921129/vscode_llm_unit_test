@@ -38,7 +38,10 @@ test('progress explains rejection, incomplete review and intermediate acceptance
     assert.match(describeStageEvent('validation', 'passed', {}, 'execution'), /本模式不執行品質審查與突變/);
     assert.doesNotMatch(describeStageEvent('validation', 'accepted', {}, 'execution'), /繼續量測突變/);
     for (const [stage, status] of [['structure', 'passed'], ['scenarios', 'observed'], ['coverage', 'measured'],
-        ['validation', 'passed'], ['executable-baseline', 'checkpointed'], ['model-request', 'requested'], ['model-request', 'completed']]) {
+        ['validation', 'passed'], ['executable-baseline', 'checkpointed'], ['model-request', 'requested'], ['model-request', 'completed'], ['writer-seed', 'started'], ['writer-seed', 'accepted'],
+            ['quality-experiment', 'observed'], ['quality-experiment', 'improved'], ['quality-experiment', 'unchanged'],
+            ['quality-experiment-baseline', 'passed'], ['quality-novelty', 'duplicate'], ['reviewer', 'repair-requested'],
+            ['candidate-artifact', 'rejected']]) {
         assert.notEqual(describeStageEvent(stage, status, {}), status);
     }
 });

@@ -266,6 +266,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <input type="text" id="project-path" readonly placeholder="${t('ui.projectPath')}">
                 <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
             </div>
+            <button id="btn-batch-scope">${t('ui.chooseBatchSources')}</button>
+            <p id="batch-scope-status" role="status">${t('ui.batchScopeGuide')}</p>
             <div class="flex-row">
                 <button id="btn-prepare-env" style="flex:1;">${t('ui.prepareProjectEnvironment')}</button>
                 <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
@@ -388,7 +390,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let environmentBusy = false;
         let analysisRunning = false;
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting","batchScopeGuide"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         vscode.postMessage({ command: 'getInitialData' });
@@ -602,6 +604,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     break;
                 case 'setProjectPath':
                     document.getElementById('project-path').value = msg.path;
+                    document.getElementById('batch-scope-status').textContent = i18n.batchScopeGuide;
                     document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>';
                     document.getElementById('file-select').value = '';
                     resetFunctionSelection();
@@ -659,16 +662,21 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'pythonEnvironmentSelection':
                     document.getElementById('python-environment-status').value = i18n.currentPython + msg.python;
                     break;
+                case 'batchScopeSelected':
+                    if (msg.projectRoot === document.getElementById('project-path').value) {
+                        document.getElementById('batch-scope-status').textContent = msg.text;
+                    }
+                    break;
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
-                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = environmentBusy;
                     }
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
-                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = false;
                     }
                     break;
@@ -687,6 +695,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     document.getElementById('btn-prepare-env').disabled = environmentBusy;
                     document.getElementById('btn-prepare-env-scope').disabled = environmentBusy;
                     document.getElementById('btn-import-setup').disabled = environmentBusy;
+                    document.getElementById('btn-batch-scope').disabled = environmentBusy;
                     break;
             }
         });
@@ -742,6 +751,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
 
         document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
+        document.getElementById('btn-batch-scope').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            vscode.postMessage({ command: 'previewBatchScope', projectRoot: document.getElementById('project-path').value,
+                outputPath: document.getElementById('output-path').value });
+        };
         document.getElementById('btn-browse-out').onclick = () => vscode.postMessage({ command: 'browseFolder' });
         function resetFunctionSelection() {
             const functions = document.getElementById('func-select');
@@ -870,6 +884,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-prepare-env-scope').disabled = true;
             document.getElementById('btn-import-setup').disabled = true;
+            document.getElementById('btn-batch-scope').disabled = true;
             document.getElementById('btn-run').disabled = true;
             document.getElementById('btn-run').innerText = isBatch ? '⏳ Testing all...' : '⏳ Testing...';
             document.getElementById('btn-abort').style.display = 'block';

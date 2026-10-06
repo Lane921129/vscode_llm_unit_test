@@ -4,7 +4,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from '../i18n';
-import { extractFunctionsWithAst } from '../utils/utils';
+import { extractFunctionsWithAst, findPythonFilesInDir } from '../utils/utils';
+import { BatchScopeController } from './BatchScopeController';
+import { BatchScopeSelection } from '../pipeline/batchScope';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, googleThinkingSession, normalizeGoogleModelName } from '../llm/cloudApi';
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
@@ -23,8 +25,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     private view?: vscode.WebviewView;
     private activeAnalysis?: string;
     private languageRefreshPending = false;
+    private readonly batchScope: BatchScopeController;
+    private projectRevision = 0;
 
-    constructor(private readonly secretStorage: vscode.SecretStorage, private readonly uiState: vscode.Memento) {}
+    constructor(private readonly secretStorage: vscode.SecretStorage, private readonly uiState: vscode.Memento) {
+        this.batchScope = new BatchScopeController(uiState);
+    }
+
+    public previewBatchScope(root: string, files: readonly string[]): Promise<BatchScopeSelection | undefined> {
+        return this.batchScope.preview(root, files);
+    }
+
+    public cancelBatchScopePreview(): void { this.batchScope.invalidate(); }
 
     public beginAnalysis(id: string): void { this.activeAnalysis = id; }
     public endAnalysis(id: string): void {
@@ -208,6 +220,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
                         const projectPath = fileUri[0].fsPath;
+                        const revision = ++this.projectRevision;
+                        this.batchScope.invalidate();
                         await this.rememberFolder('project', projectPath);
                         try {
                             await config.update('projectPath', projectPath, true);
@@ -221,6 +235,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                         // 重新掃描並更新檔案列表
                         const files = await this.findPythonFiles(projectPath);
+                        if (revision !== this.projectRevision) { break; }
                         this.webview?.postMessage({ command: 'setFiles', projectPath, files });
                         
                         if (files.length === 0) {
@@ -269,6 +284,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     const fileUri = await vscode.window.showOpenDialog(options);
                     if (fileUri && fileUri[0]) {
                         const batchPath = fileUri[0].fsPath;
+                        this.projectRevision++;
+                        this.batchScope.invalidate();
                         await this.rememberFolder('batch', batchPath);
                         this.webview?.postMessage({ command: 'setBatchPath', path: batchPath });
                     }
@@ -288,6 +305,26 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         projectRoot: typeof message.projectRoot === 'string' ? message.projectRoot : undefined,
                         outputPath: typeof message.outputPath === 'string' ? message.outputPath : undefined
                     });
+                    break;
+                }
+                case 'previewBatchScope': {
+                    if (this.activeAnalysis) { break; }
+                    const root = typeof message.projectRoot === 'string' ? message.projectRoot : this.lastFolder('project');
+                    if (!root || !fs.existsSync(root)) { await vscode.window.showWarningMessage(t('ui.selectProject')); break; }
+                    const revision = this.projectRevision;
+                    const output = typeof message.outputPath === 'string' ? message.outputPath : config.get<string>('outputPath', '');
+                    try {
+                        const excluded = output && path.resolve(output) !== path.resolve(root) ? [output] : [];
+                        const files = await findPythonFilesInDir(root, true, excluded, true);
+                        if (revision !== this.projectRevision) { break; }
+                        const selection = await this.previewBatchScope(root, files);
+                        if (selection && revision === this.projectRevision) {
+                            this.webview?.postMessage({ command: 'batchScopeSelected', projectRoot: root,
+                                text: t('ui.batchScopeSelected', selection.selectedFiles.length, selection.knownFiles.length) });
+                        }
+                    } catch {
+                        if (revision === this.projectRevision) { await vscode.window.showWarningMessage(t('ui.batchScopeScanFailed')); }
+                    }
                     break;
                 }
                 case 'prepareProjectEnvironment':

@@ -1,4 +1,6 @@
 import ast
+import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -91,6 +93,29 @@ BASE = 'import unittest\nfrom sample import target\nclass TestVerifiedTrace_targ
 
 
 class TraceDeduplicationTests(unittest.TestCase):
+    def test_passed_seed_copy_is_protected_but_later_duplicate_is_removed(self):
+        seed = 'import unittest\nfrom sample import target\nclass Model(unittest.TestCase):\n' + METHOD
+        code = BASE + 'class Model(unittest.TestCase):\n' + METHOD + METHOD.replace('test_copy', 'test_modelcopy_1')
+        result = deduplicate(code, 'target', seed)
+        self.assertEqual(result['removed'], 1)
+        self.assertIn('class Model(unittest.TestCase):\n' + METHOD, result['code'])
+        self.assertNotIn('test_modelcopy_1', result['code'])
+        self.assertIn(BASE, result['code'])
+        self.assertEqual(deduplicate(result['code'], 'target', seed)['removed'], 0)
+
+    def test_protection_uses_class_method_identity_and_json_input(self):
+        seed = 'class Model(unittest.TestCase):\n' + METHOD
+        code = BASE + seed + 'class Other(unittest.TestCase):\n' + METHOD
+        process = subprocess.run([sys.executable, '-B', str(Path(__file__).parent / 'deduplicate_trace_tests.py')],
+                                 input=json.dumps({'code': code, 'target': 'target', 'protectedCode': seed}),
+                                 text=True, encoding='utf-8', capture_output=True, timeout=5)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result['removed'], 1)
+        self.assertIn(seed, result['code'])
+        self.assertIn('class Other(unittest.TestCase):\n    pass', result['code'])
+        self.assertEqual(deduplicate(code, 'target', 'broken syntax!')['code'], code)
+
     def test_exact_copies_removed_but_baseline_and_distinct_cases_preserved(self):
         code = BASE + 'class Model(unittest.TestCase):\n' + METHOD + METHOD.replace('test_copy', 'test_other').replace('target(2)', 'target(3)')
         result = deduplicate(code, 'target')

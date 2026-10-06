@@ -3,8 +3,11 @@ import { spawnSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { test } from 'node:test';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { buildTier1InstanceSetup, buildTier1TestMethods } from '../tier/tier1TestBuilder';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+
+const python = resolvePythonExecutable(undefined, resolve(__dirname, '../..'));
 
 test('Tier 1 generated tests execute against a dependency that returns exact strings', () => {
     const methods = buildTier1TestMethods('format_value', [
@@ -33,7 +36,7 @@ test('Tier 1 generated tests execute against a dependency that returns exact str
         "result = unittest.TextTestRunner(verbosity=0).run(suite)",
         'sys.exit(0 if result.wasSuccessful() else 1)',
     ].join('; ');
-    const result = spawnSync('python', ['-c', runner, encodedTest], { encoding: 'utf8' });
+    const result = spawnSync(python, ['-c', runner, encodedTest], { encoding: 'utf8' });
 
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 });
@@ -61,7 +64,7 @@ test('Tier 1 generated tests execute keyword-only calls from verified trace data
         "result = unittest.TextTestRunner(verbosity=0).run(suite)",
         'sys.exit(0 if result.wasSuccessful() else 1)',
     ].join('; ');
-    const result = spawnSync('python', ['-c', runner, encodedTest], { encoding: 'utf8' });
+    const result = spawnSync(python, ['-c', runner, encodedTest], { encoding: 'utf8' });
 
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 });
@@ -98,7 +101,7 @@ test('Tier 1 generated instance-method tests reuse verified constructor literals
             ''
         ].join('\n'), 'utf8');
 
-        const result = spawnSync('python', ['-m', 'unittest', 'test_worker.py'], {
+        const result = spawnSync(python, ['-m', 'unittest', 'test_worker.py'], {
             cwd: tempDir,
             encoding: 'utf8'
         });
@@ -132,7 +135,7 @@ test('Tier 1 generated tests execute ordinary coroutine targets from verified tr
             ''
         ].join('\n'), 'utf8');
 
-        const result = spawnSync('python', ['-m', 'unittest', 'test_async_target.py'], {
+        const result = spawnSync(python, ['-m', 'unittest', 'test_async_target.py'], {
             cwd: tempDir,
             encoding: 'utf8'
         });
@@ -178,7 +181,7 @@ test('Tier 1 generated async instance-method tests combine constructor and corou
             ''
         ].join('\n'), 'utf8');
 
-        const result = spawnSync('python', ['-m', 'unittest', 'test_worker.py'], {
+        const result = spawnSync(python, ['-m', 'unittest', 'test_worker.py'], {
             cwd: tempDir,
             encoding: 'utf8'
         });
@@ -218,7 +221,7 @@ test('Tier 1 generated tests execute finite sync and async generator assertions'
             ''
         ].join('\n'), 'utf8');
 
-        const result = spawnSync('python', ['-m', 'unittest', 'test_generator_target.py'], {
+        const result = spawnSync(python, ['-m', 'unittest', 'test_generator_target.py'], {
             cwd: tempDir,
             encoding: 'utf8'
         });
@@ -246,7 +249,7 @@ test('condition-guided trace produces Tier 1 tests that kill boundary mutations'
         ].join('\n'), 'utf8');
 
         const trace = spawnSync(
-            'python',
+            python,
             [join(process.cwd(), 'python_scripts', 'dynamic_tracer.py'), sourcePath, 'route'],
             { encoding: 'utf8' }
         );
@@ -266,15 +269,23 @@ test('condition-guided trace produces Tier 1 tests that kill boundary mutations'
         ].join('\n'), 'utf8');
 
         const mutation = spawnSync(
-            'python',
+            python,
             [join(process.cwd(), 'python_scripts', 'basic_mutation_runner.py'), sourcePath, testPath],
             { encoding: 'utf8' }
         );
         assert.strictEqual(mutation.status, 0, mutation.stdout + mutation.stderr);
-        const mutationData = JSON.parse(mutation.stdout) as { total: number; killed: number; survived: number };
+        const mutationData = JSON.parse(mutation.stdout) as { total: number; killed: number; survived: number;
+            mutants: Array<{ status: string; kind: string; codeChange: { before: string } }> };
         assert.ok(mutationData.total >= 3, mutation.stdout);
-        assert.strictEqual(mutationData.killed, mutationData.total, mutation.stdout);
-        assert.strictEqual(mutationData.survived, 0, mutation.stdout);
+        // Exception type assertions do not verify message text. v2 message
+        // mutations remain genuine survivors, while branch mutations must die.
+        const messageMutants = mutationData.mutants.filter(item => item.kind === 'string_constant'
+            && item.codeChange.before.trim().startsWith('raise ValueError('));
+        assert.strictEqual(messageMutants.length, 2, mutation.stdout);
+        assert.ok(messageMutants.every(item => item.status === 'SURVIVED'), mutation.stdout);
+        assert.ok(mutationData.mutants.filter(item => !messageMutants.includes(item))
+            .every(item => item.status === 'KILLED'), mutation.stdout);
+        assert.strictEqual(mutationData.survived, messageMutants.length, mutation.stdout);
     } finally {
         rmSync(tempDir, { recursive: true, force: true });
     }
@@ -299,7 +310,7 @@ test('relative numeric trace probes produce runnable Tier 1 tests for derived th
         ].join('\n'), 'utf8');
 
         const trace = spawnSync(
-            'python',
+            python,
             [join(process.cwd(), 'python_scripts', 'dynamic_tracer.py'), sourcePath, 'classify'],
             { encoding: 'utf8' }
         );
@@ -322,7 +333,7 @@ test('relative numeric trace probes produce runnable Tier 1 tests for derived th
             ''
         ].join('\n'), 'utf8');
 
-        const run = spawnSync('python', ['-m', 'unittest', 'test_derived_thresholds.py'], {
+        const run = spawnSync(python, ['-m', 'unittest', 'test_derived_thresholds.py'], {
             cwd: tempDir,
             encoding: 'utf8'
         });

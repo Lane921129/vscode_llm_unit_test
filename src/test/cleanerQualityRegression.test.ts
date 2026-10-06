@@ -111,6 +111,9 @@ test('quality task has one host-bound evidence identity, strict fields and no in
     assert.equal(selectQualityFocus(coverage([4]), ['m1'], 2)?.evidence, 'm1');
     assert.equal(selectQualityFocus(coverage([]), [], 1), undefined);
     assert.equal(selectQualityFocus(coverage([4]), [], 1)?.id, focus.id);
+    assert.equal(selectQualityFocus(coverage([4]), ['unsupported', 'bounded'], 1, ['bounded'])?.evidence, 'bounded');
+    assert.equal(selectQualityFocus(coverage([4]), ['unsupported'], 1, ['invented'])?.evidence, 'line:4',
+        'a static proposal can prioritize only a measured survivor');
     const task = { evidence_id: focus.id, hypothesis: 'A path is missing.', scenario: 'Try one boundary input.', verification: 'Execute original and mutant with identical input.' };
     assert.equal(parseFocusedQualityTask(JSON.stringify({ tasks: [task] }), focus).tasks?.[0].evidence, focus.evidence);
     for (const invalid of [

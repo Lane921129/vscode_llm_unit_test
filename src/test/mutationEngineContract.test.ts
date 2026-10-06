@@ -108,7 +108,7 @@ test('real Mutatest artifacts cross Python/TypeScript readers and the complete-q
         assert.equal(tsAssessment.fullyPassed, true);
         const policyScript = 'import json,sys;sys.path.insert(0,"python_scripts");from quality_policy import evaluate_quality;'
             + 'data=json.load(sys.stdin);print(json.dumps(evaluate_quality(data["policy"],data["evidence"])))';
-        const checked = spawnSync(python, ['-B', '-c', policyScript], { encoding: 'utf8', input: JSON.stringify(fixture), timeout: 15000 });
+        const checked = spawnSync(python, ['-X', 'utf8', '-B', '-c', policyScript], { encoding: 'utf8', input: JSON.stringify(fixture), timeout: 15000 });
         assert.equal(checked.status, 0, checked.stderr || checked.error?.message);
         assert.deepEqual(JSON.parse(checked.stdout), tsAssessment);
     } finally {

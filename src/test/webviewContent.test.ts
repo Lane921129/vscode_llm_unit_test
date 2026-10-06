@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { getWebviewContent } from '../ui/webviewContent';
+import { setLanguage, t } from '../i18n/core';
 
 test('cloud credential editor has separate name, model, and key inputs and clears them after saving', () => {
     const html = getWebviewContent(key => key);
@@ -47,4 +48,19 @@ test('dependency checks and their result are placed beside the project selection
     assert.ok(projectArea.includes('id="python-environment-status"'));
     assert.equal((html.match(/id="btn-prepare-env"/g) || []).length, 1);
     assert.ok(!html.slice(html.indexOf('id="file-select"'), html.indexOf('id="btn-run"')).includes('id="btn-prepare-env"'));
+});
+
+test('source selection guidance renders beside project readiness in both supported languages', () => {
+    try {
+        for (const language of ['en', 'zh-tw']) {
+            setLanguage(language);
+            const html = getWebviewContent(t);
+            const area = html.slice(html.indexOf('id="project-path"'), html.indexOf('id="output-path"'));
+            assert.ok(area.includes('id="btn-batch-scope"'));
+            assert.ok(area.includes(t('ui.chooseBatchSources')));
+            assert.ok(area.includes(t('ui.batchScopeGuide')));
+            assert.ok(!area.includes('ui.batchScope'));
+            if (language === 'en') { assert.ok(!/[\u3400-\u9fff]/.test(area)); }
+        }
+    } finally { setLanguage('zh-tw'); }
 });

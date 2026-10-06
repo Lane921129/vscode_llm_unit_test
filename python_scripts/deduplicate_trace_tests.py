@@ -1,6 +1,7 @@
 """Remove exact copied Trace methods only from fixture-free standard TestCases.
 
-The runner-owned baseline remains intact. No target or generated code executes.
+The runner-owned baseline and passed protected methods remain intact.
+No target or generated code executes.
 Changed bodies, decorators, helpers, fixtures, inheritance and async are retained.
 The resulting whole test still requires all normal execution/quality gates.
 """
@@ -38,11 +39,17 @@ def plain_test_class(node):
     return all(isinstance(item, ast.FunctionDef) and item.name.startswith('test_') for item in node.body)
 
 
-def deduplicate(code, target):
+def deduplicate(code, target, protected_code=''):
     try:
         tree = ast.parse(code)
-    except SyntaxError:
+        protected_tree = ast.parse(protected_code) if protected_code else None
+    except (SyntaxError, TypeError):
         return {'code': code, 'removed': 0}
+    protected_methods = {
+        (cls.name, method.name)
+        for cls in protected_tree.body if isinstance(cls, ast.ClassDef)
+        for method in cls.body if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } if protected_tree is not None else set()
     if not any(isinstance(n, ast.Import) and any(a.name == 'unittest' and a.asname is None for a in n.names) for n in tree.body):
         return {'code': code, 'removed': 0}
     prefix = 'TestVerifiedTrace_' + target
@@ -54,7 +61,8 @@ def deduplicate(code, target):
     for cls in tree.body:
         if cls is baselines[0] or not plain_test_class(cls):
             continue
-        copies = [m for m in cls.body if fingerprint(m) in signatures]
+        copies = [m for m in cls.body if (cls.name, m.name) not in protected_methods
+                  and fingerprint(m) in signatures]
         for index, method in enumerate(copies):
             # Keep an empty class syntactically valid without inserting a fake test.
             replacement = ' ' * method.col_offset + 'pass\n' if len(copies) == len(cls.body) and index == 0 else ''
@@ -67,4 +75,4 @@ def deduplicate(code, target):
 
 if __name__ == '__main__':
     payload = json.load(sys.stdin)
-    print(json.dumps(deduplicate(payload['code'], payload['target']), ensure_ascii=True))
+    print(json.dumps(deduplicate(payload['code'], payload['target'], payload.get('protectedCode', '')), ensure_ascii=True))

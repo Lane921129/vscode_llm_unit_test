@@ -6,6 +6,7 @@ import { currentTargetBudget } from './targetBudget';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { RepairDiagnostic, RepairResponseError, repairHash, repairReasonCode } from './repairDiagnostics';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
+import type { CandidateRejectionGate } from './rejectedCandidateStore';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -16,9 +17,16 @@ export interface CandidateExecution {
     testModule?: string;
 }
 
+/** The application preflight already ran; candidate import/setup errors belong to the Writer. */
+export class CandidateValidationError extends Error {
+    readonly category = 'validation';
+    readonly stage = 'candidate-validation';
+    constructor(message: string) { super(message); this.name = 'CandidateValidationError'; }
+}
+
 export interface CandidatePipelineHooks {
     reviewRequired?: boolean;
-    validate(code: string): Promise<string | undefined>;
+    validate(code: string): Promise<string | { reason: string; gate: CandidateRejectionGate; reasonCode: string } | undefined>;
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number): Promise<string>;
     repairRole?(code: string, failure: string): 'writer' | 'bug-fixer';
@@ -28,6 +36,8 @@ export interface CandidatePipelineHooks {
         role: 'writer' | 'bug-fixer'): Promise<string | { reason: string; reasonCode: string } | undefined>;
     execute(code: string): Promise<CandidateExecution>;
     executable?(code: string, execution: CandidateExecution): void | Promise<void>;
+    /** Records the rejected version before restoring a retained baseline. */
+    rejectedCandidate?(code: string, attempt: number, gate: CandidateRejectionGate, reasonCode: string): void | Promise<void>;
     event(stage: string, status: string, detail: unknown): void;
     checkCancelled(): void;
 }
@@ -88,7 +98,7 @@ export async function validateTestCandidate(
                     hooks.event(role, 'repair-rejected', { attempt, category: 'validation', contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
                         diagnostic: { version: 'repair-diagnostics-v1', gate: 'candidate-deduplication',
                             reasonCodes: ['repeated-failure'], previousTestHash: repairHash(code), previousTestUnchanged: true } satisfies RepairDiagnostic });
-                    throw new Error(localize("Bug Fixer 已處理過相同失敗，停止重複修復：{0}", lastFailure));
+                    throw new CandidateValidationError(localize("Bug Fixer 已處理過相同失敗，停止重複修復：{0}", lastFailure));
                 }
                 attemptedBugFixFailures.add(failureKey);
             }
@@ -99,6 +109,8 @@ export async function validateTestCandidate(
             } catch (error) {
                 hooks.checkCancelled();
                 if (role === 'bug-fixer' && error instanceof RepairResponseError) {
+                    await hooks.rejectedCandidate?.('', attempt, 'response-format',
+                        error.diagnostic.reasonCodes[0] || 'response-format');
                     if (recoverWithWriter(attempt, 'response-format')) { continue; }
                 }
                 throw error;
@@ -107,6 +119,7 @@ export async function validateTestCandidate(
             hooks.event(arithmetic ? 'source-expectation-repair' : role, 'candidate', {
                 attempt, code: candidate, ...(arithmetic ? { evidence: arithmetic.evidence } : {}) });
             if (!feedback.consider(candidate, lastFailure)) {
+                await hooks.rejectedCandidate?.(candidate, attempt, 'candidate-deduplication', 'repeated-candidate');
                 lastFailure = feedback.output;
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure, category: 'validation', contractVersion: role === 'bug-fixer'
                     ? ROLE_CONTRACT_VERSIONS.bugFix : ROLE_CONTRACT_VERSIONS.writerRevision,
@@ -115,7 +128,7 @@ export async function validateTestCandidate(
                         candidateTestHash: repairHash(candidate), previousTestUnchanged: true } satisfies RepairDiagnostic });
                 if (role === 'bug-fixer') {
                     if (recoverWithWriter(attempt, 'repeated-candidate')) { continue; }
-                    throw new Error(localize("Bug Fixer 未產生有效變更，停止重複修復：{0}", lastFailure));
+                    throw new CandidateValidationError(localize("Bug Fixer 未產生有效變更，停止重複修復：{0}", lastFailure));
                 }
                 if (writerRecoveryAttempt) { break; }
                 continue;
@@ -129,6 +142,8 @@ export async function validateTestCandidate(
             const revisionViolation = arithmetic ? undefined : await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
             if (revisionViolation) {
                 const reason = typeof revisionViolation === 'string' ? revisionViolation : revisionViolation.reason;
+                await hooks.rejectedCandidate?.(candidate, attempt, 'revision-scope',
+                    repairReasonCode(typeof revisionViolation === 'string' ? undefined : revisionViolation.reasonCode));
                 feedback.reject(reason);
                 lastFailure = feedback.output;
                 code = retainedCode;
@@ -149,9 +164,13 @@ export async function validateTestCandidate(
             code = candidate;
         }
         const invalid = await hooks.validate(code);
-        hooks.event('structure', invalid ? 'rejected' : 'passed', { attempt, reason: invalid });
+        const invalidReason = typeof invalid === 'string' ? invalid : invalid?.reason;
+        hooks.event('structure', invalid ? 'rejected' : 'passed', { attempt, reason: invalidReason });
         if (invalid) {
-            lastFailure = invalid;
+            await hooks.rejectedCandidate?.(code, attempt,
+                typeof invalid === 'string' ? 'unittest-structure' : invalid.gate,
+                typeof invalid === 'string' ? 'candidate-structure-rejected' : invalid.reasonCode);
+            lastFailure = invalidReason!;
             code = retainedCode;
             // A malformed file has no proven failing method to replace.
             role = 'writer';
@@ -163,6 +182,7 @@ export async function validateTestCandidate(
         hooks.event('validation', execution.ok ? 'passed' : 'failed', { attempt, code, ...execution });
         const regression = feedback.record(execution.out, execution.testModule);
         if (!regression.accepted) {
+            await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-regression');
             lastFailure = feedback.output;
             code = retainedCode;
             role = 'bug-fixer';
@@ -180,6 +200,7 @@ export async function validateTestCandidate(
             hooks.event('reviewer', reviewStatus === 'not-required' ? 'not-required' : review ? 'assessed' : 'unavailable', { attempt, review });
             const blocking = review?.issues.filter(issue => issue.severity === 'blocking') || [];
             if (blocking.length) {
+                await hooks.rejectedCandidate?.(code, attempt, 'review', 'review-blocking');
                 lastFailure = JSON.stringify(blocking);
                 role = 'writer';
                 if (writerRecoveryAttempt) { break; }
@@ -199,6 +220,7 @@ export async function validateTestCandidate(
                 ]
             };
         }
+        await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-execution-failed');
         lastFailure = execution.out;
         executionFailure = true;
         if (writerRecoveryAttempt) { break; }
@@ -206,5 +228,5 @@ export async function validateTestCandidate(
         role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }
-    throw new Error(localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure));
+    throw new CandidateValidationError(localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure));
 }

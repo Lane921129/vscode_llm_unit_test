@@ -15,6 +15,11 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
     const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\ndef target(value):\n    return value + 1\n';
     const file = path.join(root, 'sample.py'); fs.writeFileSync(file, source);
     const vscode = {
+        CancellationTokenSource: class {
+            token = { isCancellationRequested: false };
+            cancel() { this.token.isCancellationRequested = true; }
+            dispose() {}
+        },
         ConfigurationTarget: { Global: 1 }, ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }], openTextDocument: async (file: string) => ({ file }),
             getConfiguration: () => ({ get: (key: string, fallback: unknown) => settings[key] ?? fallback,
@@ -22,6 +27,7 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
         window: { registerWebviewViewProvider: (_: string, provider: any) => {
             provider.webview = { postMessage: async (message: any) => { messages.push(message); return true; } }; return { dispose() {} };
         }, showInformationMessage: async () => {}, showTextDocument: async () => {},
+        showQuickPick: async (items: any[]) => items.filter(item => item.picked),
         showWarningMessage: async (_message: string, _options: unknown, action: string) => {
             if (changeSource && action === '套用此清單並重新檢查') { fs.appendFileSync(file, '# changed\n'); }
             return approve ? action : undefined;

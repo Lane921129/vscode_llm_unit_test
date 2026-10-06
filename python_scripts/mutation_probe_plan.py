@@ -160,7 +160,7 @@ def plan(payload):
         seen = {tuple(s[n] for n in names) for s in seeds}
         experiments = []
         for m in survivors:
-            if m.get('kind') != 'compare': continue
+            if m.get('kind', '').lower() != 'compare': continue
             matches = [c for c in comparisons if (c.lineno, c.col_offset) == (m.get('line'), m.get('column'))]
             if len(matches) != 1: continue
             c, pos = matches[0], m.get('position', -1)

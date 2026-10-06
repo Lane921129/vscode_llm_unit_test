@@ -17,10 +17,15 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const originalEngine = utilities.detectMutationEngine;
     const processRunner = require('../utils/processRunner');
     const originalSpawn = processRunner.runSpawn;
+    // This scenario exercises a second improvement round, so explicitly use
+    // strict quality. The product's standard 80% policy may stop after round one.
+    const policies = require('../pipeline/qualityPolicy');
+    const originalPolicy = policies.createDefaultQualityPolicy;
+    policies.createDefaultQualityPolicy = policies.createStrictQualityPolicy;
     const traceBuilder = require('../tier/tier1TestFileBuilder');
     const originalTraceBuilder = traceBuilder.buildTier1TestFile;
     const mutationRuns: Array<{ args: string[]; timeout: number }> = [];
-    let expectedMutationSeconds = 20;
+    let expectedMutationSeconds = 60;
     let externalEngine: 'mutatest' | 'mutmut' | undefined;
     let externalRuns = 0;
     let failBuiltinMutation = false;
@@ -87,6 +92,9 @@ class Cases(unittest.TestCase):
     const stronger = code.replace('self.assertFalse(target())', 'self.assertIs(target(), False)') + `
     def test_mixed(self):
         with patch('sample.read', return_value={'ready': True, 'kind': 'other'}):
+            self.assertIs(target(), False)
+    def test_kind_after_plain(self):
+        with patch('sample.read', return_value={'ready': True, 'kind': 'zebra'}):
             self.assertIs(target(), False)
 `;
     const vscode = {
@@ -186,7 +194,13 @@ class Cases(unittest.TestCase):
         assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'completed'
             && event.detail.elapsedMs >= 0 && event.detail.writerContext === 'compact-writer-v1'));
         assert.equal(rejectedReviewSchema, true);
-        const mutations = events.filter(event => event.stage === 'mutation');
+        const seedStart = events.findIndex(event => event.stage === 'writer-seed' && event.status === 'started');
+        const seedAccepted = events.findIndex(event => event.stage === 'writer-seed' && event.status === 'accepted');
+        const firstReviewer = events.findIndex(event => event.stage === 'reviewer' && event.status === 'parsed');
+        assert.ok(seedStart >= 0 && seedAccepted > seedStart && firstReviewer > seedAccepted);
+        const seedCheckpoint = events.slice(seedStart, seedAccepted).find(event => event.stage === 'executable-baseline');
+        assert.equal(seedCheckpoint.detail.reviewStatus, 'incomplete');
+        const mutations = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
         assert.equal(mutations.length, 2, logs.join('\n'));
         assert.equal(mutationRuns.length, 2);
         assert.ok(mutations[0].detail.score < 100);
@@ -224,7 +238,7 @@ class Cases(unittest.TestCase):
         assert.equal(incomplete.mutationScore, 100, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
         assert.equal(incomplete.reviewStatus, 'incomplete');
         assert.equal(incomplete.terminalStatus, 'execution-passed-review-incomplete');
-        assert.equal(roles.filter(role => role === 'reviewer').length, 2);
+        assert.equal(roles.filter(role => role === 'reviewer').length, 4, 'each of two candidates gets at most one contract correction');
         const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
             && event.detail.diagnostics.includes('invalid-json')));
@@ -352,7 +366,7 @@ class Cases(unittest.TestCase):
         scaffoldMode = true;
         writers = 1;
         roles.length = 0;
-        expectedMutationSeconds = 20;
+        expectedMutationSeconds = 60;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
@@ -428,7 +442,8 @@ class Cases(unittest.TestCase):
         const partialKnowledge = JSON.parse(fs.readFileSync(path.join(partialOutput, 'function_knowledge.json'), 'utf8'));
         const partialEvents = fs.readFileSync(path.join(partialOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         const accepted = partialEvents.filter(event => event.stage === 'baseline' && event.status === 'accepted');
-        const covered = partialEvents.filter(event => event.stage === 'coverage' && event.status === 'measured');
+        const covered = [...new Map(partialEvents.filter(event => event.stage === 'coverage' && event.status === 'measured')
+            .map(event => [event.loop, event] as const)).values()];
         assert.equal(accepted.length, 2, JSON.stringify({ failure: partialKnowledge.failure, baseline: accepted }));
         assert.ok(accepted[1].detail.score > accepted[0].detail.score);
         assert.ok(covered[1].detail.missingTargetLines.length < covered[0].detail.missingTargetLines.length);
@@ -519,6 +534,7 @@ class Cases(unittest.TestCase):
         Module._load = originalLoad;
         utilities.detectMutationEngine = originalEngine;
         processRunner.runSpawn = originalSpawn;
+        policies.createDefaultQualityPolicy = originalPolicy;
         traceBuilder.buildTier1TestFile = originalTraceBuilder;
         fs.rmSync(directory, { recursive: true, force: true });
     }

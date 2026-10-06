@@ -19,5 +19,7 @@ if (testFiles.length === 0) {
     process.exit(1);
 }
 
-const result = spawnSync(process.execPath, ['--test', ...testFiles], { stdio: 'inherit' });
+// Integration files launch their own bounded Python workers. Run files serially
+// so runner CPU counts do not multiply those workers and cause false timeouts.
+const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...testFiles], { stdio: 'inherit' });
 process.exit(result.status ?? 1);

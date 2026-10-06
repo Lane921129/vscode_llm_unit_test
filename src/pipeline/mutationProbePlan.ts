@@ -17,7 +17,8 @@ export interface MutationProbePlan {
 export async function planMutationProbes(source: string, target: string, mutation: MutationRun,
     observations: BehaviorObservations | undefined, python: string): Promise<MutationProbePlan> {
     const empty: MutationProbePlan = { version: 'mutation-input-plan-v1', inputs: [], diagnostics: [], assertionOracle: false };
-    if (mutation.engine !== 'builtin' || mutation.status !== 'complete'
+    if (!['builtin', 'mutatest'].includes(mutation.engine) || mutation.status !== 'complete'
+        || mutation.scopeVersion !== 'selected-function-body-v1' || mutation.targetScope.kind !== 'function'
         || mutation.sourceHash !== evidenceHash(source) || mutation.targetScope.qualifiedName !== target) { return empty; }
     const survivors = mutation.mutants.filter(item => item.status === 'SURVIVED');
     if (!survivors.length) { return empty; }
