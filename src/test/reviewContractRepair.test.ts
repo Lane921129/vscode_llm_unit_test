@@ -80,12 +80,14 @@ test('expired or elapsed original deadline never starts a replacement request', 
     let now = 100;
     let calls = 0;
     const recorded = events();
-    const config = options(async () => { calls++; now = 1_000; return badLine; }, recorded);
+    const config = options(async () => { calls++; now = 1_000; return valid; }, recorded);
     config.now = () => now;
-    assert.equal(await reviewWithContractRepair(config), undefined);
+    const timeout = (error: unknown) => error instanceof AnalysisStageError
+        && error.category === 'timeout' && error.stage === 'reviewer';
+    await assert.rejects(reviewWithContractRepair(config), timeout);
     assert.equal(calls, 1);
     assert.deepEqual(recorded.map(event => event.status), ['repair-skipped']);
-    assert.equal(await reviewWithContractRepair(config), undefined);
+    await assert.rejects(reviewWithContractRepair(config), timeout);
     assert.equal(calls, 1);
 });
 

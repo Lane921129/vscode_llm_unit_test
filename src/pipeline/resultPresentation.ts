@@ -6,6 +6,7 @@ export interface OutcomeEvidence {
     qualityAssessment?: { fullyPassed?: unknown; toolsSatisfied?: unknown };
     validationMode?: unknown;
     executionVerified?: unknown;
+    workflowVersion?: unknown;
 }
 export interface OutcomePresentation { state: string; label: string; kind: 'passed' | 'executed' | 'failed' | 'pending' | 'skipped' }
 
@@ -25,6 +26,7 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
         failed: [localize("未通過：執行或驗證失敗"), 'failed'],
         'retained-after-failure': [localize("未通過：後續失敗，已保留先前測試"), 'failed'],
         'execution-passed-review-incomplete': [localize("未完成：執行達標，審查未完成"), 'pending'],
+        'review-blocked': [localize("未通過：審查未批准，本候選不進入突變"), 'pending'],
         'quality-incomplete': [localize("未通過：品質要求未完成"), 'pending'],
         'round-limit': [localize("未通過：已達輪次上限"), 'pending'],
         stagnated: [localize("未通過：連續多輪未改善"), 'pending'],
@@ -39,10 +41,11 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
     return { state, label, kind };
 }
 
-/** Concise demo surface. Audit status and pass accounting remain unchanged. */
+/** Retain the historical demo display without applying it to the AI review gate. */
 export function presentSummaryOutcome(value: OutcomeEvidence): OutcomePresentation {
     const outcome = presentOutcome(value);
-    if (outcome.state === 'execution-passed-review-incomplete' && outcome.kind === 'pending') {
+    if (value.workflowVersion !== 'ai-reviewed-loop-v1'
+        && outcome.state === 'execution-passed-review-incomplete' && outcome.kind === 'pending') {
         return { ...outcome, label: value.validationMode !== 'execution' && value.qualityAssessment?.toolsSatisfied === true
             ? localize("測試執行與量測達標") : localize("未完成：缺少完整通過證據") };
     }
@@ -73,18 +76,21 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
         'mutation-engine:failed': localize("突變引擎預檢失敗：{0}；已停止，未更換引擎", reason || localize("請查看報告中的拒絕原因")),
         'mutation:started': localize("正在隔離執行突變；完成後才能判定分數"),
         'numeric-skill:planned': localize("正在以數值計算技能核對失敗測資"),
-        'numeric-skill:verified': localize("計算與同輸入隔離觀測一致；修正候選仍須重新執行、審查與突變驗證"),
+        'numeric-skill:verified': localize("計算與同輸入隔離觀測一致；證據交 AI 修訂，工具不改寫測試"),
         'numeric-skill:unverified': localize("計算缺少一致的同輸入觀測；保留原測資與修復流程"),
         'numeric-skill:unsupported': localize("此案例超出數值技能支援範圍；保留原修復流程"),
         'numeric-skill:unavailable': localize("數值技能未完成；保留原修復流程"),
-        'writer-seed:started': localize("先獨立執行模型的最小測試，尚未合併 Trace"),
-        'writer-seed:accepted': localize("模型測試已獨立通過；接著合併觀測測試並進行完整量測"),
-        'quality-experiment:observed': localize("已取得補測觀測；仍須通過獨立測試與完整品質量測"),
-        'quality-experiment-baseline:passed': localize("補測案例已獨立通過；下一輪重新量測覆蓋率與突變"),
+        'writer-seed:started': localize("先獨立執行模型的最小測試；工具不附加測試"),
+        'writer-seed:accepted': localize("模型測試已獨立通過並保存；等待 Reviewer 審查批准"),
+        'quality-experiment:observed': localize("已取得補測觀測；交 AI 撰寫測試，再執行與審查"),
+        'quality-experiment-baseline:passed': localize("工具案例已獨立通過；此紀錄不代表 AI 測試已獲批准"),
+        'quality-evidence:writer-required': localize("觀測已備妥；由 Writer 補寫測試，工具不合併測試"),
         'quality-experiment:improved': localize("實測確認品質缺口減少"),
         'quality-experiment:unchanged': localize("實測缺口未減少；保留既有基線"),
         'quality-novelty:duplicate': localize("沒有新的測試情境；停止重複量測並保留基線"),
         'reviewer:repair-requested': localize("審查契約無效；在原時限內僅要求一次修正"),
+        'reviewer:approved': localize("Reviewer 已批准此版測試；可進入突變量測，尚非完整通過"),
+        'reviewer:rejected': localize("Reviewer 提出待處理問題；交 Writer 修訂後重新執行與審查"),
         'candidate-artifact:rejected': localize("已記錄拒絕原因；可保存的測試候選附於失敗報告"),
         'structure:passed': localize("測試結構、目標呼叫與斷言證據檢查通過；尚未判定完整品質"),
         'structure:rejected': localize("測試候選未通過檢查：{0}；交 Writer 修訂，修訂額度用盡則停止本候選", reason || localize("請查看報告中的拒絕原因")),
@@ -93,12 +99,12 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
         'validation:passed': mode === 'execution' ? localize("本次隔離測試執行通過；本模式不執行品質審查與突變")
             : localize("本次隔離測試執行通過；審查與突變品質尚須判定"),
         'validation:accepted': mode === 'execution' ? localize("保留可執行候選；本模式不執行突變，不代表完整品質通過")
-            : localize("保留可執行候選，繼續量測突變；不代表完整通過"),
+            : localize("保留可執行候選；須取得此版審查批准才可量測突變，不代表完整通過"),
         'executable-baseline:checkpointed': localize("已保存可執行測試及目前審查狀態；突變可能尚未量測"),
         'model-request:requested': localize("已送出模型請求"),
         'model-request:completed': localize("模型已回覆；內容仍須驗證"),
         'reviewer:invalid-response': localize("審查回覆未通過契約檢查{0}；不採用該建議", diagnostics ? `（${diagnostics}）` : ''),
-        'reviewer:unavailable': localize("審查未完成；保留已通過執行的測試並繼續工具量測"),
+        'reviewer:unavailable': localize("審查未完成；保留已通過執行的測試，本候選不進入突變"),
         'reviewer:suspended': localize("連續審查失敗，停止額外請求；審查仍標為未完成")
     };
     return labels[`${stage}:${status}`] || stageLabel(status);

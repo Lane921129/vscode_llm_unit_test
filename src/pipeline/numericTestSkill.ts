@@ -9,6 +9,8 @@ import { validTraceValueSnapshot } from './traceValues';
 import { pythonToolPath } from './pythonTools';
 import { currentTargetBudget } from './targetBudget';
 import { runSpawn } from '../utils/processRunner';
+import { containsCredential } from './artifactSafety';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 interface Calculation {
     call: TraceValueSnapshot;
@@ -20,6 +22,7 @@ interface Proposal { changed: true; code: string; basis: string; corrections: Co
 interface Options {
     code: string; failure: string; source: string; target: string; module: string;
     python: string; env: NodeJS.ProcessEnv; directory: string; runId: string; sourceHash: string;
+    knownSecrets?: readonly string[];
     checkCurrent(): void;
     observe(calls: Array<{ trace_input: TraceValueSnapshot }>): Promise<BehaviorObservations | null>;
     event(stage: string, status: string, detail: unknown): void;
@@ -64,14 +67,33 @@ export function verifyNumericObservations(calculations: Calculation[], raw: unkn
 
 /** Host-owned skill: no model tool-calling support, arbitrary eval, or new provider request. */
 export async function repairWithNumericSkill(options: Options): Promise<{ code: string; evidence: unknown } | undefined> {
+    return evaluateNumericSkill(options, false);
+}
+
+/** Production handoff: the AI receives exact-call observations and owns every code change. */
+export async function collectNumericRepairEvidence(options: Options): Promise<string | undefined> {
+    const result = await evaluateNumericSkill(options, true);
+    if (!result) { return undefined; }
+    const proof = result.evidence as Record<string, unknown>;
+    return 'VERIFIED NUMERIC OBSERVATIONS (evidence only; the AI must revise the test):\n'
+        + JSON.stringify({ schemaVersion: 'numeric-observation-handoff-v1', runId: options.runId,
+            sourceHash: options.sourceHash, target: options.target, testHash: evidenceHash(options.code),
+            corrections: proof.corrections,
+            limitation: 'Exact typed inputs were independently executed. These facts describe current behavior, not independent requirements. Preserve passing tests; produce the AI revision using the existing output contract.' });
+}
+
+async function evaluateNumericSkill(options: Options, evidenceOnly: boolean): Promise<{ code: string; evidence: unknown } | undefined> {
     if (!/^(?:FAIL|ERROR): test_/m.test(options.failure)) { return undefined; }
     const check = () => { options.checkCurrent(); currentTargetBudget()?.assertRemaining(); };
     check();
     const [file] = reserveArtifactFiles(options.directory, ['numeric'], 'json');
-    const identity = { schemaVersion: 'numeric-test-skill-v2', runId: options.runId, target: options.target,
+    const identity = { schemaVersion: evidenceOnly ? 'numeric-observations-v1' : 'numeric-test-skill-v2', runId: options.runId, target: options.target,
         sourceHash: options.sourceHash, previousTestHash: evidenceHash(options.code), file: path.basename(file),
         limitation: 'Calculator and exact-input execution agree with current source; independent requirements are not proven.' };
     const save = (status: string, detail: Record<string, unknown> = {}) => {
+        if (containsCredential(JSON.stringify(detail), options.knownSecrets)) {
+            throw new AnalysisStageError('validation', 'sensitive-output', 'Numeric observations contain credentials; no observations were saved or adopted.');
+        }
         const evidence = { ...identity, status, ...detail };
         fs.writeFileSync(file, JSON.stringify(evidence, null, 2), 'utf8');
         options.event('numeric-skill', status, { file: identity.file, ...detail });
@@ -113,9 +135,11 @@ export async function repairWithNumericSkill(options: Options): Promise<{ code: 
             }
             traces.push(trace!);
         }
-        const evidence = save('verified', { candidateTestHash: evidenceHash(value.code), corrections: value.corrections, trace, traces });
-        return { code: value.code, evidence };
-    } catch {
+        const evidence = save('verified', { ...(evidenceOnly ? { testAuthor: 'llm' } : { candidateTestHash: evidenceHash(value.code) }),
+            corrections: value.corrections, trace, traces });
+        return { code: evidenceOnly ? options.code : value.code, evidence };
+    } catch (error) {
+        if (error instanceof AnalysisStageError) { throw error; }
         // Cancellation, deadlines and source changes must not turn into fallback success.
         try { check(); }
         catch (error) {

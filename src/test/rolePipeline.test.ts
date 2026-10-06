@@ -11,6 +11,8 @@ import { getBugFixerUserPrompt, mergeBugFixReplacement } from '../roles/bugFixer
 import { parseQualityTasks, qualityStrategyHints } from '../roles/qualityAnalyst';
 import { normalizeScenarioOutput, reconcileScenarios } from '../validation/scenarioIdentity';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { repairHash } from '../pipeline/repairDiagnostics';
 
 const passed = 'test_keep (suite.C.test_keep) ... ok\nRan 1 test\nOK';
 function hooks(overrides: Partial<CandidatePipelineHooks> = {}): CandidatePipelineHooks {
@@ -29,6 +31,7 @@ test('executable candidates are reviewed and review revisions execute before re-
         execute: async code => { order.push(`execute:${code}`); return { ok: true, out: passed, qualityGaps: [] }; }
     }));
     assert.equal(result.code, 'fixed');
+    assert.equal(result.approvedCodeHash, repairHash('fixed'));
     assert.deepEqual(order, ['execute:draft', 'review:draft', 'writer', 'execute:fixed', 'review:fixed']);
 });
 
@@ -58,17 +61,22 @@ test('structural pre-validation failures go to Writer without guessing a failing
     assert.deepEqual(roles, ['writer']);
 });
 
-test('malformed/unavailable review becomes a warning and does not create another quality loop', async () => {
-    const result = await validateTestCandidate('draft', hooks({ review: async () => undefined }));
-    assert.equal(result.reviewStatus, 'incomplete');
-    assert.deepEqual(result.qualityIssues, []);
-    assert.match(result.reviewWarnings.join(), /審查未完成/);
+test('malformed or unavailable review stops after saving executable work, without Writer repair or acceptance', async () => {
+    const checkpoints: string[] = [];
+    await assert.rejects(validateTestCandidate('draft', hooks({
+        executable: code => { checkpoints.push(code); },
+        review: async () => undefined,
+        revise: async () => { throw Error('unavailable review must not trigger Writer'); }
+    })), (error: unknown) => error instanceof AnalysisStageError
+        && error.stage === 'reviewer' && error.category === 'validation');
+    assert.deepEqual(checkpoints, ['draft']);
 });
 
 test('deterministic fallback records review not-required without a fabricated empty review', async () => {
     const result = await validateTestCandidate('draft', hooks({ reviewRequired: false,
         review: async () => { throw new Error('must not request review'); } }));
     assert.equal(result.reviewStatus, 'not-required');
+    assert.equal(result.approvedCodeHash, undefined);
     assert.deepEqual(result.reviewWarnings, []);
 });
 
@@ -84,14 +92,84 @@ test('module import failures return to Writer without invoking method repair', a
     assert.deepEqual(roles, ['writer']);
 });
 
-test('nonblocking Reviewer advice is reported without overriding measured quality gates', async () => {
+test('actionable quality findings require Writer revision, execution and a clean re-review', async () => {
+    const order: string[] = [];
     const result = await validateTestCandidate('draft', hooks({
-        review: async () => ({ issues: [{
+        review: async code => { order.push('review:' + code); return { issues: code === 'draft' ? [{
             id: 'Q1', severity: 'quality', evidence: 'draft', reason: 'consider clarity', action: 'use a clearer assertion'
-        }] })
+        }] : [] }; },
+        execute: async code => { order.push('execute:' + code); return { ok: true, out: passed, qualityGaps: [] }; },
+        revise: async (code, failure, role) => {
+            assert.equal(code, 'draft'); assert.match(failure, /use a clearer assertion/);
+            order.push(role); return 'fixed';
+        }
     }));
     assert.deepEqual(result.qualityIssues, []);
-    assert.deepEqual(result.reviewWarnings, ['Q1: use a clearer assertion']);
+    assert.deepEqual(result.reviewWarnings, []);
+    assert.equal(result.approvedCodeHash, repairHash('fixed'));
+    assert.deepEqual(order, ['execute:draft', 'review:draft', 'writer', 'execute:fixed', 'review:fixed']);
+});
+
+test('all actionable findings block approval when the Writer revision allowance is exhausted', async () => {
+    for (const severity of ['blocking', 'quality'] as const) {
+        const checkpoints: string[] = [];
+        await assert.rejects(validateTestCandidate('draft', hooks({
+            review: async () => ({ issues: [{ id: 'R1', severity, evidence: 'assertion',
+                reason: 'the verified empty case is absent', action: 'add the verified empty input case' }] }),
+            executable: code => { checkpoints.push(code); },
+            revise: async (_code, _failure, role, attempt) => {
+                assert.equal(role, 'writer'); return 'revision-' + attempt;
+            }
+        }), 1), (error: unknown) => error instanceof AnalysisStageError
+            && error.stage === 'reviewer' && error.category === 'validation'
+            && (error.diagnostic as { reasonCode: string }).reasonCode === 'review-revisions-exhausted');
+        assert.deepEqual(checkpoints, ['draft', 'revision-1']);
+    }
+});
+
+test('Reviewer timeout and transport failures keep their category and cannot become accepted or Tier fallback', async () => {
+    for (const category of ['timeout', 'model-api'] as const) {
+        await assert.rejects(validateTestCandidate('draft', hooks({
+            review: async () => { throw new AnalysisStageError(category, 'model-request', 'safe failure'); },
+            revise: async () => { throw Error('unexpected revision'); }
+        })), (error: unknown) => error instanceof AnalysisStageError
+            && error.stage === 'reviewer' && error.category === category);
+    }
+});
+
+test('bounded repair evidence informs an AI revision and cannot replace the test through a host correction', async () => {
+    let evidenceCalls = 0;
+    let revisions = 0;
+    const events: string[] = [];
+    const result = await validateTestCandidate('draft', hooks({
+        reviewRequired: true,
+        execute: async code => ({ ok: code === 'fixed', out: code === 'fixed' ? passed : 'AssertionError: wrong', qualityGaps: [] }),
+        repairEvidence: async () => { evidenceCalls++; return '{"observed":2}'; },
+        repairExpectations: async () => { throw Error('host correction must not execute'); },
+        revise: async (_code, failure, _role, _attempt, evidence) => {
+            revisions++; assert.match(failure, /AssertionError: wrong/); assert.equal(evidence, '{"observed":2}');
+            assert.doesNotMatch(failure, /observed/);
+            return 'fixed';
+        },
+        event: (stage, status) => { events.push(stage + ':' + status); }
+    }));
+    assert.equal(result.code, 'fixed'); assert.equal(evidenceCalls, 1); assert.equal(revisions, 1);
+    assert.ok(events.includes('repair-evidence:provided'));
+});
+
+test('oversized repair evidence is omitted whole while the original failure still reaches AI', async () => {
+    const events: string[] = [];
+    await validateTestCandidate('draft', hooks({
+        execute: async code => ({ ok: code === 'fixed', out: code === 'fixed' ? passed : 'AssertionError: wrong', qualityGaps: [] }),
+        repairEvidence: async () => 'BIG_OBSERVATION' + '中'.repeat(3000),
+        revise: async (_code, failure, _role, _attempt, evidence) => {
+            assert.match(failure, /AssertionError: wrong/); assert.doesNotMatch(failure, /BIG_OBSERVATION|VERIFIED REPAIR EVIDENCE/);
+            assert.equal(evidence, undefined);
+            return 'fixed';
+        },
+        event: (stage, status) => { events.push(stage + ':' + status); }
+    }));
+    assert.ok(events.includes('repair-evidence:omitted'));
 });
 
 test('dropping previously passing tests cannot be accepted, and next repair uses retained code', async () => {

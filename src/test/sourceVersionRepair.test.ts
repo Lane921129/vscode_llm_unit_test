@@ -9,6 +9,7 @@ import { CandidateCheckpointStore } from '../pipeline/candidateCheckpoint';
 import { createStrictQualityPolicy } from '../pipeline/qualityPolicy';
 import { SOURCE_VERSIONS_VERSION, sourceVersionsCurrent } from '../pipeline/sourceVersions';
 import { preflightTargetModule } from '../pipeline/modulePreflight';
+import { AI_WORKFLOW_VERSION } from '../pipeline/aiWorkflow';
 
 test('guarded preflight tracks constant, module and transitive imports by actual source origin', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-versions-'));
@@ -64,6 +65,8 @@ for (const change of ['modify', 'delete', 'same-name', 'legacy', 'mismatch', 'em
             journal.knowledge({ terminalStatus: 'passed', acceptedTest: quality.testFile, acceptedCodeHash: quality.codeHash,
                 execution: quality.execution, coverage: quality.coverage, mutation: quality.mutation, qualityAssessment: quality.qualityAssessment,
                 reviewStatus: quality.reviewStatus, generationMode: quality.generationMode, resolvedTier: quality.tier,
+                reviewApproval: { workflowVersion: AI_WORKFLOW_VERSION, runId: journal.runId,
+                    sourceHash: journal.sourceHash, target: 'target', testHash: quality.codeHash },
                 dependencyEvidenceVersion: quality.dependencyEvidenceVersion, dependencyVersions: quality.dependencyVersions });
             journal.record(1, 'pipeline', 'passed', {});
             fs.writeFileSync(path.join(report, 'final_report.md'), 'historical report');

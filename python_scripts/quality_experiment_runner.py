@@ -1,7 +1,8 @@
 """Bounded quality experiments from passing literal calls, not model oracles.
 
 The planner never imports the target. Each experiment runs in a fresh guarded
-worker. Only exact builtin results/state/exception arguments become assertions.
+worker. Exact builtin results/state/exception arguments are evidence for the
+Writer, never automatically generated or merged tests in the production route.
 No arbitrary state assignment, generated code, or other method is executed.
 """
 import ast
@@ -23,8 +24,8 @@ from contextlib import redirect_stdout, redirect_stderr
 from basic_mutation_runner import find_target_scope, mutation_scope_walk
 from trace_value_codec import snapshot_value, restore_value, type_field
 
-VERSION = 'quality-experiment-result-v1'
-EXPERIMENT_VERSION = 'quality-experiment-v1'
+VERSION = 'quality-experiment-result-v2'
+EXPERIMENT_VERSION = 'quality-experiment-v2'
 MAX_CASES = 6
 MAX_CALLS = 2
 
@@ -227,10 +228,16 @@ def plan(payload):
         if payload.get('sourceHash', result['sourceHash']) != result['sourceHash']:
             raise ValueError('source-hash-mismatch')
         _, cls, method, attributes = class_contract(source, target)
-        source_root = Path(payload['sourcePath']).resolve().parent
+        source_path = Path(payload['sourcePath']).resolve()
+        source_root = source_path.parent
+        package_parts = []
         while (source_root / '__init__.py').is_file():
+            package_parts.insert(0, source_root.name)
             source_root = source_root.parent
-        context = {'sourceRoot': str(source_root),
+        module = '.'.join(package_parts if package_parts and source_path.stem == '__init__' else package_parts + [source_path.stem])
+        if module != payload['module']:
+            raise ValueError('source-module-mismatch')
+        context = {'sourceRoot': str(source_root), 'sourcePath': str(source_path), 'module': module,
                    'importFixturePlanHash': digest(os.environ.get('LLM_UNIT_TEST_IMPORT_FIXTURES', ''))}
         result['context'] = context
         node = focus_node(method, payload['focus'])
@@ -273,7 +280,8 @@ def plan(payload):
         if not result['experiments']:
             result['reason'] = 'no-new-literal-experiment' if duplicates else 'no-supported-passing-literal-seed'
     except (ValueError, SyntaxError, KeyError, TypeError, RecursionError) as error:
-        result['reason'] = str(error)[:160]
+        message = str(error)
+        result['reason'] = message if re.fullmatch(r'[a-z][a-z0-9-]{0,159}', message) else type(error).__name__
     return result
 
 
@@ -311,8 +319,8 @@ def worker(payload):
         for item in [constructor] + calls:
             if type(item) is not dict or set(item) != {'args', 'kwargs'} or type(item['args']) is not list or type(item['kwargs']) is not dict:
                 raise ValueError('invalid-call-values')
-        _, root, _ = package_module_context(str(path))
-        if experiment['context'] != {'sourceRoot': str(Path(root).resolve()),
+        module_name, root, _ = package_module_context(str(path))
+        if experiment['context'] != {'sourceRoot': str(Path(root).resolve()), 'sourcePath': str(path.resolve()), 'module': module_name,
                 'importFixturePlanHash': digest(os.environ.get('LLM_UNIT_TEST_IMPORT_FIXTURES', ''))}:
             raise ValueError('execution-context-mismatch')
         with observe_ambient_reads(root, importing=True) as import_reads, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), block_trace_side_effects():
@@ -361,10 +369,14 @@ def worker(payload):
                     break
         if import_reads or reads:
             raise ValueError('uncontrolled-ambient-read')
-        output.update(status='observed', evidence={'schemaVersion': 'quality-experiment-evidence-v1',
+        if digest(path.read_bytes().decode('utf-8-sig')) != experiment['sourceHash']:
+            raise ValueError('experiment-source-changed')
+        evidence = {'schemaVersion': 'quality-experiment-evidence-v2',
             'sourceHash': experiment['sourceHash'], 'target': experiment['target'],
-            'fingerprint': experiment['fingerprint'], 'constructor': experiment['constructor'],
-            'initialState': before, 'steps': steps, 'context': experiment['context'], 'isolation': 'fresh-process-per-case'})
+            'gapId': experiment['gapId'], 'fingerprint': experiment['fingerprint'],
+            'constructor': experiment['constructor'], 'calls': experiment['calls'], 'observe': experiment['observe'],
+            'initialState': before, 'steps': steps, 'context': experiment['context'], 'isolation': 'fresh-process-per-case'}
+        output.update(status='observed', evidence=evidence, evidenceHash=digest(canonical(evidence)))
     except (Exception, SystemExit) as error:
         # Diagnostics contain bounded classifications, never application output.
         output['reason'] = (BaseException.__dict__['args'].__get__(error)[0][:180]
@@ -382,6 +394,7 @@ def render_call(name, snapshot):
 
 
 def build_tests(module, target, experiments):
+    """Offline compatibility helper. Production --run returns observations only."""
     if not all(p.isidentifier() and not keyword.iskeyword(p) for p in module.split('.')):
         raise ValueError('invalid-import-module')
     class_name, method = target.split('.')
@@ -437,9 +450,6 @@ def run(payload):
             observed = {'fingerprint': experiment['fingerprint'], 'status': 'unavailable', 'reason': 'worker-error'}
         result['experiments'].append(observed)
     result['status'] = 'observed' if any(r['status'] == 'observed' for r in result['experiments']) else 'unavailable'
-    if result['status'] == 'observed':
-        result['testCode'] = build_tests(payload['module'], payload['target'], result['experiments'])
-        result['testHash'] = digest(result['testCode'])
     return result
 
 

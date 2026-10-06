@@ -16,7 +16,8 @@ import { validateSeedThenCandidate } from './pipeline/seedCandidatePipeline';
 import { RejectedCandidateStore, CandidateRejectionGate } from './pipeline/rejectedCandidateStore';
 import { reviewWithContractRepair } from './roles/reviewContractRepair';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt } from './roles/writerPhases';
-import { repairWithNumericSkill } from './pipeline/numericTestSkill';
+import { collectNumericRepairEvidence } from './pipeline/numericTestSkill';
+import { NumericEvidenceLedger } from './pipeline/numericEvidenceLedger';
 import { verificationMode, VerificationMode } from './pipeline/verificationMode';
 import { runExecutionVerification } from './pipeline/executionVerification';
 import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './roles/unittestWriter';
@@ -37,9 +38,10 @@ import { TierHistory } from './pipeline/tierHistory';
 import { ReportIdentity, writeTargetReports } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
 import { deduplicateTargets } from './pipeline/batchScope';
-import { prepareQualityExperiments, mergeQualityExperimentTests, assessQualityCandidateNovelty } from './pipeline/qualityExperiments';
+import { prepareQualityExperiments, buildQualityExperimentEvidencePrompt, assessQualityCandidateNovelty } from './pipeline/qualityExperiments';
 import { QualityImprovementSession } from './pipeline/qualityImprovementSession';
 import { containsCredential } from './pipeline/artifactSafety';
+import { AI_WORKFLOW_VERSION, requireReviewApproval, ReviewApproval } from './pipeline/aiWorkflow';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
 import {
@@ -47,6 +49,7 @@ import {
     BehaviorObservations,
     SemanticPlanV2,
     summarizeObservationPhase,
+    observationsForPrompt,
     WriterEvidenceBundleV3
 } from './pipeline/evidenceContracts';
 import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from './validation/scenarioIdentity';
@@ -59,13 +62,11 @@ import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, g
 import { SerialRequestQueue } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
-import { buildTier1TestFile } from './tier/tier1TestFileBuilder';
-import { restoreVerifiedTraceTestFile, shouldPreserveVerifiedTrace } from './tier/traceTestAugmenter';
 import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
 import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, QUALIFICATION_VERSION } from './llm/modelQualification';
 import { RoleQualificationProfile, qualifiedRole } from './llm/roleQualification';
 import { ReviewSession, ReviewStatus } from './roles/reviewSession';
-import { canUseDeterministicTierOne, canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
+import { canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
@@ -1242,6 +1243,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let bestGaps: string[] = [];
     let bestReviewWarnings: string[] = [];
     let bestReviewStatus: ReviewStatus = 'incomplete';
+    let bestReviewApproval: ReviewApproval | undefined;
     let bestCoverage: RetainedCoverage | null = null;
     let bestTier: number | undefined;
     let qualityGaps: string[] = [];
@@ -1306,7 +1308,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         log(userTierSetting === 'auto'
             ? mode === 'execution'
                 ? localize("[模型能力] 此供應商／模型尚未完成 Writer 探測；執行驗證的 Auto 需要先透過「測試連線」確認生成能力。")
-                : localize("[模型能力] 此供應商／模型尚未透過「測試連線」驗證 unittest 生成能力；Auto 會保守使用 Tier 1。測試連線以無副作用 fixture 實測可執行 unittest，並讀取供應商可提供的參數量／Context。")
+                : localize('完整流程的 Auto 需要先完成 Writer 與 Reviewer 角色測試連線。')
             : localize("[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier {0} 選擇繼續執行。輸出仍須通過{1}。", userTierSetting.replace('tier', ''), gateDescription));
     }
     const resolvedTier = resolveTier(
@@ -1400,9 +1402,20 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     if (mode === 'full') { journal.knowledge({ tierHistory }); }
     const qualityAnalystSession = new QualityAnalystSession();
     const qualityExperiments = new QualityImprovementSession();
-    let verifiedQualityBundle = '';
-    let retainedQualityBundle = '';
-    let pendingToolCandidate = '';
+    let qualityObservationEvidence = '';
+    let qualityTraceProjection = '';
+    let qualityTraceReference = '';
+    const appendQualityEvidence = (prompt: string): string => {
+        if (!qualityObservationEvidence || prompt.includes(qualityObservationEvidence)) { return prompt; }
+        // Only omit a repeated envelope when the complete current Trace projection
+        // is already in this role's prompt. Partial or caller-scoped traces still need it.
+        const addition = qualityTraceProjection && prompt.includes(qualityTraceProjection)
+            ? qualityTraceReference : qualityObservationEvidence;
+        return prompt.includes(addition) ? prompt : prompt + '\n\n' + addition;
+    };
+    const numericEvidence = new NumericEvidenceLedger({ runId: journal.runId, sourceHash: journal.sourceHash,
+        target: params.funcName || 'file' }, knownSecrets);
+    const numericEvidencePrompt = () => numericEvidence.prompt(Math.min(12000, activeModelProfile.budgetTokens));
     let pendingQualityGap: { id: string; previousGaps: string[] } | undefined;
     const writeReport = (body = finalReportMarkdown) => {
         existingReport = writeTargetReports(sessionDir, reportIdentity, journal.sourceHash, journal.runId, journal.snapshot(), body);
@@ -1434,6 +1447,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (role === 'writer' && mode === 'full') {
             prompt = seedPending ? buildWriterSeedPrompt(prompt)
                 : buildWriterExpansionPrompt(prompt, bestCode || checkpoints.executable?.code || '', analystTasks);
+        }
+        prompt = appendQualityEvidence(prompt);
+        if (mode === 'full' && numericEvidence.hasEvidence) {
+            const observations = numericEvidencePrompt();
+            if (!prompt.includes(observations)) { prompt += '\n\n' + observations; }
         }
         if (importFixtures) {
             prompt += '\n\n[Import test setup] The original module runs under the saved import-fixtures-v1 contract. '
@@ -1536,7 +1554,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions });
     const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
     let mutationSelection: SelectedMutationEngine | undefined;
-    if (mode === 'full') {
+    if (mode === 'full' && !isStubFunction(astContext)) {
+        journal.knowledge({ workflowVersion: AI_WORKFLOW_VERSION, testAuthor: 'llm',
+            reviewStatus: 'incomplete', mutationStatus: 'not-measured', mutationScore: null });
+        if ((!mayUseModelAuthoredTests || !mayUseModelAuthoredReview) && !isStubFunction(astContext)) {
+            throw new AnalysisStageError('validation', 'role-qualification',
+                localize('完整 AI 流程需要可用的 Writer 與 Reviewer；請先完成角色測試連線。'));
+        }
         try {
             mutationSelection = await selectMutationEngine(params.mutationEngine, params.mutationWorkers,
                 args => runSpawn(pythonExecutable, args, { timeout: 10000 }));
@@ -1582,16 +1606,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     return result.valid ? undefined : result.reason || 'Structure validation failed';
                 },
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
-                revise: async (code, failure, role, attempt) => {
+                revise: async (code, failure, role, attempt, repairEvidence) => {
                     if (role === 'bug-fixer' && !mayUseModelAuthoredRepair) {
                         throw new AnalysisStageError('validation', 'fixer-qualification', localize("Auto 的 Bug Fixer 尚未通過資格探測；已保存失敗測試。"));
                     }
                     const system = role === 'bug-fixer' ? getBugFixerSystemPrompt() : getExecutionWriterSystemPrompt();
-                    const prompt = role === 'bug-fixer'
+                    const prompt = (role === 'bug-fixer'
                         ? getBugFixerUserPrompt(code, failure, targetFuncName, astContext.args, astContext.code,
                             astContext, targetImportModule, undefined,
                             Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
-                        : getExecutionWriterPrompt(evidence, code, failure);
+                        : getExecutionWriterPrompt(evidence, code, failure)) + '\n' + (repairEvidence || '');
                     const raw = await requestBudgeted(params, system, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision');
@@ -1626,10 +1650,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             + localize("- Trace、覆蓋率、突變及品質審查：未執行；完整品質尚未驗證。\n")
             + localize("- 這份結果只涵蓋已執行案例與明確 mock 設定，不代表整個應用程式或所有需求正確。\n")
             + `\n\`\`\`text\n${journal.snapshot().execution}\n\`\`\`\n`;
-        const expectationRepair = journal.snapshot().expectationRepair as { file: string; candidateTestHash: string } | undefined;
+        const expectationRepair = journal.snapshot().expectationRepair as { file: string } | undefined;
         if (expectationRepair) {
-            const applied = expectationRepair.candidateTestHash === accepted.testHash;
-            finalReportMarkdown += localize("\n- **預期值修正**：{0}計算依據：[{1}]({2})。這只驗證與來源行為一致，不代表獨立需求正確性。\n", applied ? localize("依原始碼與案例輸入進行有界算術計算，修正失敗案例的預期常數後重新執行通過。") : localize("曾提出來源算術修正；最後採用另一次修訂，該提案不代表最終測試。"), expectationRepair.file, expectationRepair.file);
+            finalReportMarkdown += localize("\n- **預期值修正**：{0}計算依據：[{1}]({2})。這只驗證與來源行為一致，不代表獨立需求正確性。\n",
+                localize('工具僅提供算術假設；測試由 AI 修訂，再經實際執行驗證。'), expectationRepair.file, expectationRepair.file);
         }
         writeReport();
         sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName: displayName, file: displayFile,
@@ -1667,7 +1691,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const reason = localize("類別 {0} 的建構子需要 {1}，但找不到可驗證的 caller literal 設定。", className, requiredConstructorParams.join(', '));
             finalReportMarkdown += localize("## 🚀 快速通道結果\n\n> [!WARNING]\n> 此函式為 Stub/Dummy，但無法安全建立實例：{0} 未產生測試，也未呼叫 LLM。\n", reason);
             throwIfExecutionCancelled();
-            journal.knowledge({ terminalStatus: 'stub-skipped', reason });
+            journal.knowledge({ terminalStatus: 'stub-skipped', reason, testAuthor: 'none',
+                reviewStatus: 'not-required', mutationStatus: 'not-measured', mutationScore: null });
             writeReport();
             log(localize("[快速通道] ⏭️ {0} 已安全略過。", reason));
             return;
@@ -1711,7 +1736,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += `\`\`\`python\n${smokeTest}\n\`\`\`\n`;
 
         throwIfExecutionCancelled();
-        journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false });
+        journal.knowledge({ terminalStatus: 'stub-smoke-generated', executionVerified: false, testAuthor: 'host-smoke',
+            reviewStatus: 'not-required', mutationStatus: 'not-measured', mutationScore: null });
         writeReport();
         log(localize("[快速通道] ✅ Stub 函式 {0} 處理完成！Smoke Test 已寫入 {1}", params.funcName, testPath));
         // 依需求：Stub/Dummy 函式不顯示在 UI 測試列表中，避免洗版
@@ -1835,15 +1861,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     raw: semRaw,
                     result: null
                 });
-                log(localize("[語意分析師] ⚠️ 回應未符合語意分析 schema，改用程式碼特徵規則基線（不影響主流程）。"));
+                throw new AnalysisStageError('model-format', 'analyst-planning',
+                    localize('分析師回覆無效；已停止，尚未進入測試生成。'));
             }
         } catch (semErr: any) {
             throwIfExecutionCancelled();
-            if (semErr instanceof AnalysisStageError && ['sensitive-output', 'prompt-budget', 'target-budget'].includes(semErr.stage)) {
-                throw semErr;
-            }
             recordRole('analyst-planning', 'failed', { reason: semErr.message });
-            log(localize("[語意分析師] ⚠️ 語意分析呼叫失敗: {0}，繼續主流程。", semErr.message));
+            if (semErr instanceof AnalysisStageError) { throw semErr; }
+            throw new AnalysisStageError('model-api', 'analyst-planning',
+                localize('分析師未完成；已停止，尚未進入測試生成。'));
         }
     } else {
         recordRole('analyst-planning', 'skipped', {
@@ -1988,25 +2014,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const testDir = path.dirname(testPath);
         const reportDir = path.join(loopDir, `loop${currentLoop}_report`);
 
-        let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', survivedMutants, params.modelName);
-        let focusContext = "";
-        if (currentLoop > 1 && (survivedMutants || qualityGaps.length)) {
-            focusContext = extractFocusContext(survivedMutants, targetCode);
-            if (focusContext) {
-                log(localize("[動態焦點] 已擷取 {0} 個突變體焦點區塊，準備進行精準修復。", focusContext.split(localize("【目標變異體】")).length - 1));
-            }
-            // 最優解錨定：將歷史最高分的測試嵌入到 focusContext，明確禁止 LLM 刪除修改
-            if (bestCode) {
-                const bestBlock = `=== EXISTING VERIFIED TESTS (DO NOT DELETE OR MODIFY THESE METHODS) ===\n${bestCode}\n=== END OF EXISTING TESTS ===\n\n`;
-                focusContext = bestBlock + focusContext;
-                log(localize("[最優解錨定] 已將歷史最優測試集（{0}%）嵌入到 Prompt，防止 LLM 改壞舊斷言。", bestScore));
-            }
-        }
-
-        if (qualityGaps.length || analystTasks) {
-            focusContext += '\n=== NEXT QUALITY TASKS (hypotheses; validate before acceptance) ===\n'
-                + qualityGaps.slice(0, 5).join('\n') + '\n' + analystTasks;
-        }
+        // One measured gap per expansion. The phase wrapper carries the full baseline
+        // and the selected task once; the source and observations already live in evidence.
+        let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', undefined, params.modelName);
+        const focusContext = '';
+        const phasePrompt = seedPending ? buildWriterSeedPrompt('')
+            : buildWriterExpansionPrompt('', bestCode || checkpoints.executable?.code || '', analystTasks);
+        const generationBudget = Math.max(1, activeModelProfile.budgetTokens
+            - estimateTokens(addOutputContract(systemPrompt, testGenerationResponseFormat))
+            - estimateTokens(phasePrompt) - estimateTokens(qualityObservationEvidence)
+            - estimateTokens(numericEvidencePrompt()));
         const userPrompt = getUserPrompt(
             params.filePath,
             targetFuncName,
@@ -2014,7 +2031,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             evalStrategy as 'small' | 'large',
             astContext,
             focusContext,
-            activeModelProfile.budgetTokens,
+            generationBudget,
             params.modelName,
             writerEvidenceBundle
         );
@@ -2027,6 +2044,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         let loopCoverage: RetainedCoverage | null = null;
         let loopAssessment: TargetCoverageAssessment = { available: false, coverageText: 'N/A', missingLines: localize("未知") };
         let loopExecution = '';
+        let reviewApproval: ReviewApproval | undefined;
         qualityGaps = [];
         try {
             // ─── Tier 降階修復迴圈 ───
@@ -2034,14 +2052,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             while (currentTier >= 1 && !tierSuccess && !isExecutionCancelled()) {
                 try {
                 log(localize("[Tier 執行] 目前使用策略：Tier {0}", currentTier));
-                sanitizedCode = pendingToolCandidate;
-                pendingToolCandidate = '';
-                rawCode = "";
-                const usingVerifiedQualityCandidate = Boolean(sanitizedCode);
-                if (usingVerifiedQualityCandidate) {
-                    recordRole('quality-experiment', 'candidate', { codeHash: evidenceHash(sanitizedCode),
-                        origin: 'host-observed-evidence', modelBaselinePreserved: true });
-                }
+                sanitizedCode = '';
+                rawCode = '';
 
                 const callerPlan = planCallerPartitions(astContext?.callerContexts || []);
                 const callerContextsCount = callerPlan.callers.length;
@@ -2053,60 +2065,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     log(localize("[分治規劃] {0} 個呼叫站、{1} 組已知輸入：{2}。", callerPlan.totalCallers, callerPlan.distinctInputs, useDivideAndConquer ? localize("按不同輸入分組") : localize("使用單次生成，保留完整語境")));
                 }
 
-                // ─── Tier 1：LLM 證據導向生成；未驗證 Auto 才使用確定性備援 ───
-                if (currentTier === 1 && !sanitizedCode && !survivedMutants) {
-                const traceResult = astContext?.traceResult;
-                if (!tier1GenerationModeRecorded) {
-                    const modeLabel = tier1GenerationMode === 'llm-evidence-bound'
-                        ? localize("LLM 證據導向生成（來源碼 + AST + 已驗證行為觀測 + 測試生成規則）")
-                        : localize("確定性備援（模型尚未通過 Auto 的 unittest 資格探測）");
-                    finalReportMarkdown += localize("- **Tier 1 實際產生模式**: {0}\n\n", modeLabel);
-                    // Stable, machine-readable provenance for fixture scorecards.
-                    // Keep this separate from the localized explanation above.
-                    finalReportMarkdown += `- **Tier 1 generation mode**: ${tier1GenerationMode}\n\n`;
-                    tier1GenerationModeRecorded = true;
-                }
-                if (tier1GenerationMode === 'llm-evidence-bound') {
+                // Every production Tier uses AI-authored tests; Trace is evidence only.
+                if (currentTier === 1 && !survivedMutants) {
+                    if (!tier1GenerationModeRecorded) {
+                        finalReportMarkdown += `- **Tier 1 generation mode**: ${tier1GenerationMode}\n\n`;
+                        tier1GenerationModeRecorded = true;
+                    }
                     systemPrompt = getTier1EvidenceBoundSystemPrompt();
-                    log(localize("[Tier 1] 以 LLM 證據導向生成：模型將根據來源碼、AST、已驗證行為觀測與測試生成規則撰寫測試；後續閘門驗證產物。"));
-                } else {
-                    if (!traceResult || !canUseDeterministicTierOne(traceResult)) {
-                        throw new Error(
-                            localize("Tier 1 確定性備援無法取得可驗證的行為觀測；Auto 模式下選定模型尚未通過 unittest 生成探測，")
-                            + localize("因此不會改用 LLM 猜測測試。請先執行「測試連線」，或明確選擇 Tier 1–4 後以既有驗證閘門使用 LLM 生成。")
-                        );
-                    }
-                    log(localize("[Tier 1 備援] 模型未驗證，使用已驗證行為觀測機械式生成 {0} 個成功範例與 {1} 個例外範例。", traceResult.examples.length, traceResult.errors.length));
-                    const className = astContext?.class_name as string | null | undefined;
-                    const constructorParams = (astContext?.class_context?.effective_init?.required_params
-                        || astContext?.class_context?.effective_init?.params
-                        || astContext?.class_context?.init?.required_params
-                        || astContext?.class_context?.init?.params) as string[] | undefined;
-                    const tier1File = buildTier1TestFile({
-                        moduleName: targetImportModule,
-                        functionName: targetFuncName,
-                        examples: traceResult.examples,
-                        errors: traceResult.errors,
-                        className,
-                        methodKind: astContext?.method_kind,
-                        constructorParams,
-                        callerContexts: astContext?.callerContexts,
-                        isAsync: Boolean(astContext?.is_async),
-                    });
-                    if (tier1File.missingConstructorFacts) {
-                        throw new Error(
-                            localize("Tier 1 確定性備援無法安全建立 {0}：建構子需要 {1}，", className, tier1File.missingConstructorFacts.join(', '))
-                            + localize("但沒有可驗證的 caller literal。請先執行「測試連線」後改用 LLM 證據導向生成。")
-                        );
-                    } else if (tier1File.code) {
-                        sanitizedCode = tier1File.code;
-                        rawCode = `[Tier 1 deterministic fallback] Generated ${tier1File.methodCount} observation-derived test methods`;
-                        log(localize("[Tier 1 備援] 完成！共產出 {0} 個行為觀測衍生測試方法。{1}", tier1File.methodCount, className ? ` (Class method: ${className}.${targetFuncName})` : ''));
-                    } else {
-                        throw new Error(localize("Tier 1 確定性備援未能從已驗證行為觀測產生測試。"));
-                    }
                 }
-            }
 
                 // ─── Tier 3：Mock Scaffold（34–70B 模型） ───
                 if (currentTier === 3 && !sanitizedCode && !survivedMutants) {
@@ -2181,7 +2147,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         'small',
                         subAstContext,
                         focusContext,
-                        activeModelProfile.budgetTokens,
+                        generationBudget,
                         params.modelName,
                         writerEvidenceBundle
                     );
@@ -2337,106 +2303,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
             let finalCode = sanitizedCode;
             
-            // 強制檢查並補齊 import，同時移除 LLM 可能寫的假 placeholder
+            // Import, fixture and assertion changes belong to the AI revision path.
             const baseName = path.basename(params.filePath, '.py');
-            finalCode = finalCode
-                .split('\n')
-                .filter(line => {
-                    const t = line.trim();
-                    if (!t.startsWith('from ') && !t.startsWith('import ')) {return true;}
-                    // 移除 placeholder imports
-                    if (t.includes('module_name') || t.includes('MODULE_NAME') ||
-                        t.includes('<module>') || t.includes('your_module') ||
-                        t.includes('FUNCTION_NAME')) {return false;}
-                    // 移除相對 import（from .. import, from .x import）
-                    if (/^from\s+\./.test(t)) {return false;}
-                    return true;
-                })
-                .join('\n');
-
-            if (!finalCode.includes(`from ${targetImportModule} import`)
-                && !finalCode.includes(`import ${targetImportModule}`)) {
-                log(localize("[警告] AI 遺漏了 import 目標模組的語句，系統自動補齊..."));
-                if (finalCode.includes('import unittest')) {
-                    finalCode = finalCode.replace('import unittest', `import unittest\nfrom ${targetImportModule} import *`);
-                } else {
-                    finalCode = `import unittest\nfrom ${targetImportModule} import *\n\n` + finalCode;
-                }
-            }
-
-            // 🚨 自動補齊 mock / patch import (小模型常見遺漏)
-            if ((finalCode.includes('patch(') || finalCode.includes('MagicMock')) && !finalCode.includes('unittest.mock')) {
-                log(localize("[警告] 偵測到程式碼使用 patch/MagicMock 但遺漏 import，系統自動補齊 unittest.mock..."));
-                finalCode = finalCode.replace('import unittest', 'import unittest\nfrom unittest.mock import patch, MagicMock');
-            }
-
-            // All real Trace cases run in their own runner-owned class, including functions.
-            const traceForAugmentation = astContext?.traceResult;
-            const verifiedTrace = shouldPreserveVerifiedTrace(currentTier, tier1GenerationMode)
-                && canUseDeterministicTierOne(traceForAugmentation)
-                ? buildTier1TestFile({
-                    moduleName: targetImportModule,
-                    functionName: targetFuncName,
-                    examples: traceForAugmentation!.examples,
-                    errors: traceForAugmentation!.errors,
-                    className: astContext?.class_name,
-                    methodKind: astContext?.method_kind,
-                    constructorParams: astContext?.class_context?.effective_init?.required_params
-                        || astContext?.class_context?.effective_init?.params
-                        || astContext?.class_context?.init?.required_params
-                        || astContext?.class_context?.init?.params,
-                    callerContexts: astContext?.callerContexts,
-                    isAsync: Boolean(astContext?.is_async),
-            }) : undefined;
-            let traceBaselineChecked = false;
-            const ensureTraceBaseline = async (): Promise<void> => {
-                if (traceBaselineChecked || !verifiedTrace?.code) { return; }
-                const traceStructure = await validateGeneratedTestCode(verifiedTrace.code, targetFuncName, baseName,
-                    astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
-                    exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
-                if (!traceStructure.valid) {
-                    recordRole('trace-baseline', 'failed', { category: 'validation', reason: traceStructure.reason });
-                    throw new AnalysisStageError('validation', 'trace-baseline',
-                        localize("系統 Trace 基線未通過結構／安全檢查，停止模型修訂：") + traceStructure.reason);
-                }
-                const traceTestPath = path.join(loopDir, `loop${currentLoop}_trace_test.py`);
-                fs.writeFileSync(traceTestPath, verifiedTrace.code, 'utf8');
-                const traceRun = await runSpawn(pythonExecutable,
-                    generatedUnittestArguments(path.basename(traceTestPath, '.py'), targetDir, false, true),
-                    { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
-                recordRole('trace-baseline', traceRun.code === 0 ? 'passed' : 'failed', {
-                    testPath: traceTestPath, output: traceRun.stdout + traceRun.stderr
-                });
-                if (traceRun.code !== 0 || !/Ran ([1-9]\d*) tests?/.test(traceRun.stdout + traceRun.stderr)) {
-                    throw new AnalysisStageError('validation', 'trace-baseline',
-                        localize("已驗證行為觀測的獨立 unittest 基線未通過，停止合併 Trace 與模型測試。"),
-                        { output: traceRun.stdout + traceRun.stderr, traceTestPath });
-                }
-                traceBaselineChecked = true;
-            };
-            const preserveTrace = async (candidate: string): Promise<string> => {
-                if (seedPending) { return candidate; }
-                await ensureTraceBaseline();
-                if (verifiedQualityBundle) {
-                    candidate = (await mergeQualityExperimentTests(candidate, verifiedQualityBundle, pythonExecutable,
-                        { restore: true, env: testExecutionEnv })).code;
-                }
-                if (!verifiedTrace?.code) { return candidate; }
-                const restored = restoreVerifiedTraceTestFile(candidate, verifiedTrace.code, verifiedTrace.methodCount, targetFuncName).code;
-                const result = await runSpawn(pythonExecutable, ['-B', pythonToolPath('traceDeduplication')], {
-                    input: JSON.stringify({ code: restored, target: targetFuncName.replace(/\W+/g, '_'),
-                        protectedCode: checkpoints.executable?.code || bestCode || '' }),
-                    timeout: 5000, env: testExecutionEnv
-                });
-                if (result.code !== 0) { throw new Error(localize("Trace 重複案例檢查未完成；未採用修改。")); }
-                const cleaned = JSON.parse(result.stdout) as { code: string; removed: number };
-                if (cleaned.removed > 0) { recordRole('trace-deduplication', 'normalized', { removed: cleaned.removed, baselinePreserved: true }); }
-                return cleaned.code;
-            };
-            finalCode = await preserveTrace(finalCode);
-            if (verifiedTrace?.code && !seedPending) {
-                log(localize("[行為觀測保底] 已保留 {0} 個已驗證 I/O 測試於獨立類別；每次修復後也會還原。", verifiedTrace.methodCount));
-            }
 
             if (bestCode && !seedPending) {
                 const novelty = await assessQualityCandidateNovelty(bestCode, finalCode, pythonExecutable, testExecutionEnv);
@@ -2446,16 +2314,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         localize('候選僅重複或重新命名既有測試，未新增可驗證情境；保留已測量基線。'));
                 }
             }
-            recordRole(usingVerifiedQualityCandidate ? 'quality-experiment' : 'writer', 'candidate', { tier: currentTier, responseHash: evidenceHash(rawCode),
+            recordRole('writer', 'candidate', { tier: currentTier, responseHash: evidenceHash(rawCode),
                 responseCharacters: rawCode.length, code: finalCode });
             const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
                 code, failure, targetFuncName, astContext?.args || [], astContext?.code || targetCode,
                 astContext, targetImportModule, undefined,
                 Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`)
             );
-            const roleEvidence = getReviewEvidence('', '', targetFuncName, astContext?.args || [],
+            const roleEvidence = appendQualityEvidence(getReviewEvidence('', '', targetFuncName, astContext?.args || [],
                 astContext?.code || targetCode, astContext, targetImportModule, undefined,
-                Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`));
+                Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`)));
             const inventories = new Map<string, ScenarioIdentity[]>();
             const inventory = async (code: string): Promise<ScenarioIdentity[]> => {
                 const hash = evidenceHash(code);
@@ -2489,14 +2357,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     + localize("\n### 已保存可執行測試\n\n- 測試：{0}\n- 審查狀態：{1}\n- 本候選突變：尚未測量\n", snapshot.testFile, status));
             };
             const candidateHooks: CandidatePipelineHooks = {
-                reviewRequired: mayUseModelAuthoredTests,
+                reviewRequired: true,
                 checkCancelled: throwIfExecutionCancelled,
                 event: recordRole,
                 rejectedCandidate: recordRejected,
-                repairExpectations: ruleSelection.ids.includes('numeric_calculation') ? (code, failure) => repairWithNumericSkill({
+                repairEvidence: ruleSelection.ids.includes('numeric_calculation') ? async (code, failure) => {
+                    const evidence = await collectNumericRepairEvidence({
                     code, failure, source: initialSource, target: params.funcName || targetFuncName, module: targetImportModule,
                     python: pythonExecutable, env: testExecutionEnv, directory: loopDir,
-                    runId: journal.runId, sourceHash: journal.sourceHash,
+                    runId: journal.runId, sourceHash: journal.sourceHash, knownSecrets,
                     checkCurrent: () => {
                         throwIfExecutionCancelled();
                         if (!evidenceStillCurrent()) {
@@ -2508,9 +2377,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             input: call.trace_input, source: { kind: 'semantic_guided', detail: 'numeric-calculation' }
                         })) }),
                     event: recordRole
-                }) : undefined,
+                    });
+                    if (!evidence) { return undefined; }
+                    recordRole('numeric-evidence', 'retained', numericEvidence.add(evidence));
+                    return numericEvidencePrompt();
+                } : undefined,
                 executable: (code, execution) => checkpointExecutable(code, execution.out, execution.qualityGaps,
-                    mayUseModelAuthoredTests ? 'incomplete' : 'not-required', [], execution.coverage || loopAssessment),
+                    'incomplete', [], execution.coverage || loopAssessment),
                 validate: async (code) => {
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
@@ -2529,10 +2402,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         return undefined;
                     }
                     const sys = getTestReviewerSystemPrompt();
-                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence, executionVerified: true },
+                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true },
                         Number.MAX_SAFE_INTEGER);
                     if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt, activeModelProfile.budgetTokens)) {
-                        recordRole('reviewer', 'budget-exceeded', { reason: localize("完整證據超過預算；未截斷程式碼，交工具驗證並標記審查未完成。") });
+                        recordRole('reviewer', 'budget-exceeded', { reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
                         return undefined;
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
@@ -2551,7 +2424,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             throwIfExecutionCancelled();
                             recordRole('reviewer', 'failed', { reason: error.message,
                                 category: error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(error.message) });
-                            return undefined;
+                            throw error;
                         }
                     }, (status, detail) => recordRole('reviewer', status, detail));
                 },
@@ -2591,9 +2464,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             throw error;
                         }
                         if (merged.normalization) { recordRole('bug-fixer', 'format-normalized', { attempt, ...merged.normalization }); }
-                        return preserveTrace(merged.code!);
+                        return merged.code!;
                     }
-                    return preserveTrace(sanitizeLlmResponse(raw));
+                    return sanitizeLlmResponse(raw);
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
                     if (role !== 'bug-fixer') { return undefined; }
@@ -2667,10 +2540,17 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 }
             };
             const accepted = await validateSeedThenCandidate({ code: finalCode, seed: seedPending,
-                hooks: candidateHooks, augment: preserveTrace,
+                hooks: candidateHooks,
                 seedAccepted: () => { seedPending = false; journal.knowledge({ writerPhase: 'expand' }); },
                 baseline: bestCode ? { code: bestCode, output: bestExecution } : undefined });
             finalCode = accepted.code;
+            if (accepted.reviewStatus === 'completed' && accepted.approvedCodeHash === evidenceHash(finalCode)) {
+                reviewApproval = { workflowVersion: AI_WORKFLOW_VERSION, runId: journal.runId,
+                    sourceHash: journal.sourceHash, target: params.funcName || targetFuncName, testHash: accepted.approvedCodeHash };
+            }
+            requireReviewApproval(finalCode, reviewApproval, { runId: journal.runId,
+                sourceHash: journal.sourceHash, target: params.funcName || targetFuncName });
+            journal.knowledge({ reviewApproval, testAuthor: 'llm' });
             loopExecution = accepted.execution.out;
             loopAssessment = accepted.execution.coverage || loopAssessment;
             loopCoverage = extractCoverage(loopAssessment, params.funcName || targetFuncName);
@@ -2731,6 +2611,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (!measuredCandidate || evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
                 throw new AnalysisStageError('validation', 'candidate-changed', localize('測試檔已改變，不能沿用先前執行結果進行突變測量。'));
             }
+            if (!evidenceStillCurrent()) {
+                throw new AnalysisStageError('validation', 'source-changed', localize('來源版本已改變，停止使用舊證據。'));
+            }
+            requireReviewApproval(fs.readFileSync(testPath, 'utf8'), reviewApproval, { runId: journal.runId,
+                sourceHash: journal.sourceHash, target: params.funcName || targetFuncName });
             const mutationContext: MutationContext = { sourcePath: params.filePath,
                 sourceHash: journal.sourceHash, testHash: measuredCandidate.codeHash,
                 targetScope: { kind: params.funcName ? 'function' : 'module', qualifiedName: params.funcName || 'module' },
@@ -2839,14 +2724,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 bestGaps = [...qualityGaps];
                 bestReviewWarnings = [...reviewWarnings];
                 bestReviewStatus = reviewStatus;
+                bestReviewApproval = reviewApproval;
                 bestCoverage = loopCoverage;
                 bestTier = currentTier;
                 bestMutation = mutationRun;
-                retainedQualityBundle = verifiedQualityBundle;
                 recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
                     survivors: survivorIds, qualityGaps });
             } else if (bestCode) {
-                verifiedQualityBundle = retainedQualityBundle;
                 recordRole('baseline', 'rollback', { rejectedScore: mutationScore, retainedScore: bestScore,
                     reintroduced, lostQuality, coverageComparison, retainedCodeHash: evidenceHash(bestCode) });
                 throwIfExecutionCancelled();
@@ -2862,6 +2746,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
                 reviewStatus = bestReviewStatus;
+                reviewApproval = bestReviewApproval;
                 measuredQualityGaps = [...bestMeasuredGaps];
                 acceptedScenarios = bestScenarios;
                 finalReportMarkdown += localize("> 已還原歷史基線，測試、分數（{0}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n", bestScore);
@@ -2886,7 +2771,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions,
                 scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
                 survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
-                reviewWarnings, reviewStatus,
+                reviewWarnings, reviewStatus, reviewApproval,
                 mutation: mutationRun, qualityAssessment: checkpoints.quality?.qualityAssessment,
                 generationMode: checkpoints.quality?.generationMode,
                 qualityBaseline: { path: 'quality_baseline.json', codeHash: checkpoints.quality?.codeHash },
@@ -2966,7 +2851,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reason: message, category: failureCategory, retainedScore
             });
             journal.knowledge({
-                terminalStatus: !evidenceValid ? 'source-changed' : failureCategory === 'cancelled' ? 'cancelled' : retainedBaseline ? 'retained-after-failure' : 'failed',
+                terminalStatus: !evidenceValid ? 'source-changed' : failureCategory === 'cancelled' ? 'cancelled'
+                    : failureStage === 'reviewer' ? 'review-blocked' : retainedBaseline ? 'retained-after-failure' : 'failed',
                 failure: message, failureCategory, failureStage,
                 evidenceValid,
                 diagnostic: error instanceof AnalysisStageError || error instanceof RepairResponseError ? error.diagnostic : undefined,
@@ -2983,6 +2869,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
                 reviewStatus = bestReviewStatus;
+                journal.knowledge({ reviewApproval: bestReviewApproval });
             } else if (executable) {
                 preserveCandidate(testPath);
                 fs.writeFileSync(testPath, executable.code, 'utf8');
@@ -2998,7 +2885,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 journal.knowledge({ acceptedTest: executable.testFile, acceptedCodeHash: executable.codeHash,
                     resolvedTier: executable.tier, scenarios: executable.scenarios, execution: executable.execution,
                     coverage: executable.coverage, qualityGaps, reviewWarnings, reviewStatus,
-                    mutationScore: null, mutationStatus: 'incomplete', survivors: null });
+                    mutationScore: null, mutationStatus: failureStage === 'reviewer' ? 'not-measured' : 'incomplete', survivors: null });
             }
             if (!evidenceValid) {
                 invalidateSourceEvidence();
@@ -3034,7 +2921,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
 
         // Analyst proposes bounded scenarios; Writer owns code. Do not spend a call after the last round.
-        analystTasks = qualityStrategyHints(survivedMutants).join('\n');
+        analystTasks = '';
+        qualityObservationEvidence = '';
+        qualityTraceProjection = '';
+        qualityTraceReference = '';
         if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
             try {
                 // Measured comparison survivors can propose bounded numeric inputs
@@ -3049,6 +2939,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const proposedIds = new Set(numericPlan?.inputs.map(input => input.mutantId) || []);
                 const supportedSurvivors = survivorLines.filter(line => [...proposedIds].some(id => line.startsWith(`- id ${id},`)));
                 const focus = selectQualityFocus(loopAssessment, survivorLines, currentLoop, supportedSurvivors);
+                if (focus) {
+                    analystTasks = 'MEASURED GAP (not an output oracle):\n' + JSON.stringify(focus)
+                        + '\n' + qualityStrategyHints(focus.evidence).join('\n');
+                }
                 const focusedMutant = focus?.kind === 'survivor' ? bestMutation?.mutants.find(mutant =>
                     mutant.status === 'SURVIVED' && focus.evidence.startsWith(`- id ${mutant.id},`)) : undefined;
                 if (focus && bestCode && evidenceStillCurrent()) {
@@ -3056,7 +2950,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         target: params.funcName || targetFuncName, module: targetImportModule, testCode: bestCode,
                         focus: { ...focus, mutant: focusedMutant,
                             line: focus.kind === 'coverage' ? Number(/^(?:line|branch):(\d+)/.exec(focus.evidence)?.[1]) || undefined : undefined },
-                        python: pythonExecutable, env: testExecutionEnv, triedFingerprints: qualityExperiments.triedFingerprints });
+                        python: pythonExecutable, env: testExecutionEnv, knownSecrets, triedFingerprints: qualityExperiments.triedFingerprints });
                     throwIfExecutionCancelled();
                     if (!evidenceStillCurrent()) { throw new Error(localize('來源或相依已變更，未採用補測觀測。')); }
                     qualityExperiments.record(result);
@@ -3069,40 +2963,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     recordRole('quality-experiment', result.status, { gapId: focus.id,
                         fingerprints: result.experiments.map(item => item.fingerprint), reason: result.reason });
                     journal.knowledge({ qualityExperiments: qualityExperiments.events });
-                    if (result.testCode) {
-                        const structure = await validateGeneratedTestCode(result.testCode, targetFuncName,
-                            path.basename(params.filePath, '.py'), astContext?.method_kind === 'property' ? 'property' : 'call',
-                            astContext?.signature, exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined,
-                            pythonExecutable, testBindingContext);
-                        const evidence = structure.valid ? await validateTraceEvidence(result.testCode, targetFuncName,
-                            astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name) : structure;
-                        if (!structure.valid || !evidence.valid) {
-                            recordRejected(result.testCode, 0, structure.valid ? 'assertion-evidence' : 'unittest-structure',
-                                'host-quality-baseline-rejected');
-                            throw new AnalysisStageError('validation', 'quality-experiment-baseline',
-                                evidence.reason || structure.reason || 'Host quality baseline was rejected.');
-                        }
-                        const probePath = path.join(loopDir, `loop${currentLoop}_quality_test.py`);
-                        fs.writeFileSync(probePath, result.testCode, 'utf8');
-                        const baseline = await runSpawn(pythonExecutable,
-                            generatedUnittestArguments(path.basename(probePath, '.py'), targetDir, false, true),
-                            { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
-                        throwIfExecutionCancelled();
-                        const passed = baseline.code === 0 && /Ran ([1-9]\d*) tests?/.test(baseline.stdout + baseline.stderr);
-                        recordRole('quality-experiment-baseline', passed ? 'passed' : 'failed', {
-                            gapId: focus.id, testFile: probePath, codeHash: result.testHash, output: baseline.stdout + baseline.stderr });
-                        if (passed && evidenceStillCurrent()) {
-                            const bundle = verifiedQualityBundle
-                                ? (await mergeQualityExperimentTests(verifiedQualityBundle, result.testCode, pythonExecutable, { env: testExecutionEnv })).code
-                                : result.testCode;
-                            const merged = await mergeQualityExperimentTests(bestCode, bundle, pythonExecutable,
-                                { restore: true, env: testExecutionEnv });
-                            verifiedQualityBundle = bundle;
-                            pendingToolCandidate = merged.code;
-                            pendingQualityGap = { id: focus.id, previousGaps: [...coverageGapIds(loopAssessment),
-                                ...survivedMutants.split('\n').filter(Boolean)] };
-                            observedBoundary = true;
-                        }
+                    const handoff = qualityExperiments.evidenceFor(result);
+                    qualityObservationEvidence = buildQualityExperimentEvidencePrompt(handoff || result,
+                        Math.min(12000, Math.floor(activeModelProfile.budgetTokens * 0.6)), knownSecrets,
+                        fingerprints => { if (handoff) { qualityExperiments.recordHandoff(handoff, fingerprints); } });
+                    observedBoundary = result.status === 'observed';
+                    if (observedBoundary) {
+                        pendingQualityGap = { id: focus.id, previousGaps: [...coverageGapIds(loopAssessment), ...survivorLines] };
+                        recordRole('quality-evidence', 'writer-required', { gapId: focus.id, testAuthor: 'llm' });
                     }
                 }
                 if (!observedBoundary && focus?.kind === 'survivor' && focusedMutant && bestMutation && astContext && evidenceStillCurrent()) {
@@ -3125,24 +2993,35 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             && [...observations.examples, ...observations.errors].some(item => item.call_assertable !== false
                                 && item.result_assertable !== false));
                         if (observedBoundary && observations) {
+                            if (containsCredential(JSON.stringify(observations), knownSecrets)) {
+                                throw new AnalysisStageError('validation', 'sensitive-output',
+                                    localize('補測觀測含疑似憑證，未保存觀測或建立測試。'));
+                            }
                             astContext.traceResult = mergeBehaviorProbeResults(astContext.traceResult, observations);
                             writerEvidenceBundle.mergedTargetObservations = astContext.traceResult;
-                            pendingToolCandidate = bestCode;
+                            qualityObservationEvidence = 'VERIFIED BOUNDARY OBSERVATIONS (the AI must write tests):\n'
+                                + JSON.stringify({ sourceHash: journal.sourceHash, target: params.funcName || targetFuncName,
+                                    gapId: focus.id, observations: observationsForPrompt(observations),
+                                    limitation: 'Current behavior under these exact inputs; not independent requirements.' });
+                            qualityTraceProjection = JSON.stringify(observationsForPrompt(astContext.traceResult));
+                            qualityTraceReference = 'VERIFIED BOUNDARY EVIDENCE: the complete merged Trace projection already supplied includes this gap: '
+                                + JSON.stringify({ sourceHash: journal.sourceHash, target: params.funcName || targetFuncName, gapId: focus.id })
+                                + '. Use exact observed inputs only; the AI writes the tests.';
                             pendingQualityGap = { id: focus.id, previousGaps: [...coverageGapIds(loopAssessment), ...survivorLines] };
                             journal.knowledge({ verifiedObservations: astContext.traceResult,
                                 nextTasks: [{ origin: 'measured-mutation-inputs', inputs: plan.inputs,
                                     verification: localize("觀測僅支持相同輸入的斷言；下一輪仍須通過獨立基線、執行、審查與突變量測。") }],
-                                taskStatus: 'observed-inputs-require-quality-measurement' });
+                                taskStatus: 'observed-inputs-require-ai-tests' });
                             analystTasks += '\nNew boundary inputs have isolated execution observations in TRACE evidence. '
-                                + 'The host preserves these tests. Keep model cases; do not copy TestVerifiedTrace methods into model classes. '
-                                + 'Do not invent output expectations.\n' + JSON.stringify(plan.inputs);
+                                + 'The Writer must write the additional tests, preserving passed model cases. '
+                                + 'The tools do not add tests. Use only the exact observed input/output pairs.\n' + JSON.stringify(plan.inputs);
                         }
                         recordRole('mutation-inputs', observedBoundary ? 'observed' : 'unavailable', {
                             inputCount: plan.inputs.length, summary: summarizeObservationPhase(observations || undefined) });
                     }
                 }
                 const sys = getQualityAnalystSystemPrompt();
-                if (focus && !observedBoundary) {
+                if (focus) {
                     const tasks = await qualityAnalystSession.request({ focus,
                         context: `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
                             + `CURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
@@ -3171,6 +3050,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     break;
                 }
                 recordRole('analyst-quality', 'failed', { reason: error.message });
+                if (error instanceof AnalysisStageError) { throw error; }
             }
         }
 
@@ -3222,51 +3102,5 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     }
 }
 
-
-/**
- * 動態焦點上下文 (Dynamic Focus Context): 
- * 從存活突變體日誌中解析出行號，並提取該行前後的程式碼作為焦點切片。
- */
-function extractFocusContext(survivedMutants: string, targetCode: string): string {
-    if (!survivedMutants) {return "";}
-    const lines = targetCode.split('\n');
-    const focusSnippets: string[] = [];
-    const mutantLines = survivedMutants.split('\n');
-    
-    let processedCount = 0;
-    for (const mLine of mutantLines) {
-        if (processedCount >= 3) {break;} // 最多只取前 3 個焦點，避免 Prompt 過載
-        if (!mLine.trim() || !mLine.includes('mutation')) {continue;}
-        
-        let lineNum = -1;
-        // 優先匹配 mutatest 格式: (l: 5, c: 11)
-        const mutatestMatch = mLine.match(/\(l:\s*(\d+)/);
-        if (mutatestMatch) {
-            lineNum = parseInt(mutatestMatch[1], 10);
-        } else {
-            // fallback
-            const otherMatch = mLine.match(/line\s+(\d+)/i) || mLine.match(/:(\d+)/);
-            if (otherMatch) {
-                lineNum = parseInt(otherMatch[1], 10);
-            }
-        }
-        
-        if (lineNum > 0 && lineNum <= lines.length) {
-            const idx = lineNum - 1;
-            const start = Math.max(0, idx - 2);
-            const end = Math.min(lines.length - 1, idx + 2);
-            
-            let snippet = localize("【目標變異體】\n{0}\n【發生位置周遭程式碼 (第 {1}~{2} 行)】\n```python\n", mLine.trim(), start+1, end+1);
-            for (let i = start; i <= end; i++) {
-                const prefix = (i === idx) ? '>> ' : '   ';
-                snippet += `${prefix}${i+1}: ${lines[i]}\n`;
-            }
-            snippet += `\`\`\``;
-            focusSnippets.push(snippet);
-            processedCount++;
-        }
-    }
-    return focusSnippets.join('\n\n');
-}
 
 export function deactivate() {}

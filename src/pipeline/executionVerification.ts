@@ -45,7 +45,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
     hooks.event('writer', 'candidate', { code: initial, validationMode: 'execution' });
     const candidate = await validateTestCandidate(initial, {
         ...hooks, reviewRequired: false, review: async () => undefined, checkCancelled: checkCurrent,
-        repairExpectations: async (code, failure) => {
+        repairEvidence: async (code, failure) => {
             if (!options.targetModule || !/^FAIL: test_/m.test(failure)) { return undefined; }
             checkCurrent();
             const result = await runSpawn(python, ['-B', pythonToolPath('sourceExpectations')], {
@@ -63,11 +63,12 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                     || value.corrections.length === 0 || value.basis !== 'source-derived-arithmetic-v1') { return undefined; }
                 const [proofPath] = reserveArtifactFiles(artifacts, ['arithmetic'], 'json');
                 const evidence = { basis: value.basis, limitation: value.limitation, sourceHash: journal.sourceHash,
-                    previousTestHash: evidenceHash(code), candidateTestHash: evidenceHash(value.code), corrections: value.corrections };
+                    previousTestHash: evidenceHash(code), corrections: value.corrections, assertionOracle: false };
                 // reserveArtifactFiles already created this exclusively owned file.
                 fs.writeFileSync(proofPath, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
                 journal.knowledge({ expectationRepair: { file: path.basename(proofPath), ...evidence } });
-                return { code: value.code, evidence };
+                return 'SOURCE-DERIVED CALCULATION HYPOTHESES (not independently verified):\n'
+                    + JSON.stringify(evidence) + '\nThe AI must revise the test; execution must validate the revision. Preserve passing cases.';
             } catch {
                 hooks.event('source-expectation-repair', 'unavailable', { reason: localize("算術檢查結果無效，保留模型修復流程") });
                 return undefined;

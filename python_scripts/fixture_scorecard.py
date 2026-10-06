@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MANIFEST = ROOT / 'test' / 'fixtures' / 'python' / 'manifest.json'
 REPORT_NAME = 'final_report.md'
 TIER1_GENERATION_MODES = {'llm-evidence-bound', 'deterministic-fallback'}
+AI_WORKFLOW_VERSION = 'ai-reviewed-loop-v1'
 
 
 def load_manifest(manifest_path=DEFAULT_MANIFEST):
@@ -60,6 +61,35 @@ def _same_json(left, right):
     return left == right
 
 
+def _uses_ai_review_gate(manifest, knowledge):
+    return any(item.get('workflowVersion') == AI_WORKFLOW_VERSION for item in (manifest, knowledge))
+
+
+def _validate_quality_workflow_versions(*artifacts):
+    for item in artifacts:
+        if 'workflowVersion' in item and item['workflowVersion'] not in (AI_WORKFLOW_VERSION, 'seed-expand-v1'):
+            raise ValueError('unsupported quality workflow version')
+
+
+def _verify_ai_review_approval(manifest, knowledge, test_hash, target):
+    """New workflow approvals belong to this exact retained test; legacy reports stay readable."""
+    _validate_quality_workflow_versions(manifest, knowledge)
+    if not _uses_ai_review_gate(manifest, knowledge):
+        return
+    if any('workflowVersion' in item and item['workflowVersion'] != AI_WORKFLOW_VERSION
+           for item in (manifest, knowledge)):
+        raise ValueError('review workflow identity mismatch')
+    approval = knowledge.get('reviewApproval')
+    expected = {'workflowVersion': AI_WORKFLOW_VERSION, 'runId': manifest.get('runId'),
+                'sourceHash': manifest.get('sourceHash'), 'target': target, 'testHash': test_hash}
+    if (knowledge.get('reviewStatus') != 'completed'
+            or knowledge.get('generationMode') == 'deterministic-fallback'
+            or not isinstance(approval, dict)
+            or any(type(value) is not str or not value or approval.get(key) != value for key, value in expected.items())
+            or manifest.get('target') != target or knowledge.get('target') != target):
+        raise ValueError('missing or mismatched retained review approval')
+
+
 def _read_policy_assessment(report_path, knowledge, manifest, target_file, target_function):
     """Recompute new evidence; serialized pass booleans never authorize a pass."""
     if knowledge.get('evidenceValid') is False:
@@ -84,6 +114,7 @@ def _read_policy_assessment(report_path, knowledge, manifest, target_file, targe
     if type(code) is not str or hashlib.sha256(code.encode('utf-8')).hexdigest() != digest \
             or digest != snapshot.get('codeHash') or digest != knowledge.get('acceptedCodeHash') or digest != accepted_digest:
         raise ValueError('quality snapshot test mismatch')
+    _verify_ai_review_approval(manifest, knowledge, digest, target_function)
     for field in ('mutation', 'reviewStatus', 'generationMode', 'execution'):
         if not _same_json(snapshot.get(field), knowledge.get(field)):
             raise ValueError('quality snapshot evidence mismatch')
@@ -163,6 +194,9 @@ def report_fields(report_path):
             # Scores and review must describe the retained file from this run,
             # never independently selected maxima from different repair loops.
             manifest = json.loads(journal_path.with_name('run_manifest.json').read_text(encoding='utf-8'))
+            if terminal_status == 'passed':
+                _validate_quality_workflow_versions(manifest, knowledge)
+            new_quality_policy = new_quality_policy or _uses_ai_review_gate(manifest, knowledge)
             report_identity = manifest.get('report')
             source_path = target_match.group(1).strip() if target_match else None
             if report_identity is not None:
@@ -233,7 +267,11 @@ def report_fields(report_path):
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-                new_quality_policy = new_quality_policy or 'qualityPolicy' in manifest or 'qualityContractVersion' in manifest
+                if not (manifest.get('validationMode') == 'execution'
+                        and manifest.get('workflowVersion') == 'llm-execution-v1'):
+                    _validate_quality_workflow_versions(manifest)
+                new_quality_policy = (new_quality_policy or 'qualityPolicy' in manifest or 'qualityContractVersion' in manifest
+                                      or manifest.get('workflowVersion') == AI_WORKFLOW_VERSION)
                 invalid_journal = invalid_journal or new_quality_policy
             except (OSError, ValueError, TypeError):
                 invalid_journal = True

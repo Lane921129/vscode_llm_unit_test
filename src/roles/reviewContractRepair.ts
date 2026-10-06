@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { currentTargetBudget } from '../pipeline/targetBudget';
 import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
 import { parseTestReviewDetailed, ReviewConstraints, ReviewRejectionCode, TestReview } from './testReviewer';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 export type { ReviewConstraints } from './testReviewer';
 
 export interface ReviewContractEvent {
@@ -39,7 +40,8 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
         if (now() >= deadlineAt) {
             options.event('repair-skipped', { contractVersion: ROLE_CONTRACT_VERSIONS.reviewer,
                 attempt, reasonCode: 'deadline-expired' });
-            return undefined;
+            throw new AnalysisStageError('timeout', 'reviewer', 'Reviewer deadline expired before approval.',
+                { reasonCode: 'deadline-expired', attempt });
         }
         // Cancellation, transport, timeout and budget exceptions propagate without a second request.
         const raw = await options.request(prompt, deadlineAt);
@@ -48,7 +50,8 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
         if (now() >= deadlineAt) {
             options.event('repair-skipped', { contractVersion: ROLE_CONTRACT_VERSIONS.reviewer,
                 attempt, reasonCode: 'deadline-expired' });
-            return undefined;
+            throw new AnalysisStageError('timeout', 'reviewer', 'Reviewer deadline expired before approval.',
+                { reasonCode: 'deadline-expired', attempt });
         }
         const parsed = parseTestReviewDetailed(raw, options.tests, true, options.constraints);
         options.event(parsed.review ? 'parsed' : 'invalid-response', {

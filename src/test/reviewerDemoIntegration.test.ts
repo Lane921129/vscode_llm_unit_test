@@ -6,12 +6,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { BatchJournal } from '../pipeline/batchJournal';
-import { summarizeTarget, renderFinalReport, ReportIdentity } from '../pipeline/targetReport';
+import { evidenceHash } from '../pipeline/analysisJournal';
 import { setLanguage } from '../i18n/core';
 
-test('demo summary shows real measurements while invalid review remains incomplete in audit and batch', async () => {
+test('full workflow blocks mutation on invalid review and requires AI revision plus fresh approval for quality findings', async () => {
     const repo = path.resolve(__dirname, '../..');
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-demo-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-gate-'));
     const file = path.join(root, 'bmi.py');
     const source = fs.readFileSync(path.join(repo, 'test/test_mut/bmi.py'), 'utf8');
     const candidate = `import unittest
@@ -36,11 +36,13 @@ class Cases(unittest.TestCase):
         with self.assertRaises(TypeError):
             calculate_bmi("a", "a")
 `;
+    const revised = candidate.replaceAll('self.assertEqual(', 'self.assertTupleEqual(');
     fs.writeFileSync(file, source);
     const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, language: 'en' };
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
-    let writers = 0, fixes = 0;
+    let scenario: 'invalid' | 'quality' = 'invalid';
+    let writers = 0, revisions = 0, fixes = 0, reviews = 0;
     const logs: string[] = [];
     const outcomes: any[] = [];
     const vscode = {
@@ -61,73 +63,96 @@ class Cases(unittest.TestCase):
         let response: string;
         if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
         else if (request.system.includes('You are the test Reviewer')) {
+            reviews++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
-            response = JSON.stringify({ findings: [{ category: 'target-binding', test_line: 'L1',
-                reason: 'The target import is incorrect; use import bmi.', action: 'Replace with import bmi.' }] });
-        }
-        else if (request.system.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
-        else { writers++; response = '```python\n' + candidate + '\n```'; }
+            if (scenario === 'invalid') {
+                response = JSON.stringify({ findings: [{ category: 'target-binding', test_line: 'L1',
+                    reason: 'The target import is incorrect; use import bmi.', action: 'Replace with import bmi.' }] });
+            } else {
+                response = JSON.stringify({ findings: revisions > 0 ? [] : [{ category: 'assertion-quality', test_line: 'L5',
+                    reason: 'The expected tuple structure should be explicit in this assertion.',
+                    action: 'Use assertTupleEqual for the verified tuple results while preserving all current input cases.' }] });
+            }
+        } else if (request.system.includes('Python unittest Bug Fixer')) {
+            fixes++; throw Error('passing candidates must not request method repair');
+        } else if (request.system.includes('Revise the current tests')) {
+            revisions++;
+            assert.equal(scenario, 'quality');
+            assert.match(request.prompt, /assertTupleEqual/);
+            response = '```python\n' + revised + '\n```';
+        } else { writers++; response = '```python\n' + candidate + '\n```'; }
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
     };
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768 });
-        const outputPath = path.join(root, 'results');
-        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
-            funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', validationMode: 'full',
-            maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 30 });
-        const report = fs.readdirSync(outputPath, { recursive: true }).map(String).find(p => path.basename(p) === 'function_knowledge.json')!;
-        assert.ok(report, logs.join('\n'));
-        const directory = path.dirname(path.join(outputPath, report));
-        const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-        const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
-        assert.equal(knowledge.terminalStatus, 'execution-passed-review-incomplete', JSON.stringify(knowledge.qualityAssessment || knowledge.lastFailure));
-        assert.equal(knowledge.qualityPolicy.policyId, 'standard80-v1');
-        assert.equal(knowledge.qualityAssessment.fullyPassed, false);
-        assert.equal(knowledge.reviewStatus, 'incomplete');
-        const counts = knowledge.mutation.counts;
-        const mutants = knowledge.mutation.mutants;
-        assert.equal(counts.selected, counts.available);
-        assert.equal(counts.executed, counts.selected);
-        assert.equal(counts.killed, mutants.filter((item: any) => item.status === 'KILLED').length);
-        assert.equal(counts.survived, mutants.filter((item: any) => item.status === 'SURVIVED').length);
-        assert.ok(counts.survived > 0, 'all surviving mutants remain reported and scored');
-        assert.ok(counts.killed / counts.selected >= 0.8);
-        assert.equal(writers, 1, 'meeting the policy must not trigger a second generation');
-        assert.equal(fixes, 0);
-        assert.equal(events.filter(e => e.stage === 'mutation' && e.status === 'measured').length, 1);
-        const final = fs.readFileSync(path.join(functionReportDirectory(directory), 'final_report.md'), 'utf8');
-        assert.match(final, /Final outcome: Test execution and measurements met the thresholds/);
-        assert.doesNotMatch(final, /Reviewer|review incomplete|Fully passed|Failure reason/);
-        assert.equal(outcomes.at(-1).kind, 'pending');
-        assert.match(outcomes.at(-1).label, /measurements met the thresholds/);
-        const audit = fs.readFileSync(path.join(functionReportDirectory(directory), 'failure_report.md'), 'utf8');
-        assert.match(audit, /review|Reviewer/);
-        assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'invalid-response'));
-        assert.deepEqual(knowledge.tierHistory.transitions, []);
-        assert.ok(final.includes(`${counts.killed}/${counts.selected}`));
-        assert.match(final, /threshold ≥ 80%/);
-        assert.match(final, /SURVIVED/);
-        const batch = new BatchJournal(outputPath, root, { model: 'local/neutral-fixture', buildTimestamp: 'fixture', python: String(settings.pythonPath) });
-        batch.discover(file, ['calculate_bmi']); batch.start(); batch.begin(0);
-        batch.attach(0, functionReportDirectory(directory)); batch.refresh(0); batch.finish('completed');
-        const summary = JSON.parse(fs.readFileSync(path.join(outputPath, 'batch_manifest.json'), 'utf8'));
-        assert.equal(summary.allTargetsPassed, false, JSON.stringify(summary.statusCounts));
-        const identity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: file, sourceFile: 'bmi.py',
-            target: 'calculate_bmi', modelIdentity: 'local/neutral-fixture', requestedTier: 'tier2' };
-        setLanguage('zh-tw');
-        const chinese = renderFinalReport(identity, summarizeTarget(directory, knowledge, identity, knowledge.sourceHash), true);
-        assert.match(chinese, /測試執行與量測達標/);
-        assert.doesNotMatch(chinese, /Reviewer|審查未完成|完整通過|失敗原因/);
-        for (const patch of [{ evidenceValid: false }, { acceptedCodeHash: 'bad' },
-            { mutation: { ...knowledge.mutation, status: 'partial' } },
-            { coverage: { ...knowledge.coverage, assessment: { ...knowledge.coverage.assessment, targetExecuted: false } } }]) {
-            const invalid = summarizeTarget(directory, { ...knowledge, ...patch }, identity, knowledge.sourceHash);
-            assert.equal(invalid.summaryOutcome, undefined);
-            assert.doesNotMatch(renderFinalReport(identity, invalid, true), /測試執行與量測達標/);
+        for (const selected of ['invalid', 'quality'] as const) {
+            scenario = selected; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
+            const outputPath = path.join(root, 'results-' + scenario);
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
+                funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', validationMode: 'full',
+                maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 30 });
+            const report = fs.readdirSync(outputPath, { recursive: true }).map(String).find(p => path.basename(p) === 'function_knowledge.json')!;
+            assert.ok(report, logs.join('\n'));
+            const directory = path.dirname(path.join(outputPath, report));
+            const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+            const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
+            const checkpoint = JSON.parse(fs.readFileSync(path.join(directory, 'executable_baseline.json'), 'utf8'));
+            const final = fs.readFileSync(path.join(functionReportDirectory(directory), 'final_report.md'), 'utf8');
+            assert.equal(writers, 1);
+            assert.equal(fixes, 0);
+            assert.equal(reviews, 2, 'contract correction or review of a revised candidate consumes the second request');
+            assert.deepEqual(knowledge.tierHistory.transitions, []);
+            if (scenario === 'invalid') {
+                assert.equal(knowledge.terminalStatus, 'review-blocked', JSON.stringify(knowledge.lastFailure || knowledge.failure));
+                assert.equal(knowledge.failureStage, 'reviewer');
+                assert.equal(knowledge.reviewStatus, 'incomplete');
+                assert.equal(checkpoint.mutationScore, null);
+                assert.equal(checkpoint.mutationStatus, 'not-measured');
+                assert.equal(checkpoint.reviewStatus, 'incomplete');
+                assert.equal(revisions, 0, 'invalid findings cannot instruct the Writer');
+                assert.equal(events.filter(e => e.stage === 'validation' && e.status === 'passed').length, 1,
+                    'the seed is executed only once');
+                assert.equal(events.some(e => e.stage === 'mutation'), false, 'no mutation process starts before approval');
+                assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'invalid-response'));
+                assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'unavailable'));
+                assert.doesNotMatch(final, /measurements met the thresholds|Fully passed/);
+                assert.match(final, /Reviewer|review/);
+                assert.notEqual(outcomes.at(-1).kind, 'passed');
+                const batch = new BatchJournal(outputPath, root, { model: 'local/neutral-fixture', buildTimestamp: 'fixture', python: String(settings.pythonPath) });
+                batch.discover(file, ['calculate_bmi']); batch.start(); batch.begin(0);
+                batch.attach(0, functionReportDirectory(directory)); batch.refresh(0); batch.finish('completed');
+                const summary = JSON.parse(fs.readFileSync(path.join(outputPath, 'batch_manifest.json'), 'utf8'));
+                assert.equal(summary.allTargetsPassed, false);
+            } else {
+                assert.equal(revisions, 1);
+                assert.equal(knowledge.reviewStatus, 'completed', JSON.stringify(knowledge.failure));
+                const executed = events.map((event, index) => ({ event, index }))
+                    .filter(({ event }) => event.stage === 'validation' && event.status === 'passed');
+                const reviewAssessments = events.map((event, index) => ({ event, index }))
+                    .filter(({ event }) => event.stage === 'reviewer' && event.status === 'assessed');
+                const revisionIndex = events.findIndex((e, index) => index > reviewAssessments[0].index
+                    && e.stage === 'writer' && e.status === 'candidate');
+                const approvalIndex = events.findIndex(e => e.stage === 'reviewer' && e.status === 'approved');
+                const mutationIndex = events.findIndex(e => e.stage === 'mutation' && e.status === 'measured');
+                assert.equal(executed.length, 2);
+                assert.equal(reviewAssessments.length, 2);
+                assert.ok(executed[0].index < reviewAssessments[0].index);
+                assert.ok(reviewAssessments[0].index < revisionIndex);
+                assert.ok(revisionIndex < executed[1].index);
+                assert.ok(executed[1].index < reviewAssessments[1].index);
+                assert.ok(reviewAssessments[1].index < approvalIndex && approvalIndex < mutationIndex,
+                    'only a fresh review of the executed revision permits mutation');
+                const approvedCode = fs.readFileSync(path.join(directory, checkpoint.testFile), 'utf8');
+                assert.equal(events[approvalIndex].detail.approvedCodeHash, evidenceHash(approvedCode));
+                assert.equal(knowledge.mutation.counts.executed, knowledge.mutation.counts.selected);
+                assert.ok(knowledge.mutation.counts.executed > 0, 'the approved path uses the real mutation engine');
+                assert.match(approvedCode, /assertTupleEqual/);
+                assert.doesNotMatch(approvedCode, /TestVerifiedState|Trace_/);
+            }
+            assert.equal(fs.readFileSync(file, 'utf8'), source);
         }
-        assert.equal(fs.readFileSync(file, 'utf8'), source);
     } finally {
         setLanguage('zh-tw'); Module._load = originalLoad; globalThis.fetch = originalFetch;
         fs.rmSync(root, { recursive: true, force: true });

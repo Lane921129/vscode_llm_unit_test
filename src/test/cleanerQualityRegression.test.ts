@@ -9,6 +9,7 @@ import { parseFocusedQualityTask, requestFocusedQualityTask, selectQualityFocus,
 import { responseSchemaForOutputFormat } from '../llm/customApi';
 import { assessReviewerQualification } from '../llm/roleQualification';
 import { formatTargetContract } from '../pipeline/targetContract';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 function coverage(lines: number[], branches: string[] = []): TargetCoverageAssessment {
     return { available: true, coverageText: 'measured', missingLines: '', targetExecuted: true,
@@ -93,16 +94,14 @@ test('explicit target self-mock, source edits and binding contradictions remain 
 
 test('invalid constraint review does not spend a Writer revision or falsely approve the candidate', async () => {
     let revisions = 0;
-    const result = await validateTestCandidate(tests, {
+    await assert.rejects(validateTestCandidate(tests, {
         validate: async () => undefined,
         execute: async () => ({ ok: true, out: 'test_value (Cases.test_value) ... ok\nRan 1 test\nOK', qualityGaps: [] }),
         review: async code => parseTestReviewDetailed(raw({ action: 'Mock Widget.normalize with patch.' }), code, true, constraints).review,
         revise: async () => { revisions++; return tests; },
         event: () => {}, checkCancelled: () => {}
-    });
-    assert.equal(result.reviewStatus, 'incomplete');
+    }), (error: unknown) => error instanceof AnalysisStageError && error.stage === 'reviewer');
     assert.equal(revisions, 0);
-    assert.equal(result.code, tests);
 });
 
 test('quality task has one host-bound evidence identity, strict fields and no invented oracle', () => {

@@ -7,6 +7,7 @@ import { parseTestReviewDetailed } from '../roles/testReviewer';
 import { validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { pythonToolPath } from '../pipeline/pythonTools';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 const original = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
     + '    def setUp(self):\n        self.value = 2\n'
@@ -58,11 +59,10 @@ test('review cannot mistake a source dependency patch or its standard import for
     assert.ok(parseTestReviewDetailed(wrong, code.replace('sample.helper', 'sample.target'), true, constraints).review);
     assert.ok(parseTestReviewDetailed(raw('mock-isolation', 'L2', 'This dependency patch is not cleaned up after the test.'), code, true, constraints).review);
     let revisions = 0;
-    const result = await validateTestCandidate(code, {
+    await assert.rejects(validateTestCandidate(code, {
         validate: async () => undefined, execute: async () => ({ ok: true, out: 'Ran 1 test\nOK', qualityGaps: [] }),
         review: async () => parseTestReviewDetailed(wrong, code, true, constraints).review,
         revise: async () => { revisions++; return code; }, event: () => {}, checkCancelled: () => {}
-    });
+    }), (error: unknown) => error instanceof AnalysisStageError && error.stage === 'reviewer');
     assert.equal(revisions, 0);
-    assert.equal(result.reviewStatus, 'incomplete');
 });

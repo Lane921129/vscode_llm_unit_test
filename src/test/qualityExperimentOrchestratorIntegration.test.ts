@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { evidenceHash } from '../pipeline/analysisJournal';
 
-test('real quality loop preserves a passed seed and improves object-state mutants without another Writer', async () => {
+test('real AI quality loop sends state evidence to Analyst and Writer then reviews the new tests before mutation', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-loop-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const targetFile = path.join(root, 'ledger.py');
@@ -25,12 +25,19 @@ class ModelCases(unittest.TestCase):
     def setUp(self):
         self.ledger = Ledger()
     def test_real_calls(self):
-        self.assertIsNone(self.ledger.increase('entry', 2))
         self.assertIsNone(self.ledger.increase('entry', 3))
+        self.assertIsNone(self.ledger.increase('entry', 2))
+`;
+    const strong = weak + `    def test_observed_state(self):
+        self.assertIsNone(self.ledger.increase('entry', 3))
+        self.assertEqual(self.ledger.entries, {'entry': 3})
+        self.assertIsNone(self.ledger.increase('entry', 3))
+        self.assertEqual(self.ledger.entries, {'entry': 6})
 `;
     fs.writeFileSync(targetFile, source);
     const handlers = new Map<string, (...args: any[]) => any>();
     const roles: string[] = [];
+    const prompts: Array<{ role: string; prompt: string }> = [];
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -50,12 +57,18 @@ class ModelCases(unittest.TestCase):
         if (request.system?.includes('You are the test Reviewer')) {
             roles.push('reviewer'); response = '{"findings":[]}';
         } else if (request.system?.includes('Analyst after successful')) {
-            roles.push('quality-analyst'); response = '{"tasks":[]}';
+            roles.push('quality-analyst');
+            const focus = JSON.parse(request.prompt.match(/FOCUS\n([^\n]+)/)[1]);
+            response = JSON.stringify({ tasks: [{ evidence_id: focus.id,
+                hypothesis: 'Return-only assertions do not distinguish the observed accumulated entries.',
+                scenario: "Construct Ledger(), then increase('entry', 3) twice and assert the observed entries after each call.",
+                verification: 'Run the preserved original test and new state test, obtain Reviewer approval, then rerun the same mutant set.' }] });
         } else if (request.system?.includes('dependency_behaviors')) {
             roles.push('planning'); response = '{"dependency_behaviors":[]}';
         } else {
-            roles.push('writer'); response = '```python\n' + weak + '\n```';
+            roles.push('writer'); response = '```python\n' + (roles.filter(role => role === 'writer').length === 1 ? weak : strong) + '\n```';
         }
+        prompts.push({ role: roles.at(-1)!, prompt: request.prompt });
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
     };
     try {
@@ -71,7 +84,8 @@ class ModelCases(unittest.TestCase):
         const runRoot = path.dirname(path.join(output, knowledgeFile));
         const knowledge = JSON.parse(fs.readFileSync(path.join(runRoot, 'function_knowledge.json'), 'utf8'));
         const events = fs.readFileSync(path.join(runRoot, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-        assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify({ failure: knowledge.lastFailure, roles }));
+        assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify({ failure: knowledge.lastFailure, roles,
+            budgets: events.filter(e => e.stage === 'model-request' && ['budget-exceeded', 'requested'].includes(e.status)).map(e => e.detail) }));
         const seedAccepted = events.findIndex(e => e.stage === 'writer-seed' && e.status === 'accepted');
         const review = events.findIndex(e => e.stage === 'reviewer' && e.status === 'parsed');
         assert.ok(seedAccepted >= 0 && review > seedAccepted);
@@ -80,15 +94,24 @@ class ModelCases(unittest.TestCase):
         assert.ok(measurements[1].detail.score > measurements[0].detail.score);
         assert.equal(measurements[1].detail.score, 100);
         assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'observed'));
-        assert.ok(events.some(e => e.stage === 'quality-experiment-baseline' && e.status === 'passed'));
+        assert.ok(!events.some(e => e.stage === 'quality-experiment-baseline'));
         assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'improved'));
-        assert.equal(roles.filter(role => role === 'writer').length, 1, 'tool-observed candidate must skip a redundant Writer request');
-        assert.equal(roles.filter(role => role === 'quality-analyst').length, 0);
+        assert.equal(roles.filter(role => role === 'writer').length, 2, 'Writer must author the addition from isolated observations');
+        assert.equal(roles.filter(role => role === 'quality-analyst').length, 1);
         assert.equal(roles.filter(role => role === 'reviewer').length, 2);
+        assert.deepEqual(roles.filter(role => role !== 'planning'), ['writer', 'reviewer', 'quality-analyst', 'writer', 'reviewer']);
+        assert.match(prompts.find(item => item.role === 'quality-analyst')!.prompt, /QUALITY_EXPERIMENT_OBSERVATIONS_V2/);
+        assert.match(prompts.filter(item => item.role === 'writer')[1].prompt, /QUALITY_EXPERIMENT_OBSERVATIONS_V2/);
+        for (const measurement of measurements) {
+            assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'parsed'
+                && event.loop === measurement.loop && event.sequence < measurement.sequence));
+        }
         const final = fs.readFileSync(path.join(runRoot, knowledge.acceptedTest), 'utf8');
         assert.ok(final.includes('class ModelCases'));
-        assert.ok(final.includes('class TestVerifiedState_'));
-        assert.ok(final.includes('instance.entries'));
+        assert.ok(!final.includes('class TestVerifiedState_'));
+        assert.ok(!final.includes('class TestTrace'));
+        assert.ok(final.includes('self.ledger.entries'));
+        assert.ok(final.includes(weak.trimEnd()), 'all original passing cases remain unchanged');
         assert.equal(knowledge.acceptedCodeHash, evidenceHash(final));
         assert.equal(knowledge.mutation.testHash, knowledge.acceptedCodeHash);
         assert.equal(knowledge.mutation.counts.error + knowledge.mutation.counts.timeout + knowledge.mutation.counts.notRun, 0);

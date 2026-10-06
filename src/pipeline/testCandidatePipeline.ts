@@ -7,6 +7,7 @@ import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { RepairDiagnostic, RepairResponseError, repairHash, repairReasonCode } from './repairDiagnostics';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import type { CandidateRejectionGate } from './rejectedCandidateStore';
+import { AnalysisStageError, classifyExecutionFailure } from '../utils/executionFailureCategory';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -28,9 +29,11 @@ export interface CandidatePipelineHooks {
     reviewRequired?: boolean;
     validate(code: string): Promise<string | { reason: string; gate: CandidateRejectionGate; reasonCode: string } | undefined>;
     review(code: string): Promise<TestReview | undefined>;
-    revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number): Promise<string>;
+    revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number, repairEvidence?: string): Promise<string>;
     repairRole?(code: string, failure: string): 'writer' | 'bug-fixer';
-    /** Host-only expectation correction with evidence; still subject to all execution gates. */
+    /** Bounded observed evidence for an AI revision; this hook cannot replace candidate code. */
+    repairEvidence?(code: string, failure: string): Promise<string | undefined>;
+    /** Legacy diagnostic-only correction; never used when Reviewer approval is required. */
     repairExpectations?(code: string, failure: string): Promise<{ code: string; evidence: unknown } | undefined>;
     validateRevision?(previousCode: string, candidateCode: string, failure: string,
         role: 'writer' | 'bug-fixer'): Promise<string | { reason: string; reasonCode: string } | undefined>;
@@ -52,6 +55,8 @@ export async function validateTestCandidate(
     qualityIssues: string[];
     reviewWarnings: string[];
     reviewStatus: ReviewStatus;
+    /** Exact candidate approved by a valid, zero-finding review; absent in diagnostic mode. */
+    approvedCodeHash?: string;
 }> {
     let code = initialCode;
     const feedback = new RepairFeedback(baseline?.code || initialCode, baseline?.output || '');
@@ -63,6 +68,7 @@ export async function validateTestCandidate(
     let writerRecoveryPending = false;
     let executionFailure = false;
     let toolRepairAttempts = 0;
+    let unresolvedReview = false;
     // One reserved handoff after a no-op or unusable method repair response.
     // It still consumes the enclosing target's candidate/request/time budgets.
     const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change' | 'response-format'): boolean => {
@@ -87,7 +93,23 @@ export async function validateTestCandidate(
         const writerRecoveryAttempt = writerRecoveryPending;
         writerRecoveryPending = false;
         if (attempt > 0) {
-            const arithmetic = executionFailure && toolRepairAttempts < 2 && hooks.repairExpectations
+            let verifiedRepairEvidence: string | undefined;
+            if (executionFailure && hooks.repairEvidence) {
+                const evidence = await hooks.repairEvidence(code, lastFailure);
+                hooks.checkCancelled();
+                if (evidence?.trim()) {
+                    const bytes = Buffer.byteLength(evidence, 'utf8');
+                    // Never truncate a structured observation into misleading partial evidence.
+                    if (bytes <= 8192) {
+                        verifiedRepairEvidence = evidence;
+                        hooks.event('repair-evidence', 'provided', { attempt, bytes });
+                    } else {
+                        hooks.event('repair-evidence', 'omitted', { attempt, bytes, reasonCode: 'evidence-budget' });
+                    }
+                }
+            }
+            const arithmetic = hooks.reviewRequired === false && !hooks.repairEvidence
+                && executionFailure && toolRepairAttempts < 2 && hooks.repairExpectations
                 ? (toolRepairAttempts++, await hooks.repairExpectations(code, lastFailure)) : undefined;
             executionFailure = false;
             hooks.checkCancelled();
@@ -105,7 +127,7 @@ export async function validateTestCandidate(
             const previousCode = code;
             let candidate: string;
             try {
-                candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt);
+                candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt, verifiedRepairEvidence);
             } catch (error) {
                 hooks.checkCancelled();
                 if (role === 'bug-fixer' && error instanceof RepairResponseError) {
@@ -158,7 +180,7 @@ export async function validateTestCandidate(
                     && recoverWithWriter(attempt, 'no-method-change')) { continue; }
                 hooks.event('repair-routing', 'selected', { attempt, action: attempt < maxRevisions ? 'continue-repair' : 'stop-revisions',
                     previousTestUnchanged: true });
-                role = 'bug-fixer';
+                role = unresolvedReview ? 'writer' : 'bug-fixer';
                 continue;
             }
             code = candidate;
@@ -167,6 +189,7 @@ export async function validateTestCandidate(
         const invalidReason = typeof invalid === 'string' ? invalid : invalid?.reason;
         hooks.event('structure', invalid ? 'rejected' : 'passed', { attempt, reason: invalidReason });
         if (invalid) {
+            unresolvedReview = false;
             await hooks.rejectedCandidate?.(code, attempt,
                 typeof invalid === 'string' ? 'unittest-structure' : invalid.gate,
                 typeof invalid === 'string' ? 'candidate-structure-rejected' : invalid.reasonCode);
@@ -182,6 +205,7 @@ export async function validateTestCandidate(
         hooks.event('validation', execution.ok ? 'passed' : 'failed', { attempt, code, ...execution });
         const regression = feedback.record(execution.out, execution.testModule);
         if (!regression.accepted) {
+            unresolvedReview = false;
             await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-regression');
             lastFailure = feedback.output;
             code = retainedCode;
@@ -193,33 +217,52 @@ export async function validateTestCandidate(
         if (execution.ok) {
             // Persist independently from review acceptance and later quality measurement.
             await hooks.executable?.(code, execution);
-            const review = hooks.reviewRequired === false ? undefined : await hooks.review(code);
-            const reviewStatus: ReviewStatus = hooks.reviewRequired === false ? 'not-required' : review ? 'completed' : 'incomplete';
+            let review: TestReview | undefined;
+            if (hooks.reviewRequired !== false) {
+                try {
+                    review = await hooks.review(code);
+                } catch (error) {
+                    hooks.checkCancelled();
+                    const message = error instanceof Error ? error.message : String(error);
+                    const category = error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
+                    hooks.event('reviewer', 'failed', { attempt, category, reasonCode: 'review-request-failed' });
+                    await hooks.rejectedCandidate?.(code, attempt, 'review', 'review-request-failed');
+                    if (error instanceof AnalysisStageError) {
+                        throw new AnalysisStageError(error.category, 'reviewer', error.message, error.diagnostic);
+                    }
+                    throw new AnalysisStageError(category, 'reviewer', message);
+                }
+            }
+            const reviewStatus: ReviewStatus = hooks.reviewRequired === false ? 'not-required' : 'completed';
             hooks.checkCancelled();
-            // Unavailable/malformed review is explicitly unknown, never a fabricated approval.
             hooks.event('reviewer', reviewStatus === 'not-required' ? 'not-required' : review ? 'assessed' : 'unavailable', { attempt, review });
-            const blocking = review?.issues.filter(issue => issue.severity === 'blocking') || [];
-            if (blocking.length) {
-                await hooks.rejectedCandidate?.(code, attempt, 'review', 'review-blocking');
-                lastFailure = JSON.stringify(blocking);
+            if (hooks.reviewRequired !== false && !review) {
+                await hooks.rejectedCandidate?.(code, attempt, 'review', 'review-unavailable');
+                throw new AnalysisStageError('validation', 'reviewer',
+                    localize("Reviewer 審查未完成；工具執行通過不代表模型審查通過。"),
+                    { reasonCode: 'review-unavailable', attempt });
+            }
+            if (review?.issues.length) {
+                unresolvedReview = true;
+                await hooks.rejectedCandidate?.(code, attempt, 'review',
+                    review.issues.some(issue => issue.severity === 'blocking') ? 'review-blocking' : 'review-quality');
+                lastFailure = JSON.stringify(review.issues);
                 role = 'writer';
                 if (writerRecoveryAttempt) { break; }
                 continue;
             }
+            const approvedCodeHash = reviewStatus === 'completed' ? repairHash(code) : undefined;
+            if (approvedCodeHash) { hooks.event('reviewer', 'approved', { attempt, approvedCodeHash }); }
             return {
                 code,
                 execution,
                 reviewStatus,
-                // 只有可量測的執行缺口可以啟動下一輪品質補測。
-                // Only measured execution gaps may trigger another quality loop.
+                approvedCodeHash,
                 qualityIssues: [...execution.qualityGaps],
-                reviewWarnings: [
-                ...(reviewStatus === 'incomplete' ? [localize("Reviewer 審查未完成；工具執行通過不代表模型審查通過。")] : []),
-                ...(review?.issues.filter(issue => issue.severity === 'quality').map(issue =>
-                    `${issue.id}: ${issue.action}`) || [])
-                ]
+                reviewWarnings: []
             };
         }
+        unresolvedReview = false;
         await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-execution-failed');
         lastFailure = execution.out;
         executionFailure = true;
@@ -228,5 +271,9 @@ export async function validateTestCandidate(
         role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }
-    throw new CandidateValidationError(localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure));
+    const reason = localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure);
+    if (unresolvedReview) {
+        throw new AnalysisStageError('validation', 'reviewer', reason, { reasonCode: 'review-revisions-exhausted' });
+    }
+    throw new CandidateValidationError(reason);
 }

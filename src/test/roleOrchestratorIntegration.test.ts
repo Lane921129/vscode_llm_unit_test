@@ -235,10 +235,10 @@ class Cases(unittest.TestCase):
         const incompleteRoot = path.join(directory, 'incomplete-results');
         const incompleteOutput = outputFor(incompleteRoot);
         const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
-        assert.equal(incomplete.mutationScore, 100, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
+        assert.equal(incomplete.mutationScore, null, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
         assert.equal(incomplete.reviewStatus, 'incomplete');
-        assert.equal(incomplete.terminalStatus, 'execution-passed-review-incomplete');
-        assert.equal(roles.filter(role => role === 'reviewer').length, 4, 'each of two candidates gets at most one contract correction');
+        assert.equal(incomplete.terminalStatus, 'review-blocked');
+        assert.equal(roles.filter(role => role === 'reviewer').length, 2, 'the first candidate gets one contract correction then stops before mutation');
         const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
             && event.detail.diagnostics.includes('invalid-json')));
@@ -357,8 +357,8 @@ class Cases(unittest.TestCase):
         const serviceJournal = fs.readFileSync(path.join(serviceOutput, 'role_events.jsonl'), 'utf8');
         assert.doesNotMatch(serviceJournal, /PROVIDER_BODY_MUST_REMAIN_PRIVATE/);
         const serviceEvents = serviceJournal.trim().split('\n').map(line => JSON.parse(line));
-        assert.equal(serviceCalls, 6, 'three bounded attempts each for planning and Writer');
-        assert.equal(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer').length, 1);
+        assert.equal(serviceCalls, 3, 'planning transport retries are bounded; an incomplete Analyst does not start the Writer');
+        assert.equal(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer').length, 0);
         assert.ok(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error').every(event => event.detail.category === 'model-api'));
 
         globalThis.fetch = fixtureFetcher;
@@ -409,10 +409,7 @@ class Cases(unittest.TestCase):
             let response: string;
             if (request.system.includes('You are the test Reviewer')) {
                 partialReviews++;
-                response = partialReviews === 1 ? '{"findings":[]}' : JSON.stringify({ findings: [{
-                    category: 'target-binding', test_line: 'L7', reason: 'The target function is not static.',
-                    action: 'Add @staticmethod to Widget.normalize.'
-                }] });
+                response = '{"findings":[]}';
             } else if (request.system.includes('Analyst after successful')) {
                 qualityCalls++;
                 assert.equal(request.format, undefined, 'plain-unittest profiles retain text transport');
@@ -449,18 +446,19 @@ class Cases(unittest.TestCase):
         assert.ok(covered[1].detail.missingTargetLines.length < covered[0].detail.missingTargetLines.length);
         assert.ok(covered[1].detail.missingTargetLines.length > 0, 'this is partial improvement, not a full pass');
         assert.equal(partialKnowledge.mutationScore, accepted[1].detail.score);
-        assert.equal(partialKnowledge.reviewStatus, 'incomplete');
+        assert.equal(partialKnowledge.reviewStatus, 'completed');
         assert.equal(partialWriters, 2, JSON.stringify(partialEvents.filter(event =>
             (event.stage === 'model-request' && event.status === 'requested') || ['rejected', 'tier-failed', 'failed'].includes(event.status))
             .map(event => ({ stage: event.stage, status: event.status, role: event.detail.role, reason: event.detail.reason }))));
         assert.equal(qualityCalls, 2, 'one invalid response receives one bounded format repair');
-        assert.ok(partialEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
-            && event.detail.diagnostics.includes('target-binding-contradiction')));
+
         assert.ok(!partialEvents.some(event => event.stage === 'baseline' && event.status === 'rollback'));
         assert.match(fs.readFileSync(path.join(partialOutput, partialKnowledge.acceptedTest), 'utf8'), /test_more/);
         globalThis.fetch = fixtureFetcher;
 
+        let hostBuilderCalls = 0;
         traceBuilder.buildTier1TestFile = (...args: any[]) => {
+            hostBuilderCalls++;
             const built = originalTraceBuilder(...args);
             return { ...built, code: built.code?.replace('import unittest', "import unittest\n__import__('math')") };
         };
@@ -473,8 +471,9 @@ class Cases(unittest.TestCase):
         const badRoot = path.join(directory, 'bad-runner-baseline');
         const badOutput = outputFor(badRoot);
         const badKnowledge = JSON.parse(fs.readFileSync(path.join(badOutput, 'function_knowledge.json'), 'utf8'));
-        assert.equal(badKnowledge.failureStage, 'trace-baseline');
-        assert.deepEqual(roles, ['analyst-planning', 'writer'], 'runner-owned failure never consumes model repair or review');
+        assert.equal(hostBuilderCalls, 0, 'the AI workflow never builds a runner-owned test to augment the model');
+        assert.notEqual(badKnowledge.failureStage, 'trace-baseline');
+        assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer']);
 
         traceBuilder.buildTier1TestFile = originalTraceBuilder;
         for (const mode of ['format', 'scope'] as const) {

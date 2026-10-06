@@ -33,7 +33,7 @@ test('progress explains rejection, incomplete review and intermediate acceptance
     assert.match(describeStageEvent('structure', 'rejected', { reason: '沒有 test_ 方法', raw: 'PRIVATE_RESPONSE' }), /沒有 test_ 方法.*Writer/);
     assert.doesNotMatch(describeStageEvent('structure', 'rejected', { raw: 'PRIVATE_RESPONSE' }), /PRIVATE_RESPONSE/);
     assert.match(describeStageEvent('reviewer', 'invalid-response', { diagnostics: ['target-self-mock'], raw: 'PRIVATE_RESPONSE' }), /target-self-mock.*不採用/);
-    assert.match(describeStageEvent('reviewer', 'unavailable', {}), /審查未完成.*繼續工具量測/);
+    assert.match(describeStageEvent('reviewer', 'unavailable', {}), /審查未完成.*不進入突變/);
     assert.match(describeStageEvent('validation', 'accepted', {}), /不代表完整通過/);
     assert.match(describeStageEvent('validation', 'passed', {}, 'execution'), /本模式不執行品質審查與突變/);
     assert.doesNotMatch(describeStageEvent('validation', 'accepted', {}, 'execution'), /繼續量測突變/);
@@ -62,7 +62,7 @@ test('tier summary preserves fallback history across a restart, rollback and int
 
 test('final status cannot be promoted by a high-scoring retained candidate or partial stage success', () => {
     for (const terminalStatus of ['failed', 'retained-after-failure', 'execution-passed-review-incomplete',
-        'running', 'round-limit', 'stagnated', 'no-mutation-candidates', 'dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'cancelled', 'unknown']) {
+        'review-blocked', 'running', 'round-limit', 'stagnated', 'no-mutation-candidates', 'dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'cancelled', 'unknown']) {
         assert.notEqual(presentOutcome({ terminalStatus, qualityAssessment: { fullyPassed: true } }).kind, 'passed');
     }
     assert.notEqual(presentOutcome({ terminalStatus: 'passed' }).kind, 'passed');
@@ -112,7 +112,7 @@ test('the actual result-card renderer keeps 100% neutral unless the final outcom
 });
 
 
-test('demo summary omits incomplete review without claiming full approval or hiding real failures', () => {
+test('historical demo summary omits incomplete review without claiming full approval or hiding real failures', () => {
     const evidence = { terminalStatus: 'execution-passed-review-incomplete',
         qualityAssessment: { toolsSatisfied: true, fullyPassed: false } };
     assert.match(presentSummaryOutcome(evidence).label, /測試執行與量測達標/);
@@ -123,4 +123,50 @@ test('demo summary omits incomplete review without claiming full approval or hid
         { qualityAssessment: { toolsSatisfied: false, fullyPassed: false } }]) {
         assert.notEqual(presentSummaryOutcome({ ...evidence, ...extra }).label, presentSummaryOutcome(evidence).label);
     }
+});
+
+test('AI workflow exposes review blocking even when a retained candidate has complete tool measurements', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const evidence = { workflowVersion: 'ai-reviewed-loop-v1', terminalStatus: 'review-blocked',
+                qualityAssessment: { toolsSatisfied: true, fullyPassed: true } };
+            const outcome = presentSummaryOutcome(evidence);
+            assert.equal(outcome.kind, 'pending');
+            assert.match(outcome.label, lang === 'en' ? /Review not approved.*not enter mutation/ : /審查未批准.*不進入突變/);
+            assert.equal(outcome.label, presentOutcome(evidence).label);
+            const oldStatusInNewRun = { ...evidence, terminalStatus: 'execution-passed-review-incomplete' };
+            assert.equal(presentSummaryOutcome(oldStatusInNewRun).label, presentOutcome(oldStatusInNewRun).label);
+            if (lang === 'en') { assert.doesNotMatch(outcome.label, /\p{Script=Han}/u); }
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('AI workflow progress keeps tool evidence separate from Writer tests and Reviewer approval', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const expected = lang === 'en' ? {
+                seed: /awaiting Reviewer approval/, numeric: /evidence goes to AI.*do not rewrite tests/,
+                evidence: /Writer must add tests.*do not merge tests/,
+                approved: /approved.*not a full pass/, rejected: /Writer.*execution and review/
+            } : {
+                seed: /等待 Reviewer 審查批准/, numeric: /證據交 AI 修訂.*不改寫測試/,
+                evidence: /Writer 補寫測試.*不合併測試/,
+                approved: /批准.*尚非完整通過/, rejected: /Writer.*重新執行與審查/
+            };
+            for (const [stage, status, expression] of [
+                ['writer-seed', 'accepted', expected.seed], ['numeric-skill', 'verified', expected.numeric],
+                ['quality-evidence', 'writer-required', expected.evidence],
+                ['reviewer', 'approved', expected.approved], ['reviewer', 'rejected', expected.rejected]
+            ] as const) {
+                const label = describeStageEvent(stage, status, { raw: 'PRIVATE_RESPONSE' });
+                assert.match(label, expression);
+                assert.doesNotMatch(label, /PRIVATE_RESPONSE/);
+                if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            }
+        }
+    } finally { setLanguage(originalLanguage); }
 });

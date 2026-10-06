@@ -236,7 +236,13 @@ class Cases(unittest.TestCase):
                 { name: 'saved assessment counts', artifact: 'function_knowledge.json',
                     change: value => { value.qualityAssessment.counts.lines.executed++; } },
                 { name: 'checkpoint assessment', artifact: 'quality_baseline.json',
-                    change: value => { value.qualityAssessment.fullyPassed = false; } }
+                    change: value => { value.qualityAssessment.fullyPassed = false; } },
+                { name: 'missing review approval', artifact: 'function_knowledge.json',
+                    change: value => { delete value.reviewApproval; } },
+                { name: 'approval for another candidate', artifact: 'function_knowledge.json',
+                    change: value => { value.reviewApproval.testHash = '0'.repeat(64); } },
+                { name: 'manifest detects missing approval without a knowledge workflow marker', artifact: 'function_knowledge.json',
+                    change: value => { delete value.workflowVersion; delete value.reviewApproval; } }
             ];
             for (const corruption of corruptions) {
                 restoreArtifacts();

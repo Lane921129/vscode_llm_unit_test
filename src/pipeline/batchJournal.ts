@@ -13,6 +13,7 @@ import { VerificationMode } from './verificationMode';
 import { SOURCE_VERSIONS_VERSION, validSourceVersions, sourceVersionsCurrent } from './sourceVersions';
 import { conciseReason, isReportExcluded, reportCell, reportLink, summarizeTarget, TargetReportSummary } from './targetReport';
 import { BatchScopeSelection, canonicalScopeRoot, createBatchScopeSelection } from './batchScope';
+import { AI_WORKFLOW_VERSION, requireReviewApproval } from './aiWorkflow';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -31,6 +32,8 @@ interface EnvironmentIssue {
 function verifyQualityPass(directory: string, sourcePath: string, target: string,
     manifest: any, knowledge: any): void {
     const invalid = () => { throw Error('incomplete-quality-provenance'); };
+    if ([manifest, knowledge].some(item => item.workflowVersion !== undefined
+        && ![AI_WORKFLOW_VERSION, 'seed-expand-v1'].includes(item.workflowVersion))) { return invalid(); }
     const validated = validateQualityPolicy(manifest.qualityPolicy);
     if (!validated.ok || !['standard', 'strict100'].includes(validated.policy.mode)
         || manifest.qualityContractVersion !== 'quality-policy-v1'
@@ -65,6 +68,13 @@ function verifyQualityPass(directory: string, sourcePath: string, target: string
             || !snapshot[field].every((item: unknown) => typeof item === 'string'))
         || !isDeepStrictEqual(snapshot.coverage?.assessment, knowledge.coverage?.assessment)
         || !isDeepStrictEqual(snapshot.mutation, knowledge.mutation)) { return invalid(); }
+    if ([manifest, knowledge].some(item => item.workflowVersion === AI_WORKFLOW_VERSION)) {
+        if ([manifest, knowledge].some(item => item.workflowVersion !== undefined && item.workflowVersion !== AI_WORKFLOW_VERSION)
+            || knowledge.reviewStatus !== 'completed' || knowledge.generationMode === 'deterministic-fallback') { return invalid(); }
+        requireReviewApproval(snapshot.code, knowledge.reviewApproval, {
+            runId: manifest.runId, sourceHash: manifest.sourceHash, target
+        });
+    }
     const targetScope = { kind: 'function' as const, qualifiedName: target };
     const assessment = evaluateQuality(validated.policy, {
         identity: { sourcePath, sourceHash: knowledge.sourceHash, testHash: snapshot.codeHash,

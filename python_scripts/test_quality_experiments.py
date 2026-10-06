@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from quality_experiment_runner import plan, run, novelty, merge_tests, digest, worker, fingerprint
+from quality_experiment_runner import plan, run, novelty, merge_tests, digest, worker, fingerprint, build_tests, canonical
 from basic_mutation_runner import run_mutation_trials, find_target_scope, mutation_candidates
 from external_mutation_runner import mutatest_candidates
 
@@ -88,18 +88,53 @@ class QualityExperimentsTests(unittest.TestCase):
                                self.tests.stem], cwd=self.root, text=True, encoding='utf-8', capture_output=True,
                               env={**os.environ, 'PYTHONPATH': str(self.root), 'PYTHONIOENCODING': 'utf-8'}, timeout=12)
 
+    def test_production_run_returns_only_identity_bound_complete_observations(self):
+        original = self.tests.read_bytes()
+        with patch('quality_experiment_runner.build_tests', side_effect=AssertionError('production must not write tests')):
+            result = run(self.payload())
+        self.assertEqual(result['status'], 'observed')
+        self.assertEqual(result['schemaVersion'], 'quality-experiment-result-v2')
+        self.assertNotIn('testCode', result)
+        self.assertNotIn('testHash', result)
+        self.assertEqual(self.tests.read_bytes(), original)
+        for item in result['experiments']:
+            evidence = item['evidence']
+            self.assertEqual(evidence['schemaVersion'], 'quality-experiment-evidence-v2')
+            self.assertEqual(evidence['sourceHash'], digest(SOURCE))
+            self.assertEqual(evidence['target'], 'Inventory.register')
+            self.assertEqual(evidence['gapId'], result['gapId'])
+            self.assertEqual(item['evidenceHash'], digest(canonical(evidence)))
+            self.assertEqual(evidence['initialState'], evidence['steps'][0]['before'])
+            for index, step in enumerate(evidence['steps']):
+                self.assertEqual(step['input'], evidence['calls'][index])
+                if index:
+                    self.assertEqual(step['before'], evidence['steps'][index - 1]['after'])
+
+    def test_production_cli_never_returns_a_generated_test_file(self):
+        executed = subprocess.run([sys.executable, '-B', str(Path(__file__).parent / 'quality_experiment_runner.py'), '--run'],
+            input=json.dumps(self.payload()), text=True, encoding='utf-8', capture_output=True,
+            env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}, timeout=20)
+        self.assertEqual(executed.returncode, 0, executed.stderr)
+        result = json.loads(executed.stdout)
+        self.assertEqual(result['status'], 'observed')
+        self.assertNotIn('testCode', result)
+        self.assertNotIn('testHash', result)
+
     def assert_mutation_improves(self, candidate_provider=None):
         initial = self.payload()
         state = run(initial)
         self.assertEqual(state['status'], 'observed', state)
         self.assertFalse(state['assertionOracle'])
-        self.assertIn("'count': 2", state['testCode'])
-        self.assertNotIn('setattr', state['testCode'])
-        self.assertEqual(self.baseline(state['testCode']).returncode, 0)
-        merged = merge_tests({'previous': TESTS, 'addition': state['testCode']})['code']
+        self.assertNotIn('testCode', state)
+        # Explicit offline compatibility test, never the production --run route.
+        offline_code = build_tests('sample', 'Inventory.register', state['experiments'])
+        self.assertIn("'count': 2", offline_code)
+        self.assertNotIn('setattr', offline_code)
+        self.assertEqual(self.baseline(offline_code).returncode, 0)
+        merged = merge_tests({'previous': TESTS, 'addition': offline_code})['code']
         boundary = run(self.payload(kind='Compare'))
         self.assertEqual(boundary['status'], 'observed', boundary)
-        merged = merge_tests({'previous': merged, 'addition': boundary['testCode']})['code']
+        merged = merge_tests({'previous': merged, 'addition': build_tests('sample', 'Inventory.register', boundary['experiments'])})['code']
         self.assertEqual(self.baseline(merged).returncode, 0)
         self.tests.write_bytes(TESTS.encode('utf-8'))
         before = run_mutation_trials(self.source, self.tests, max_mutations=100,
@@ -121,10 +156,10 @@ class QualityExperimentsTests(unittest.TestCase):
                             if m['id'] in before_survivors and m['line'] != 6))
         self.assertEqual(after['counts']['timeout'] + after['counts']['error'], 0)
 
-    def test_observed_state_and_zero_boundary_kill_real_builtin_survivors(self):
+    def test_offline_compatibility_state_and_boundary_kill_real_builtin_survivors(self):
         self.assert_mutation_improves()
 
-    def test_observed_state_and_zero_boundary_kill_real_mutatest_survivors(self):
+    def test_offline_compatibility_state_and_boundary_kill_real_mutatest_survivors(self):
         try:
             available = importlib.metadata.version('mutatest') == '3.1.0'
         except importlib.metadata.PackageNotFoundError:
@@ -136,11 +171,17 @@ class QualityExperimentsTests(unittest.TestCase):
     def test_exception_arguments_distinguish_same_exception_type(self):
         result = run(self.payload('Inventory.discard', 'If'))
         self.assertEqual(result['status'], 'observed', result)
-        self.assertIn('observed_exception.exception.args', result['testCode'])
-        self.assertEqual(self.baseline(result['testCode']).returncode, 0)
+        self.assertNotIn('testCode', result)
+        evidence = result['experiments'][0]['evidence']
+        self.assertEqual(evidence['steps'][0]['status'], 'raised')
+        self.assertEqual(evidence['steps'][0]['exception'], 'KeyError')
+        self.assertEqual(evidence['steps'][0]['exceptionArgs']['value']['items'][0]['value'], 'unknown entry: missing')
+        offline_code = build_tests('sample', 'Inventory.discard', result['experiments'])
+        self.assertIn('observed_exception.exception.args', offline_code)
+        self.assertEqual(self.baseline(offline_code).returncode, 0)
         mutated = SOURCE.replace('if label in self.entries:\n            del', 'if True:\n            del')
         self.source.write_bytes(mutated.encode('utf-8'))
-        self.assertNotEqual(self.baseline(result['testCode']).returncode, 0)
+        self.assertNotEqual(self.baseline(offline_code).returncode, 0)
 
     def test_builtin_and_mutatest_positions_produce_same_experiment_without_provider_rules(self):
         external = self.payload()
@@ -260,7 +301,9 @@ class Cases(unittest.TestCase):
         with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': encoded}):
             result = run(payload)
             self.assertEqual(result['status'], 'observed', result)
-            self.assertEqual(self.baseline(result['testCode']).returncode, 0)
+            self.assertNotIn('testCode', result)
+            offline_code = build_tests('sample', 'Inventory.register', result['experiments'])
+            self.assertEqual(self.baseline(offline_code).returncode, 0)
         for item in result['experiments']:
             self.assertEqual(item['evidence']['context']['importFixturePlanHash'], digest(encoded))
         self.assertFalse(marker.exists())
@@ -284,8 +327,17 @@ class Cases(unittest.TestCase):
         planned['fingerprint'] = fingerprint(planned)
         self.assertEqual(worker({'sourcePath': str(self.source), 'experiment': planned})['status'], 'unavailable')
 
+    def test_source_path_module_and_context_are_bound_even_for_identical_source_text(self):
+        payload = self.payload()
+        planned = plan(payload)['experiments'][0]
+        payload['module'] = 'different'
+        self.assertEqual(plan(payload)['reason'], 'source-module-mismatch')
+        duplicate = self.root / 'duplicate.py'
+        duplicate.write_bytes(SOURCE.encode('utf-8'))
+        self.assertEqual(worker({'sourcePath': str(duplicate), 'experiment': planned})['status'], 'unavailable')
+
     def test_merge_preserves_model_tests_main_guard_and_rejects_binding_collision(self):
-        addition = run(self.payload())['testCode']
+        addition = build_tests('sample', 'Inventory.register', run(self.payload())['experiments'])
         original = TESTS + "\nif __name__ == '__main__':\n    unittest.main()\n"
         merged = merge_tests({'previous': original, 'addition': addition})['code']
         self.assertEqual(self.baseline(merged).returncode, 0)

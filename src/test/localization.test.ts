@@ -80,7 +80,8 @@ test('English stage, rejection, fallback and repair messages preserve non-passin
             ['validation', 'accepted'], ['coverage', 'measured'], ['model-request', 'completed'], ['writer-seed', 'started'], ['writer-seed', 'accepted'],
             ['quality-experiment', 'observed'], ['quality-experiment', 'improved'], ['quality-experiment', 'unchanged'],
             ['quality-experiment-baseline', 'passed'], ['quality-novelty', 'duplicate'], ['reviewer', 'repair-requested'],
-            ['candidate-artifact', 'rejected']]) {
+            ['candidate-artifact', 'rejected'], ['reviewer', 'approved'], ['reviewer', 'rejected'],
+            ['quality-evidence', 'writer-required'], ['numeric-skill', 'verified']]) {
             assert.doesNotMatch(describeStageEvent(stage, status, {}), /\p{Script=Han}/u);
         }
         assert.match(withOutcomeHeader('原始證據{1}', { validationMode: 'execution', terminalStatus: 'execution-passed', executionVerified: true }),
@@ -107,6 +108,32 @@ test('English stage, rejection, fallback and repair messages preserve non-passin
             assert.equal(classifyExecutionFailure(localize(source, 20)), expected);
         }
     } finally { setLanguage('zh-tw'); }
+});
+
+test('English AI workflow blocking reasons explain the stopped stage without untranslated framework text', () => {
+    const originalLanguage = getLanguage();
+    setLanguage('en');
+    try {
+        for (const [source, meaning] of [
+            ['工具僅提供算術假設；測試由 AI 修訂，再經實際執行驗證。', /only provides arithmetic hypotheses.*AI revises the tests.*actual execution/],
+            ['完整 AI 流程需要可用的 Writer 與 Reviewer；請先完成角色測試連線。', /qualified Writer and Reviewer/],
+            ['完整流程的 Auto 需要先完成 Writer 與 Reviewer 角色測試連線。', /Auto.*Writer and Reviewer role connection tests/],
+            ['分析師回覆無效；已停止，尚未進入測試生成。', /Analyst response is invalid.*before test generation/],
+            ['分析師未完成；已停止，尚未進入測試生成。', /Analyst did not complete.*before test generation/],
+            ['完整審查證據超過預算；已保留測試，突變測試未執行。', /review evidence exceeds the budget.*mutation testing was not run/],
+            ['此候選尚未取得有效審查批准；突變測試未執行。', /no valid review approval.*mutation testing was not run/]
+        ] as const) {
+            const label = localize(source);
+            assert.doesNotMatch(label, /\p{Script=Han}/u);
+            assert.match(label, meaning);
+        }
+        const outcome = presentOutcome({ workflowVersion: 'ai-reviewed-loop-v1', terminalStatus: 'review-blocked' });
+        assert.equal(outcome.kind, 'pending');
+        assert.match(outcome.label, /Review not approved/);
+        assert.doesNotMatch(withOutcomeHeader('Raw evidence preserved', {
+            workflowVersion: 'ai-reviewed-loop-v1', terminalStatus: 'review-blocked'
+        }), /\p{Script=Han}/u);
+    } finally { setLanguage(originalLanguage); }
 });
 
 test('language switches follow explicit selection and auto while active runs keep a consistent report locale', async () => {

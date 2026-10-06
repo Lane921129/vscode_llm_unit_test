@@ -9,6 +9,7 @@ import { RejectedCandidateStore } from '../pipeline/rejectedCandidateStore';
 import { RepairResponseError } from '../pipeline/repairDiagnostics';
 import { createResultLayout, roundDirectory } from '../pipeline/resultLayout';
 import { ReportIdentity, writeTargetReports } from '../pipeline/targetReport';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 const passed = 'test_keep (Cases.test_keep) ... ok\nRan 1 test\nOK';
 const noopHooks: CandidatePipelineHooks = {
@@ -72,7 +73,7 @@ test('legacy structure failures, regressions, repeated candidates, and blocking 
         ...noopHooks, review: async () => ({ issues: [{ id: 'self-mock', severity: 'blocking',
             reason: 'target replaced', evidence: 'target replaced', action: 'call target', test: 'test_keep' }] }),
         rejectedCandidate: record
-    }, 0), CandidateValidationError);
+    }, 0), (error: unknown) => error instanceof AnalysisStageError && error.stage === 'reviewer');
     assert.equal(checkpointed, 0);
     assert.deepEqual(rejections, [
         ['bad-structure', 0, 'unittest-structure', 'candidate-structure-rejected'],

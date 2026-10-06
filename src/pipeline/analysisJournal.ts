@@ -9,6 +9,7 @@ import { formatRepairDiagnostic, RepairDiagnostic } from './repairDiagnostics';
 import { VerificationMode } from './verificationMode';
 import type { ReportIdentity } from './targetReport';
 import { normalizeKnownSecrets, redactCredentialStrings } from './artifactSafety';
+import { AI_WORKFLOW_VERSION } from './aiWorkflow';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -52,9 +53,9 @@ export class AnalysisJournal {
         fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify(this.protect({
             schemaVersion: 2, runId: this.runId, startedAt: new Date().toISOString(), validationMode,
             sourceHash: this.sourceHash, target, model, promptVersion: 'role-contracts-v7',
-            workflowVersion: 'seed-expand-v1', writerSeedVersion: 'writer-seed-v1',
-            writerExpansionVersion: 'writer-expansion-v1', reviewRepairVersion: 'review-contract-repair-v1',
-            qualityExperimentVersion: 'quality-experiment-result-v1',
+            workflowVersion: validationMode === 'full' ? AI_WORKFLOW_VERSION : 'llm-execution-v1', writerSeedVersion: 'writer-seed-v2',
+            writerExpansionVersion: 'writer-expansion-v2', reviewRepairVersion: 'review-contract-repair-v1',
+            qualityExperimentVersion: 'quality-experiment-result-v2',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS,
             repairDiagnosticsVersion: 'repair-diagnostics-v1',
             ...(report ? { report } : {}),

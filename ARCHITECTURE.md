@@ -1,19 +1,19 @@
 # 專案閱讀入口
 
-## 初版整合流程與交付邊界（2026-10-06）
+## AI 主導閉環與交付邊界（2026-10-07）
 
-本輪以 `all_test_2026_10_06_13_59` 的實測缺口為驗收依據，保留既有單一 orchestrator，將範圍準備、角色契約修正、候選紀錄與品質實驗抽成小模組，不建立第二套執行管線。以下為本輪固定的流程契約；實際交付與驗證結果另記於 CHANGELOG。
+使用者確認原始設計為「AI 分析函式、AI 撰寫測試、另一個 AI 審查、同意後做突變、品質不足再交 AI 改寫」。正式 full 流程以 `ai-reviewed-loop-v1` 對齊此分工，取代 `seed-expand-v1` 的自動 Trace 合併、host 補測與審查未完成仍量測路徑。保留單一 orchestrator、既有安全與品質契約；歷史產物仍以原版本讀取，不重標為新版通過。實際交付與驗證結果另記於 CHANGELOG。
 
 1. **範圍與環境**：選取專案後保留所選根目錄及來源範圍，提供相依檢查和模組初始化預檢。批次先確認來源清單、合併重複的來源／限定目標身分，再做已存在的逐模組預檢。備份、測試 fixture 與業務程式的取捨由範圍選擇明示；同名重複定義只記一次歧義，不能猜選第一份定義。安裝和初始化替身仍須使用既有具體清單確認；關閉或取消不啟動生成。
-2. **來源與證據固定**：保留單次執行的 Python、來源／相依版本、限定目標、角色資格、Tier、品質政策與引擎選擇。AST、預檢、受控 Trace、生成與量測使用同一環境；切換來源或設定不能沿用過期就緒狀態。
-3. **Writer seed**：首次模型請求先要求一個有證據支持的最小案例及必要 setup。模型自己的候選通過結構、binding、簽名、assertion evidence 及隔離執行後，立即保存 executable checkpoint，審查仍為 incomplete、突變仍未量測。不能藉自動附加 Trace 把無效模型候選升格通過。
-4. **合併、審查與量測**：只有獨立通過的 Trace 基線才合併到 seed。合併後重走相同 gate；Reviewer 的契約無效回覆最多修正一次，兩次共用原 absolute deadline 與總預算，不重新傳送壞回覆，不在傳輸／取消／預算失敗後再啟動契約修正。未完成審查維持 incomplete。覆蓋及完整所選突變集合確認同一來源／測試身分後保存品質基線。
-5. **單一實測缺口補強**：每輪選一個已量測 coverage gap 或存活 mutant。支援範圍內，由本機產生有上限、純資料、沒有 expected value 的輸入／狀態實驗；以 fingerprint 避免相同實驗重送。數值邊界同時支援 builtin 與 Mutatest 的可核對 AST 位置。物件狀態初版只支援可重播的同步實例建構、目標呼叫和普通資料，未知 descriptor、動態 setup、外部 I/O、async 等保留明確 unsupported，不猜測結果。
-6. **觀測轉測試**：只有同版來源、同一組 constructor／輸入／呼叫順序、完整隔離且可 assertion 的回傳、例外或狀態觀測能產生 host 測試。新增測試先獨立執行，再與已通過案例合併。模型可在未支援範圍提出新假設，但仍須實際驗證；新方法名稱、重複測試與未執行提案不能算改善。
-7. **接受、保留與停止**：同候選重新量測 coverage、branch、mutation，沿用既有非退步檢查、總預算與停滯上限。擴充失敗保留已驗證基線；source 變更使舊證據失效。80% 只適用突變，目標行覆蓋及分支完整性、Reviewer 和所有隔離 gate 維持。
+2. **來源、資格與 AI 分析**：固定單次 Python、來源／相依、限定目標、角色資格、Tier、品質政策與引擎。full Auto 的 Writer／Reviewer 都須 verified，否則停止，不使用 deterministic fallback。Semantic Analyst 根據 AST、相依、呼叫語境及受控觀測分析函式；初始分析必須通過本地 parser，無效或請求失敗不能略過後直接生成。
+3. **Writer seed 與工具執行**：Writer 先寫一個有證據支持的最小案例及必要 setup。模型候選通過結構、binding、簽名、assertion evidence 與隔離執行後，立即保存 executable checkpoint；審查仍為 incomplete、突變仍未量測。工具不附加 Trace／host 測試、不改 expected，不以其他工具案例彌補無效模型候選。執行失敗依唯一方法、結構／fixture 等證據交 Bug Fixer 或 Writer。
+4. **Reviewer 同意才突變**：Reviewer 審查已執行的同一份測試。有效 finding 交 Writer，修訂後重新執行、重新審查；零 findings 才批准。契約無效最多在原 absolute deadline 與總預算內修正一次，不重送壞回覆，不在傳輸／取消／預算失敗後擴大重試。審查仍無法完成時保存 `review-blocked`，保留 executable，沒有量測則為 `mutationStatus=not-measured`。候選的 `approvedCodeHash` 隨 run/source/target 保存為 `reviewApproval.testHash`；測試改變不得沿用舊同意。
+5. **量測後選單一缺口**：只有已批准候選可執行完整所選突變集合，保存同一候選的 coverage、branch、mutation。未達門檻時每輪選一個實測缺口或存活 mutant，交品質分析師與 Writer。支援範圍內，本機可規劃有上限的純資料輸入／狀態實驗；用 fingerprint 避免重複，unsupported 明示未知，不猜 expected。
+6. **工具證據交 AI 改寫**：同來源、constructor／輸入／呼叫順序與完整隔離觀測可交 AI 作為核對證據；計算步驟、回傳、例外及狀態不等同獨立需求規格。數值邊界與普通同步物件實驗不直接注入測試；由 Writer 選擇測資、組織 assertion 並產生新候選，再走執行、審查、突變。新名稱、重複測試與未執行提案不算改善。
+7. **接受、保留與停止**：同候選重新量測，沿用非退步保護、總預算、輪數及停滯上限。修訂失敗保留已驗證基線；保留的舊分數不可冒充目前未批准候選的品質。source 變更使舊證據失效。80% 只適用突變，目標行覆蓋 100%、分支完整性、Reviewer 同意與所有隔離 gate 維持。
 8. **可重現診斷**：在丟棄／降階前保存有界 Python 候選與階段、Tier、attempt、gate、固定原因碼及 hash；沒有可辨識 Python、包含憑證或原始碼複製的回覆僅保留安全 metadata。候選不使用 test_ 名稱，不自動執行；事件不保存完整 provider 回應。final_report 保留同一候選的結果，failure_report 可追溯 seed、修訂、實驗、審查修正與回滾。
 
-本輪驗收包含：環境取消不生成／切專案不沿用設定、seed 失敗不擴充、seed 成功才合併、Reviewer 同時限修正與未完成狀態、拒絕候選追溯與憑證拒存、Mutatest 邊界規劃、普通容器狀態和例外實測、重複實驗不量測、baseline 失敗不合併，以及真實隔離執行／coverage／mutation 的小批次整合。固定模型回覆與本機實驗不冒充實驗室模型的新一輪通過。
+本輪驗收重點為：AI 分析不可靜默略過、seed 的模型所有權、Reviewer 無效／有 finding 時零突變、AI 修訂後必須重跑與重審、批准身分與測試 hash 一致、工具僅提供證據、原有安全與成果保護，以及歷史結果讀取相容。固定模型回覆與本機實驗不冒充實驗室模型的新一輪通過。
 
 先看本頁，再依「想改什麼」打開對應檔案。角色提示詞只有一份正式實作，集中在 `src/roles/`。
 
@@ -21,9 +21,9 @@
 
 結果呈現由 `src/pipeline/targetReport.ts` 分流：`final_report.md` 只保留選定目標的結果、模型、失敗原因、保留測資及其覆蓋／突變；`workflow_report.md` 保留執行細節，失敗或曾失敗時另產生含完整流程的 `failure_report.md`。`batchJournal.ts` 的摘要只列已開始的非 Dummy／Stub 目標，完整清單留在 manifest／batch_workflow，批次 failure_report 連向各目標完整流程。`run_manifest.report` 保存新報告身分，scorecard 仍核對同一保留候選與政策證據，不從精簡 Markdown 推定通過。操作見 [結果與失敗報告](docs/結果與失敗報告.md)。
 
-Demo 摘要使用 `presentSummaryOutcome`，僅在執行及量測達標時省略 Reviewer 未完成標籤；`presentOutcome`、品質政策與批次評分仍保留原始終態。final_report 重算同一候選的品質量測後才採用精簡標頭；failure_report／workflow／JSON 保存完整審查診斷。Reviewer 收到完整證據與已通過隔離執行的明示事實，輸出仍需 review-v7 證據行與語意檢查。
+舊 Demo 的 `execution-passed-review-incomplete` 可保留歷史讀取，但不適用新 `ai-reviewed-loop-v1`。新 `review-blocked` 必須呈現審查受阻原因與突變未執行，不能顯示量測達標；failure_report／workflow／JSON 保存完整診斷。角色產物、Reviewer 決定及工具量測分開保存；舊 deterministic fallback 也不能冒充新的 AI 閉環完整通過。Reviewer 收到完整證據與已通過隔離執行的明示事實，輸出仍需 review-v7 證據行與語意檢查。
 
-數值技能遇到正確的單呼叫內建例外斷言時保留原文並繼續，支援布林值參與 Python 數值運算但不變更輸入型別；不確定或複合例外保持拒絕。Bug Fixer 的 RepairResponseError 由候選狀態機交 Writer 接手一次，沿用現有總預算與重新驗證，接手失敗才交外層決定終止／降級。
+數值技能可核對單呼叫內建例外與 Python 布林數值語義，不改變 typed 輸入，也不直接改寫測試；不確定或複合例外維持未知並交 AI。Bug Fixer 的 RepairResponseError 由候選狀態機交 Writer 接手一次，沿用現有總預算與重新驗證，接手失敗才交外層決定終止／降級。
 
 ## 可選突變規則與共用隔離執行器（2026-10-01）
 
@@ -53,11 +53,11 @@ Demo 摘要使用 `presentSummaryOutcome`，僅在執行及量測達標時省略
 
 以下圖示描述 **full 完整品質模式**；execution 在隔離測試及證據確認後產生「執行驗證通過」，Trace／coverage／mutation／Reviewer 保存未執行狀態，不寫入 0 或 100 分。環境準備依所選模式決定是否需要品質工具，相依完整性檢查與安裝清單確認仍保留。
 
-完整模式的數值計算技能由 `testRuleDispatcher.ts` 選取 `numeric_calculation` 規則卡，Writer 與修復角色使用相同指引。LLM 負責選擇具體輸入、組織測試；實際 assertion 失敗後，`numericTestSkill.ts` 先呼叫 `repair_source_expectations.py` 的受限 AST 計算器，再將候選中的原始 typed args／kwargs 交給既有隔離 Trace。只有相同來源／相依版本、同一組輸入、完整且可 assertion 的回傳快照與計算結果一致，才能採用修正；不需要模型支援原生 tool calling，也不增加模型請求。
+完整模式的數值技能由 `testRuleDispatcher.ts` 選取 `numeric_calculation` 規則卡，Writer 與修復角色使用相同指引。實際 assertion 失敗後，受限 AST 計算器可分析既有 typed args／kwargs，再由相同來源／相依的隔離 Trace 核對回傳或例外。`numericTestSkill.ts` 只將核對證據交給 AI，不採用工具產生的 replacement code；LLM 不直接執行工具，也不需要 provider 原生 tool calling。
 
-目前支援同步頂層純算術、`round`／`abs`、比較分支、tuple 拆解與簡單 `self` 資料 fixture。只改失敗方法的預期值；正確的 `type`／`assertIsInstance` 檢查保持原文，不阻止後方數值修正。單一目標呼叫的錯誤 `assertRaises` 可在同輸入已證實正常回傳時改為精確回傳斷言；實際 unittest `ERROR` 若同時經受限運算與同輸入隔離 Trace 確認為內建 `ZeroDivisionError`／`TypeError`，可改成對應 `assertRaises`。只替換失敗呼叫及其不可達的回傳斷言，保留輸入、setup、先前成功斷言與其他方法；獨立工作、複合例外測試、mock、class／async、外部 I/O、動態執行、不明語法或超過計算／案例預算都保留原修復路徑。來源公式是計算假設，並非獨立需求規格。修正後仍走結構、實際 unittest、coverage、Reviewer 與 mutation，不能消除 Reviewer 未完成狀態。execution 模式維持原有來源算術修正，不啟用這條 Trace 流程。
+工具支援的純算術、`round`／`abs`、比較分支及可證明輸入僅構成計算核對範圍；不可把 unsupported 變成通過。正常回傳與內建 `ZeroDivisionError`／`TypeError` 依同一 typed 輸入分開觀測，來源公式仍是計算假設，不是獨立需求規格。修訂由 Writer 或唯一方法失敗的 Bug Fixer 產生，保留 passing 方法與修復範圍；新候選重走結構、實際 unittest、Reviewer 同意後才做 mutation。`execution` 是明確選用的診斷模式，不啟用 full 的 Trace／審查／突變閉環；其受限算術工具也只將未獨立核對的假設交 AI 修訂，再由實際 unittest 驗證，不直接替換測試。診斷成果不能當作完整流程通過。
 
-每次技能檢查在當輪保存 `numeric_001.json` 等獨立紀錄：run／source／前後測試 hash、輸入、計算步驟、觀測、修正與未採用原因；`numeric-skill` 事件及中英文進度納入當輪 `failure_report.md` 與共用完整流程。`numeric-test-skill-v2` 分別記錄回傳快照與例外型別；`verified` 只表示計算與觀測核對完成，不代表測試或整體品質通過。每次最多補測 12 組輸入，分成每批至多 6 組，修正至多 32 處。候選驗證至多嘗試兩次工具修正，有效工具候選不占模型修訂次數；計算器及 Trace 保留既有時限，所有候選仍計入目標總預算。
+技能紀錄保存 run／source／測試 hash、輸入、計算步驟、觀測與未採用原因；`verified` 只表示計算與觀測核對完成，不表示工具改寫測試、AI 已修訂或整體品質通過。證據受原有案例／時間上限與總目標預算約束；只有實際 AI 修訂後的新候選才進入後續測試循環。舊 `numeric-test-skill-v2` 自動修正紀錄保留原版本讀取，不能標成新版 AI 產物。
 
 Python 環境準備入口與結果置於專案資料夾欄位下方。「檢查此專案相依」把已選資料夾直接交給 `pythonEnvironmentController.ts`，不重問範圍；「其他範圍…」仍可選整個專案、資料夾或單一 Python 檔案，分別保存最近選擇。資料夾／專案模式經 `environment_probe.py` 呼叫 `dependency_inventory.py`，只以 AST 盤點所選樹內 import，依所選 Python 的標準庫與頂層套件位置彙整缺項；不執行應用或外部套件的 import。`dependencyInventory.ts` 驗證並呈現 `dependency-inventory-v1` 報告，保留逐檔行號、條件／可選／型別相依、首次與最近缺項及不完整掃描原因。必要缺項優先採 requirements／明確 packageMappings，否則預填同名候選供確認補裝；條件缺項只列出。靜態可找到套件不代表正式模組載入成功，原有單檔隔離預檢與測試 gate 不變。詳細操作及範圍限制見 [專案相依掃描](docs/Python相依掃描.md)。
 
@@ -85,38 +85,38 @@ flowchart TD
     SeedGate -->|是| SeedCheck[獨立結構與隔離執行驗證]
     SeedCheck -->|通過| SeedCheckpoint[保存 seed：審查及突變尚未完成]
     SeedCheck -->|失敗| Repair
-    SeedCheckpoint --> TraceBaseline[獨立驗證 Trace 後合併並保留 seed]
-    SeedGate -->|否| TraceBaseline
-    TraceBaseline --> Structure[合併候選的結構與證據檢查]
+    SeedCheckpoint --> Reviewer
+    SeedGate -->|否| Structure[模型候選的結構與證據檢查]
     Structure --> Validation[受控 unittest 與原生目標 coverage]
     Validation -->|執行通過| Checkpoint[立即保存可執行基線]
     Checkpoint --> Reviewer[Reviewer 審查]
     Reviewer -->|契約無效且尚有預算| ReviewRepair[原期限內最多修正一次]
     ReviewRepair --> Reviewer
-    Reviewer -->|具體審查問題| Writer
+    Reviewer -->|任何有效待處理 finding| Writer
+    Reviewer -->|無法完成或修訂用盡| ReviewBlocked[保留成果：review-blocked]
+    ReviewBlocked --> Report
     Structure -->|結構問題| Writer
-    Validation -->|數值 assertion 失敗| Calculator[受限計算器提出候選]
-    Calculator -->|有受限計算候選| ExactTrace[同輸入隔離 Trace 核對]
+    Validation -->|數值 assertion 失敗| Calculator[受限計算器產生核對提案]
+    Calculator -->|有可核對提案| ExactTrace[同輸入隔離 Trace 核對]
     Calculator -->|不支援| Repair[原有失敗分流]
-    ExactTrace -->|一致且來源未變| Structure
+    ExactTrace -->|一致且來源未變| RepairEvidence[將觀測證據交 AI 修訂]
+    RepairEvidence --> Repair
     ExactTrace -->|未核對| Repair
     Validation -->|其他失敗| Repair
     Repair -->|唯一定位的一個方法失敗| Fixer[Bug Fixer 修復]
     Repair -->|多方法、匯入或 fixture 問題| Writer
     Fixer --> Structure
-    Reviewer -->|審查完成或明示未完成| Quality[完整所選範圍突變測量]
+    Reviewer -->|零 findings 且同一測試獲批准| Quality[完整所選範圍突變測量]
     Quality -->|證據完整且不退步| QualityCheckpoint[提交同候選最佳品質基線]
     Quality -->|失敗或證據不足| Report
     QualityCheckpoint -->|仍有缺口且預算足夠| Focus[選取單一實測缺口]
     Focus --> Experiments[有界數值或普通物件狀態實驗]
-    Experiments -->|可重播觀測且獨立基線通過| ToolMerge[保留既有案例並合併工具測試]
-    ToolMerge --> Structure
-    Experiments -->|不支援或沒有新證據| QualityAnalyst[品質分析師提出下一輪任務]
+    Experiments --> QualityAnalyst[品質分析師依實測缺口與可用觀測提出任務]
     QualityAnalyst --> Writer
     QualityCheckpoint -->|達標或達停止條件| Report
 ```
 
-Reviewer 無法完成時會保留「審查未完成」，工具驗證仍可執行，但不因此宣稱品質達標。所有模型建議都是待驗證假設。
+Reviewer 無法完成或仍有待處理 finding 時，不啟動該候選的突變；已完成的執行 checkpoint 可保存，不能因此宣稱品質達標。初始 Analyst 無效時停在分析階段；所有模型建議與未執行工具提案都是待驗證假設。
 
 Trace 現在由 `trace_case_worker.py` 每案建立新 Python 程序，`trace_value_codec.py` 保存 target 與 constructor 呼叫前後的有限型態快照。`behavior-observations-v2` 保留 run／case ID、來源、耗時、returned／raised／blocked／setup_error／timeout／not_started／worker_error 等逐案狀態，JSONL 可恢復已完成觀測。`behaviorObservations.ts` 驗證 tagged schema、容量、唯一 ID 與 outcome 配對；cycle、shared-reference、未知物件及截斷值只算不可重播診斷。合併初始／補充觀測時保留 kwargs 順序，相同呼叫的矛盾結果不可作精確斷言。完整快照留在產物；`observationsForPrompt` 提供斷言事實與案例識別，避免把重複序列化資料塞進角色提示。
 
@@ -138,7 +138,7 @@ caller AST 現在先以同一 codec 編碼整筆 `args`／`kwargs` 與已證明�
 
 `review-v7` 保留完整測試語境，只替非空、非註解行提供可引用 ID；模板回聲、明顯不相關的引用，以及帶引號／mocked 詞形的目標修改指令均會被拒絕。`bug-fix-v4` 正式請求改回傳單方法 Python fence，減少 JSON 多行轉義錯誤，仍由 host 合併並經 Python AST 範圍與執行驗證；舊 JSON 只保留解析相容性。資格版本 `python-unittest-v5` 分別以 JSON 審查及文字 Python 修復探測，不升級舊資格。
 
-`review-v7` 把最多五個 findings 的分類、TEST_FILE 行號、原因與動作固定在同一份 schema／parser 契約；程式依行號還原精確原文，缺漏情境不會自行升格為 blocking。明確與目標 binding 矛盾、要求修改來源或 mock 目標本身的回覆保持未完成，不能交 Writer 或轉成通過。這是有界的矛盾檢查，不是模型意見的正確性證明。Writer 修訂保留最新拒絕原因；只有 unittest 唯一列出的一個失敗方法可交 Bug Fixer。Tier 3 scaffold 回傳完整測試檔，不再做第二層 class／縮排包裝。
+`review-v7` 把最多五個 findings 的分類、TEST_FILE 行號、原因與動作固定在同一份 schema／parser 契約；程式依行號還原精確原文。缺漏情境不是 unittest 執行錯誤，但與其他有效 finding 一樣須由 Writer 修訂後重審，零 findings 才可批准突變。明確與目標 binding 矛盾、要求修改來源或 mock 目標本身的回覆保持未完成，不能交 Writer 或轉成通過。這是有界的矛盾檢查，不是模型意見的正確性證明。Writer 修訂保留最新拒絕原因；只有 unittest 唯一列出的一個失敗方法可交 Bug Fixer。Tier 3 scaffold 回傳完整測試檔，不再做第二層 class／縮排包裝。
 
 `src/roles/reviewSession.ts` 以完整審查 prompt 的雜湊重用同候選／同證據評估；連續兩次無法取得合格審查後，停止該目標分析的額外審查。每次評估由 `reviewContractRepair.ts` 在原期限與目標預算內容許一次契約修正，使用同一輸出格式，不把無效原文放回 prompt。傳輸錯誤不觸發契約修正，仍遵循既有有限傳輸重試。新目標分析重新開始，未知結果絕不改成空問題通過。
 
@@ -198,9 +198,9 @@ Dummy 標記仍在 AST 前直接略過；Stub 在正規模組匯入通過後走�
 
 `tierHistory.ts` 的摘要由每輪起始與降級事件更新，報告每次寫入時重新呈現；保留候選 Tier 取已量測候選，尚未量測時才取 executable checkpoint。機讀 `tierHistory` 不覆寫舊事件，scorecard 不從新版「起始策略」推定保留 Tier。
 
-`mutationProbePlan.ts`／`mutation_probe_plan.py` 只對同來源、完整內建突變量測規劃輸入。依實測成功呼叫作種子，使用有上限的 AST 算術反推找到比較邊界，每次最多 12 組，沒有輸出 oracle。正式流程用既有逐案隔離 Trace 實測，合併完整觀測後在下一輪獨立驗證 Trace 基線；若沒有可用新觀測，仍由品質分析師規劃。`QualityAnalystSession` 在連續兩次契約失敗後停止額外請求，保留缺口指引與未完成狀態。
+`mutationProbePlan.ts`／`mutation_probe_plan.py` 只對同來源、可核對的完整 builtin／Mutatest 量測規劃輸入。依實測成功呼叫作種子，使用有上限的 AST 算術反推找到比較邊界，每次最多 12 組，不輸出 oracle。正式流程以逐案隔離 Trace 實測，完整觀測只補入角色證據；品質分析師與 Writer 決定如何補測，不建立或合併 Trace 測試。`QualityAnalystSession` 在連續兩次契約失敗後停止額外請求，保留實測缺口與未完成狀態，不將無效回覆當成 AI 分析成功。
 
-`deduplicate_trace_tests.py` 靜態核對模型副本與 runner-owned 方法的 AST；僅處理沒有 fixture／helper／decorator 的標準同步 TestCase，保留不同 setup、不同斷言與未知語意。條件式等價診斷保存於 `loop<n>_mutation_input_plan.json`，是未排除的候選，完整突變集合及品質政策不改變。
+`deduplicate_trace_tests.py` 的 runner-owned Trace 去重保留離線工具與歷史回歸用途，正式 AI 閉環不呼叫它改寫模型候選。候選新穎性只用於診斷純更名或重複的無改善迭代，不能自動刪除 AI 案例。條件式等價診斷保存於 `loop<n>_mutation_input_plan.json`，是未排除的候選，完整突變集合及品質政策不改變。
 
 | 檔案 | 用途 |
 |---|---|
@@ -237,19 +237,19 @@ Cloud 的 `llmUnitTest.cloudThinkingMode` 預設 `minimal`，可改 `provider-de
 模型生成、coverage 與 mutation 仍由 extension 和 `fixture_scorecard.py` 完成；UI 相依類別可
 在實驗室替換成原始目標，但不可混用不同來源的報告。
 
-模型候選合併已驗證 Trace 前，管線先對 runner-owned Trace 做結構／安全檢查，再寫成 `loop*_trace_test.py`，在乾淨 Python 程序獨立執行；只有該基線通過才放入候選。async／generator 使用一般標準庫 import。系統基線失敗會停止，避免反覆交模型修訂同一份被自動還原的程式碼。
+正式 LLM 候選不再附加 `loop*_trace_test.py` 或 host 狀態實驗測試。既有 Trace 測試工具保留 deterministic／離線驗證用途，仍須先做結構、安全與獨立程序執行；這類工具產物不會被標成 Writer 產物。原 `seed-expand-v1` 合併成果維持歷史身分，不能據此認定已通過新的 AI 審查順序。
 
 Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例外使用執行觀測確認的 module／qualname；不可解析的例外不產生 assertion。SQLite 檔案／共享 URI 連線會被 audit gate 阻擋；獨立 `:memory:` 連線另設 authorizer，禁止 ATTACH／VACUUM INTO，遭吞掉的安全例外也不能成為 oracle。
 
 `python_scripts/trace_observation_guard.py` 是 Dynamic Trace 的執行觀測輔助模組。它依 Python profiling 事件與真實 callable 身分記錄標準庫時鐘、熵、共享 RNG 及程序身分讀取，不修改回傳值。未控制的觀測加上 `non_deterministic_operations`、`oracle_reason=uncontrolled-ambient-read` 與不可 assertion 旗標，沿既有 Tier 1／例外／Trace gate 排除；Writer、Reviewer、Bug Fixer 收到控制依賴的指引。明確 seeded 的當次私有 RNG、純函式、純 async 與明確 mock 仍保留可驗證路徑。此機制不是任意程式的純度證明，也不保證追蹤所有原生 extension 內部讀取；獨立基線執行及安全檢查仍是必要 gate。
 
-保留候選的 `reviewStatus` 為 `completed`、`incomplete` 或 deterministic 專用 `not-required`，會隨 rollback 同步還原。工具滿分但審查未完成的終態為 `execution-passed-review-incomplete`。scorecard 查核 journal／manifest 的 runId、來源 hash 與保留測試 hash，採該版本的分數，拒絕未完成審查、stub、running、失敗與未解決品質缺口；不拼接不同輪次最高分。
+新 AI 閉環的保留候選只有零 findings 且同一候選獲批准才可記為 `reviewStatus=completed`；候選回傳 `approvedCodeHash`，再將同意保存為 `reviewApproval.testHash` 及 run/source/target，跟隨 rollback 同步還原。未獲同意為 `review-blocked`，尚未啟動的 mutation 明示 not-measured／null。deterministic 的 `not-required` 與舊 `execution-passed-review-incomplete` 只保留既有工具／歷史契約。BatchJournal 與 scorecard 在 manifest 或 knowledge 任一宣告 `ai-reviewed-loop-v1` 時，另核對 `reviewApproval` 的 workflowVersion、runId、sourceHash、target、testHash 與保留測試／品質快照；缺批准、錯版本或跨候選批准，即使終態自稱 passed 也不能計入通過。舊版本維持原讀取契約，不拼接不同輪次最高分，也不以舊 fallback 冒充新版 AI 閉環通過。
 
 同模組 helper 檢索由 `ast_extractor.py` 執行，與既有跨檔相依合併供分析角色和 Writer 使用。來源碼是 setup/path 語境，無執行時不得成為 oracle。`src/prompts/compactWriterContext.ts` 負責小模型完整證據與可省略 context 的排序，`verifiedWriterExamples.ts` 提供經回歸執行的中性範例；`promptBudget.ts` 統一 M/B 參數量、輸入預算與 Ollama context 設定。所有正式角色請求均先檢查完整提示預算，並記錄估計 tokens 與 logical request 耗時。Reviewer 拒絕帶穩定 diagnostics，完成 gate 維持不變。實作範圍與實驗室驗收見 [Writer 檢索與模型相容性](docs/Writer檢索與模型相容性_2026_09_17.md)。
 
 ## 尚未實作與尚待驗收的界線
 
-本次提交沒有包含型態樹、型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗目前只支援普通同步實例的同一目標最多兩次呼叫；實驗去重不等同突變量測快取。Writer 仍使用現有完整 Python fence 契約，seed 與補強提示不等同已完成增量格式生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
+本次流程重構不宣稱完成型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗只提供普通同步實例的同一目標最多兩次呼叫觀測，不自動寫入正式測試；實驗去重不等同突變量測快取。Writer 仍使用完整 Python fence，seed 與補強提示不等同已完成增量格式生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
 
 共用版本化 `QualityPolicy` 已交付；新執行的 standard80、歷史 strict100 與 fixture manifest 各自保存明確政策欄位。N/A、未知、未完成審查與未完成測量不因此升格通過。固定模型 A/B、完整 corpus／保留評估集，以及外部引擎的真實支援環境驗收均未執行。
 

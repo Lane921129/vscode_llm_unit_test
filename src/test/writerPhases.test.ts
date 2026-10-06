@@ -23,6 +23,17 @@ test('expansion includes the exact executable baseline and only one requested ga
     assert.match(prompt, /adding one focused test/);
     assert.match(prompt, /return the unchanged baseline/);
     assert.match(prompt, /does not certify coverage or mutation quality/);
+    assert.match(prompt, /responsible for writing the new test/);
+    assert.match(prompt, /separate Reviewer before mutation/);
+    assert.match(prompt, /exact constructor and ordered target calls/);
+});
+
+test('expansion keeps a large baseline whole for the shared request budget to decide', () => {
+    const baseline = 'import unittest\n' + '# preserved line\n'.repeat(6000);
+    const prompt = buildWriterExpansionPrompt('verified evidence', baseline, 'one measured gap');
+    assert.ok(prompt.includes(baseline));
+    assert.equal(prompt.split(baseline).length - 1, 1);
+    assert.equal((prompt.match(/```/g) ?? []).length, 2);
 });
 
 test('expansion does not duplicate a baseline already included in the evidence prompt', () => {

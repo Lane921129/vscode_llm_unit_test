@@ -9,7 +9,7 @@ import unittest
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
-from fixture_scorecard import DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard, report_fields
+from fixture_scorecard import AI_WORKFLOW_VERSION, DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard, report_fields
 from quality_policy import create_default_quality_policy, create_fixture_quality_policy, create_strict_quality_policy, evaluate_quality
 
 
@@ -177,6 +177,64 @@ class FixtureScorecardTests(unittest.TestCase):
                 self.assertEqual(result['status'], expected)
                 self.assertEqual(result['policy_mode'], policy['mode'])
                 self.assertEqual(result['mutation_score'], 99.5 if '199' in vector else 100 if 'full-success' in vector else 90)
+
+    def test_ai_workflow_requires_approval_bound_to_retained_test_with_manifest_only_detection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            path, original = self.write_policy_report(root, create_strict_quality_policy())
+            original = copy.deepcopy(json.loads(json.dumps(original)))
+            manifest, knowledge = original['run_manifest.json'], original['function_knowledge.json']
+            manifest['workflowVersion'] = knowledge['workflowVersion'] = AI_WORKFLOW_VERSION
+            knowledge['reviewApproval'] = {'workflowVersion': AI_WORKFLOW_VERSION,
+                'runId': manifest['runId'], 'sourceHash': manifest['sourceHash'], 'target': manifest['target'],
+                'testHash': knowledge['acceptedCodeHash']}
+
+            def reread(change=lambda artifacts: None):
+                artifacts = copy.deepcopy(original)
+                change(artifacts)
+                for name, value in artifacts.items():
+                    path.with_name(name).write_text(json.dumps(value), encoding='utf-8')
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+
+            self.assertEqual(reread()['status'], 'passed')
+            self.assertEqual(reread(lambda a: a['function_knowledge.json'].pop('workflowVersion'))['status'], 'passed')
+            self.assertEqual(reread(lambda a: a['run_manifest.json'].pop('workflowVersion'))['status'], 'passed')
+            mutations = [
+                lambda a: a['function_knowledge.json'].pop('reviewApproval'),
+                lambda a: (a['function_knowledge.json'].pop('workflowVersion'), a['function_knowledge.json'].pop('reviewApproval')),
+                lambda a: a['run_manifest.json'].update(workflowVersion='seed-expand-v1'),
+                lambda a: a['function_knowledge.json'].update(workflowVersion='seed-expand-v1'),
+            ]
+            for field in ['workflowVersion', 'runId', 'sourceHash', 'target', 'testHash']:
+                mutations.append(lambda a, field=field: a['function_knowledge.json']['reviewApproval'].update({field: 'wrong-identity'}))
+                mutations.append(lambda a, field=field: a['function_knowledge.json']['reviewApproval'].pop(field))
+            for version in ['unknown-workflow-v1', ' ', '', None, 1]:
+                def unknown_workflow(artifacts, version=version):
+                    artifacts['run_manifest.json']['workflowVersion'] = version
+                    artifacts['function_knowledge.json']['workflowVersion'] = version
+                    artifacts['function_knowledge.json'].pop('reviewApproval')
+                mutations.append(unknown_workflow)
+            for index, mutation in enumerate(mutations):
+                with self.subTest(index=index):
+                    self.assertEqual(reread(mutation)['status'], 'incomplete_provenance')
+
+            # Valid pre-refactor evidence keeps its historical interpretation.
+            def historical(artifacts):
+                artifacts['run_manifest.json']['workflowVersion'] = 'seed-expand-v1'
+                artifacts['function_knowledge.json'].pop('workflowVersion')
+                artifacts['function_knowledge.json'].pop('reviewApproval')
+            self.assertEqual(reread(historical)['status'], 'passed')
+            def legacy(artifacts):
+                artifacts['run_manifest.json'].pop('workflowVersion')
+                artifacts['function_knowledge.json'].pop('workflowVersion')
+                artifacts['function_knowledge.json'].pop('reviewApproval')
+            self.assertEqual(reread(legacy)['status'], 'passed')
+
+            # The manifest still enforces the new contract if its journal disappears.
+            reread()
+            path.with_name('function_knowledge.json').unlink()
+            result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            self.assertEqual(result['status'], 'incomplete_provenance')
 
     def test_new_policy_requires_bound_manifest_contract_and_does_not_upgrade_round_limit(self):
         correct_hash = hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()

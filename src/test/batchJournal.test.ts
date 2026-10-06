@@ -7,6 +7,10 @@ import { BatchJournal } from '../pipeline/batchJournal';
 import { createAnalysisDirectory, createBatchDirectory } from '../pipeline/analysisOutput';
 import { AnalysisJournal, evidenceHash } from '../pipeline/analysisJournal';
 import { createBatchScopeSelection } from '../pipeline/batchScope';
+import { createStrictQualityPolicy } from '../pipeline/qualityPolicy';
+import { CandidateCheckpointStore } from '../pipeline/candidateCheckpoint';
+import { AI_WORKFLOW_VERSION } from '../pipeline/aiWorkflow';
+import { SOURCE_VERSIONS_VERSION } from '../pipeline/sourceVersions';
 
 test('batch inventory distinguishes completion, verified passes, skips and incomplete provenance across reruns', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-journal-'));
@@ -113,4 +117,82 @@ test('batch rejects scope from another root or a modified selection hash', () =>
         assert.throws(() => batch.selectScope({ ...selection, excludedFiles: [] }), /invalid/);
         assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'batch_manifest.json'), 'utf8')).scope, undefined);
     } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true }); }
+});
+
+test('batch revalidates AI review approval for the retained candidate and preserves legacy readers', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-review-proof-'));
+    try {
+        const source = 'def target(value):\n    return value + 1\n';
+        const sourcePath = path.join(root, 'sample.py'); fs.writeFileSync(sourcePath, source);
+        const directory = path.join(root, 'result'); fs.mkdirSync(directory);
+        const policy = createStrictQualityPolicy();
+        const journal = new AnalysisJournal(directory, source, 'target', 'fixture', policy);
+        const code = '# immutable reader fixture\n';
+        const codeHash = evidenceHash(code), sourceHash = evidenceHash(source);
+        const vectors = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../contracts/quality-policy-cases-v1.json'), 'utf8'));
+        const evidence = structuredClone(vectors.cases.find((item: any) => item.name === 'strict-full-success').evidence);
+        Object.assign(evidence.mutation, { sourcePath, sourceHash, testHash: codeHash });
+        evidence.coverage.assessment.invocationEvidence.testHash = codeHash;
+        const store = new CandidateCheckpointStore(directory, sourceHash, 'target', {
+            policy, sourcePath, targetScope: { kind: 'function', qualifiedName: 'target' }
+        });
+        const executable = store.saveExecutable({ code, execution: 'Ran 1 test\nOK',
+            coverage: { coverageText: '100%', missingLines: '', assessment: evidence.coverage.assessment },
+            scenarios: [], qualityGaps: [], measuredQualityGaps: [], reviewWarnings: [], reviewStatus: 'completed',
+            tier: 1, generationMode: 'llm-evidence-bound', dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
+            dependencyVersions: [{ file: sourcePath, hash: sourceHash }] });
+        const checkpoint = store.saveQuality(executable, evidence.mutation);
+        const approval = { workflowVersion: AI_WORKFLOW_VERSION, runId: journal.runId, sourceHash,
+            target: 'target', testHash: codeHash };
+        journal.knowledge({ ...checkpoint, terminalStatus: 'passed', acceptedTest: checkpoint.testFile,
+            acceptedCodeHash: codeHash, resolvedTier: 1, workflowVersion: AI_WORKFLOW_VERSION, reviewApproval: approval });
+        journal.record(1, 'reviewer', 'approved', { testHash: codeHash });
+        fs.writeFileSync(path.join(directory, 'final_report.md'), 'reader fixture');
+        const manifestPath = path.join(directory, 'run_manifest.json'), knowledgePath = path.join(directory, 'function_knowledge.json');
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const knowledge = JSON.parse(fs.readFileSync(knowledgePath, 'utf8'));
+        const reread = (change: (artifacts: { manifest: any; knowledge: any }) => void = () => {}) => {
+            const artifacts = structuredClone({ manifest, knowledge }); change(artifacts);
+            fs.writeFileSync(manifestPath, JSON.stringify(artifacts.manifest));
+            fs.writeFileSync(knowledgePath, JSON.stringify(artifacts.knowledge));
+            const output = path.join(root, 'batch');
+            fs.mkdirSync(output, { recursive: true });
+            const batch = new BatchJournal(output, root, { model: 'fixture', buildTimestamp: 'fixture', python: 'python' });
+            batch.discover(sourcePath, ['target']); batch.start(); batch.begin(0);
+            // The reader permits report children only; copy the same fixture into its output.
+            const reportPath = path.join(output, 'target'); fs.mkdirSync(reportPath, { recursive: true });
+            for (const name of fs.readdirSync(directory)) { fs.copyFileSync(path.join(directory, name), path.join(reportPath, name)); }
+            batch.attach(0, reportPath); batch.refresh(0); batch.finish('completed');
+            return JSON.parse(fs.readFileSync(path.join(output, 'batch_manifest.json'), 'utf8'));
+        };
+        assert.equal(reread().allTargetsPassed, true);
+        assert.equal(reread(value => { delete value.knowledge.workflowVersion; }).allTargetsPassed, true,
+            'the manifest alone identifies the new workflow');
+        const corruptions: Array<(value: { manifest: any; knowledge: any }) => void> = [
+            value => { delete value.knowledge.reviewApproval; },
+            value => { delete value.knowledge.workflowVersion; delete value.knowledge.reviewApproval; },
+            ...['workflowVersion', 'runId', 'sourceHash', 'target', 'testHash'].map(field =>
+                (value: { manifest: any; knowledge: any }) => { value.knowledge.reviewApproval[field] = 'wrong-identity'; }),
+            value => { value.manifest.workflowVersion = 'seed-expand-v1'; }
+        ];
+        for (const version of ['unknown-workflow-v1', ' ', '', null, 1]) {
+            corruptions.push(value => {
+                value.manifest.workflowVersion = value.knowledge.workflowVersion = version;
+                delete value.knowledge.reviewApproval;
+            });
+        }
+        for (const [index, corrupt] of corruptions.entries()) {
+            const result = reread(corrupt);
+            assert.equal(result.allTargetsPassed, false, String(index));
+            assert.equal(result.targets[0].terminalStatus, 'incomplete-report', String(index));
+        }
+        assert.equal(reread(value => {
+            value.manifest.workflowVersion = 'seed-expand-v1'; delete value.knowledge.workflowVersion;
+            delete value.knowledge.reviewApproval;
+        }).allTargetsPassed, true, 'valid historical quality evidence does not require the new proof');
+        assert.equal(reread(value => {
+            delete value.manifest.workflowVersion; delete value.knowledge.workflowVersion;
+            delete value.knowledge.reviewApproval;
+        }).allTargetsPassed, true, 'legacy evidence without workflow fields retains its existing validation');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

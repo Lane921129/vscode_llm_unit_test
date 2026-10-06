@@ -4,13 +4,19 @@
 
 ## 目前驗收優先順序
 
-- 依使用者 2026-09-30 Demo 要求，工具已達固定品質門檻但 Reviewer 未完成時，結果卡與 final_report 先只呈現「測試執行與量測達標」，省略審查標註。此為顯示分流，不能標成完整通過；審查狀態、拒絕原因及原終態保留於機讀紀錄與詳細 failure／workflow 報告，批次與 scorecard 通過規則不變。
-- 數值技能可保留同一失敗方法中已核對的單呼叫內建 TypeError／ZeroDivisionError 斷言並繼續檢查後續案例；布林數值運算保留 Python 語義與 typed 輸入。例外不符、重綁定、複合 scope 及不可證實運算仍拒絕整段候選，不略過 gate。
+- 依使用者確認，2026-10-07 重構的正式 LLM 完整流程以 `ai-reviewed-loop-v1` 固定為「AI 分析 → Writer 撰寫 → 工具執行驗證 → Reviewer 同意 → 突變量測 → 品質不足交 AI 修訂 → 重新執行及審查」。本節取代先前允許工具自動補測、直接修正 expected 或未完成審查仍進入突變的分工；安全、身分核對與品質門檻保持不變。
+- Reviewer 只有回覆契約有效且沒有待處理 finding，才允許該版候選進入突變。有效 finding 交 Writer；無效／矛盾回覆僅在既有限額內修正審查契約，仍無效就保留可執行成果並停止該候選的完整流程。審查不可用、預算耗盡或取消，均不能改成同意。每次 AI 修改測試後必須重新執行、重新審查；同一候選與同一完整證據的審查快取仍可使用。
+- AST、Trace、受限計算、數值邊界及狀態實驗只向 AI 提供有來源／輸入身分的證據或待驗證提案，不在正式 LLM 候選中自動附加 host 測試、合併 Trace 基線或改寫 expected／assertRaises。Writer 與 Bug Fixer 才能產生正式測試修訂；模型修訂仍受相同結構、範圍、passing 案例保護及執行 gate。
+- 已通過執行的第一份最小模型測試仍立即保存 immutable executable checkpoint，但該 checkpoint 不等同審查同意或品質通過。未啟動的突變保存 null／未執行，不能補成 0、100 或沿用其他候選的分數。
+- Reviewer 同意證據必須綁定同一 run、source、target 與候選的 `approvedCodeHash`，保存為 `reviewApproval.testHash`；`completed` 只可用於零 findings 的已批准候選。審查受阻終態為 `review-blocked`，沒有已核對突變時保存 `mutationStatus=not-measured`。保留的前一輪品質與本輪審查阻擋須分開呈現。
+- 結果須分開標示 AI 產物、工具證據、審查決定與品質量測；新流程因審查受阻時明示原因及突變未執行，不套用舊 Demo 的量測達標標籤。舊報告保留原始 workflow／policy 與讀取相容性，不改寫為新流程成果。
+- 數值技能保留 Python 布林數值語義與 typed 輸入，可核對單呼叫內建 TypeError／ZeroDivisionError、正常回傳及計算步驟後提供修訂證據；例外不符、重綁定、複合 scope 及不可證實運算保留未知，不能由工具默默改寫候選或略過 gate。
 - Bug Fixer 回覆格式／合併契約失敗，可使用既有一次性 Writer 接手額度，傳入原候選與實際失敗；不直接降 Tier。接手仍走結構、範圍、保留 passing 案例、執行及總預算檢查；取消／傳輸錯誤不能偽裝成格式修復。
 
 
 - 依使用者 2026-09-30 澄清，正常流程必須包含突變測試，預設 `validationMode=full`，正確性優先、速度優化延後。`execution` 僅供明確選用的單元測試執行診斷，不驗證整個專案可正常運作，也不可代替完整品質驗收。以下要求 Trace oracle、coverage、mutation、Reviewer 與 Tier 分支的規則適用於 full，不能用來將 execution 未量測的項目補成通過。已保存的明確模式選擇保留，介面必須顯示是否包含突變；切回 full 必須重新執行。
 - execution 保留靜態語境、同環境匯入預檢、明確初始化 fixture、結構／AST／簽名／目標 binding 與斷言檢查、隔離執行及修復範圍限制。可提出來源支持的確定性關係、可達 literal 或同測試控制之 Mock 行為作為待執行測試假設；不可憑空發明需求、依賴 API、例外、環境常值，或 mock／複製受測目標。測試通過只驗證實際案例，不證明完整需求正確。
+- execution 的受限算術工具只提供來源支持的假設給 AI 修訂，不直接替換測試。此模式沒有同輸入 Trace 核對，不得將算術假設標成已觀測 oracle；AI 產物仍須經實際執行與原有範圍 gate。
 - 模式在執行前固定並記入 manifest。只有同一版 source/test/run 的真實目標呼叫、至少一個未略過且成功的案例、完整且成功的隔離紀錄均核對後，才可標示「執行驗證通過」。空測試、全 skip／expectedFailure、匯入受阻、來源變更與缺少證據不得算通過。批次重新讀取證據；結果不得冒充完整品質通過。
 - execution 的 Auto Writer 仍須通過生成資格；未合格時提示測試連線或手動 Tier，不啟用 Trace fallback。Reviewer、覆蓋率、突變與深度 Trace 延後，未量測保存 null／deferred；full 的政策與 gate 不變。既有程式／函式兩層結果及原檔不變規則仍適用。
 
@@ -18,9 +24,9 @@
 
 - `python_scripts/dynamic_tracer.py`、`python_scripts/ast_extractor.py` 與基礎提示詞不得硬編碼任何業務領域關鍵字、固定閾值或特定回傳結構。
 - 技能必須由 Skill Dispatcher 根據目標原始碼與 AST 選取 Skill Cards；不得把某個專案的規則帶進其他專案。
-- full 的數值技能僅可把受限計算結果當候選；採用前須有同版來源／相依與同一組 typed 輸入的完整、可 assertion 隔離 Trace 核對。不得以算術工具輸出取代 Trace，或把計算一致當作獨立需求驗證。只修失敗方法；正常回傳與例外依原輸入分開核對，保留 passing 方法、輸入及原品質 gate。
+- full 的數值技能僅可把受限計算結果當待核對證據；提供可 assertion 的計算核對結果前須有同版來源／相依與同一組 typed 輸入的完整、可 assertion 隔離 Trace。不得以算術工具輸出取代 Trace，或把計算一致當作獨立需求驗證。證據交 AI 修訂，正常回傳與例外依原輸入分開核對；AI 修訂須保留 passing 方法、輸入及原品質 gate。
 - Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；模型不再負責選取技能 ID，舊 required_skills 僅保留讀取相容性；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
-- 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕並保留 AST 推導的技能卡基線。
+- 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕。正式 full 的初始 Analyst 未回覆或無法通過本地 parser 時停止，不以 AST 技能卡代替 AI 分析後直接進 Writer；AST 仍保留為診斷與技能選擇依據。
 - 供應商支援 JSON Schema 時，Semantic Analyzer 與 mutant triage 必須帶最小任務 schema；供應商 schema 只提供傳輸層結構保證，所有回覆仍需通過本地語意／分流 parser 和 execution quality gates。不得因 schema 成功就把模型候選升格為事實。
 - 已驗證僅支援純 Python unittest 的模型，正式 Writer、Semantic Analyzer 與 mutation triage 都不得再強制供應商 JSON mode／schema；分析與分流仍須以 prompt 的 JSON 契約及本地 schema parser 驗證，不得放寬資料品質 gate。
 - Semantic Analyzer 必須收到受預算限制的目標模組 imports、引用 globals、class bases 與 `__init__` 簽名／賦值；這些只可用於 import、constructor、dependency injection 與 Mock 策略，不能作為回傳值、例外或外部 side effect 的 assertion 事實。
@@ -68,7 +74,7 @@
 - 行為驗證只能採用可執行的 Python 語句；註解、docstring、字串或 Markdown 中出現的目標函式與 assertion 文字不得視為測試證據。
 - 標準 mock 呼叫／await 斷言可作為行為測試，但 AST 必須證明 Mock 的標準庫來源、目標使用點 patch 或參數傳入，以及同測試內 target 執行與斷言順序。僅有同名 assert 方法、未使用 mock、重綁定或未 await 的目標不得通過。
 - Trace 的 SQLite 僅可使用受保護的獨立 `:memory:` 連線；檔案、共享 URI、ATTACH／VACUUM INTO 與 extension loading 均不得提供 oracle，安全例外被目標吞掉也不例外。
-- Reviewer 的相同測試／完整證據可在同一目標分析內重用；連續兩次契約失敗後停止額外審查，必須保留未完成狀態。完整工具通過與 Reviewer 完成分開保存，rollback 必須同步保留候選的審查狀態。scorecard 不得拼接跨輪次的最高分。
+- Reviewer 的相同測試／完整證據可在同一目標分析內重用；連續兩次契約失敗後停止額外審查，必須保留未完成狀態並阻擋該候選的突變。審查完成與審查同意分開解讀：合法 finding 仍須 AI 修訂，不能只因完成解析便進入量測。rollback 必須同步保留候選的審查狀態及品質證據，scorecard 不得拼接跨輪次最高分或將其他版本的同意套給新測試。
 - 生成測試不得直接啟動 shell／子程序、直接連網、直接檔案 I/O、動態執行程式碼或做破壞性檔案操作；外部行為必須使用 `unittest.mock.patch`／`mock_open` 模擬。
 - 生成、Reviewer 與 Self-repair 的目標函式呼叫必須符合 AST 擷取的簽名；未知 keyword 或過多 positional 引數只允許用於明確的 `assertRaises(TypeError)` 行為測試。
 - 上述簽名規則同樣適用於被測函式的合法匯入別名，不得因 alias 而略過驗證。
@@ -78,20 +84,20 @@
 - 涉及外部模組副作用或跨模組返回值測試時，必須使用標準的 `unittest.mock.patch`；嚴禁透過竄改本地變數進行無效的偽 Mock。
 - 生成測試的標準 `patch` 字串或可解析 `patch.object` 不得替換所選目標或其類別，即使同檔另有真實 Trace 基線亦不例外。已知直接 unittest 類別中、沒有 decorator 的測試方法若要求額外必填參數，須於結構階段交 Writer 修正；無法證明的 decorator 注入仍由隔離執行判斷。
 - 動態追蹤只提供可呼叫性的基礎 I/O 事實；複雜邊界與多分支策略由 Semantic Analyzer 產生。
-- Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物仍須通過結構、隔離執行、coverage 與 mutation gate。Auto 未驗證模型的 deterministic Trace 產物只能作為明確標示的 fallback，不得稱為 LLM 生成成果。
-- LLM 證據導向 Tier 1 與 Tier 2–4 都必須保留所有可安全 assertion 的 Dynamic Trace I/O；模型可增加情境與測試組織，但不可因遺漏而移除已驗證基線。deterministic Tier 1 本身已由 Trace 建構，不得再重複附加。
+- Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物須通過結構、隔離執行、Reviewer 同意、coverage 與 mutation gate。正式 full Auto 不再啟用未驗證模型的 deterministic fallback；歷史或離線 Trace 產物維持原 provenance，不得稱為 LLM 生成成果。
+- LLM 證據導向 Tier 1 與 Tier 2–4 都必須將可安全 assertion 的 Dynamic Trace I/O 保留為角色可讀證據；測試情境與程式由 AI 撰寫。不得用自動附加 Trace 補足模型未寫的案例；已執行成功的模型基線仍受保留檢查。deterministic Tier 1 由 Trace 建構的既有 fallback 保留獨立 provenance，不得稱為 AI 主導閉環成果。
 - 模型 context 預算不足時，Prompt 必須以完整段落優先保留目標函式、可 assertion Dynamic Trace、類別建構語境、已驗證相依事實與證據觸發的技能卡；低信心的語意候選、補充策略與 few-shot 範例可先縮減。不得截斷規則、code fence 或將候選建議升格為 execution fact。
 - Tier 1 fixture scorecard 必須以機讀 `llm-evidence-bound` 或 `deterministic-fallback` provenance 分開評分；同一份彙整含有兩種模式而未選擇模式時，必須拒絕形成單一品質結論。舊報告缺少 provenance 時不可計入 LLM 成績。
 - 若要宣稱 Tier 1 LLM 已通過發行品質驗收，必須使用 scorecard 的 `--model-identity <provider/model>` 與 `--require-tier1-llm-release`；每個 Tier 1 corpus fixture 都必須是同一個模型識別、實際 Tier 1、`llm-evidence-bound`、無執行中斷且 coverage／mutation 均達各自門檻。deterministic fallback、混合模式、不同 provider／模型、缺報告、未計分或 Tier 不符一律不可替代。
 - Tier 2 分治合流的每一份模型子回覆都必須先通過 Python/unittest 結構與 Trace assertion evidence gate，兩者缺一不可；不合格子回覆只能對該子任務帶著原因重試，不得合併污染其他已通過子測試。
 - Tier 2 合併器必須以每個已驗證子回覆的標準庫 `unittest` import 解析其 `TestCase`／`IsolatedAsyncioTestCase` base 與 alias；不得只認固定 `unittest.TestCase` 字串而靜默遺失合法子測試，也不得接受未追溯到標準庫 import 的任意 base class。
-- Tier 2 依 caller 分治時，每個子 prompt 與其 Trace assertion gate 只能接收 source literal 可精確匹配該 caller 的 Trace I/O；repr、動態值、近似值或未解析 caller 一律不可借用其他 caller 的 oracle。分治完成後才由全域 Trace augmentation 保留所有已驗證目標行為。
+- Tier 2 依 caller 分治時，每個子 prompt 與其 Trace assertion gate 只能接收 source literal 可精確匹配該 caller 的 Trace I/O；repr、動態值、近似值或未解析 caller 一律不可借用其他 caller 的 oracle。分治完成後僅合併已驗證的模型子產物，不做全域 Trace 測試 augmentation；尚未涵蓋的已驗證行為作為 AI 補測證據。
 - 若目標為 instance method／property 且 caller 具有已驗證 constructor literal，Tier 2 caller partition 必須同時精確比對方法 args／kwargs 與 constructor args／kwargs；相同方法引數但不同實例 state 的 Trace 結果不得混用。Trace 若缺少可驗證的建構語境，該 caller 子任務必須保守不取得該 oracle。
 - Tier 2 合流不得把不同 caller context 的 `setUp`／`tearDown`／Mock 狀態塞進同一個 TestCase；每個已驗證子回覆必須保留為獨立且名稱唯一的 TestCase，只可去重共用 imports。
 - 每份中斷報告必須寫入 provider-neutral 的機讀失敗分類；分類只用於後續 Tier／模型品質分析，不能改變驗證 gate、重試或把失敗轉成通過。至少區分 API、格式、AST／Trace、執行驗證、coverage、mutation、環境與 timeout。
 - Mutant triage 回覆必須包含 `verdicts` 陣列及每筆可辨識的 mutant、verdict、reason；`KILLABLE` 只有附帶完整 `kill_test` 才能成為下一輪提示。等效／可殺計數必須由已驗證 verdicts 重算，不得信任模型宣告的 summary 欄位。
 - 已通過資格的 Tier 2–4 測試，對頂層函式必須保留所有可安全 assertion 的 Dynamic Trace I/O 方法；LLM 可以增加情境、Mock 與突變修補，但不得移除或覆寫已驗證的行為 oracle。
-- 已通過資格的 Tier 2–4 測試，對可安全建立的 class method 或 property 也必須保留所有可 assertion 的 Dynamic Trace I/O；這些 Trace 測試必須使用獨立 `TestCase` 及已驗證的 constructor literal，禁止合併覆寫模型的 `setUp`，也不得猜測 constructor dependency。
+- 已通過資格的 Tier 2–4，對可安全建立的 class method 或 property 也必須保留可 assertion 的 Dynamic Trace I/O 供 AI 使用；constructor literal 與每筆方法輸入綁定同一觀測，不能猜測依賴或混用狀態。是否新增測試及其 `TestCase`／`setUp` 由 Writer 決定，再經執行與審查；工具不覆寫或附加模型 fixture。
 - Dynamic Trace 可使用受限、語法／型別中立的數值尺度組合作為探索輸入，但任何測試 oracle 都必須來自實際執行結果；不得將探索值或結果解讀為特定領域規則。
 - Dynamic Trace 對直接 AST `and` 條件可合成同時滿足多個不同參數之 literal／長度／集合子條件的單一探索輸入；只能在每個子條件皆可靜態證明且不衝突時使用，必須優先受限於 probe 預算，且仍不得將該輸入推定為任何輸出 oracle。巢狀 callable 的條件不得進入 selected target 的探索。
 - Dynamic Trace 可從明確 `typing.Literal[...]` annotation 擷取有限 scalar 值作為探索輸入；只接受字串、數字、布林與 `None`，不得評估 annotation 中的 call、attribute 或任意表達式。這些值僅用於實際執行 Trace，不是 output oracle。
@@ -126,17 +132,17 @@
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 - 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
 - 最小資格 probe 可接受安全的 fixture 結果暫存、固定 expected scalar、`assertEqual` 訊息與 `-> None` 註記；允許集合必須為可靜態驗證的 unittest 語句，不能為了相容性執行任意模型 Python。
-- 正式 Writer、Tier 2 分治、Tier 3 Scaffold、Reviewer 與 Self-repair 的完整 unittest code request 必須一律要求純 Python code fence，不得把整份測試檔包進 provider JSON／schema；本地 extractor、結構、隔離執行、coverage 與 mutation gate 是唯一驗證依據。Semantic Analyzer 與 mutant triage 的 JSON 契約可獨立失敗並退回 deterministic AST 技能基線，不得阻擋已驗證的純 Python code path。
-- 尚未完成「測試連線」的 provider／model 視為尚未驗證；**Auto** 必須先使用有真實 Dynamic Trace 的 Tier 1 deterministic fallback，且只有同一 provider／model 通過可執行 unittest 探測後，Auto 才可使用 LLM 證據導向 Tier 1 與 Tier 2–4。使用者明確選擇 Tier 1–4 時必須保留其選擇，不得因探測缺失強制降階；其模型輸出仍必須通過結構、隔離執行、覆蓋率與突變閘門。測試連線應一併讀取供應商可提供的參數量與 Context，但兩者不可取代可執行性驗證。
+- 正式 Writer、Tier 2 分治、Tier 3 Scaffold 與修復角色的完整 unittest code request 必須一律要求純 Python code fence，不得把整份測試檔包進 provider JSON／schema；本地 extractor、結構、隔離執行、coverage 與 mutation gate 是驗證依據，Reviewer 另依 findings 契約提供同意決定。初始 Semantic Analyzer 的 JSON 契約失敗會阻擋正式 full，不能以 deterministic AST 規則冒充 AI 分析；後續 mutant triage 失敗仍可保留既有實測缺口供 Writer，但不得把無效分析當成有效角色產物。
+- 尚未完成「測試連線」的 provider／model 視為尚未驗證；正式 full 的 **Auto** 必須在 Writer 與 Reviewer 各自 verified 後才進入 AI 閉環，否則明示資格受阻，不啟用 deterministic Trace fallback。使用者明確選擇 Tier 1–4 時保留其選擇，不因探測缺失強制降階；其模型輸出仍必須通過分析、結構、隔離執行、Reviewer 同意、覆蓋率與突變閘門。測試連線可讀取參數量與 Context，但不能取代角色資格與正式執行驗證。
 - 模型資格的儲存、查詢與套用必須使用同一個 provider／模型身分正規化規則；Google 的 `models/<name>` 與 `<name>` 是同一模型，不得因 resource prefix 讓已通過的 Cloud 探測在 Auto 路由中失效；不同 provider 仍必須嚴格隔離。
 - 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
 - 正式 Semantic Analyzer、Writer、Reviewer 與 mutation triage 的模型生成請求必須對暫態傳輸錯誤及 `408`、`429`、`5xx` 採有限次數、帶 jitter 的指數退避；`400`、認證與權限錯誤不得重試。重試不得重設使用者選擇的總 timeout，取消後不得繼續發送請求，且不得依 provider 或模型名稱決定規則。
 - 結構化輸出拒絕或不完整回覆改走一般文字相容模式時，必須沿用原始 API 請求的 absolute deadline；不得以遞迴或新 controller 重給一次完整 timeout。若退避期間已到期，不得再送出下一次 provider 請求。
-- 未驗證模型在 **Auto** 的 Tier 1 僅可產生完全由 assertable Dynamic Trace 推導的測試；Trace 不足或無法安全建構類別實例時必須停止並說明原因，禁止暗中退回 LLM 生成。使用者明確選擇任一 Tier 時，可走 LLM fallback／高階流程，但不得略過既有的輸出結構、Python 執行、覆蓋率與突變驗證。
+- deterministic Tier 1 僅保留離線工具、歷史讀取與其回歸測試，不作正式 full Auto 的資格回退。其測試必須完全由 assertable Dynamic Trace 推導；Trace 不足或無法安全建構類別實例時停止，不暗中呼叫 LLM。工具驗證成績與 AI 閉環成績保持分開。
 - 若 `Class.method` 的成功 Dynamic Trace 使用了呼叫端已驗證的建構子字面值，Tier 1 必須以相同字面值建立實例後才可寫入 assertion；不得因建構子有必要參數而丟棄已驗證 Trace，也不得猜測建構子依賴。
 - Tier 3 Mock Scaffold 若有已驗證的 caller constructor literal，必須將其作為明確 setup 事實提供給模型，並禁止將該設定誤傳給被測方法；沒有事實時不得憑空補出 constructor dependency。
-- 未驗證模型在 **Auto** 不得呼叫 LLM 語意分析師、Reviewer、Tier 4 修補或突變體分流師；若 deterministic Tier 1 仍有存活變異體，必須保留測試與報告後停止，不得以猜測性修補灌水分數。手動 Tier 可使用這些流程，但每一輪的產物必須接受相同的可執行驗證，不得以模型宣稱取代證據。
-- 未驗證模型在 **Auto** 的 deterministic Tier 1 若未通過 unittest 執行或 coverage gate，也必須在保留現有測試與報告後停止；不得因失敗而繞過上述限制啟動 Reviewer 或 Self-repair。
+- 正式 full Auto 的 Writer／Reviewer 資格不足時，在角色呼叫與生成前停止並保留診斷；不得為了繼續流程改走 deterministic、其他 Tier 或未合格角色。明確手動 Tier 的每一輪仍接受相同可執行驗證與 Reviewer 同意 gate，不得以模型宣稱取代證據。
+- 離線 deterministic 產物未通過 unittest／coverage 或仍有存活突變時，只能保留工具結果，不得繞過模型資格啟動 AI 修補，也不能標示新 AI 閉環完成。
 - Stub/Dummy 快速通道只能依函式本體的結構（`pass` 或單一安全 literal 回傳）或函式名稱中明確的 `dummy` token 判定；不得依短小行數或複雜度分數略過具有可觀察行為的程式碼。`dummy` 是使用者標記的雜訊／佔位約定，不是業務領域關鍵字。
 - Stub 快速通道必須依目標的 module／instance／static／class／property 綁定方式建立可執行 smoke test；有必要建構子參數時僅可重用已驗證 caller literal，沒有事實則記錄原因並略過，不得寫入必定失敗的 `Class()` 測試。
 - 名稱含明確 `dummy` token 的使用者標記函式，必須在複雜度、AST、Dynamic Trace、LLM 與突變測試之前直接略過；報告須清楚標示略過原因，且不得生成未驗證的 Smoke Test。
@@ -166,7 +172,7 @@
 - 分析師的品質分析包含存活變異體；只提出有測量依據的情境假設，不直接注入模型生成的 kill_test，也不能宣告等效或排除分母。
 - 完整歷史存於 role_events.jsonl；當次 Prompt 僅提供必要來源、測試與證據。證據超過預算時不可截斷成不完整程式；審查失敗或格式無效必須記錄為未完成，不能假裝通過。
 - 已知環境預檢失敗可依 interpreter、來源雜湊、模組與穩定匯入根快取；session output 目錄等暫時路徑不得使同一環境障礙重新啟動子程序。來源或匯入環境變更後必須產生新 cache key。
-- 合併已驗證 Trace 與模型測試前，Trace 產物必須先通過相同的結構／安全 gate，再在獨立 Python unittest 程序通過；失敗時停止合併並保留診斷，不交模型反覆修訂，不能讓同一份候選測試掩蓋 Trace 基線問題。async／generator 使用明確標準庫 import，不使用動態 `__import__`。
+- 正式 LLM 流程不合併 runner-owned Trace 或狀態實驗測試。舊 Trace 基線工具僅保留歷史結果讀取、明確 deterministic fallback 與獨立工具回歸用途；凡要執行其產物，仍須先通過結構／安全與獨立 Python unittest gate。工具本身失敗保留診斷，不能借模型候選掩蓋，或把 fallback 說成 AI 生成／審查同意的成果。async／generator 使用明確標準庫 import，不使用動態 `__import__`。
 - 每輪基線綁定同一版測試、案例識別、執行輸出、覆蓋與存活變異體；回滾時全部同步還原。原候選必須保留。
 - 可執行基線在成功執行後、審查與突變之前立即保存為獨立不可變快照；未測突變為 null，不得補成 0 或 100。完整品質基線另綁同一版 MutationRun，來源／相依改變後舊產物只供歷史閱讀，必須明示 evidenceValid=false。
 - Dynamic Trace 以新程序逐案執行，建構子與目標呼叫前後分開快照；未知物件、共享參照、循環與超出容量的值不得藉 repr／deepcopy hook 重建。blocked、setup_error、timeout 與 not_started 保留逐筆狀態，不能混入例外 oracle。
@@ -199,9 +205,9 @@
 - 完整流程報告必須分開呈現指定／起始 Tier、逐輪起始策略、降級歷程與保留候選 Tier；起始路由不能標成全程實際策略。結構拒絕應顯示原因及 Writer 修訂路由，審查未完成與接受可執行候選均不可呈現為完整通過。
 - 依使用者 2026-09-30 要求，`final_report.md` 只顯示選定目標身分、模型、最終狀態與失敗原因、目標覆蓋率／突變分數，以及同一保留候選的測資與突變案例；不得累加其他函式、專案、歷史候選或模組整體分數。Dummy、未執行 Stub 與沒有測試目標的檔案不產生最終結果；保留 `workflow_report.md` 與批次機讀清單，不偽裝為通過。
 - 失敗／未完成或曾遇失敗的目標另存 `failure_report.md`，保留首尾原因、依序事件、各輪分析、修復／降級／回滾及證據連結。批次摘要只列已開始的非略過目標，失敗索引另列掃描障礙、取消及逐目標流程。缺最終報告的真實測試目標仍屬未完成；報告精簡不能放寬來源／測試／品質身分核對。完整 provider 回覆不寫入新報告與角色事件。
-- 實測比較突變可由有界 AST 算術反推產生數值輸入實驗；不得執行或求值任意來源表達式，不推定結果／例外。候選仍經逐案隔離 Trace、獨立 Trace 基線及全套品質 gate；不支援的簽名、物件狀態與表達式保持未知。
-- 品質分析連續兩次契約無效後，停止同一目標後續品質分析請求，保存實測缺口指引；新目標重新計數。具備新隔離邊界觀測時優先交下一輪量測，不再為同批輸入追加分析師請求。空任務、停用角色或條件式等價候選不得升格為通過。
-- 重複 Trace 方法只可從無 fixture／helper／decorator 的標準 TestCase 中，依相同 AST 確認後移除模型副本；runner-owned 基線保持完整，合併產物重新驗證。前置分支推導的等價候選必須明示其數值型別假設，沒有全域等價證據不得改動突變分母。
+- 實測比較突變可由有界 AST 算術反推產生數值輸入實驗；不得執行或求值任意來源表達式，不推定結果／例外。實驗經逐案隔離 Trace 後只補充 AI 證據，不直接產生正式測試；AI 候選仍經執行、Reviewer 同意及全套品質 gate。不支援的簽名、物件狀態與表達式保持未知。
+- 品質分析連續兩次契約無效後，停止同一目標後續品質分析請求，保存實測缺口指引；新目標重新計數。新隔離邊界觀測只交給 AI 作補測證據，不能直接跳到下一輪量測；Writer 修訂必須先執行並取得 Reviewer 同意。空任務、停用角色或條件式等價候選不得升格為通過。
+- 正式 LLM 流程不以 Trace 去重工具改寫模型測試；重複候選只作停滯／新穎性診斷，交 AI 決定修訂。歷史 Trace 合併工具保留原 AST 安全限制與已執行基線保護，不能轉為新流程捷徑。前置分支推導的等價候選必須明示其數值型別假設，沒有全域等價證據不得改動突變分母。
 
 - 初始化設定只套用於確認時綁定的相同實體受測根目錄。切換專案時保留但忽略其他根的規則，不要求舊專案仍存在，不將舊規則搬移到新根；新的來源照常接受隔離預檢。相同根的過期版本、非法路徑與未經確認的副作用仍須受阻。
 
@@ -220,7 +226,7 @@
 - 修復回覆拒絕必須在降階／停止前逐次落盤，區分格式／合併、AST 範圍與重複候選。原因碼與回覆結構統計不得保存完整模型回覆、憑證或任意 tool stderr；scope 失敗採工具提供的穩定原因碼。最後錯誤不得覆蓋首次／最近修復診斷；報告須區分原測試未修改與已驗證基線是否存在。新增診斷不得默默放寬驗證或增加模型請求。
 
 - 跨檔相依來源須由預檢實際載入的模組 origin 與函式定義身分解析，且實體位於所選來源樹；不得以批次根目錄拼接猜測。未知、re-export／重綁定、動態來源與範圍外相依只保留診斷，不另行匯入或假造來源。
-- Reviewer 使用 `review-v7` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度。缺少情境、弱 assertion 與型別／風格不是執行阻擋；blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Reviewer 使用 `review-v7` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度。缺少情境、弱 assertion 與型別／風格不是 unittest 執行失敗，但任何有效待處理 finding 都須交 AI 修訂並重審，尚未得到 Reviewer 同意就不進突變。blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
 - Reviewer 明確違反所選 static／instance 契約、要求修改目標實作或 mock 目標本身時，整份審查保持未完成，不得刪掉錯誤 finding 後偽裝為空問題通過，也不得交 Writer 執行矛盾動作。有限語句檢查不是任意自然語言正確性證明，所有工具 gate 仍須保留。
 - 品質回滾及停滯判斷使用實測未覆蓋行／分支的個別身份與存活突變體；不能因缺口清單縮短而改變顯示文字，就將改善誤判退步。已知覆蓋變未知、新增未覆蓋行／分支、舊突變體重新存活及分數降低仍受保護。
 - 品質分析師 `quality-task-v3` 每輪最多一項任務，引用程式選定的量測證據 ID；模型不可自行發明證據或預期值。格式補正最多一次，與初次請求共用絕對 deadline；取消／傳輸失敗不再啟動格式重試。空任務只代表無建議，不能將剩餘缺口算通過。
