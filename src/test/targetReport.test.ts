@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { AnalysisJournal, evidenceHash } from '../pipeline/analysisJournal';
 import { BatchJournal } from '../pipeline/batchJournal';
 import { ReportIdentity, summarizeTarget, writeTargetReports, renderFinalReport } from '../pipeline/targetReport';
-import { MutationRecord } from '../mutation/mutationResult';
+import { MutationRecord, mutationCandidateSetId } from '../mutation/mutationResult';
 import { createDefaultQualityPolicy, createStrictQualityPolicy } from '../pipeline/qualityPolicy';
 import { setLanguage } from '../i18n/core';
 
@@ -134,6 +134,51 @@ test('concise reports bind tests, target coverage and mutations to one retained 
         const incomplete = fs.readFileSync(path.join(root, 'failure_report.md'), 'utf8');
         assert.match(incomplete, /could not be verified/);
         assert.doesNotMatch(incomplete, /final tests passed|## Final outcome: Fully passed/);
+    } finally { setLanguage('zh-tw'); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('review-blocked reports distinguish retained measurements from the latest unmeasured candidate', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'target-review-blocked-'));
+    try {
+        const code = 'import unittest\n# verified retained candidate\n';
+        fs.writeFileSync(path.join(root, 'retained.py'), code);
+        const identity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: path.join(root, 'sample.py'),
+            sourceFile: 'sample.py', target: 'target', modelIdentity: 'local/neutral-model', requestedTier: 'tier2' };
+        const sourceHash = evidenceHash('source');
+        const mutation = structuredClone(require('../../contracts/quality-policy-cases-v1.json').cases
+            .find((item: any) => item.name === 'strict-90-of-100-below').evidence.mutation);
+        mutation.mutants = mutation.mutants.slice(0, 39).map((item: any, index: number) => ({ ...item,
+            status: index < 8 ? 'KILLED' : 'SURVIVED' }));
+        mutation.candidateIds = mutation.mutants.map((item: any) => item.id);
+        mutation.candidateSetId = mutationCandidateSetId(mutation.candidateIds);
+        mutation.counts = { available: 39, selected: 39, executed: 39, notRun: 0, killed: 8, survived: 31, timeout: 0, error: 0 };
+        Object.assign(mutation, { sourcePath: identity.sourcePath, sourceHash, testHash: evidenceHash(code) });
+        const state = { target: identity.target, terminalStatus: 'review-blocked', workflowVersion: 'ai-reviewed-loop-v1',
+            acceptedTest: 'retained.py', acceptedCodeHash: evidenceHash(code), mutation, reviewStatus: 'completed',
+            coverage: { selectedTarget: { qualifiedName: 'target', executableLines: [2, 3, 4, 5, 6], missingLines: [3, 4, 5, 6] } },
+            qualityPolicy: createDefaultQualityPolicy(), qualityGaps: [],
+            latestMutation: { ...mutation, testHash: evidenceHash('latest candidate'), score: 100 } };
+        for (const language of ['zh-tw', 'en']) {
+            setLanguage(language);
+            const summary = summarizeTarget(root, state, identity, sourceHash);
+            assert.equal(summary.mutation, language === 'en' ? '20.51% (8/39); threshold ≥ 80%' : '20.51% (8/39)；門檻 ≥ 80%');
+            assert.equal(summary.coverage, '20.00% (1/5)');
+            assert.deepEqual(summary.latestCandidate, { status: 'review-blocked', mutation: 'not-run' });
+            const report = renderFinalReport(identity, summary, true);
+            assert.match(report, language === 'en' ? /Latest candidate.*mutation testing was not run/ : /最新候選.*此候選未執行突變/);
+            assert.match(report, language === 'en' ? /Retained test mutation score.*20.51%/ : /保留測資突變分數.*20.51%/);
+            assert.match(report, language === 'en' ? /tables below belong to the retained tests/ : /下方突變表屬於保留測資/);
+            assert.match(report, language === 'en' ? /cannot inherit this score/ : /不能沿用此分數/);
+            assert.match(report, /\[retained.py\]\(retained.py\)/);
+            assert.match(report, /failure_report.md/);
+            assert.doesNotMatch(report, /100.00%/);
+            assert.equal(summary.mutants?.length, 39, 'the existing retained mutation table is preserved');
+            if (language === 'en') { assert.doesNotMatch(report, /\p{Script=Han}/u); }
+            const mismatched = summarizeTarget(root, { ...state, acceptedCodeHash: evidenceHash('latest candidate') }, identity, sourceHash);
+            assert.match(mismatched.mutation, /^N\/A/);
+            assert.equal(mismatched.mutants, undefined);
+            assert.equal(mismatched.testFile, undefined);
+        }
     } finally { setLanguage('zh-tw'); fs.rmSync(root, { recursive: true, force: true }); }
 });
 

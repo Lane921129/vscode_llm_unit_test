@@ -26,15 +26,19 @@ export interface QualityFocus { id: string; kind: 'coverage' | 'survivor'; evide
 
 /** Rotate one deterministic measured gap per round; no model selects or invents evidence. */
 export function selectQualityFocus(coverage: TargetCoverageAssessment, survivors: string[], round: number,
-    preferredSurvivors: readonly string[] = []): QualityFocus | undefined {
+    preferredSurvivors: readonly string[] = [], excludedFocusIds: readonly string[] = []): QualityFocus | undefined {
     const items = [
         ...coverageGapIds(coverage).map(evidence => ({ kind: 'coverage' as const, evidence })),
         ...[...new Set(survivors)].filter(Boolean).map(evidence => ({ kind: 'survivor' as const, evidence }))
-    ];
-    const supported = items.filter(item => item.kind === 'survivor' && preferredSurvivors.includes(item.evidence));
-    const pool = supported.length ? supported : items;
+    ].map(item => ({ ...item, id: 'E' + createHash('sha256').update(item.kind + ':' + item.evidence).digest('hex').slice(0, 16) }));
+    // Deferral changes only the next task selection, never the measured gap set
+    // or mutation denominator. With no alternative, retain the sole known gap.
+    const alternatives = items.filter(item => !excludedFocusIds.includes(item.id));
+    const eligible = alternatives.length ? alternatives : items;
+    const supported = eligible.filter(item => item.kind === 'survivor' && preferredSurvivors.includes(item.evidence));
+    const pool = supported.length ? supported : eligible;
     const item = pool[(Math.max(1, round) - 1) % pool.length];
-    return item ? { ...item, id: 'E' + createHash('sha256').update(item.kind + ':' + item.evidence).digest('hex').slice(0, 16) } : undefined;
+    return item;
 }
 
 export function parseFocusedQualityTask(raw: string, focus: QualityFocus): { tasks?: QualityTask[]; diagnostics: string[] } {

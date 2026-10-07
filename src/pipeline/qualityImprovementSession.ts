@@ -1,16 +1,22 @@
 import { QualityExperimentResult, validateQualityExperimentResult } from './qualityExperiments';
+import { MutationRun } from '../mutation/mutationResult';
+import { TargetCoverageAssessment } from '../mutation/targetCoverage';
+import { QualityFocus } from '../roles/qualityAnalyst';
+import { beginQualityFocus, FocusedQualityMeasurement, measureQualityFocus, PendingQualityFocus } from './focusedQualityProgress';
+
+export { PendingQualityFocus, FocusedQualityMeasurement } from './focusedQualityProgress';
 
 /** Run-local ledger. A suggestion, a renamed test, or a completed probe is never
  * counted as a quality gain; only measured gap sets can establish progress. */
 export class QualityImprovementSession {
     private readonly attempts = new Set<string>();
-    private readonly history: Array<{ gapId: string; status: string; fingerprints: string[] }> = [];
+    private readonly history: Array<{ gapId: string; status: string; fingerprints: string[]; measurement?: FocusedQualityMeasurement }> = [];
     private readonly observations: QualityExperimentResult[] = [];
     private readonly presented = new Set<string>();
 
     get triedFingerprints(): readonly string[] { return [...this.attempts]; }
-    get events(): ReadonlyArray<{ gapId: string; status: string; fingerprints: string[] }> {
-        return this.history.map(event => ({ ...event, fingerprints: [...event.fingerprints] }));
+    get events(): ReadonlyArray<{ gapId: string; status: string; fingerprints: string[]; measurement?: FocusedQualityMeasurement }> {
+        return structuredClone(this.history);
     }
     record(result: QualityExperimentResult): void {
         validateQualityExperimentResult(result);
@@ -53,6 +59,18 @@ export class QualityImprovementSession {
         if (fingerprints.some(value => !valid.has(value))) { throw new Error('Unknown quality observation handoff.'); }
         fingerprints.forEach(value => this.presented.add(value));
     }
+
+    beginFocus(focus: QualityFocus, coverage: TargetCoverageAssessment, mutation: MutationRun): PendingQualityFocus {
+        return beginQualityFocus(focus, coverage, mutation);
+    }
+
+    measureFocus(pending: PendingQualityFocus, coverage: TargetCoverageAssessment, mutation: MutationRun): FocusedQualityMeasurement {
+        const measurement = measureQualityFocus(pending, coverage, mutation);
+        this.history.push({ gapId: pending.focus.id, status: measurement.status, fingerprints: [], measurement: structuredClone(measurement) });
+        return measurement;
+    }
+
+    /** Historical global-set comparison. New focused tasks use measureFocus. */
     measured(gapId: string, previousGaps: readonly string[], currentGaps: readonly string[]): 'improved' | 'unchanged' | 'regressed' {
         const before = new Set(previousGaps), after = new Set(currentGaps);
         const status = [...after].some(value => !before.has(value)) ? 'regressed'

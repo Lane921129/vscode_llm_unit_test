@@ -15,6 +15,9 @@ import { CandidatePipelineHooks, CandidateValidationError } from './pipeline/tes
 import { validateSeedThenCandidate } from './pipeline/seedCandidatePipeline';
 import { RejectedCandidateStore, CandidateRejectionGate } from './pipeline/rejectedCandidateStore';
 import { reviewWithContractRepair } from './roles/reviewContractRepair';
+import { buildReviewFacts } from './roles/reviewFacts';
+import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
+import { passingTestIds } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt } from './roles/writerPhases';
 import { collectNumericRepairEvidence } from './pipeline/numericTestSkill';
 import { NumericEvidenceLedger } from './pipeline/numericEvidenceLedger';
@@ -39,7 +42,7 @@ import { ReportIdentity, writeTargetReports } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
 import { deduplicateTargets } from './pipeline/batchScope';
 import { prepareQualityExperiments, buildQualityExperimentEvidencePrompt, assessQualityCandidateNovelty } from './pipeline/qualityExperiments';
-import { QualityImprovementSession } from './pipeline/qualityImprovementSession';
+import { QualityImprovementSession, PendingQualityFocus } from './pipeline/qualityImprovementSession';
 import { containsCredential } from './pipeline/artifactSafety';
 import { AI_WORKFLOW_VERSION, requireReviewApproval, ReviewApproval } from './pipeline/aiWorkflow';
 import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
@@ -1416,7 +1419,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const numericEvidence = new NumericEvidenceLedger({ runId: journal.runId, sourceHash: journal.sourceHash,
         target: params.funcName || 'file' }, knownSecrets);
     const numericEvidencePrompt = () => numericEvidence.prompt(Math.min(12000, activeModelProfile.budgetTokens));
-    let pendingQualityGap: { id: string; previousGaps: string[] } | undefined;
+    let pendingQualityGap: PendingQualityFocus | undefined;
+    let focusedQualityFeedback = '';
+    let pendingQualityAttempts = 0;
+    let deferredFocusId: string | undefined;
     const writeReport = (body = finalReportMarkdown) => {
         existingReport = writeTargetReports(sessionDir, reportIdentity, journal.sourceHash, journal.runId, journal.snapshot(), body);
     };
@@ -1446,7 +1452,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     ): Promise<string> => {
         if (role === 'writer' && mode === 'full') {
             prompt = seedPending ? buildWriterSeedPrompt(prompt)
-                : buildWriterExpansionPrompt(prompt, bestCode || checkpoints.executable?.code || '', analystTasks);
+                : buildWriterExpansionPrompt(prompt, checkpoints.executable?.code || bestCode || '', analystTasks);
         }
         prompt = appendQualityEvidence(prompt);
         if (mode === 'full' && numericEvidence.hasEvidence) {
@@ -2019,7 +2025,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', undefined, params.modelName);
         const focusContext = '';
         const phasePrompt = seedPending ? buildWriterSeedPrompt('')
-            : buildWriterExpansionPrompt('', bestCode || checkpoints.executable?.code || '', analystTasks);
+            : buildWriterExpansionPrompt('', checkpoints.executable?.code || bestCode || '', analystTasks);
         const generationBudget = Math.max(1, activeModelProfile.budgetTokens
             - estimateTokens(addOutputContract(systemPrompt, testGenerationResponseFormat))
             - estimateTokens(phasePrompt) - estimateTokens(qualityObservationEvidence)
@@ -2336,7 +2342,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 }
                 return inventories.get(hash)!;
             };
-            let baselineScenarios = bestScenarios.length ? bestScenarios : bestCode ? await inventory(bestCode) : [];
+            // A passed seed survives Tier fallback even before its first approved mutation run.
+            const retainedExecution = checkpoints.executable;
+            const retainedCode = retainedExecution?.code || bestCode;
+            const passingExecutions = new Map<string, string[]>();
+            let baselineScenarios = retainedExecution?.scenarios.length ? retainedExecution.scenarios
+                : bestScenarios.length ? bestScenarios : retainedCode ? await inventory(retainedCode) : [];
+            const checkPreservation = async (previous: string, candidate: string, protectedMethods: 'all' | readonly string[]) => {
+                if (previous === candidate || !previous || (protectedMethods !== 'all' && !protectedMethods.length)) { return undefined; }
+                const result = await validatePassingTestPreservation({ previousCode: previous, candidateCode: candidate,
+                    protectedMethods, python: pythonExecutable, env: testExecutionEnv });
+                throwIfExecutionCancelled();
+                if (result.valid) { return undefined; }
+                recordRole('passing-tests', 'preservation-rejected', { ...result,
+                    previousTestHash: evidenceHash(previous), candidateTestHash: evidenceHash(candidate) });
+                return { reason: result.reason, reasonCode: result.reasonCode!, gate: 'revision-scope' as const };
+            };
             const checkpointExecutable = (code: string, execution: string, gaps: string[],
                 status: ReviewStatus, warnings: string[], assessment: TargetCoverageAssessment) => {
                 if (!evidenceStillCurrent()) {
@@ -2385,6 +2406,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 executable: (code, execution) => checkpointExecutable(code, execution.out, execution.qualityGaps,
                     'incomplete', [], execution.coverage || loopAssessment),
                 validate: async (code) => {
+                    const preservation = await checkPreservation(checkpoints.executable?.code || retainedCode, code, 'all');
+                    if (preservation) { return preservation; }
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
                         exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
@@ -2402,7 +2425,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         return undefined;
                     }
                     const sys = getTestReviewerSystemPrompt();
-                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true },
+                    const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+                    const facts = await buildReviewFacts({ ...identity, code, module: targetImportModule,
+                        python: pythonExecutable, env: testExecutionEnv, executionVerified: true,
+                        numericEvidencePrompt: numericEvidencePrompt(), knownSecrets,
+                        observations: astContext?.traceResult ? { ...identity, value: astContext.traceResult } : undefined });
+                    throwIfExecutionCancelled();
+                    const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true, facts },
                         Number.MAX_SAFE_INTEGER);
                     if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt, activeModelProfile.budgetTokens)) {
                         recordRole('reviewer', 'budget-exceeded', { reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
@@ -2411,7 +2440,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
                         try {
                             return await reviewWithContractRepair({ tests: code, prompt,
-                                constraints: { target: params.funcName || targetFuncName,
+                                constraints: { target: params.funcName || targetFuncName, facts, identity,
                                     methodKind: astContext?.method_kind || (astContext?.class_name ? 'instance' : 'module'),
                                     module: targetImportModule,
                                     dependencyUsePoints: (astContext?.calls || []).map((name: string) => `${targetImportModule}.${name}`) },
@@ -2469,7 +2498,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     return sanitizeLlmResponse(raw);
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
-                    if (role !== 'bug-fixer') { return undefined; }
+                    const preservePassed = () => checkPreservation(previousCode, candidateCode,
+                        passingExecutions.get(evidenceHash(previousCode)) || []);
+                    if (role !== 'bug-fixer') { return preservePassed(); }
+                    // Keep the Bug Fixer's narrower, established scope diagnostic first.
                     const scope = await runSpawn(pythonExecutable,
                         ['-B', pythonToolPath('repairScope')], {
                             input: JSON.stringify({
@@ -2487,7 +2519,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     try {
                         const result = JSON.parse(scope.stdout) as { valid?: boolean; reasonCode?: string };
                         const reasonCode = repairReasonCode(result.reasonCode);
-                        return result.valid === true ? undefined : { reason: localize(REPAIR_REASON_LABELS[reasonCode]), reasonCode };
+                        return result.valid === true ? preservePassed() : { reason: localize(REPAIR_REASON_LABELS[reasonCode]), reasonCode };
                     } catch {
                         return { reason: localize(REPAIR_REASON_LABELS['scope-result-invalid']), reasonCode: 'scope-result-invalid' };
                     }
@@ -2510,6 +2542,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         executionArguments,
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
                     const scenarios = await inventory(code);
+                    passingExecutions.set(evidenceHash(code), [...passingTestIds(run.stdout + run.stderr, path.basename(testPath, '.py'))]);
                     let out = normalizeScenarioOutput(`${run.stdout}${run.stderr}`.trim(), scenarios, baselineScenarios);
                     acceptedScenarios = reconcileScenarios(scenarios, baselineScenarios);
                     if (!baselineScenarios.length) { baselineScenarios = acceptedScenarios; }
@@ -2542,7 +2575,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const accepted = await validateSeedThenCandidate({ code: finalCode, seed: seedPending,
                 hooks: candidateHooks,
                 seedAccepted: () => { seedPending = false; journal.knowledge({ writerPhase: 'expand' }); },
-                baseline: bestCode ? { code: bestCode, output: bestExecution } : undefined });
+                baseline: retainedCode ? { code: retainedCode, output: retainedExecution?.execution || bestExecution } : undefined });
             finalCode = accepted.code;
             if (accepted.reviewStatus === 'completed' && accepted.approvedCodeHash === evidenceHash(finalCode)) {
                 reviewApproval = { workflowVersion: AI_WORKFLOW_VERSION, runId: journal.runId,
@@ -2701,13 +2734,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (evidenceHash(fs.readFileSync(testPath, 'utf8')) !== measuredCandidate.codeHash) {
                 throw new AnalysisStageError('validation', 'candidate-changed', localize("測試檔在突變期間改變；保留先前已驗證快照。"));
             }
-            if (pendingQualityGap) {
-                const status = qualityExperiments.measured(pendingQualityGap.id, pendingQualityGap.previousGaps,
-                    [...coverageGapIds(loopAssessment), ...survivorIds]);
-                recordRole('quality-experiment', status, { gapId: pendingQualityGap.id });
-                pendingQualityGap = undefined;
-                journal.knowledge({ qualityExperiments: qualityExperiments.events });
-            }
             recordRole('mutation', 'measured', { code: measuredCandidate.code,
                 score: noMutationCandidates ? null : mutationScore, survivors: survivorIds, qualityGaps,
                 engine: mutationRun.engine, operatorSetVersion: mutationRun.operatorSetVersion,
@@ -2749,7 +2775,34 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reviewApproval = bestReviewApproval;
                 measuredQualityGaps = [...bestMeasuredGaps];
                 acceptedScenarios = bestScenarios;
+                const restored = checkpoints.restoreQualityExecutable();
+                journal.knowledge({ executableBaseline: { path: 'executable_baseline.json', testFile: restored.testFile,
+                    codeHash: restored.codeHash, tier: restored.tier, reviewStatus: restored.reviewStatus, mutationStatus: restored.mutationStatus } });
+                recordRole('executable-baseline', 'restored', { codeHash: restored.codeHash,
+                    testFile: restored.testFile, reviewStatus: restored.reviewStatus, mutationScore: null });
                 finalReportMarkdown += localize("> 已還原歷史基線，測試、分數（{0}%）、覆蓋與存活變異體同步還原；原候選保留於 role_events.jsonl。\n\n", bestScore);
+            }
+            if (pendingQualityGap) {
+                // Judge the retained candidate after rollback, against the exact selected gap.
+                const measurement = qualityExperiments.measureFocus(pendingQualityGap, loopAssessment, mutationRun);
+                recordRole('quality-experiment', measurement.status, { gapId: pendingQualityGap.focus.id, ...measurement });
+                focusedQualityFeedback = measurement.feedback;
+                if (measurement.status === 'resolved') { pendingQualityGap = undefined; pendingQualityAttempts = 0; }
+                else if (measurement.status === 'unchanged') {
+                    pendingQualityAttempts++;
+                    if (pendingQualityAttempts >= 2) {
+                        // An unproven equivalent/hard mutant must not consume every remaining round.
+                        deferredFocusId = pendingQualityGap.focus.id;
+                        recordRole('quality-experiment', 'deferred', { gapId: deferredFocusId,
+                            reasonCode: 'focused-attempt-limit', attempts: pendingQualityAttempts, resolved: false });
+                        pendingQualityGap = undefined;
+                        pendingQualityAttempts = 0;
+                    } else {
+                        // Preserve the task, but compare the next global gain with this retained round.
+                        pendingQualityGap = qualityExperiments.beginFocus(pendingQualityGap.focus, loopAssessment, mutationRun);
+                    }
+                }
+                journal.knowledge({ qualityExperiments: qualityExperiments.events });
             }
             qualityToolsSatisfied = checkpoints.quality?.qualityAssessment?.toolsSatisfied === true;
             if (!checkpoints.quality?.qualityAssessment || (checkpoints.quality.qualityAssessment.policyStatus === 'unassessable'
@@ -2921,10 +2974,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
 
         // Analyst proposes bounded scenarios; Writer owns code. Do not spend a call after the last round.
-        analystTasks = '';
-        qualityObservationEvidence = '';
-        qualityTraceProjection = '';
-        qualityTraceReference = '';
+        analystTasks = focusedQualityFeedback;
+        if (!pendingQualityGap) {
+            qualityObservationEvidence = '';
+            qualityTraceProjection = '';
+            qualityTraceReference = '';
+        }
         if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
             try {
                 // Measured comparison survivors can propose bounded numeric inputs
@@ -2938,9 +2993,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const survivorLines = survivedMutants.split('\n').filter(Boolean);
                 const proposedIds = new Set(numericPlan?.inputs.map(input => input.mutantId) || []);
                 const supportedSurvivors = survivorLines.filter(line => [...proposedIds].some(id => line.startsWith(`- id ${id},`)));
-                const focus = selectQualityFocus(loopAssessment, survivorLines, currentLoop, supportedSurvivors);
+                const focus = pendingQualityGap?.focus || selectQualityFocus(loopAssessment, survivorLines, currentLoop, supportedSurvivors,
+                    deferredFocusId ? [deferredFocusId] : []);
+                if (deferredFocusId && focus?.id !== deferredFocusId) {
+                    analystTasks += '\nThe previous focus remains unresolved and is deferred. Work only on the following current FOCUS; '
+                        + 'do not claim the previous task resolved or remove its mutant from scoring.';
+                }
+                deferredFocusId = undefined;
                 if (focus) {
-                    analystTasks = 'MEASURED GAP (not an output oracle):\n' + JSON.stringify(focus)
+                    if (!pendingQualityGap && bestMutation) {
+                        pendingQualityGap = qualityExperiments.beginFocus(focus, loopAssessment, bestMutation);
+                    }
+                    analystTasks += '\nMEASURED GAP (not an output oracle):\n' + JSON.stringify(focus)
                         + '\n' + qualityStrategyHints(focus.evidence).join('\n');
                 }
                 const focusedMutant = focus?.kind === 'survivor' ? bestMutation?.mutants.find(mutant =>
@@ -2963,13 +3027,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     recordRole('quality-experiment', result.status, { gapId: focus.id,
                         fingerprints: result.experiments.map(item => item.fingerprint), reason: result.reason });
                     journal.knowledge({ qualityExperiments: qualityExperiments.events });
-                    const handoff = qualityExperiments.evidenceFor(result);
-                    qualityObservationEvidence = buildQualityExperimentEvidencePrompt(handoff || result,
+                    const available = qualityExperiments.evidenceFor(result);
+                    const handoff = available?.gapId === focus.id ? available : undefined;
+                    const nextEvidence = buildQualityExperimentEvidencePrompt(handoff || result,
                         Math.min(12000, Math.floor(activeModelProfile.budgetTokens * 0.6)), knownSecrets,
                         fingerprints => { if (handoff) { qualityExperiments.recordHandoff(handoff, fingerprints); } });
+                    if (nextEvidence && (handoff || !qualityObservationEvidence)) {
+                        qualityObservationEvidence = nextEvidence;
+                        qualityTraceProjection = '';
+                        qualityTraceReference = '';
+                    }
                     observedBoundary = result.status === 'observed';
                     if (observedBoundary) {
-                        pendingQualityGap = { id: focus.id, previousGaps: [...coverageGapIds(loopAssessment), ...survivorLines] };
                         recordRole('quality-evidence', 'writer-required', { gapId: focus.id, testAuthor: 'llm' });
                     }
                 }
@@ -3007,7 +3076,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             qualityTraceReference = 'VERIFIED BOUNDARY EVIDENCE: the complete merged Trace projection already supplied includes this gap: '
                                 + JSON.stringify({ sourceHash: journal.sourceHash, target: params.funcName || targetFuncName, gapId: focus.id })
                                 + '. Use exact observed inputs only; the AI writes the tests.';
-                            pendingQualityGap = { id: focus.id, previousGaps: [...coverageGapIds(loopAssessment), ...survivorLines] };
                             journal.knowledge({ verifiedObservations: astContext.traceResult,
                                 nextTasks: [{ origin: 'measured-mutation-inputs', inputs: plan.inputs,
                                     verification: localize("觀測僅支持相同輸入的斷言；下一輪仍須通過獨立基線、執行、審查與突變量測。") }],

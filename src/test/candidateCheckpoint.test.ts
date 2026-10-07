@@ -98,3 +98,36 @@ test('invalid measured evidence cannot replace a quality baseline or erase execu
         assert.throws(() => store.saveQuality(first, { ...mutation, candidateSetId: 'f'.repeat(64) }), /not assessable/);
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('quality rollback restores the exact executable baseline without carrying mutation claims or erasing rejected work', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rollback-checkpoint-'));
+    try {
+        const input = structuredClone(require('../../contracts/quality-policy-cases-v1.json').cases[0].evidence);
+        const store = new CandidateCheckpointStore(directory, input.identity.sourceHash, 'target', {
+            policy: createStrictQualityPolicy(), sourcePath: input.identity.sourcePath, targetScope: input.identity.targetScope });
+        assert.throws(() => store.restoreQualityExecutable(), /no accepted quality checkpoint/);
+        const first = store.saveExecutable({ ...candidate(), qualityGaps: [], measuredQualityGaps: [], reviewStatus: 'completed',
+            coverage: { assessment: { ...input.coverage.assessment,
+                invocationEvidence: { ...input.coverage.assessment.invocationEvidence, testHash: evidenceHash(candidate().code) } },
+            coverageText: '100%', missingLines: '' } });
+        const acceptedQuality = store.saveQuality(first, { ...input.mutation, testHash: first.codeHash });
+        const rejected = store.saveExecutable(candidate(first.code + '# executable candidate with inferior measured quality\n'));
+        assert.notEqual(store.executable?.codeHash, acceptedQuality.codeHash);
+        const restored = store.restoreQualityExecutable();
+        assert.equal(store.executable, restored);
+        assert.deepEqual(restored, first);
+        assert.equal(store.quality, acceptedQuality);
+        const saved = JSON.parse(fs.readFileSync(path.join(directory, 'executable_baseline.json'), 'utf8'));
+        assert.equal(saved.codeHash, first.codeHash);
+        assert.equal(saved.schemaVersion, 'executable-baseline-v1');
+        assert.equal(saved.mutationScore, null);
+        assert.equal(saved.mutationStatus, 'not-measured');
+        assert.equal(Object.hasOwn(saved, 'mutation'), false);
+        assert.equal(Object.hasOwn(saved, 'qualityAssessment'), false);
+        assert.equal(fs.readFileSync(path.join(directory, rejected.testFile), 'utf8'), rejected.code);
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'quality_baseline.json'), 'utf8')), acceptedQuality);
+        assert.throws(() => restored.qualityGaps.push('changed'), TypeError);
+        fs.writeFileSync(path.join(directory, first.testFile), 'corrupt retained artifact');
+        assert.throws(() => store.restoreQualityExecutable(), /code hash/);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

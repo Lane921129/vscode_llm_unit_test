@@ -26,7 +26,7 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
         failed: [localize("未通過：執行或驗證失敗"), 'failed'],
         'retained-after-failure': [localize("未通過：後續失敗，已保留先前測試"), 'failed'],
         'execution-passed-review-incomplete': [localize("未完成：執行達標，審查未完成"), 'pending'],
-        'review-blocked': [localize("未通過：審查未批准，本候選不進入突變"), 'pending'],
+        'review-blocked': [localize("未通過：最新候選審查未批准"), 'pending'],
         'quality-incomplete': [localize("未通過：品質要求未完成"), 'pending'],
         'round-limit': [localize("未通過：已達輪次上限"), 'pending'],
         stagnated: [localize("未通過：連續多輪未改善"), 'pending'],
@@ -67,7 +67,15 @@ export function stageLabel(status: string): string {
 
 /** Human progress messages never turn intermediate acceptance into certification. */
 export function describeStageEvent(stage: string, status: string, detail: unknown, mode: 'full' | 'execution' = 'full'): string {
-    const value = detail as { reason?: unknown; diagnostics?: unknown; role?: unknown } | undefined;
+    const value = detail as { reason?: unknown; diagnostics?: unknown; role?: unknown; focus?: unknown; globalProgress?: unknown } | undefined;
+    if (stage === 'quality-experiment' && value?.focus) {
+        if (status === 'resolved') { return localize('實測確認指定品質缺口已解決；整體品質仍須另外判定'); }
+        if (status === 'unavailable') { return localize('指定品質缺口缺少可比較量測，不能判定已解決'); }
+        if (status === 'unchanged') {
+            return localize('指定補測缺口尚未解決；保留觀測交 AI 修訂')
+                + (value.globalProgress === 'improved' ? localize('；其他量測有改善，但未算此缺口已解決') : '');
+        }
+    }
     const reason = typeof value?.reason === 'string' ? value.reason.replace(/[\r\n]+/g, ' ').slice(0, 400) : '';
     const diagnostics = Array.isArray(value?.diagnostics)
         ? value.diagnostics.filter(item => typeof item === 'string' && /^[a-z0-9-]+$/.test(item)).join(', ') : '';
@@ -86,7 +94,11 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
         'quality-experiment-baseline:passed': localize("工具案例已獨立通過；此紀錄不代表 AI 測試已獲批准"),
         'quality-evidence:writer-required': localize("觀測已備妥；由 Writer 補寫測試，工具不合併測試"),
         'quality-experiment:improved': localize("實測確認品質缺口減少"),
-        'quality-experiment:unchanged': localize("實測缺口未減少；保留既有基線"),
+        'quality-experiment:unchanged': localize('指定補測缺口尚未解決；保留觀測交 AI 修訂'),
+        'quality-experiment:resolved': localize('實測確認指定品質缺口已解決；整體品質仍須另外判定'),
+        'quality-experiment:unavailable': localize('指定品質缺口缺少可比較量測，不能判定已解決'),
+        'quality-experiment:deferred': localize('指定補測缺口尚未解決；若有其他實測缺口則優先處理，突變分母不變'),
+        'passing-tests:preservation-rejected': localize('修訂未通過既有案例保護檢查；已拒絕修訂，保留原測試'),
         'quality-novelty:duplicate': localize("沒有新的測試情境；停止重複量測並保留基線"),
         'reviewer:repair-requested': localize("審查契約無效；在原時限內僅要求一次修正"),
         'reviewer:approved': localize("Reviewer 已批准此版測試；可進入突變量測，尚非完整通過"),
@@ -101,6 +113,7 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
         'validation:accepted': mode === 'execution' ? localize("保留可執行候選；本模式不執行突變，不代表完整品質通過")
             : localize("保留可執行候選；須取得此版審查批准才可量測突變，不代表完整通過"),
         'executable-baseline:checkpointed': localize("已保存可執行測試及目前審查狀態；突變可能尚未量測"),
+        'executable-baseline:restored': localize('已恢復保留測資與執行證據；後續修訂沿用此基線，未產生新量測'),
         'model-request:requested': localize("已送出模型請求"),
         'model-request:completed': localize("模型已回覆；內容仍須驗證"),
         'reviewer:invalid-response': localize("審查回覆未通過契約檢查{0}；不採用該建議", diagnostics ? `（${diagnostics}）` : ''),

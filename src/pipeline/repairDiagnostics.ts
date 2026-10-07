@@ -29,6 +29,17 @@ export const REPAIR_REASON_LABELS = {
     'scope-tool-error': '修復範圍工具未成功執行',
     'scope-result-invalid': '修復範圍工具回傳無效資料',
     'scope-rejected': '修復範圍不符合契約（無細分原因）',
+    'baseline-syntax': '保留基線無法通過 Python 語法解析',
+    'invalid-protected-methods': '已通過方法的身分無法對應保留基線',
+    'duplicate-binding': '重複名稱綁定使通過案例保護無法確認',
+    'removed-passing-method': '移除或更名已通過的方法',
+    'passing-signature-changed': '修改已通過方法的簽名、裝飾器或同步形式',
+    'assertion-weakened': '移除、替換或放寬已通過的斷言',
+    'passing-scenario-changed': '修改已通過案例的輸入、設定或執行步驟',
+    'fixture-context-changed': '修改已通過案例共用的 fixture 或 helper',
+    'import-binding-changed': '修改或遮蔽已通過案例的 import 綁定',
+    'unsupported-preservation': '無法證明修訂保留已通過案例',
+    'preservation-tool-error': '已通過案例保護工具未成功執行',
     'repeated-candidate': '候選與先前嘗試相同',
     'repeated-failure': '同一失敗已交由 Bug Fixer 處理'
 } as const;

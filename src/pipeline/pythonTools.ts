@@ -15,6 +15,8 @@ export const PYTHON_TOOLS = {
     calls: 'validate_target_calls.py',
     assertionEvidence: 'validate_assertion_evidence.py',
     repairScope: 'validate_repair_scope.py',
+    passingPreservation: 'passing_test_preservation.py',
+    reviewFacts: 'review_test_facts.py',
     sourceExpectations: 'repair_source_expectations.py',
     rescue: 'rescue_unittest.py',
     scenarios: 'scenario_inventory.py',

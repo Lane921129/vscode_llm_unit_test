@@ -75,6 +75,21 @@ export class CandidateCheckpointStore {
     get executable(): ExecutableCheckpoint | undefined { return this.retained; }
     get quality(): QualityCheckpoint | undefined { return this.bestQuality; }
 
+    /** A rejected quality candidate must not remain the next Writer's required
+     * executable baseline. Keep its immutable artifact, but restore the exact
+     * accepted quality version without copying mutation claims into this slot. */
+    restoreQualityExecutable(): ExecutableCheckpoint {
+        const accepted = this.bestQuality;
+        if (!accepted) { throw new Error('There is no accepted quality checkpoint to restore.'); }
+        return this.saveExecutable({
+            code: accepted.code, execution: accepted.execution, coverage: accepted.coverage,
+            scenarios: accepted.scenarios, qualityGaps: accepted.qualityGaps, measuredQualityGaps: accepted.measuredQualityGaps,
+            reviewStatus: accepted.reviewStatus, reviewWarnings: accepted.reviewWarnings, tier: accepted.tier,
+            generationMode: accepted.generationMode, dependencyVersions: accepted.dependencyVersions,
+            dependencyEvidenceVersion: accepted.dependencyEvidenceVersion
+        });
+    }
+
     saveExecutable(candidate: ExecutableCandidate): ExecutableCheckpoint {
         const codeHash = evidenceHash(candidate.code);
         // The full hash is retained and verified below; a short-name collision

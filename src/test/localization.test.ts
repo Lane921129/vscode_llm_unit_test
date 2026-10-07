@@ -129,7 +129,7 @@ test('English AI workflow blocking reasons explain the stopped stage without unt
         }
         const outcome = presentOutcome({ workflowVersion: 'ai-reviewed-loop-v1', terminalStatus: 'review-blocked' });
         assert.equal(outcome.kind, 'pending');
-        assert.match(outcome.label, /Review not approved/);
+        assert.match(outcome.label, /latest candidate was not approved by review/);
         assert.doesNotMatch(withOutcomeHeader('Raw evidence preserved', {
             workflowVersion: 'ai-reviewed-loop-v1', terminalStatus: 'review-blocked'
         }), /\p{Script=Han}/u);

@@ -95,7 +95,8 @@ class ModelCases(unittest.TestCase):
         assert.equal(measurements[1].detail.score, 100);
         assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'observed'));
         assert.ok(!events.some(e => e.stage === 'quality-experiment-baseline'));
-        assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'improved'));
+        assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'resolved'
+            && e.detail.globalProgress === 'improved'));
         assert.equal(roles.filter(role => role === 'writer').length, 2, 'Writer must author the addition from isolated observations');
         assert.equal(roles.filter(role => role === 'quality-analyst').length, 1);
         assert.equal(roles.filter(role => role === 'reviewer').length, 2);

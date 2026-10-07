@@ -134,11 +134,52 @@ test('AI workflow exposes review blocking even when a retained candidate has com
                 qualityAssessment: { toolsSatisfied: true, fullyPassed: true } };
             const outcome = presentSummaryOutcome(evidence);
             assert.equal(outcome.kind, 'pending');
-            assert.match(outcome.label, lang === 'en' ? /Review not approved.*not enter mutation/ : /審查未批准.*不進入突變/);
+            assert.match(outcome.label, lang === 'en' ? /latest candidate was not approved by review/ : /最新候選審查未批准/);
             assert.equal(outcome.label, presentOutcome(evidence).label);
             const oldStatusInNewRun = { ...evidence, terminalStatus: 'execution-passed-review-incomplete' };
             assert.equal(presentSummaryOutcome(oldStatusInNewRun).label, presentOutcome(oldStatusInNewRun).label);
             if (lang === 'en') { assert.doesNotMatch(outcome.label, /\p{Script=Han}/u); }
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('focused gap progress labels do not confuse an unrelated gain with resolving the selected task', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const detail = { focus: { id: 'measured', kind: 'survivor' }, globalProgress: 'improved' };
+            const unchanged = describeStageEvent('quality-experiment', 'unchanged', detail);
+            assert.match(unchanged, lang === 'en' ? /selected supplemental-test gap is unresolved/ : /指定補測缺口尚未解決/);
+            assert.match(unchanged, lang === 'en' ? /other measurements improved/ : /其他量測有改善/);
+            const resolved = describeStageEvent('quality-experiment', 'resolved', detail);
+            assert.match(resolved, lang === 'en' ? /overall quality.*separate assessment/ : /整體品質仍須另外判定/);
+            const unavailable = describeStageEvent('quality-experiment', 'unavailable', detail);
+            assert.match(unavailable, lang === 'en' ? /cannot be marked resolved/ : /不能判定已解決/);
+            if (lang === 'en') { assert.doesNotMatch(unchanged + resolved + unavailable, /\p{Script=Han}/u); }
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('new recovery and focused-progress events are explained in both languages without claiming a new pass', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            for (const [stage, status, expected] of [
+                ['quality-experiment', 'resolved', lang === 'en' ? /overall quality.*separate assessment/ : /整體品質仍須另外判定/],
+                ['quality-experiment', 'unavailable', lang === 'en' ? /cannot be marked resolved/ : /不能判定已解決/],
+                ['quality-experiment', 'unchanged', lang === 'en' ? /selected supplemental-test gap is unresolved/ : /指定補測缺口尚未解決/],
+                ['quality-experiment', 'deferred', lang === 'en' ? /unresolved.*other measured gaps.*denominator is unchanged/ : /尚未解決.*其他實測缺口.*分母不變/],
+                ['passing-tests', 'preservation-rejected', lang === 'en' ? /revision was rejected.*original tests retained/ : /拒絕修訂.*保留原測試/],
+                ['executable-baseline', 'restored', lang === 'en' ? /restored.*no new measurement/ : /已恢復.*未產生新量測/]
+            ] as const) {
+                const label = describeStageEvent(stage, status, { raw: 'PRIVATE_PROVIDER_RESPONSE' });
+                assert.match(label, expected);
+                assert.notEqual(label, status);
+                assert.doesNotMatch(label, /PRIVATE_PROVIDER_RESPONSE|Fully passed|完整通過/);
+                if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            }
         }
     } finally { setLanguage(originalLanguage); }
 });

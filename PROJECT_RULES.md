@@ -8,6 +8,9 @@
 - Reviewer 只有回覆契約有效且沒有待處理 finding，才允許該版候選進入突變。有效 finding 交 Writer；無效／矛盾回覆僅在既有限額內修正審查契約，仍無效就保留可執行成果並停止該候選的完整流程。審查不可用、預算耗盡或取消，均不能改成同意。每次 AI 修改測試後必須重新執行、重新審查；同一候選與同一完整證據的審查快取仍可使用。
 - AST、Trace、受限計算、數值邊界及狀態實驗只向 AI 提供有來源／輸入身分的證據或待驗證提案，不在正式 LLM 候選中自動附加 host 測試、合併 Trace 基線或改寫 expected／assertRaises。Writer 與 Bug Fixer 才能產生正式測試修訂；模型修訂仍受相同結構、範圍、passing 案例保護及執行 gate。
 - 已通過執行的第一份最小模型測試仍立即保存 immutable executable checkpoint，但該 checkpoint 不等同審查同意或品質通過。未啟動的突變保存 null／未執行，不能補成 0、100 或沿用其他候選的分數。
+- 通過案例保護涵蓋生成、Reviewer 交 Writer 修訂及跨 Tier；不得只檢查方法名稱與執行仍通過，還須保留原輸入、精確 expected／比較、例外與共享設定。無法證明任意改寫等價時明示拒絕，不以放寬斷言換取通過。失敗方法可依證據修訂；新增案例、可證明的標準 unittest 斷言強化及更嚴格數值 tolerance 仍可接受。
+- Reviewer 的機械事實必須綁定目前候選及來源；只有完整、同 typed 呼叫且可重播的隔離觀測支持 expected 事實。拒絕明確矛盾的回覆後只可要求有界重新審查，不能把刪去錯誤 findings 的結果算批准；獨立需求、未知語意及不同輸入不由文字規則猜測。
+- 補測任務是否完成必須核對原指定 mutant ID 或 line／branch；其他覆蓋增加只屬全局進展，不能替代指定缺口完成。來源、引擎或候選集合不同及不完整量測維持 unavailable；未解決任務保留其觀測，沿用原總預算與停滯限制。
 - Reviewer 同意證據必須綁定同一 run、source、target 與候選的 `approvedCodeHash`，保存為 `reviewApproval.testHash`；`completed` 只可用於零 findings 的已批准候選。審查受阻終態為 `review-blocked`，沒有已核對突變時保存 `mutationStatus=not-measured`。保留的前一輪品質與本輪審查阻擋須分開呈現。
 - 結果須分開標示 AI 產物、工具證據、審查決定與品質量測；新流程因審查受阻時明示原因及突變未執行，不套用舊 Demo 的量測達標標籤。舊報告保留原始 workflow／policy 與讀取相容性，不改寫為新流程成果。
 - 數值技能保留 Python 布林數值語義與 typed 輸入，可核對單呼叫內建 TypeError／ZeroDivisionError、正常回傳及計算步驟後提供修訂證據；例外不符、重綁定、複合 scope 及不可證實運算保留未知，不能由工具默默改寫候選或略過 gate。

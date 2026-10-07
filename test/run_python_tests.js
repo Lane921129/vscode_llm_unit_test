@@ -23,6 +23,8 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_assertion_evidence.py',
         'python_scripts/test_source_expectations.py',
         'python_scripts/test_numeric_skill.py',
+        'python_scripts/test_passing_test_preservation.py',
+        'python_scripts/test_review_test_facts.py',
         'python_scripts/test_mutation_baseline_repair.py',
         'python_scripts/test_mutation_improvement.py',
         'python_scripts/test_mutation_v2.py',

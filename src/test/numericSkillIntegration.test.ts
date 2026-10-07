@@ -39,7 +39,7 @@ test('numeric observations guide an AI revision which is reviewed before real mu
     const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, language: 'en' };
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
-    let writers = 0, fixes = 0;
+    let writers = 0, fixes = 0, reviews = 0;
     const logs: string[] = [];
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -58,7 +58,18 @@ test('numeric observations guide an AI revision which is reviewed before real mu
         const request = JSON.parse(String(options?.body));
         let response: string;
         if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
-        else if (request.system.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+        else if (request.system.includes('You are the test Reviewer')) {
+            reviews++;
+            assert.match(request.prompt, /HOST_VERIFIED_REVIEW_FACTS_V1/);
+            assert.match(request.prompt, /"observationVerified":true/);
+            // The 2026-10-07 failure: review contradicts an exact numeric result
+            // already verified by independent isolated execution.
+            const line = corrected.split('\n').findIndex(value => value.includes('self.assertEqual(bmi, 24.22)')) + 1;
+            response = reviews === 1 ? JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${line}`,
+                reason: 'The actual result differs from the expected value 24.22.',
+                action: 'Change the expected value to 23.5 in this assertion.' }] }) : '{"findings":[]}';
+            if (reviews === 2) { assert.match(request.prompt, /observed-outcome-contradiction/); }
+        }
         else if (request.system.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
         else { writers++; if (writers === 2) { assert.match(request.prompt, /VERIFIED_NUMERIC_EVIDENCE_LEDGER_V1/); }
             response = '```python\n' + (writers === 1 ? candidate : corrected) + '\n```'; }
@@ -81,6 +92,9 @@ test('numeric observations guide an AI revision which is reviewed before real mu
         assert.equal(writers, 2, JSON.stringify(events.filter(e => ['failed', 'rejected', 'error', 'tier-failed'].includes(e.status))
             .map(e => ({ stage: e.stage, status: e.status, reason: e.detail.reason }))));
         assert.equal(fixes, 0, 'multiple failing methods route to the Writer');
+        assert.equal(reviews, 2, 'contradictory review is repaired once, never forwarded as Writer instructions');
+        assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'invalid-response'
+            && e.detail.diagnostics.includes('observed-outcome-contradiction')));
         const proof = JSON.parse(fs.readFileSync(path.join(roundDirectory(directory, 1), numeric.detail.file), 'utf8'));
         assert.equal(proof.corrections.length, 11, 'numeric, classification, type-checked result and both exception directions');
         assert.equal(new Set(proof.corrections.map((item: any) => JSON.stringify(item.basis.call))).size, 8);

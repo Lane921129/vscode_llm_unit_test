@@ -1,5 +1,14 @@
 # 專案閱讀入口
 
+## 保護工具事實與已通過測試（2026-10-07）
+
+三批 BMI 實測顯示：計算與同輸入 Trace 已核對正確，不代表後續 Reviewer 或 Writer 一定使用該證據。正式流程增加以下保護，仍由 AI 撰寫、修訂與批准測試，工具不代寫候選。
+
+- `reviewFacts.ts`／`review_test_facts.py` 只讀候選 AST，建立綁定 run／source／target／test hash 的 imports、unittest harness、直接呼叫與 assertion 事實。只有完整、同輸入且可重播的既有 Trace／numeric ledger 才支持觀測 expected；動態或無法證實的語意不猜測。Reviewer 收到相同 facts，明確矛盾的 finding 回覆須在原期限內重審一次，仍無效則保留成果並停止，不能刪掉 finding 自動批准。
+- `passingTestPreservation.ts`／`passing_test_preservation.py` 在候選執行前檢查通過案例。初始生成、品質擴充及跨 Tier 使用最近 executable checkpoint；修復另保護實際 runner 證明通過的方法。AST 保留輸入、步驟、預期值、比較與例外、共享 fixture／helpers／import 綁定，拒絕刪除、更名或放寬。接受格式差異、追加新案例／斷言、標準 unittest 的可證明斷言強化及收緊的 tolerance；任意重寫或共享 setup 變動無法證明等價時明示拒絕，失敗方法仍可修。
+- `focusedQualityProgress.ts` 將目前補測任務綁定具體 mutant ID 或 line／branch，以及來源、引擎、規則、範圍、候選集合與測試版本。回滾後對實際保留候選量測，事件分開記錄 `resolved/unchanged/unavailable` 與 `globalProgress`；指定 mutant 還活著時，別處覆蓋增加不能宣稱該任務完成，原任務與觀測會交回下一輪。連續兩次未解決時明示暫緩並優先選其他缺口，不宣稱等價或移除突變分母；既有總預算與停滯限制保持。
+- 簡報告分開顯示「最新候選審查未批准、未執行突變」與「已保留測資的覆蓋／突變分數」，突變表僅屬於同一份已核對的保留測試。完整失敗報告保留拒絕原因與流程。
+
 ## AI 主導閉環與交付邊界（2026-10-07）
 
 使用者確認原始設計為「AI 分析函式、AI 撰寫測試、另一個 AI 審查、同意後做突變、品質不足再交 AI 改寫」。正式 full 流程以 `ai-reviewed-loop-v1` 對齊此分工，取代 `seed-expand-v1` 的自動 Trace 合併、host 補測與審查未完成仍量測路徑。保留單一 orchestrator、既有安全與品質契約；歷史產物仍以原版本讀取，不重標為新版通過。實際交付與驗證結果另記於 CHANGELOG。
