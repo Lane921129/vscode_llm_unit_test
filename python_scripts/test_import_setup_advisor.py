@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import uuid
 
 TOOLS = Path(__file__).resolve().parent
 VENDOR = 'from pathlib import Path\ndef launch(*args, **kwargs):\n    Path("must_not_exist").mkdir()\n'
@@ -85,6 +87,66 @@ class ImportSetupAdvisorTests(unittest.TestCase):
         self.assertEqual(candidate['resourcePath'], 'VMS_Data', result)
         self.assertEqual(candidate['resourceScope'], 'project-parent', result)
         self.assertFalse((self.base / 'VMS_Data').exists())
+        self.assertEqual(self.file.read_text(encoding='utf-8'), source)
+
+    def test_unrepresentable_resource_path_retains_the_observed_mkdir_candidate(self):
+        import import_setup_advisor
+        from module_preflight import preflight
+        source = 'from pathlib import Path\nPath("must_not_exist").mkdir(exist_ok=True)\ndef target(): return 4\n'
+        file = self.root / 'cross_drive_candidate_probe.py'
+        file.write_text(source, encoding='utf-8')
+        receiver = os.path.normcase(str(self.root / 'must_not_exist'))
+        original_relpath = os.path.relpath
+
+        def relative_or_cross_drive(value, anchor=None):
+            if os.path.normcase(os.fspath(value)) == receiver:
+                raise ValueError('path is on another drive')
+            return original_relpath(value, anchor)
+
+        previous_path = list(sys.path)
+        try:
+            with mock.patch.dict(os.environ):
+                os.environ.pop('LLM_UNIT_TEST_IMPORT_FIXTURES', None)
+                os.environ.pop('LLM_UNIT_TEST_RESOURCE_LEASE', None)
+                with mock.patch.object(import_setup_advisor.os.path, 'relpath', side_effect=relative_or_cross_drive):
+                    result = preflight({'file': str(file), 'module': file.stem,
+                                        'sourceRoot': str(self.root), 'importPaths': [str(self.root)]})
+            self.assertFalse(result['ok'], result)
+            self.assertEqual(result['stage'], 'module-import')
+            self.assertEqual(result['diagnostic']['blocked_operation'], 'os.mkdir')
+            candidate = self.candidate(result)
+            self.assertIsNotNone(candidate, 'unsupported path conversion must not erase actual call evidence')
+            self.assertEqual(candidate['operation'], 'pathlib.Path.mkdir')
+            self.assertEqual(candidate['file'], file.name)
+            self.assertEqual(candidate['line'], 2)
+            self.assertEqual(candidate['sourceHash'], hashlib.sha256(file.read_bytes()).hexdigest())
+            self.assertNotIn('resourcePath', candidate)
+            self.assertNotIn('resourceScope', candidate)
+            self.assertFalse((self.root / 'must_not_exist').exists())
+        finally:
+            sys.path[:] = previous_path
+            sys.modules.pop(file.stem, None)
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows drive semantics')
+    def test_windows_cross_drive_mkdir_is_blocked_and_keeps_candidate_without_a_resource_mount(self):
+        other_drive = next(drive for drive in ('C:', 'D:') if drive.lower() != self.root.drive.lower())
+        external = Path(other_drive + '\\llm-unit-test-guard-' + uuid.uuid4().hex)
+        self.assertFalse(external.exists())
+        source = ('from pathlib import Path\nPath(' + repr(str(external))
+                  + ').mkdir(exist_ok=True)\ndef target(): return 4\n')
+        result = self.check(source)
+        self.assertFalse(result['ok'], result)
+        self.assertEqual(result['category'], 'environment')
+        self.assertEqual(result['stage'], 'module-import')
+        self.assertEqual(result['diagnostic']['blocked_operation'], 'os.mkdir')
+        candidate = self.candidate(result)
+        self.assertIsNotNone(candidate, result)
+        self.assertEqual(candidate['kind'], 'mkdir')
+        self.assertEqual(candidate['operation'], 'pathlib.Path.mkdir')
+        self.assertEqual(candidate['sourceHash'], hashlib.sha256(self.file.read_bytes()).hexdigest())
+        self.assertNotIn('resourcePath', candidate)
+        self.assertNotIn('resourceScope', candidate)
+        self.assertFalse(external.exists(), 'the guarded probe must never create the original directory')
         self.assertEqual(self.file.read_text(encoding='utf-8'), source)
 
     def test_ancestor_escape_and_non_idempotent_mkdir_do_not_propose_sibling_mounts(self):

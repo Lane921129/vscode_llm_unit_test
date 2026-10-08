@@ -43,6 +43,7 @@
 
 - 匯入前建立宣告資源。目錄已存在，所以原程式若要求 `mkdir(exist_ok=False)`，真實 `FileExistsError` 仍保留，不會吞掉。
 - 每個預檢、Trace case、測試程序、baseline、mutant 都建立新資源。同一程序的 import／函式呼叫沿用同一份，避免匯入建立的連線失效。
+- 套件匯入的突變使用對應套件副本，不額外產生未使用的平面模組與目錄別名。若測試確實同時使用多種匯入方式且資源映射矛盾，基線仍會受阻，不能把這種設定錯誤算成 killed 或有效分數。
 - 同一 unittest suite 的方法共用資源；AI 必須透過公開 API 安排與清理狀態，不能依賴執行順序、直接開檔或直接連接 SQLite。
 - 程序退出時先關閉連線、清 worker。外層工具在 owned 子樹完全停止後，核對擁有權再清理 lease；取消／逾時同樣處理。清理失敗不能回報成功。
 - `import_fixtures.json` 保存配置；執行證據保留計畫 ID／資源數量／操作摘要；`role_events.jsonl` 留下 `isolated-resources` 清理事件。隨機實體路徑不進邏輯 hash，也不提供為 expected。

@@ -269,27 +269,45 @@ def _rebase_entry_lines(original, candidate, rule):
     return mapped
 
 
-def mutation_environment(environment, trial_root, source_file):
-    """Bind the same logical setup to verified package copies and the mutant."""
+def mutation_environment(environment, trial_root, source_file, copy_bindings):
+    """Bind setup only to copies in the actual test import layout.
+
+    A binding is (original, destination, is_package). It comes from the trusted
+    mutation driver, never from the fixture plan or target. Do not infer extra
+    bindings by scanning all ancestors for coincidentally matching filenames.
+    """
     plan = read_plan(environment)
     if not plan:
         return environment
     plan = dict(plan, trialRoot=str(Path(trial_root).resolve()), rules=[dict(rule) for rule in plan['rules']])
     source_file, trial_root = Path(source_file).resolve(), Path(trial_root).resolve()
     extra = []
-    seen = set()
+    seen = {}
     for rule in plan['rules']:
         original = Path(plan['root'], rule['file']).resolve()
-        for parent in source_file.parents:
-            if not original.is_relative_to(parent):
+        for copied_source, destination, is_package in copy_bindings:
+            copied_source, destination = Path(copied_source).resolve(), Path(destination).resolve()
+            if is_package:
+                if not original.is_relative_to(copied_source):
+                    continue
+                candidate = (destination / original.relative_to(copied_source)).resolve()
+            elif original == copied_source:
+                candidate = destination
+            else:
                 continue
-            candidate = (trial_root / original.relative_to(parent)).resolve()
-            if not candidate.is_relative_to(trial_root) or not candidate.is_file() or str(candidate) in seen:
+            if not candidate.is_relative_to(trial_root):
+                raise ValueError('Mutation fixture copy escapes trial')
+            if not candidate.is_file():
+                continue
+            key = _absolute(candidate)
+            if key in seen:
+                if seen[key] != _absolute(original):
+                    raise ValueError('Ambiguous mutation fixture source binding')
                 continue
             digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
             if original != source_file and digest != rule['sourceHash']:
-                continue
-            seen.add(str(candidate))
+                raise ValueError('Mutation fixture dependency changed during copy')
+            seen[key] = _absolute(original)
             copy = dict(rule, resolvedFile=str(candidate), sourceHash=digest)
             if rule.get('resources'):
                 if rule.get('resourceSourceHash') != rule.get('sourceHash'):

@@ -63,7 +63,13 @@ def _observed_directory(following, root):
             return None
         internal = _lexically_inside(lexical, root)
         anchor = root if internal else os.path.dirname(root)
-        spec = {'path': os.path.relpath(lexical, anchor).replace('\\', '/'), 'kind': 'directory'}
+        try:
+            relative = os.path.relpath(lexical, anchor).replace('\\', '/')
+        except ValueError:
+            # A different Windows drive is outside supported resource scopes.
+            # Retain the observed mkdir candidate, without proposing a mount.
+            return None
+        spec = {'path': relative, 'kind': 'directory'}
         if not internal:
             spec['scope'] = 'project-parent'
         try:

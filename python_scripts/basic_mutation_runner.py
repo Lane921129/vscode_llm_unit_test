@@ -419,13 +419,12 @@ def package_copy_ignore():
     return ignore, declared
 
 
-def package_mutant_targets(source_file, test_file, temp_root):
-    """Mirror package imports from a test so they resolve to the mutant copy.
+def mutation_import_layout(source_file, test_file, temp_root):
+    """Describe only copies required by statically bound target imports.
 
-    A generated unittest may import either ``module`` or ``package.module``.
-    Writing only ``temp_root/module.py`` handles the former, but silently loads
-    the original source for the latter.  We copy just the matching package root
-    into the isolated directory and return every mirrored target path.
+    Keep bare and package bindings separately: an unused flat copy can invent
+    resource aliases that collide with a real ancestor-package copy. Mixed
+    imports still require both copies and remain subject to ambiguity checks.
     """
     source_stem = source_file.stem
     source_chain = list(source_file.parents)
@@ -433,37 +432,48 @@ def package_mutant_targets(source_file, test_file, temp_root):
     test_text = test_file.read_text(encoding='utf-8')
     try:
         tree = ast.parse(test_text)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                module_name = node.module or ''
-                if module_name.split('.')[-1] == source_stem:
-                    modules.add(module_name)
-                for alias in node.names:
-                    if alias.name == source_stem:
-                        modules.add(f'{module_name}.{source_stem}' if module_name else source_stem)
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.split('.')[-1] == source_stem:
-                        modules.add(alias.name)
-    except Exception:
-        for raw_line in test_text.splitlines():
-            from_match = re.match(r'^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$', raw_line)
-            if from_match:
-                module_name, imported = from_match.groups()
-                names = [part.strip().split(' as ')[0].strip() for part in imported.split(',')]
-                if module_name.split('.')[-1] == source_stem:
-                    modules.add(module_name)
-                elif source_stem in names:
-                    modules.add(f'{module_name}.{source_stem}')
+    except SyntaxError:
+        raise ValueError('Mutation target import layout is unsupported') from None
+    dynamic_names = {'__import__'}
+    dynamic_modules = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module in ('importlib', 'builtins'):
+                dynamic_names.update(alias.asname or alias.name for alias in node.names
+                                     if alias.name in ('import_module', '__import__'))
+            if node.level:
                 continue
-            import_match = re.match(r'^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)', raw_line)
-            if import_match and import_match.group(1).split('.')[-1] == source_stem:
-                modules.add(import_match.group(1))
+            module_name = node.module or ''
+            if module_name.split('.')[-1] == source_stem:
+                modules.add(module_name)
+            for alias in node.names:
+                if alias.name == source_stem:
+                    modules.add(f'{module_name}.{source_stem}' if module_name else source_stem)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ('importlib', 'builtins'):
+                    dynamic_modules[alias.asname or alias.name] = (
+                        'import_module' if alias.name == 'importlib' else '__import__')
+                if alias.name.split('.')[-1] == source_stem:
+                    modules.add(alias.name)
+    # Generated tests already disallow dynamic execution. Refuse recognized
+    # dynamic import calls here as well, rather than omitting a needed copy and
+    # letting PYTHONPATH silently resolve that target from the original source.
+    if any(isinstance(node, ast.Call) and (
+            isinstance(node.func, ast.Name) and node.func.id in dynamic_names
+            or isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+            and dynamic_modules.get(node.func.value.id) == node.func.attr)
+           for node in ast.walk(tree)):
+        raise ValueError('Mutation target import layout is unsupported')
 
     targets = []
-    copied_roots = set()
-    ignore, is_resource = package_copy_ignore()
-    for module_name in modules:
+    packages = []
+    bindings = []
+    if source_stem in modules:
+        target = temp_root / source_file.name
+        targets.append(target)
+        bindings.append((source_file, target, False))
+    for module_name in sorted(modules):
         package_parts = module_name.split('.')[:-1]
         if not package_parts or len(package_parts) > len(source_chain):
             continue
@@ -471,19 +481,23 @@ def package_mutant_targets(source_file, test_file, temp_root):
             continue
         package_root = source_chain[len(package_parts) - 1]
         destination_root = temp_root / package_root.name
-        root_key = str(package_root)
-        if root_key not in copied_roots:
-            if is_resource(package_root):
-                raise ValueError('Mutation package overlaps a declared isolated resource')
-            shutil.copytree(
-                package_root,
-                destination_root,
-                dirs_exist_ok=True,
-                ignore=ignore
-            )
-            copied_roots.add(root_key)
+        packages.append((package_root, destination_root))
+        bindings.append((package_root, destination_root, True))
         targets.append(destination_root / source_file.relative_to(package_root))
-    return targets
+    if not targets:
+        raise ValueError('Mutation target import layout is unsupported')
+    return {'targets': targets, 'packages': packages, 'bindings': bindings}
+
+
+def package_mutant_targets(source_file, test_file, temp_root, layout=None):
+    """Mirror the package roots selected by the test's static target imports."""
+    layout = layout or mutation_import_layout(source_file, test_file, temp_root)
+    ignore, is_resource = package_copy_ignore()
+    for package_root, destination_root in layout['packages']:
+        if is_resource(package_root):
+            raise ValueError('Mutation package overlaps a declared isolated resource')
+        shutil.copytree(package_root, destination_root, dirs_exist_ok=True, ignore=ignore)
+    return [target for target in layout['targets'] if target.parent != temp_root]
 
 
 def prepare_trial_directory(source_file, test_file, trial_root, source_text):
@@ -497,20 +511,34 @@ def prepare_trial_directory(source_file, test_file, trial_root, source_text):
     trial_root.mkdir(parents=True, exist_ok=False)
     test_copy = trial_root / test_file.name
     test_copy.write_text(test_file.read_text(encoding='utf-8'), encoding='utf-8')
-    mirrored_targets = package_mutant_targets(source_file, test_file, trial_root)
-    (trial_root / source_file.name).write_text(source_text, encoding='utf-8')
-    for mirrored_target in mirrored_targets:
-        mirrored_target.write_text(source_text, encoding='utf-8')
+    layout = mutation_import_layout(source_file, test_file, trial_root)
+    package_mutant_targets(source_file, test_file, trial_root, layout)
+    for target_copy in layout['targets']:
+        target_copy.write_text(source_text, encoding='utf-8')
     return test_copy
 
 
-def trial_environment(temp_root, source_file):
-    python_path = os.pathsep.join([
+def trial_environment(temp_root, source_file, test_file):
+    temp_root = Path(temp_root).resolve()
+    layout = mutation_import_layout(source_file, test_file, temp_root)
+    # Package initializers/helpers may use a bare import of this same target.
+    # Include all copied ancestors so shorter package suffixes also resolve to
+    # the same physical mutant, never the original source. Stop at trial_root;
+    # no extra flat file or resource alias is needed. An explicitly requested
+    # flat copy still wins through temp_root first.
+    copied_import_paths = []
+    for target in layout['targets']:
+        for parent in target.parents:
+            if not parent.is_relative_to(temp_root):
+                break
+            copied_import_paths.append(str(parent))
+    python_path = os.pathsep.join(dict.fromkeys([
         str(temp_root),
+        *copied_import_paths,
         str(source_file.parent),
         str(source_file.parent.parent),
         os.environ.get('PYTHONPATH', ''),
-    ])
+    ]))
     return mutation_environment({
         **os.environ,
         'PYTHONPATH': python_path,
@@ -518,7 +546,7 @@ def trial_environment(temp_root, source_file):
         # A mutation trial must execute its .py source, never bytecode left by
         # the baseline or another mutant.
         'PYTHONDONTWRITEBYTECODE': '1',
-    }, temp_root, source_file)
+    }, temp_root, source_file, layout['bindings'])
 
 
 def read_trial_result(path, expected_fixture_id=None):
@@ -710,8 +738,13 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         # used for every mutant. A failing baseline is infrastructure/test
         # failure, never evidence that every mutant was killed.
         baseline_root = temp_root / 'baseline'
-        baseline_test = prepare_trial_directory(source_file, snapshot_test, baseline_root, original_source)
-        baseline_environment = trial_environment(baseline_root, source_file)
+        try:
+            baseline_test = prepare_trial_directory(source_file, snapshot_test, baseline_root, original_source)
+            baseline_environment = trial_environment(baseline_root, source_file, baseline_test)
+        except (OSError, ValueError):
+            result.update(baselineStatus='error', diagnosticCode='mutation-trial-setup-failed',
+                          baseline_output='Mutation trial import layout or fixture setup failed')
+            return result
 
         try:
             if budget_exhausted():
@@ -776,7 +809,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             mutant_root = temp_root / f'mutant_{index:04d}'
             try:
                 mutant_test = prepare_trial_directory(source_file, snapshot_test, mutant_root, mutant_source)
-                mutant_environment = trial_environment(mutant_root, source_file)
+                mutant_environment = trial_environment(mutant_root, source_file, mutant_test)
             except (OSError, ValueError) as error:
                 return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
                         'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
