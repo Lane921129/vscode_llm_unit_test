@@ -11,6 +11,7 @@
  */
 
 import { BehaviorObservations } from '../pipeline/evidenceContracts';
+import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 
 // === Type Definitions ===
 
@@ -282,7 +283,7 @@ Your output must be a single valid JSON object with this exact schema:
 }
 
 ANALYSIS RULES:
-- MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.
+- MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.${isolatedResourceSystemRule()}
 - When TARGET FUNCTION PARAMETERS are supplied, every test_strategy.input_hints[].param_name must be exactly one of those target parameters. Dependency parameters and dependency return keys are never target inputs.
 - TARGET CALL SITES show how other project code invokes the selected target. They are input candidates only: they do not prove target output, dependency behavior, or an exception.
 - VERIFIED TARGET EXECUTION OBSERVATIONS are exact input/output samples produced by controlled Python execution. Use them to correct target-behavior hypotheses, but do not generalize them to unobserved inputs.
@@ -551,7 +552,7 @@ export function formatSemanticContextForPrompt(
 
         out += '\nAssertion style: ' + ts.assertion_style + '\n';
         if (ts.mock_needed) {
-            out += 'Mock required: YES — use unittest.mock.patch for external dependencies\n';
+            out += isolatedResourceSystemRule() ? 'Analyst suggests mocks for external dependencies; verify each against host-declared isolated resources and the actual dependency use point.\n' : 'Mock required: YES — use unittest.mock.patch for external dependencies\n';
         }
     }
 

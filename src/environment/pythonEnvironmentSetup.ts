@@ -6,7 +6,9 @@ import { spawn } from 'node:child_process';
 import { killProcessTree } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { inferTargetImportModule } from '../utils/dependencyResolver';
-import { importFixtureEnvironment } from '../pipeline/importFixtures';
+import { currentImportFixtures, importFixtureEnvironment, IMPORT_FIXTURE_ENV } from '../pipeline/importFixtures';
+import { closeResourceLease, createResourceLease, resourceLeaseEnvironment } from '../pipeline/isolatedResources';
+import { currentExecution } from '../pipeline/executionContext';
 import { DependencyInventory, inventorySummary, isDependencyInventory } from './dependencyInventory';
 import { createPythonInstallationPlan, installationPlanFilesUnchanged, PythonInstallationPlan,
     PythonInstallationDecision, validateInstallationMappings } from './pythonInstallationPlan';
@@ -17,37 +19,51 @@ export class EnvironmentSetupError extends Error {
 export interface SetupCommand {
     executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv;
     input?: string; timeoutMs?: number; signal?: AbortSignal; stdoutLimit?: number;
+    resourceScope?: 'module-probe';
 }
 export type SetupRunner = (command: SetupCommand) => Promise<{ code: number | null; stdout: string; stderr: string }>;
 
 /** Capture bounded output; installer responses may contain private URLs and never reach the UI. */
-export const runSetupCommand: SetupRunner = command => new Promise((resolve, reject) => {
-    if (command.signal?.aborted) { reject(new Error('cancelled')); return; }
-    const proc = spawn(command.executable, command.args, {
-        cwd: command.cwd, env: importFixtureEnvironment(command.env), shell: false, windowsHide: true,
-        detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
-    });
-    let stdout = '', stderr = '', stopped = false;
-    const stop = () => { stopped = true; killProcessTree(proc); };
-    const timer = setTimeout(stop, command.timeoutMs || 15 * 60 * 1000);
-    command.signal?.addEventListener('abort', stop, { once: true });
-    if (command.signal?.aborted) { stop(); }
-    const cleanup = () => { clearTimeout(timer); command.signal?.removeEventListener('abort', stop); };
-    proc.stdout.setEncoding('utf8');
-    proc.stderr.setEncoding('utf8');
-    proc.stdout.on('data', data => { stdout = (stdout + data.toString()).slice(-(command.stdoutLimit || 65536)); });
-    proc.stderr.on('data', data => { stderr = (stderr + data.toString()).slice(-65536); });
-    proc.stdin.on('error', () => { /* A failed interpreter can close stdin before reading. */ });
-    proc.on('error', () => { cleanup(); reject(new Error('process-start-failed')); });
-    // Do not release the installation lock until the child has actually exited.
-    proc.on('close', code => { cleanup(); resolve({ code: stopped ? null : code, stdout, stderr }); });
-    proc.stdin.end(command.input);
-});
+export const runSetupCommand: SetupRunner = async command => {
+    if (command.signal?.aborted) { throw new Error('cancelled'); }
+    const context = currentExecution();
+    const controlledProbe = command.resourceScope === 'module-probe' && command.args.at(-1) === pythonToolPath('environment');
+    const lease = controlledProbe ? createResourceLease(currentImportFixtures()) : undefined;
+    const env = controlledProbe ? resourceLeaseEnvironment(importFixtureEnvironment(command.env), lease)
+        : resourceLeaseEnvironment(command.env);
+    if (!controlledProbe) { for (const key of Object.keys(env)) { if (key.toUpperCase() === IMPORT_FIXTURE_ENV) { delete env[key]; } } }
+    let processFailure: { error: unknown } | undefined;
+    try {
+        return await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+            const proc = spawn(command.executable, command.args, {
+                cwd: command.cwd, env, shell: false, windowsHide: true,
+                detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
+            });
+            let stdout = '', stderr = '', stopped = false;
+            let terminationCleanup: Promise<void> | undefined;
+            const stop = () => { if (!stopped) { stopped = true; terminationCleanup = killProcessTree(proc); } };
+            const timer = setTimeout(stop, command.timeoutMs || 15 * 60 * 1000);
+            command.signal?.addEventListener('abort', stop, { once: true });
+            if (command.signal?.aborted) { stop(); }
+            const cleanup = () => { clearTimeout(timer); command.signal?.removeEventListener('abort', stop); };
+            proc.stdout.setEncoding('utf8');
+            proc.stderr.setEncoding('utf8');
+            proc.stdout.on('data', data => { stdout = (stdout + data.toString()).slice(-(command.stdoutLimit || 65536)); });
+            proc.stderr.on('data', data => { stderr = (stderr + data.toString()).slice(-65536); });
+            proc.stdin.on('error', () => { /* A failed interpreter can close stdin before reading. */ });
+            proc.on('error', () => { cleanup(); reject(new Error('process-start-failed')); });
+            // Do not release the installation lock until the child has actually exited.
+            proc.on('close', async code => { cleanup(); await terminationCleanup; resolve({ code: stopped ? null : code, stdout, stderr }); });
+            proc.stdin.end(command.input);
+        });
+    } catch (error) { processFailure = { error }; throw error; }
+    finally { await closeResourceLease(lease, context ? event => context.recordResourceLifecycle(event) : undefined, processFailure); }
+};
 
 export function setupEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    const env = { ...base };
+    const env = resourceLeaseEnvironment(base);
     for (const key of Object.keys(env)) {
-        if (/^(?:PYTHONPATH|PYTHONHOME|PIP_TARGET|PIP_PREFIX|PIP_USER|PIP_ROOT|PIP_PYTHON|PIP_LOG|PIP_BREAK_SYSTEM_PACKAGES|PIP_UPGRADE|PIP_FORCE_REINSTALL|PIP_IGNORE_INSTALLED)$/i.test(key)) {
+        if (key.toUpperCase() === IMPORT_FIXTURE_ENV || /^(?:PYTHONPATH|PYTHONHOME|PIP_TARGET|PIP_PREFIX|PIP_USER|PIP_ROOT|PIP_PYTHON|PIP_LOG|PIP_BREAK_SYSTEM_PACKAGES|PIP_UPGRADE|PIP_FORCE_REINSTALL|PIP_IGNORE_INSTALLED)$/i.test(key)) {
             delete env[key];
         }
     }
@@ -85,6 +101,7 @@ export async function inspectPython(candidate: PythonCandidate, projectRoot: str
         executable: candidate.executable, args: [...candidate.args || [], '-B', pythonToolPath('environment')],
         cwd: os.tmpdir(), env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeoutMs: scope === 'folder' ? 60000 : 15000,
         signal, stdoutLimit: scope === 'folder' ? 2 * 1024 * 1024 : undefined,
+        resourceScope: scope === 'file' ? 'module-probe' : undefined,
         input: JSON.stringify(scope === 'folder' ? { scanRoot: file, sourceRoot: projectRoot, excludedPaths }
             : { file, module: inferTargetImportModule(file), sourceRoot: projectRoot,
             importPaths: [directory, path.dirname(directory), path.dirname(path.dirname(directory)), projectRoot] })

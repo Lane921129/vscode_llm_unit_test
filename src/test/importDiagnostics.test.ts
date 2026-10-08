@@ -2,6 +2,14 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { describeImportIssue, summarizeImportException } from '../environment/importDiagnostics';
 
+test('missing isolated schema has actionable fixture advice without guessing an assertion', () => {
+    const issue = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: 'resource-schema-required' }, 'module-import');
+    assert.equal(issue.issue, 'resource-schema-required');
+    assert.match(issue.advice, /隔離測試資源/);
+    assert.match(issue.advice, /不會猜/);
+    assert.equal(describeImportIssue({ exception_type: 'ValueError', blocked_operation: 'resource-schema-required' }, 'module-import').kind, 'other');
+});
+
 test('runtime policy labels with spaces retain initialization diagnostics without copying arbitrary text', () => {
     for (const operation of ['network connection', 'file read', 'shell / subprocess', 'os.mkdir']) {
         const issue = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: operation,

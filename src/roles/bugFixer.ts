@@ -6,6 +6,7 @@
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } from '../pipeline/repairDiagnostics';
+import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 
 interface TestMethodFragment {
     name: string;
@@ -24,7 +25,7 @@ export interface BugFixReplacement {
 export function getBugFixerSystemPrompt(): string {
     return `You are a Python unittest Bug Fixer. Repair one failing test method only.
 
-CONTRACT:
+CONTRACT:${isolatedResourceSystemRule()}
 - Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V5.
 - Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.

@@ -1,6 +1,7 @@
 import { localize } from '../i18n/core';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import type { ResourceLifecycle } from './isolatedResources';
 
 /** One top-level analysis owns all workers, cancellation and capability facts. */
 export class ExecutionContext<Snapshot = unknown> {
@@ -8,6 +9,16 @@ export class ExecutionContext<Snapshot = unknown> {
     readonly snapshot: Snapshot;
     private stopped = false;
     private readonly cancellations = new Set<() => void>();
+    private readonly resourceObservers = new Set<(event: ResourceLifecycle) => void>();
+
+    subscribeResourceLifecycle(observer: (event: ResourceLifecycle) => void): () => void {
+        this.resourceObservers.add(observer);
+        return () => this.resourceObservers.delete(observer);
+    }
+
+    recordResourceLifecycle(event: ResourceLifecycle): void {
+        for (const observer of this.resourceObservers) { observer({ ...event }); }
+    }
 
     constructor(snapshot: Snapshot) {
         this.snapshot = structuredClone(snapshot);

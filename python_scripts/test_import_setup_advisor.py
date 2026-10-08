@@ -68,6 +68,9 @@ class ImportSetupAdvisorTests(unittest.TestCase):
         source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\ndef target(): return 4\n'
         result = self.check(source)
         self.assertEqual(self.candidate(result)['kind'], 'mkdir', result)
+        self.assertNotIn('resourcePath', self.candidate(result), 'pre-created directories would violate exist_ok=False')
+        allowed = self.check(source.replace('.mkdir()', '.mkdir(exist_ok=True)'))
+        self.assertEqual(self.candidate(allowed)['resourcePath'], 'must_not_exist')
         result = self.check('import os\nos.mkdir("must_not_exist")\ndef target(): return 4\n')
         self.assertFalse(result['ok'])
         self.assertIsNone(self.candidate(result))

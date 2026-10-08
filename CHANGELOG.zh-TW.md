@@ -2,6 +2,20 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-09
+
+### 匯入前準備隔離資源，執行後由工具回收
+
+- 依使用者確認，新增來源／根目錄綁定的空白目錄、文字 fixture、SQLite schema／seed 清單。原模組實際使用暫存資源，保留 `__file__`、來源與 coverage 身分；不複製正式資源、不猜表、不代呼叫初始化函式、不修改原始碼。
+- 預檢從真實 `Path.mkdir(exist_ok=True)` receiver 提出可核對的目錄。新增專案區「隔離測試資源」：編輯、保存、最終合併預覽與確認、重新預檢；來源變更可重建草稿版本。舊草稿不覆蓋後來新增的初始化設定；過期入口行號只明示撤銷、另行預檢批准，不自動重綁。
+- 每個預檢、Trace case、suite、baseline、mutant 都建立獨立資源；同 worker 的 import／call 沿用。Node 擁有外層 lease，正常、失敗、逾時及取消皆在子樹停止後核對清理，journal 保存清理結果；清理失敗不回報成功。套件安裝不帶入資源授權。
+- SQLite 缺表／欄位明示 `resource-schema-required`，不能作 oracle 或 killed。full／execution 以同 source／test／run／資源計畫的完整隔離紀錄停止為環境設定障礙，不交 AI 猜 schema。保留生成測試直接 I/O、未宣告路徑、越界、連結、Windows 裝置／ADS、網路、shell、共享 SQLite、ATTACH／extension 的防護。suite 方法間狀態仍須由測試透過公開 API 管理，沒有假稱自動方法級隔離。
+- Writer／Analyst／Reviewer／Bug Fixer 取得受限資源語境與相同計畫身分；seed 是輸入，不是 expected。純函式不加入冗長資源規則。修正品質實驗比對注入前環境而誤拒合法 fixture 的問題，Trace／runner／mutation 保留設定證據；不同 seed 拒絕舊觀測。
+- 突變複製套件時排除宣告資料目錄、文字檔、SQLite 及指向資源的 alias；拒絕資源路徑 symlink／junction，避免在隔離 guard 啟動前讀取正式資料。內建與 Mutatest 共用相同執行生命週期。
+- 統一單檔預檢、相依探索與報告使用的選取專案根目錄，避免 F5 工作區為插件自身時錯用根目錄。execution 呼叫語境沿用完整記錄投影，保留來源、輸入與建構子，移除重複 tagged 傳輸欄位以符合原提示預算。保留舊無 fixture Trace 輸出格式；中英文介面、設定 schema、架構／規則及操作文件同步更新。
+- 驗證：修正完整回歸發現的提示長度、空白 metadata 與既有提示文字相容性後，最終 Node 全套 650／650 通過；Python 全套 417 項，416 通過、1 項因 Windows 符號連結權限略過；核心 Mocha 15／15。TypeScript、lint、生產建置、Webview 語法、新檔／tracked／可達 Git 歷史密鑰掃描及差異檢查通過。原工作區既有 32 個未提交檔案備份並保留，不混入本次功能提交。
+- 實驗室原始整批與實際雲端／本機模型尚未重新執行；中性 fixture、模擬 provider 與工具整合通過不代表原始專案整批通過。
+
 ## 2026-10-08
 
 ### 結束重複初始化提示並刷新明確重檢

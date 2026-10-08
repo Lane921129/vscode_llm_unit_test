@@ -9,12 +9,27 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
 import { preflightFailureCacheSize, preflightTargetModule } from '../pipeline/modulePreflight';
 
+test('mkdir that requires an absent directory does not receive a contradictory pre-created resource proposal', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mkdir-absent-'));
+    try {
+        const file = path.join(root, 'sample.py');
+        fs.writeFileSync(file, 'from pathlib import Path\nPath("data").mkdir()\ndef target(): return 1\n');
+        const result = await inspectProjectImports(root, resolvePythonExecutable(undefined, path.resolve(__dirname, '../..')),
+            [{ file, target: 'target' }], path.join(root, 'output'), []);
+        assert.equal(result.rows[0].status, 'blocked');
+        assert.equal(result.rows[0].suggestion, undefined);
+        assert.equal(result.proposedPlan, null);
+        assert.deepEqual(result.proposedRules, []);
+        assert.equal(fs.existsSync(path.join(root, 'data')), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('after mkdir setup the next import exception is persisted with its type, message and source position', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-detail-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     try {
         const file = path.join(root, 'sample.py');
-        const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\n'
+        const source = 'from pathlib import Path\nPath("must_not_exist").mkdir(exist_ok=True)\n'
             + 'raise ValueError("invalid setup mode")\ndef target():\n    return 1\n';
         fs.writeFileSync(file, source);
         const targets = [{ file, target: 'target' }];
@@ -54,7 +69,7 @@ test('shared import initialization is diagnosed, previewed and rechecked without
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     try {
         const app = path.join(root, 'app'); fs.mkdirSync(app);
-        const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\nSETTING = 3\n';
+        const source = 'from pathlib import Path\nPath("must_not_exist").mkdir(exist_ok=True)\nSETTING = 3\n';
         fs.writeFileSync(path.join(app, 'config.py'), source);
         fs.writeFileSync(path.join(app, 'sample.py'), 'from config import SETTING\ndef target(value):\n    return value + SETTING\n');
         const targets = [{ file: path.join(app, 'sample.py'), target: 'target' }];
@@ -62,7 +77,9 @@ test('shared import initialization is diagnosed, previewed and rechecked without
         assert.equal(first.rows.length, 1, 'one check per source file');
         assert.equal(first.rows[0].status, 'blocked');
         assert.equal(first.rows[0].issue?.kind, 'import-side-effect');
-        assert.deepEqual(first.proposedRules, [{ file: 'app/config.py', mkdir: true }]);
+        assert.equal(first.proposedRules[0].file, 'app/config.py');
+        assert.deepEqual(first.proposedRules[0].resources, [{ path: 'must_not_exist', kind: 'directory' }]);
+        assert.match(first.proposedRules[0].resourceSourceHash!, /^[a-f0-9]{64}$/);
         verifyImportProposal(first);
         assert.equal(fs.existsSync(path.join(root, 'r1/must_not_exist')), false);
         const second = await runInExecution(new ExecutionContext({}), () => inspectProjectImports(root, python, targets, path.join(root, 'r2'), first.proposedRules, undefined, root));
@@ -77,7 +94,7 @@ test('shared import initialization is diagnosed, previewed and rechecked without
         assert.equal(switched.rows[0].issue?.kind, 'import-side-effect');
         assert.ok(switched.proposedRules.every(rule => rule.file !== 'obsolete.py'));
         fs.appendFileSync(path.join(app, 'config.py'), '# changed\n');
-        assert.throws(() => verifyImportProposal(first), /過期|變更/);
+        assert.throws(() => verifyImportProposal(first), /過期|變更|expired/);
 
         fs.writeFileSync(path.join(app, 'vendor.py'), 'version = "fixture"\n');
         fs.writeFileSync(path.join(app, 'api_case.py'), 'import vendor\nvendor.launch()\ndef target():\n    return 1\n');

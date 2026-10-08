@@ -12,10 +12,29 @@ import unittest
 from uuid import uuid4
 from target_invocation import TargetInvocationTracker
 from import_fixtures import evidence as import_fixture_evidence
+from isolated_resources import set_generated_test_file
 from runtime_policy import ISOLATION_EXIT_CODE, ISOLATION_MARKER, POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, guarded_runtime
 
 
 _target_tracking = False
+
+
+def register_generated_test_files(module, explicit_path=None):
+    """Resolve unittest module names without importing a parent package unguarded."""
+    set_generated_test_file(explicit_path)
+    parts = module.split('.')
+    if not parts or not all(part.isidentifier() for part in parts):
+        return
+    for base in sys.path:
+        for length in range(len(parts), 0, -1):
+            candidate = os.path.join(base or os.getcwd(), *parts[:length])
+            if os.path.isfile(candidate + '.py'):
+                set_generated_test_file(candidate + '.py')
+                break
+            package = os.path.join(candidate, '__init__.py')
+            if os.path.isfile(package):
+                set_generated_test_file(package)
+                break
 
 
 def _safe_test_id(test):
@@ -121,6 +140,7 @@ def main(argv=None):
     sys.dont_write_bytecode = True
     # Script execution otherwise places the extension's tool folder first.
     sys.path.insert(0, os.getcwd())
+    register_generated_test_files(args.test_module, args.target_test_file)
     coverage = None
     if args.coverage_source:
         from coverage import Coverage
@@ -177,6 +197,7 @@ def main(argv=None):
         if args.result_json:
             with open(args.result_json, 'w', encoding='utf-8') as report:
                 json.dump({'schemaVersion': 'generated-test-result-v1', 'status': 'isolation-blocked',
+                           'importFixtures': import_fixture_evidence(),
                            'testsRun': test_result['testsRun'] if test_result else 0, 'testFailures': []}, report)
         print(f'{ISOLATION_MARKER}: {violation}; mock the dependency at its target use point.', file=sys.stderr)
         record('completed', status='isolation-blocked', operation=violation)
@@ -187,6 +208,7 @@ def main(argv=None):
                   all(item['phase'] == 'test' for item in failures) else 'runner-error')
         with open(args.result_json, 'w', encoding='utf-8') as report:
             json.dump({'schemaVersion': 'generated-test-result-v1', 'status': status,
+                       'importFixtures': import_fixture_evidence(),
                        'testsRun': test_result['testsRun'] if test_result else 0,
                        'testFailures': failures}, report)
     record('completed', status='passed' if exit_code == 0 else 'failed')

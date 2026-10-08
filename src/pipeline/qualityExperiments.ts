@@ -7,6 +7,7 @@ import { containsCredential, redactCredentialStrings } from './artifactSafety';
 import { TraceValueSnapshot } from './evidenceContracts';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { importFixtureEnvironment, IMPORT_FIXTURE_ENV } from './importFixtures';
 
 export interface QualityExperimentFocus {
     id: string;
@@ -161,11 +162,12 @@ export function validateQualityExperimentResult(value: unknown): asserts value i
 /** The host returns isolated observations only. Writer authors every test, which
  * must then pass execution, independent review and mutation gates. */
 export async function prepareQualityExperiments(input: QualityExperimentInput): Promise<QualityExperimentResult> {
+    const effectiveEnvironment = importFixtureEnvironment(input.env ?? process.env);
     const run = await runSpawn(input.python, ['-B', pythonToolPath('qualityExperiments'), '--run'], {
         input: JSON.stringify({ ...input, python: undefined, env: undefined, timeoutMs: undefined, knownSecrets: undefined,
             sourceHash: evidenceHash(input.source) }),
         timeout: Math.min(input.timeoutMs ?? 20000, 20000),
-        env: { ...(input.env ?? process.env), PYTHONIOENCODING: 'utf-8' }
+        env: { ...effectiveEnvironment, PYTHONIOENCODING: 'utf-8' }
     });
     if (run.code !== 0) { throw new Error('Quality experiment worker failed; no observations were adopted.'); }
     if (containsCredential(run.stdout, input.knownSecrets)) { throw new Error('Sensitive quality observation was withheld.'); }
@@ -181,7 +183,7 @@ export async function prepareQualityExperiments(input: QualityExperimentInput): 
         while (fs.existsSync(path.join(root, '__init__.py'))) { root = path.dirname(root); }
         if (path.resolve(result.context.sourceRoot) !== root || path.resolve(result.context.sourcePath) !== sourcePath
             || result.context.module !== input.module
-            || result.context.importFixturePlanHash !== evidenceHash((input.env ?? process.env).LLM_UNIT_TEST_IMPORT_FIXTURES ?? '')) {
+            || result.context.importFixturePlanHash !== evidenceHash(effectiveEnvironment[IMPORT_FIXTURE_ENV] ?? '')) {
             throw new Error('Quality observation execution context mismatch.');
         }
     }

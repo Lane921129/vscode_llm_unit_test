@@ -19,6 +19,7 @@ export default {
         tier1: "Tier 1 — 2–3B (填空法)",
         tier4: "Tier 4 — 100B+/Cloud (全自主)",
         importSetup: "檢查模組載入／初始化設定",
+        resourceSetup: "隔離測試資源",
         fullModeSuffix: "（完整品質模式）",
         flatView: "📄 平鋪模式",
         groupedView: "📁 檔案分組",

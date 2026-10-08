@@ -11,6 +11,8 @@ import { runSpawn } from '../utils/processRunner';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { throwIfExecutionCancelled } from './executionContext';
 import { pythonToolPath } from './pythonTools';
+import { currentImportFixtures } from './importFixtures';
+import { readResourceSetupFailure } from './resourceSetupFailure';
 
 interface ExecutionVerificationOptions {
     directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
@@ -90,6 +92,13 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 '--target-evidence', invocation, '--target-run-id', baseline.testRunId, '--violation-report', isolation
             ], { cwd: artifacts, env, timeout: 30000 });
             checkCurrent();
+            const resourceFailure = readResourceSetupFailure({ isolationFile: isolation, sourceFile: file, testFile: testPath,
+                targetRunId: baseline.testRunId, sourceHash: journal.sourceHash, testHash: baseline.testHash,
+                importFixturePlanId: currentImportFixtures()?.id, exitCode: run.code });
+            if (resourceFailure) {
+                throw new AnalysisStageError('environment', 'resource-setup',
+                    localize('隔離測試資料庫缺少資料表或欄位；請在「隔離測試資源」補齊 schema 後重新執行。'), resourceFailure);
+            }
             const ok = run.code === 0 && verifyExecutionEvidence(directory, file, baseline, expected);
             const out = (run.stdout + run.stderr).trim()
                 + (!ok && run.code === 0 ? localize("\n執行證據不足：需有真正通過的案例、目標函式呼叫與完整隔離紀錄。") : '');

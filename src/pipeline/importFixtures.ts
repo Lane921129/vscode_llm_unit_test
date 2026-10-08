@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { TestResourceSpec, resourceLeaseEnvironment, validateResourcePlanConflicts, validateTestResources } from './isolatedResources';
 
 export const IMPORT_FIXTURE_ENV = 'LLM_UNIT_TEST_IMPORT_FIXTURES';
 export interface ImportFixtureRule {
@@ -12,6 +13,8 @@ export interface ImportFixtureRule {
     entryPoints?: string[];
     entryPointLines?: Record<string, number[]>;
     entryPointSourceHash?: string;
+    resources?: TestResourceSpec[];
+    resourceSourceHash?: string;
 }
 export interface ImportFixturePlan {
     schemaVersion: 'import-fixtures-v1';
@@ -51,7 +54,8 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
     const rules = input.map((value: unknown) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error(localize("匯入測試設定格式錯誤。")); }
         const rule = value as ImportFixtureRule;
-        if (Object.keys(rule).some(key => !['file', 'mkdir', 'configFiles', 'entryPoints', 'entryPointLines', 'entryPointSourceHash'].includes(key))
+        if (Object.keys(rule).some(key => !['file', 'mkdir', 'configFiles', 'entryPoints', 'entryPointLines', 'entryPointSourceHash',
+            'resources', 'resourceSourceHash'].includes(key))
             || typeof rule.file !== 'string' || path.isAbsolute(rule.file) || !rule.file.endsWith('.py')
             || rule.file.split(/[\\/]/).some(part => !part || part === '..' || part === '.')
             || (rule.mkdir !== undefined && typeof rule.mkdir !== 'boolean')) { throw new Error(localize("匯入測試設定來源或操作無效。")); }
@@ -78,6 +82,12 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
             throw new Error(localize("初始化替身行號必須綁定已宣告入口及有限的正整數來源行。"));
         }
         const sourceHash = hash(fs.readFileSync(file));
+        const resources = rule.resources === undefined ? [] : validateTestResources(rule.resources);
+        if (resources.length && (typeof rule.resourceSourceHash !== 'string'
+            || !/^[a-f0-9]{64}$/.test(rule.resourceSourceHash) || rule.resourceSourceHash !== sourceHash)
+            || !resources.length && rule.resourceSourceHash !== undefined) {
+            throw new Error('Isolated resource source approval is missing or expired; review the setup again.');
+        }
         if (rule.entryPointSourceHash !== undefined && (typeof rule.entryPointSourceHash !== 'string'
             || !/^[a-f0-9]{64}$/.test(rule.entryPointSourceHash) || !Object.keys(entryPointLines).length)) {
             throw new Error(localize("初始化入口來源版本格式無效。"));
@@ -89,8 +99,10 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
             mkdir: rule.mkdir === true, configFiles: { ...configFiles }, entryPoints: [...new Set(entryPoints)],
             ...(Object.keys(entryPointLines).length ? { entryPointLines: Object.fromEntries(Object.entries(entryPointLines)
                 .map(([name, lines]) => [name, [...new Set(lines)].sort((a, b) => a - b)])) } : {}),
-            ...(rule.entryPointSourceHash ? { entryPointSourceHash: rule.entryPointSourceHash } : {}) };
+            ...(rule.entryPointSourceHash ? { entryPointSourceHash: rule.entryPointSourceHash } : {}),
+            ...(resources.length ? { resources, resourceSourceHash: rule.resourceSourceHash } : {}) };
     });
+    validateResourcePlanConflicts(rules);
     const body = { schemaVersion: 'import-fixtures-v1' as const, root, rules };
     const encoded = JSON.stringify(body);
     if (Buffer.byteLength(encoded, 'utf8') > 262144) { throw new Error(localize("匯入測試設定超過大小限制。")); }
@@ -124,7 +136,7 @@ export function withImportFixtures<T>(plan: ImportFixturePlan | null, operation:
     return storage.run(plan, operation);
 }
 export function importFixtureEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    const result = { ...base };
+    const result = resourceLeaseEnvironment(base);
     // Host environment must not silently enable fixtures for an unconfigured run.
     delete result[IMPORT_FIXTURE_ENV];
     const plan = currentImportFixtures();

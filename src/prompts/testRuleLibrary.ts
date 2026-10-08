@@ -192,7 +192,8 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
             'MOCK EXTERNAL DEPENDENCIES:',
             '  - Use from unittest.mock import patch, MagicMock',
             '  - Patch at the point of USE: @patch("module_under_test.external_function")',
-            '  - Set mock return value: mock_fn.return_value = expected_value',
+            '  - Match the dependency protocol: a connection/cursor cannot be replaced with a scalar return value. Set return_value only for a dependency that actually returns that shape.',
+            '  - If HOST_ISOLATED_RESOURCE_CONTEXT declares the needed boundary, call the real target using that resource instead of adding an unnecessary mock.',
             '  - Derive the full patch target from the canonical target module and its imported binding (including aliases), never the dependency definition module.',
             '  - Verify mock.assert_called_once_with using the actual target-source call arguments so an unused patch cannot pass accidentally.',
         ]
@@ -227,8 +228,10 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
         rules: [
             'DATABASE STATE ISOLATION:',
             '  - Never connect to the application default, configured, or shared database from a generated test.',
-            '  - Patch the connection boundary at the module-under-test point of use; use a fresh in-memory database, temporary database, or MagicMock per test.',
+            '  - When the host declares an isolated database, call the real target using that database. Do not connect from the test or invent schema/seed data. The runner prepares it before import.',
+            '  - Otherwise patch the connection boundary at the module-under-test point of use, using fresh in-memory SQLite or protocol-correct mocks. Generated tests cannot create temporary database files.',
             '  - Keep setup and teardown independent so one test cannot leave rows, locks, or configuration that change another test.',
+            '  - Host resources are fresh per process, not per test method. Use supported public application APIs to arrange/clean up each method; do not assume automatic resets.',
             '  - Only use assertRaises for an explicit source `raise` or a verified behavior observation. Never infer validation exceptions from parameter names.',
         ]
     },
@@ -249,7 +252,8 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
         trigger_hint: 'Use when the target opens, reads, writes, or closes files',
         rules: [
             'FILE I/O MOCKING:',
-            '  - Use unittest.mock.mock_open and patch the name at the point where the target uses it.',
+            '  - For undeclared file boundaries use unittest.mock.mock_open and patch the name at the point where the target uses it.',
+            '  - For host-declared isolated files, call the real target; only application code may access them. A declared file is setup input, not a verified expected result.',
             '  - Exercise read and write paths without creating or changing real files.',
             '  - Assert the expected path, mode, and written content when the source code makes them observable.',
         ]

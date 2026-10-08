@@ -1,4 +1,7 @@
 {
+  "contributes.commands.5.title": "LLM Unit Test: Configure isolated test resources",
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resourceSourceHash.description": "Source SHA-256 approved for the resource declaration; changed source requires a new preview.",
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.description": "Project-relative temporary resources: empty directories, test text, or SQLite schemas/seed rows. Never copy production data. See docs/isolated-test-resources.md.",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0": "Built-in mutation rules with isolated execution (default).",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1": "Mutatest mutation rules, executed in isolation by the extension. Requires installation and a supported version and environment.",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2": "Mutmut is not yet supported; selecting it stops the run during preflight.",

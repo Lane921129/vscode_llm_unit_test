@@ -41,6 +41,32 @@ def _parts(node):
     return None
 
 
+def _observed_directory(following, root):
+    """Read the actual pathlib receiver, never evaluate its source expression."""
+    for entry in following:
+        if entry.tb_frame.f_code is not _PATH_MKDIR_CODE:
+            continue
+        receiver = entry.tb_frame.f_locals.get('self')
+        if type(receiver) is not type(Path()) or entry.tb_frame.f_locals.get('exist_ok') is not True:
+            return None
+        raw = os.fspath(receiver)
+        if not os.path.isabs(raw) and any(part == '..' for part in raw.replace('\\', '/').split('/')):
+            return None
+        # Relative declarations are explicitly bound to the project logical
+        # root, independent of the report/worker current directory.
+        lexical = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(root, raw))
+        # Reject existing symlink components and out-of-project destinations.
+        if os.path.normcase(lexical) != _absolute(lexical) or not _inside(lexical, root):
+            return None
+        relative = os.path.relpath(lexical, root).replace('\\', '/')
+        if relative == '.' or any(part in ('', '.', '..') for part in relative.split('/')):
+            return None
+        if any(part.lower().endswith(('.py', '.pyc', '.pyo', '.pyd', '.dll', '.so')) for part in relative.split('/')):
+            return None
+        return relative
+    return None
+
+
 def _definition_time_nodes(node):
     """Walk expressions executed when defining a function, never its local body."""
     yield node
@@ -186,10 +212,15 @@ def advise_blocked_initialization(error, source_root):
                 if not direct and not through_fixture:
                     continue
                 kind, operation = 'entry-point', external[0]
-            return {'schemaVersion': 'import-initialization-candidate-v1', 'kind': kind,
+            candidate = {'schemaVersion': 'import-initialization-candidate-v1', 'kind': kind,
                     'file': os.path.relpath(_absolute(file), root).replace('\\', '/'),
                     'line': item.tb_lineno, 'sourceHash': hashlib.sha256(source).hexdigest(),
                     'operation': operation, 'evidence': 'blocked-direct-module-call', 'returnValue': 'discarded'}
+            if direct_mkdir:
+                resource_path = _observed_directory(following, root)
+                if resource_path:
+                    candidate['resourcePath'] = resource_path
+            return candidate
     except (OSError, ValueError, TypeError, SyntaxError, RecursionError):
         # Advice is optional and must never replace the actual import failure.
         return None

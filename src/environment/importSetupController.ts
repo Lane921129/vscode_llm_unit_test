@@ -79,7 +79,7 @@ export class ImportSetupController {
                         check.proposedPlan = createImportFixturePlan(root, check.proposedRules);
                     }
                     if (check.proposedPlan) { fs.writeFileSync(path.join(check.directory, 'setup_proposal.json'), JSON.stringify({
-                        note: localize("模擬列出來源的頂層目錄建立或指定行號的外部初始化呼叫；不執行其副作用或 callback。請確認測試不依賴被略過初始化建立的狀態。其他操作仍隔離，套用後重新預檢。"),
+                        note: localize("清單中的 resources 會建立獨立暫存資源；mkdir/configFiles 舊設定與啟動入口仍是明確替身，不執行其副作用或 callback。受測原檔不變，不會複製正式資料。套用後重新預檢。"),
                         evidence: check.proposals,
                         expiredEntryPointSources: refreshed.expired,
                         'llmUnitTest.importFixtureRoot': check.root,
@@ -98,7 +98,7 @@ export class ImportSetupController {
                     throwIfExecutionCancelled();
                     const applyLabel = localize("套用此清單並重新檢查");
                     const approved = await vscode.window.showWarningMessage(
-                        localize("已開啟初始化替身清單。套用會保存測試工具設定，再重新檢查；受測原檔不變，缺少的套件或 API 仍會失敗。"),
+                        localize("已開啟初始化與隔離資源清單。套用會保存測試工具設定，再重新檢查；受測原檔不變，缺少的套件、資料表或 API 仍會失敗。"),
                         { modal: true }, applyLabel);
                     throwIfExecutionCancelled();
                     if (approved !== applyLabel) {

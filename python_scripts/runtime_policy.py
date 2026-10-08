@@ -1,8 +1,9 @@
 """One fail-closed external-operation policy for all Python execution phases.
 
-Only import/traceback source reads, stdlib asyncio socketpair plumbing and
-guarded independent in-memory SQLite are permitted. This process-local audit
-guard is not an OS sandbox for hostile native extensions.
+Only import/traceback source reads, stdlib asyncio socketpair plumbing, guarded
+independent in-memory SQLite and explicitly declared app resource operations are
+permitted. This process-local audit guard is not an OS sandbox for hostile native
+extensions. Generated tests still use mocks instead of direct filesystem I/O.
 """
 from contextlib import contextmanager, ExitStack
 import ast
@@ -21,6 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 from trace_value_codec import type_field
 from import_fixtures import ImportFixtures
+from isolated_resources import for_plan as isolated_resources_for_plan, is_redirect_frame
 
 POLICY_VERSION = 'python-execution-policy-v1'
 ISOLATION_EXIT_CODE = 86
@@ -115,14 +117,68 @@ def block_operation(operation, error_type=RuntimePolicyError):
     raise error
 
 
+class _ResourceCursor(sqlite3.Cursor):
+    def execute(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        try:
+            return super().execute(*args, **kwargs)
+        except sqlite3.OperationalError as error:
+            self.connection._check_resource_schema(error)
+            raise
+
+    def executemany(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        try:
+            return super().executemany(*args, **kwargs)
+        except sqlite3.OperationalError as error:
+            self.connection._check_resource_schema(error)
+            raise
+
+    def executescript(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        try:
+            return super().executescript(*args, **kwargs)
+        except sqlite3.OperationalError as error:
+            self.connection._check_resource_schema(error)
+            raise
+
+    def fetchone(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        return super().fetchone(*args, **kwargs)
+
+    def fetchmany(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        return super().fetchmany(*args, **kwargs)
+
+    def fetchall(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        return super().fetchall(*args, **kwargs)
+
+    def __next__(self):
+        self.connection._require_resource_caller()
+        return super().__next__()
+
+
 class _MemoryConnection(sqlite3.Connection):
     def __init__(self, *args, **kwargs):
+        self._isolated_file_resource = (args[0] if args else kwargs.get('database')) != ':memory:'
+        self._resource_owner = _active.get('resources') if _active else None
         super().__init__(*args, **kwargs)
+        # Temporary sort tables must not create files in the user's TEMP. The
+        # database and its journals remain inside the owned resource directory.
+        super().execute('PRAGMA temp_store=MEMORY')
 
         def authorize(action, *_args):
             if action == sqlite3.SQLITE_ATTACH:
                 if _active is not None:
                     _active['violations'].append('SQLite ATTACH / VACUUM INTO')
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_PRAGMA and _args and str(_args[0]).lower() in (
+                    'temp_store_directory', 'data_store_directory') or (
+                    action == sqlite3.SQLITE_PRAGMA and len(_args) > 1
+                    and str(_args[0]).lower() == 'temp_store' and _args[1] is not None):
+                if _active is not None:
+                    _active['violations'].append('SQLite external temporary directory')
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
 
@@ -131,12 +187,62 @@ class _MemoryConnection(sqlite3.Connection):
     def set_authorizer(self, *args, **kwargs):
         block_operation('replacing SQLite isolation authorizer')
 
+    def _check_resource_schema(self, error):
+        if (self._isolated_file_resource and getattr(error, 'sqlite_errorcode', None) == sqlite3.SQLITE_ERROR
+                and str(error).lower().startswith(('no such table:', 'no such column:'))):
+            # An absent declared schema is setup evidence, never an assertion
+            # oracle manufactured from the tool's empty database.
+            block_operation('resource-schema-required')
+
+    def _require_resource_caller(self):
+        if self._isolated_file_resource and self._resource_owner:
+            self._resource_owner.require_application_caller()
+
+    def cursor(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            self._require_resource_caller()
+            if args or kwargs:
+                block_operation('custom isolated SQLite cursor factory')
+            return super().cursor(factory=_ResourceCursor)
+        return super().cursor(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            return self.cursor().execute(*args, **kwargs)
+        return super().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            return self.cursor().executemany(*args, **kwargs)
+        return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            return self.cursor().executescript(*args, **kwargs)
+        return super().executescript(*args, **kwargs)
+
+    def commit(self):
+        self._require_resource_caller()
+        return super().commit()
+
+    def rollback(self):
+        self._require_resource_caller()
+        return super().rollback()
+
+    def __enter__(self):
+        self._require_resource_caller()
+        return super().__enter__()
+
+    def __exit__(self, *args):
+        self._require_resource_caller()
+        return super().__exit__(*args)
+
 
 def _import_or_traceback_read(filename):
     # The direct operation owner must be the loader or traceback reader. An
     # application frame deeper under an import does not obtain read permission.
     frame = sys._getframe(2)
-    while frame and frame.f_code.co_filename == __file__:
+    while frame and (frame.f_code.co_filename == __file__ or is_redirect_frame(frame)):
         frame = frame.f_back
     if not frame:
         return False
@@ -180,21 +286,25 @@ def _audit(event, args):
         if not (frame.f_code is _THREAD_BOOTSTRAP_CODE
                 and frame.f_globals.get('_profile_hook') is _active['thread_profile']):
             block_operation('replacing execution observer')
-    if event == 'sqlite3.connect' and not (type(args[0]) is str and args[0] == ':memory:'):
+    resources = _active.get('resources')
+    resource_operation = bool(resources and resources.allows_audit(event, args)) if event in (
+        'open', 'sqlite3.connect', 'os.remove', 'os.rename', 'os.rmdir', 'os.mkdir') else False
+    if event == 'sqlite3.connect' and not (type(args[0]) is str and args[0] == ':memory:') and not resource_operation:
         block_operation('non-isolated SQLite connection')
     if event == 'sqlite3.connect/handle' and not isinstance(args[0], _MemoryConnection):
         block_operation('unguarded SQLite connection factory')
-    if event == 'sqlite3.load_extension':
+    if event in ('sqlite3.load_extension', 'sqlite3.enable_load_extension'):
         block_operation('SQLite extension loading')
     if event == 'open':
         mode, flags = args[1], args[2]
         writing = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
             isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
-        if writing or not _import_or_traceback_read(args[0]):
+        if not resource_operation and (writing or not _import_or_traceback_read(args[0])):
             block_operation('file write' if writing else 'file read')
     if event in ('os.remove', 'os.rename', 'os.rmdir', 'os.mkdir', 'os.chmod', 'os.chown',
                  'os.link', 'os.symlink', 'os.truncate', 'os.utime', 'os.chdir'):
-        block_operation(event)
+        if not resource_operation:
+            block_operation(event)
     if event in ('subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn', 'os.fork', 'os.forkpty'):
         block_operation('shell / subprocess')
     if event in ('socket.connect', 'socket.bind', 'socket.getaddrinfo', 'socket.sendto') and not _asyncio_socketpair():
@@ -229,16 +339,23 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
         raise RuntimeError('Nested execution policy guards are unsupported')
     _prepare_metadata_reads()
     fixtures = ImportFixtures()
+    resources = isolated_resources_for_plan(fixtures.plan)
+    fixtures.resources = resources
+    if resources:
+        from import_fixtures import evidence as import_evidence
+        import_evidence()['resources'] = resources.evidence()
     violations = []
     background_failures = []
     initial_threads = set(_CURRENT_FRAMES())
     connect = sqlite3.connect
     state = {'violations': violations, 'error_type': error_type, 'first_error': None,
-             'protect_profile': protect_profile, 'thread_profile': threading.getprofile()}
+             'protect_profile': protect_profile, 'thread_profile': threading.getprofile(), 'resources': resources}
 
     def memory_connect(*args, **kwargs):
         if len(args) > 5 or 'factory' in kwargs:
             block_operation('custom SQLite connection factory')
+        if resources:
+            return resources.sqlite_connect(connect, args, {**kwargs, 'factory': _MemoryConnection})
         return connect(*args, **kwargs, factory=_MemoryConnection)
 
     def observe_background_exception(args):
@@ -260,6 +377,8 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
                     if hasattr(threading, name):
                         stack.enter_context(patch.object(threading, name, block_profile_replacement))
             stack.enter_context(fixtures)
+            if resources:
+                stack.enter_context(resources.guarding(block_operation))
             try:
                 yield violations
             finally:

@@ -273,6 +273,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
             </div>
             <button id="btn-import-setup">${t('ui.importSetup')}</button>
+            <button id="btn-resource-setup">${t('ui.resourceSetup')}</button>
             <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
             <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
             
@@ -670,13 +671,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
-                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = environmentBusy;
                     }
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
-                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = false;
                     }
                     break;
@@ -695,6 +696,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     document.getElementById('btn-prepare-env').disabled = environmentBusy;
                     document.getElementById('btn-prepare-env-scope').disabled = environmentBusy;
                     document.getElementById('btn-import-setup').disabled = environmentBusy;
+                    document.getElementById('btn-resource-setup').disabled = environmentBusy;
                     document.getElementById('btn-batch-scope').disabled = environmentBusy;
                     break;
             }
@@ -829,6 +831,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (!projectRoot) { alert(i18n.selectProject); return; }
             vscode.postMessage({ command: 'prepareImportSetup', projectRoot, outputPath: document.getElementById('output-path').value });
         };
+        document.getElementById('btn-resource-setup').onclick = () => {
+            const projectRoot = document.getElementById('project-path').value;
+            if (!projectRoot) { alert(i18n.selectProject); return; }
+            vscode.postMessage({ command: 'configureTestResources', projectRoot, outputPath: document.getElementById('output-path').value });
+        };
         document.getElementById('btn-prepare-env').onclick = () => {
             const projectRoot = document.getElementById('project-path').value;
             vscode.postMessage(projectRoot ? { command: 'prepareProjectEnvironment', projectRoot }
@@ -884,6 +891,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('btn-prepare-env').disabled = true;
             document.getElementById('btn-prepare-env-scope').disabled = true;
             document.getElementById('btn-import-setup').disabled = true;
+            document.getElementById('btn-resource-setup').disabled = true;
             document.getElementById('btn-batch-scope').disabled = true;
             document.getElementById('btn-run').disabled = true;
             document.getElementById('btn-run').innerText = isBatch ? '⏳ Testing all...' : '⏳ Testing...';

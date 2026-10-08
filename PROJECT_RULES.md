@@ -4,6 +4,11 @@
 
 ## 目前驗收優先順序
 
+- 依使用者 2026-10-08 確認，綁定根目錄／來源雜湊的明確資源可在匯入前實體建立：空白暫存目錄、純文字 fixture、結構化 SQLite schema／seed。本節窄例外取代下文對「受測應用」一律禁止檔案與檔案 SQLite 的限制；生成測試直接 I/O、網路、shell、共享 DB 與未宣告資源仍禁止。
+- 資源不得複製正式資料、改寫來源／`__file__`、猜 schema、呼叫未宣告初始化函式或代寫 expected。相對路徑綁計畫根目錄；突變副本僅映射同一批准資源。
+- 每個新 worker 重建 seed；同一 Trace worker 的 import／call 沿用，baseline／mutant／新 case 獨立。suite 內方法的公開 API setup／cleanup 由 AI 測試安排，不宣稱方法級自動隔離。
+- 資源 schema／seed／來源批准納入計畫身分；不同設定不共用觀測、審查或品質證據。外層必須在 owned 子樹結束後核對並清理自己的 lease；清理失敗、缺 schema 或初始化失敗不能算通過／oracle／killed。詳見 `docs/isolated-test-resources.md`。
+
 - 依使用者確認，2026-10-07 重構的正式 LLM 完整流程以 `ai-reviewed-loop-v1` 固定為「AI 分析 → Writer 撰寫 → 工具執行驗證 → Reviewer 同意 → 突變量測 → 品質不足交 AI 修訂 → 重新執行及審查」。本節取代先前允許工具自動補測、直接修正 expected 或未完成審查仍進入突變的分工；安全、身分核對與品質門檻保持不變。
 - Reviewer 只有回覆契約有效且沒有待處理 finding，才允許該版候選進入突變。有效 finding 交 Writer；無效／矛盾回覆僅在既有限額內修正審查契約，仍無效就保留可執行成果並停止該候選的完整流程。審查不可用、預算耗盡或取消，均不能改成同意。每次 AI 修改測試後必須重新執行、重新審查；同一候選與同一完整證據的審查快取仍可使用。
 - AST、Trace、受限計算、數值邊界及狀態實驗只向 AI 提供有來源／輸入身分的證據或待驗證提案，不在正式 LLM 候選中自動附加 host 測試、合併 Trace 基線或改寫 expected／assertRaises。Writer 與 Bug Fixer 才能產生正式測試修訂；模型修訂仍受相同結構、範圍、passing 案例保護及執行 gate。

@@ -19,6 +19,7 @@ export default {
         tier1: "Tier 1 — 2–3B (evidence-bound)",
         tier4: "Tier 4 — 100B+/Cloud (autonomous)",
         importSetup: "Check module loading / initialization",
+        resourceSetup: "Isolated test resources",
         fullModeSuffix: " (full quality mode)",
         flatView: "📄 Flat view",
         groupedView: "📁 Group by file",

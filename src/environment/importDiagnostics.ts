@@ -48,7 +48,10 @@ export function describeImportIssue(diagnostic: any, stage: string): ImportIssue
         }
     }
     let result: ImportIssue;
-    if (value.exception_type === 'ModuleNotFoundError' && identifier(value.missing_module)) {
+    if (value.exception_type === 'TraceSafetyError' && value.blocked_operation === 'resource-schema-required') {
+        result = { kind: 'import-side-effect', issue: 'resource-schema-required',
+            advice: localize('隔離 SQLite 缺少資料表或欄位。請在「隔離測試資源」提供原專案明確的 schema 與測試資料，再重新預檢；不會猜表格或把此錯誤當預期答案。') };
+    } else if (value.exception_type === 'ModuleNotFoundError' && identifier(value.missing_module)) {
         result = { kind: 'missing-dependency', issue: value.missing_module,
             advice: localize("在同一個 Python 檢查專案相依；依 requirements／明確套件對應預覽並確認安裝。") };
     } else if (value.exception_type === 'AttributeError' && identifier(api?.module)

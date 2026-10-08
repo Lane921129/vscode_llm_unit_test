@@ -12,7 +12,7 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
     const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, importFixtures: [] };
     const messages: any[] = [], handlers = new Map<string, (...args: any[]) => any>();
     let approve = false, changeSource = false, modelCalls = 0, updates = 0;
-    const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\ndef target(value):\n    return value + 1\n';
+    const source = 'from pathlib import Path\nPath("must_not_exist").mkdir(exist_ok=True)\ndef target(value):\n    return value + 1\n';
     const file = path.join(root, 'sample.py'); fs.writeFileSync(file, source);
     const vscode = {
         CancellationTokenSource: class {
@@ -63,7 +63,8 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
         fs.writeFileSync(file, source); changeSource = false;
         await setup({ projectRoot: root, outputPath: output });
         assert.equal(updates, 2);
-        assert.deepEqual(settings.importFixtures, [{ file: 'sample.py', mkdir: true }]);
+        assert.deepEqual((settings.importFixtures as any[])[0].resources, [{ path: 'must_not_exist', kind: 'directory' }]);
+        assert.match((settings.importFixtures as any[])[0].resourceSourceHash, /^[a-f0-9]{64}$/);
         assert.equal(settings.importFixtureRoot, fs.realpathSync(root));
         assert.equal(modelCalls, 0);
         assert.equal(fs.readFileSync(file, 'utf8'), source);

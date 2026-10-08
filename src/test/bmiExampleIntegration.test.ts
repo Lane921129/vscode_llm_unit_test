@@ -42,6 +42,10 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
     // preflight, validation and runner, not live-model generation quality.
     globalThis.fetch = async (_url, init) => {
         const request = JSON.parse(String(init?.body));
+        assert.doesNotMatch(request.prompt, /trace-value-v1|"trace_input"\s*:|"trace_args"\s*:/,
+            'caller input trees must not duplicate source input hints in the Writer prompt');
+        assert.match(request.prompt, /"caller_file":"tests\/test_bmi\.py"/,
+            'caller source hints from the selected project must remain available');
         const binding = request.prompt.match(/Target import: from ([\w.]+) import (\w+)/);
         assert.ok(binding); assert.ok(assertions[binding[2]]);
         calls++;
@@ -55,7 +59,10 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
             outputPath: output, promptStrategy: 'tier1', maxLoops: 2, timeoutSeconds: 30 });
         const reports = fs.readdirSync(output, { recursive: true }).map(String).filter(name => path.basename(name) === 'function_knowledge.json');
         assert.equal(reports.length, 4, JSON.stringify(messages));
-        assert.equal(calls, 4);
+        assert.equal(calls, 4, JSON.stringify(reports.map(report => {
+            const knowledge = JSON.parse(fs.readFileSync(path.join(output, report), 'utf8'));
+            return { target: knowledge.target, status: knowledge.terminalStatus, failure: knowledge.lastFailure };
+        })));
         for (const report of reports) {
             const directory = path.dirname(path.join(output, report));
             const read = (name: string) => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));

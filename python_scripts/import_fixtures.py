@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import sys
 from unittest.mock import patch
+from isolated_resources import validate_resources
 
 ENVIRONMENT_KEY = 'LLM_UNIT_TEST_IMPORT_FIXTURES'
 _last_evidence = None
@@ -61,6 +62,7 @@ class ImportFixtures:
         self.stack = ExitStack()
         self.installed_entries = set()
         self.installing_entries = False
+        self.resources = None
         _last_evidence = None
         if not self.plan:
             return
@@ -94,6 +96,7 @@ class ImportFixtures:
                 raise ValueError('Invalid import fixture operation')
             if approved_source is not None and not rule.get('resolvedFile') and approved_source != rule.get('sourceHash'):
                 raise ValueError('Startup fixture source approval expired')
+            validate_resources(rule)
             self.rules[filename] = rule
         _last_evidence = {'id': self.plan['id'], 'operations': self.operations}
 
@@ -170,6 +173,8 @@ class ImportFixtures:
         def mkdir(path, *args, **kwargs):
             frame = sys._getframe(1)
             rule = self.match(frame)
+            if self.resources and self.resources.covers(path):
+                return original_mkdir(path, *args, **kwargs)
             if rule and rule.get('mkdir'):
                 mkdir_signature.bind(path, *args, **kwargs)
                 self.record(rule, 'pathlib.Path.mkdir', frame)
@@ -188,6 +193,8 @@ class ImportFixtures:
         def exists(path, *args, **kwargs):
             frame = sys._getframe(1)
             rule = self.match(frame)
+            if self.resources and self.resources.covers(path):
+                return original_exists(path, *args, **kwargs)
             if fixture_text(rule, frame, path) is not None:
                 self.record(rule, 'config-fixture.exists', frame)
                 return True
@@ -199,6 +206,8 @@ class ImportFixtures:
             if not rule:
                 return original_read(parser, filenames, encoding=encoding)
             names = [filenames] if isinstance(filenames, (str, os.PathLike)) else list(filenames)
+            if self.resources and any(self.resources.covers(name) for name in names):
+                return original_read(parser, names, encoding=encoding)
             if rule and names and all(fixture_text(rule, frame, name) is not None for name in names):
                 for name in names:
                     parser.read_string(fixture_text(rule, frame, name), source='<declared-test-fixture>')
@@ -282,6 +291,10 @@ def mutation_environment(environment, trial_root, source_file):
                 continue
             seen.add(str(candidate))
             copy = dict(rule, resolvedFile=str(candidate), sourceHash=digest)
+            if rule.get('resources'):
+                if rule.get('resourceSourceHash') != rule.get('sourceHash'):
+                    raise ValueError('Isolated resource source approval expired before mutation')
+                copy['resourceSourceHash'] = digest
             if rule.get('entryPointLines') and digest != rule['sourceHash']:
                 copy['entryPointLines'] = _rebase_entry_lines(original, candidate, rule)
             extra.append(copy)

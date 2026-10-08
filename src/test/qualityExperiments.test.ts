@@ -10,6 +10,7 @@ import { planMutationProbes } from '../pipeline/mutationProbePlan';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { MutationRun } from '../mutation/mutationResult';
+import { createImportFixturePlan, IMPORT_FIXTURE_ENV, withImportFixtures } from '../pipeline/importFixtures';
 
 const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
 const source = `class Ledger:
@@ -29,6 +30,22 @@ class ModelCases(unittest.TestCase):
     def test_value(self):
         self.assertIsNone(self.ledger.increase('entry', 2))
 `;
+
+test('quality evidence verifies the effective fixture plan injected into its worker', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-fixture-context-'));
+    try {
+        const file = path.join(root, 'sample.py'); fs.writeFileSync(file, source);
+        const plan = createImportFixturePlan(root, [{ file: 'sample.py', mkdir: true }])!;
+        const result = await withImportFixtures(plan, () => prepareQualityExperiments({ sourcePath: file, source,
+            target: 'Ledger.increase', module: 'sample', testCode: modelTests,
+            focus: { id: 'fixture-gap', kind: 'coverage', line: 6, evidence: 'line:6' }, python,
+            env: { ...process.env, PYTHONPATH: root, [IMPORT_FIXTURE_ENV]: 'untrusted inherited plan' } }));
+        assert.equal(result.status, 'observed');
+        assert.equal(result.context?.importFixturePlanHash, evidenceHash(JSON.stringify(plan)));
+        validateQualityExperimentResult(result);
+        assert.deepEqual(fs.readdirSync(root), ['sample.py']);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('isolated state experiments provide complete Writer evidence without generating or merging tests', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-quality-'));

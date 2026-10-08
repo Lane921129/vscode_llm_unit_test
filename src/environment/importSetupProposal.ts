@@ -6,6 +6,7 @@ export interface ImportInitializationCandidate {
     schemaVersion: 'import-initialization-candidate-v1';
     kind: 'mkdir' | 'entry-point'; file: string; line: number; sourceHash: string; operation: string;
     evidence: 'blocked-direct-module-call'; returnValue: 'discarded';
+    resourcePath?: string;
 }
 
 /** Recheck the Python observation against the selected root and current bytes. */
@@ -29,8 +30,13 @@ export function readInitializationCandidate(root: string, diagnostic: any): Impo
         const relative = path.relative(root, file);
         if (relative.startsWith('..') || path.isAbsolute(relative)
             || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== value.sourceHash) { return undefined; }
+        if (value.resourcePath !== undefined && (value.kind !== 'mkdir' || typeof value.resourcePath !== 'string'
+            || value.resourcePath.length > 1000 || /[:\\\u0000-\u001f\u007f]/.test(value.resourcePath)
+            || path.isAbsolute(value.resourcePath) || value.resourcePath.split('/').some((part: string) =>
+                !part || part === '.' || part === '..' || /\.(?:py|pyc|pyo|pyd|dll|so)$/i.test(part)))) { return undefined; }
         return { schemaVersion: value.schemaVersion, kind: value.kind, file: relative.replace(/\\/g, '/'),
             line: value.line, sourceHash: value.sourceHash, operation: value.operation,
-            evidence: value.evidence, returnValue: value.returnValue };
+            evidence: value.evidence, returnValue: value.returnValue,
+            ...(value.resourcePath ? { resourcePath: value.resourcePath } : {}) };
     } catch { return undefined; }
 }

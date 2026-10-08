@@ -30,7 +30,7 @@ import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidat
 import { SOURCE_VERSIONS_VERSION, sourceVersionsCurrent } from './pipeline/sourceVersions';
 import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget } from './pipeline/targetBudget';
 import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObservations } from './pipeline/behaviorObservations';
-import { buildProbeInputs, TypedProbeInputsV1 } from './pipeline/probeInputs';
+import { buildProbeInputs, callerForPrompt, TypedProbeInputsV1 } from './pipeline/probeInputs';
 import { createDefaultQualityPolicy } from './pipeline/qualityPolicy';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
@@ -81,8 +81,11 @@ import { buildStubTestPlan } from './tier/stubTestPlan';
 import { buildGeneratedTestEnvironment, coverageRequiredMessage, generatedUnittestArguments, normalizePythonExecutable } from './utils/pythonTestEnvironment';
 import { configuredPythonForResource, PythonEnvironmentController } from './environment/pythonEnvironmentController';
 import { ImportSetupController } from './environment/importSetupController';
+import { configureTestResources } from './environment/resourceSetupController';
 import { inspectProjectImports, ImportCheckTarget } from './environment/projectImportCheck';
 import { ImportFixtureRule } from './pipeline/importFixtures';
+import { buildIsolatedResourceContext } from './prompts/isolatedResourceContext';
+import { readResourceSetupFailure } from './pipeline/resourceSetupFailure';
 import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
 import { MutationEngineSelection } from './mutation/mutationExecution';
 import { SelectedMutationEngine, selectMutationEngine, mutationArguments } from './mutation/mutationSelection';
@@ -408,6 +411,12 @@ export function activate(context: vscode.ExtensionContext) {
     const importSetup = new ImportSetupController(message => { void sidebarProvider.webview?.postMessage(message); });
     context.subscriptions.push(importSetup, vscode.commands.registerCommand('llm-unit-test.prepareImportSetup',
         (params?: { projectRoot?: string; outputPath?: string }) => importSetup.prepare(params?.projectRoot, params?.outputPath)));
+    context.subscriptions.push(vscode.commands.registerCommand('llm-unit-test.configureTestResources',
+        async (params?: { projectRoot?: string; outputPath?: string }) => {
+            if (await configureTestResources(params?.projectRoot, params?.outputPath)) {
+                await importSetup.prepare(params?.projectRoot, params?.outputPath);
+            }
+        }));
     context.subscriptions.push(environmentController, vscode.commands.registerCommand(
         'llm-unit-test.preparePythonEnvironment', (params?: { filePath?: string; projectRoot?: string }) =>
             environmentController.prepare(params?.filePath, params?.projectRoot)));
@@ -1224,10 +1233,10 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。"));
     }
     return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(limits),
-        () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider)));
+        () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider, root)));
 }
 
-async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
+async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView, projectRoot: string) {
     params = { ...params, ...normalizeExecutionSettings(params) };
     const mode = verificationMode(params.validationMode);
     const gateDescription = mode === 'full' ? localize("結構、執行、覆蓋率與突變驗證") : localize("結構、真實目標呼叫與隔離執行驗證");
@@ -1365,8 +1374,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     // 建立本次測試的專屬資料夾
     const dateStr = params.sessionDate || formatSessionDate();
     const safeFuncName = params.funcName || 'file';
-    const projectRoot = (params as any).batchPath
-        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
     const displayFile = params.projectName ? path.relative(projectRoot, params.filePath) : path.basename(params.filePath);
     const displayName = params.funcName ? `${displayFile}:${params.funcName}` : displayFile;
     throwIfExecutionCancelled();
@@ -1434,7 +1441,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     if (importFixtures) {
         fs.writeFileSync(path.join(sessionDir, 'import_fixtures.json'), JSON.stringify(importFixtures, null, 2), 'utf8');
         journal.knowledge({ importFixtureId: importFixtures.id, importFixtureContract: 'import-fixtures-v1' });
-        finalReportMarkdown += localize("\n- **匯入測試設定**: {0}（import_fixtures.json）。初始化外部操作使用明確 mock；未驗證真實目錄建立、設定檔或介面啟動。\n", importFixtures.id);
+        finalReportMarkdown += localize('\n- **隔離測試設定**: {0}（import_fixtures.json）。宣告資源在暫存區實際建立；啟動入口仍使用明確 mock。正式資料未納入測試。\n', importFixtures.id);
     }
     const checkpoints = new CandidateCheckpointStore(sessionDir, journal.sourceHash, params.funcName || 'file', {
         policy: qualityPolicy, sourcePath: params.filePath,
@@ -1465,9 +1472,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         if (importFixtures) {
             prompt += '\n\n[Import test setup] The original module runs under the saved import-fixtures-v1 contract. '
-                + 'Declared module-level external initialization is mocked. Observations apply only under that setup; '
-                + 'do not claim real filesystem, configuration-file, or GUI startup behavior was tested. '
-                + 'Function execution retains the normal isolation policy and requires its own explicit dependency mocks.';
+                + 'Declared entry-point initialization is mocked. Legacy mkdir/configFiles fixtures remain import-only mocks. '
+                + 'Only explicitly declared isolated resources are materialized by the host. Observations apply to this test setup; '
+                + 'do not claim production data, network or GUI startup behavior was tested.';
+            prompt += '\n\n' + buildIsolatedResourceContext(importFixtures, 6000, knownSecrets);
         }
         const contractedSystem = addOutputContract(system, format);
         const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
@@ -1507,6 +1515,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     };
     finalReportMarkdown += localize("- **執行識別**: {0}\n- **來源版本**: {1}\n\n", journal.runId, journal.sourceHash);
     recordRole('pipeline', 'running', { target: params.funcName });
+    const releaseResourceObserver = currentExecution()?.subscribeResourceLifecycle(event => {
+        journal.record(currentLoop, 'isolated-resources', event.cleaned ? 'cleaned' : 'failed', event);
+        journal.knowledge({ resourceLifecycle: event });
+    });
     try {
     let astContext: AstContext | null = null;
     const targetDir = path.dirname(params.filePath);
@@ -1522,9 +1534,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         return preflight;
     };
     if (params.funcName) {
-        const projectRoot = (params as any).batchPath
-            ? (params as any).batchPath
-            : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(params.filePath);
         astContext = await resolveAstAndDependencies(
             params.filePath,
             params.funcName,
@@ -1600,7 +1609,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             astContext, targetImportModule, undefined,
             Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
             + '\nCaller setup context (source literals are input hints, not output facts):\n'
-            + JSON.stringify(astContext.callerContexts || []);
+            + JSON.stringify((astContext.callerContexts || []).map(callerForPrompt));
         const accepted = await runExecutionVerification({ directory: sessionDir, artifactDirectory: roundDirectory(sessionDir, 1), file: params.filePath,
             target: params.funcName, python: pythonExecutable, env: testExecutionEnv,
             targetModule: targetImportModule,
@@ -2441,7 +2450,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRole('reviewer', 'budget-exceeded', { reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
                         return undefined;
                     }
-                    return reviewSession.review(evidenceHash(sys + '\n' + prompt), async () => {
+                    return reviewSession.review(evidenceHash(sys + '\n' + prompt + '\n' + (importFixtures?.id || '')), async () => {
                         try {
                             return await reviewWithContractRepair({ tests: code, prompt,
                                 constraints: { target: params.funcName || targetFuncName, facts, identity,
@@ -2539,12 +2548,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const testRunId = randomUUID();
                     const testHash = evidenceHash(code);
                     const [invocationFile, coverageFile] = reserveArtifactFiles(testDir, ['invocation', 'coverage'], 'json');
+                    const [isolationFile] = reserveArtifactFiles(testDir, ['isolation'], 'jsonl');
                     const executionArguments = [...generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
                         '--target-file', params.filePath, '--target-name', params.funcName || targetFuncName,
-                        '--target-evidence', invocationFile, '--target-run-id', testRunId, '--target-test-file', testPath];
+                        '--target-evidence', invocationFile, '--target-run-id', testRunId, '--target-test-file', testPath,
+                        '--violation-report', isolationFile];
                     const run = await runSpawn(pythonExecutable,
                         executionArguments,
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
+                    const resourceFailure = readResourceSetupFailure({ isolationFile, sourceFile: params.filePath,
+                        testFile: testPath, targetRunId: testRunId, sourceHash: journal.sourceHash, testHash,
+                        importFixturePlanId: currentImportFixtures()?.id, exitCode: run.code });
+                    if (resourceFailure) {
+                        throw new AnalysisStageError('environment', 'resource-setup',
+                            localize('隔離測試資料庫缺少資料表或欄位；請在「隔離測試資源」補齊 schema 後重新執行。'), resourceFailure);
+                    }
                     const scenarios = await inventory(code);
                     passingExecutions.set(evidenceHash(code), [...passingTestIds(run.stdout + run.stderr, path.basename(testPath, '.py'))]);
                     let out = normalizeScenarioOutput(`${run.stdout}${run.stderr}`.trim(), scenarios, baselineScenarios);
@@ -3164,6 +3182,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         log(`[${stage}] ${message}`);
     } finally {
+        releaseResourceObserver?.();
         if (journal.snapshot().terminalStatus === 'running') {
             journal.knowledge({ terminalStatus: isExecutionCancelled() ? 'cancelled' : 'incomplete' });
         }

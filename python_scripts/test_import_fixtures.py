@@ -4,9 +4,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
+import stat
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 TOOLS = Path(__file__).resolve().parent
 
@@ -229,6 +233,279 @@ class ImportFixtureTests(unittest.TestCase):
                             'data = PathDistribution(Path(__file__).parent).read_text("private.txt")\n', encoding='utf-8')
             (root / 'private.txt').write_text('not allowed', encoding='utf-8')
             self.assertFalse(json.loads(self.run_tool('module_preflight.py', root, payload=payload).stdout)['ok'])
+
+
+class ResourcePipelineTests(unittest.TestCase):
+    """The same source-bound seed reaches import, observation and mutation trials."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='resource-pipeline-')
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.root, self.lease = self.base / 'app', self.base / 'lease'
+        self.root.mkdir(); self.lease.mkdir()
+        (self.lease / '.llm-unit-test-resource-lease.json').write_text(json.dumps({
+            'schemaVersion': 'isolated-resource-lease-v1', 'ownerPid': os.getpid()}), encoding='utf-8')
+        self.file = self.root / 'sample.py'
+        self.file.write_text('import sqlite3\nfrom pathlib import Path\n'
+            'BASE = Path(__file__).parent\nLABEL = (BASE / "data" / "label.txt").read_text()\n'
+            'def reset():\n'
+            '    with sqlite3.connect(BASE / "data" / "items.db") as connection:\n'
+            '        connection.execute("UPDATE items SET value = 10 WHERE id = 1")\n'
+            'def increment(amount):\n'
+            '    with sqlite3.connect(BASE / "data" / "items.db") as connection:\n'
+            '        value = connection.execute("SELECT value FROM items WHERE id = 1").fetchone()[0]\n'
+            '        connection.execute("UPDATE items SET value = ? WHERE id = 1", (value + amount,))\n'
+            '        return value + amount + len(LABEL)\n', encoding='utf-8')
+        source_hash = hashlib.sha256(self.file.read_bytes()).hexdigest()
+        self.plan = {'schemaVersion': 'import-fixtures-v1', 'id': 'b' * 64, 'root': str(self.root), 'rules': [{
+            'file': 'sample.py', 'sourceHash': source_hash, 'resourceSourceHash': source_hash, 'resources': [
+                {'path': 'data', 'kind': 'directory'},
+                {'path': 'data/label.txt', 'kind': 'text', 'text': 'abc'},
+                {'path': 'data/items.db', 'kind': 'sqlite', 'tables': [{'name': 'items', 'columns': [
+                    {'name': 'id', 'type': 'INTEGER', 'primaryKey': True}, {'name': 'value', 'type': 'INTEGER'}
+                ], 'rows': [{'id': 1, 'value': 10}]}]}
+            ]}]}
+        self.tests = self.root / 'test_candidate.py'
+        self.tests.write_text('import unittest\nfrom sample import increment, reset\n'
+            'class Cases(unittest.TestCase):\n'
+            '    def setUp(self): reset()\n'
+            '    def test_first(self): self.assertEqual(increment(1), 14)\n'
+            '    def test_second(self): self.assertEqual(increment(1), 14)\n', encoding='utf-8')
+
+    def run_tool(self, tool, args=(), payload=None):
+        result = subprocess.run([sys.executable, '-B', str(TOOLS / tool), *map(str, args)],
+            input=json.dumps(payload) if payload is not None else None, cwd=self.root,
+            env={**os.environ, 'PYTHONPATH': str(self.root), 'PYTHONIOENCODING': 'utf-8',
+                 'PYTHONDONTWRITEBYTECODE': '1', 'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(self.plan),
+                 'LLM_UNIT_TEST_RESOURCE_LEASE': str(self.lease)},
+            text=True, encoding='utf-8', capture_output=True, timeout=60)
+        self.assertFalse((self.root / 'data').exists(), 'application resources must not be created in the original project')
+        return result
+
+    def test_seed_is_fresh_for_preflight_trace_suite_and_both_mutation_engines(self):
+        original = self.file.read_bytes()
+        loaded = json.loads(self.run_tool('module_preflight.py', payload={
+            'file': str(self.file), 'module': 'sample', 'sourceRoot': str(self.root),
+            'importPaths': [str(self.root)]}).stdout)
+        self.assertTrue(loaded['ok'], loaded)
+        self.assertEqual(loaded['importFixtures']['resources']['planId'], self.plan['id'])
+        traced = self.run_tool('dynamic_tracer.py', [self.file, 'increment', '[[1],[2]]'])
+        self.assertEqual(traced.returncode, 0, traced.stderr)
+        observed = json.loads(traced.stdout)
+        self.assertEqual([item['result'] for item in observed['examples']], ['14', '15'], observed)
+        for item in observed['examples']:
+            self.assertEqual(item['importFixtures']['resources']['planId'], self.plan['id'])
+        report = self.root / 'runner-result.json'
+        baseline = self.run_tool('generated_test_runner.py', [self.tests.stem, '--result-json', report])
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        result = json.loads(report.read_text(encoding='utf-8'))
+        self.assertEqual(result['testsRun'], 2)
+        self.assertEqual(result['importFixtures']['resources']['scope'], 'fresh-process')
+        for tool, prefix in [('basic_mutation_runner.py', []), ('external_mutation_runner.py', ['mutatest'])]:
+            with self.subTest(engine=tool):
+                mutated = self.run_tool(tool, [*prefix, self.file, self.tests, 3, 10, 'increment'])
+                self.assertEqual(mutated.returncode, 0, mutated.stderr)
+                result = json.loads(mutated.stdout)
+                self.assertTrue(result['baseline_passed'], result)
+                self.assertGreater(result['counts']['killed'], 0, result)
+                self.assertEqual(result['counts']['error'], 0, result)
+                self.assertEqual(result['baselineImportFixtures']['resources']['planId'], self.plan['id'])
+                for mutant in result['mutants']:
+                    if mutant['status'] in ('KILLED', 'SURVIVED'):
+                        self.assertEqual(mutant['importFixtures']['id'], self.plan['id'])
+        self.assertEqual(self.file.read_bytes(), original)
+
+    def test_generated_test_direct_resource_access_stays_blocked(self):
+        for operation in ['(Path(__file__).parent / "data" / "label.txt").read_text()',
+                          'sqlite3.connect(Path(__file__).parent / "data" / "items.db")']:
+            with self.subTest(operation=operation):
+                self.tests.write_text('import unittest\nimport sqlite3\nfrom pathlib import Path\n'
+                    'from sample import increment\nclass Cases(unittest.TestCase):\n'
+                    '    def test_value(self):\n        ' + operation + '\n'
+                    '        self.assertEqual(increment(1), 14)\n', encoding='utf-8')
+                report = self.root / 'runner-result.json'
+                ran = self.run_tool('generated_test_runner.py', [self.tests.stem, '--result-json', report])
+                self.assertEqual(ran.returncode, 86, ran.stderr)
+                self.assertEqual(json.loads(report.read_text())['status'], 'isolation-blocked')
+
+    def test_invalid_seed_is_infrastructure_failure_never_a_killed_mutant(self):
+        self.plan['rules'][0]['resources'][2]['tables'][0]['rows'].append({'id': 1, 'value': 99})
+        self.plan['id'] = 'c' * 64
+        mutated = self.run_tool('basic_mutation_runner.py', [self.file, self.tests, 3, 10, 'increment'])
+        self.assertEqual(mutated.returncode, 0, mutated.stderr)
+        result = json.loads(mutated.stdout)
+        self.assertFalse(result['baseline_passed'], result)
+        self.assertEqual(result['baselineStatus'], 'error', result)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertFalse(result['scoreAvailable'])
+
+    def test_mutation_trial_rejects_missing_or_different_resource_plan_evidence(self):
+        sys.path.insert(0, str(TOOLS))
+        try:
+            from basic_mutation_runner import read_trial_result
+        finally:
+            sys.path.remove(str(TOOLS))
+        report = self.root / 'runner-result.json'
+        detail = {'schemaVersion': 'generated-test-result-v1', 'status': 'passed', 'testsRun': 1, 'testFailures': []}
+        report.write_text(json.dumps(detail), encoding='utf-8')
+        self.assertIsNone(read_trial_result(report, self.plan['id']))
+        detail['importFixtures'] = {'id': 'c' * 64}
+        report.write_text(json.dumps(detail), encoding='utf-8')
+        self.assertIsNone(read_trial_result(report, self.plan['id']))
+        detail['importFixtures']['id'] = self.plan['id']
+        report.write_text(json.dumps(detail), encoding='utf-8')
+        self.assertIsNotNone(read_trial_result(report, self.plan['id']))
+
+    def test_package_mutation_never_copies_declared_production_resources_and_uses_seed(self):
+        sys.path.insert(0, str(TOOLS))
+        try:
+            from basic_mutation_runner import run_mutation_trials
+        finally:
+            sys.path.remove(str(TOOLS))
+        import builtins
+        import shutil
+        package = self.root / 'demo'
+        package.mkdir()
+        (package / '__init__.py').write_text('', encoding='utf-8')
+        source = self.file.read_bytes()
+        self.file.unlink()
+        self.file = package / 'sample.py'
+        self.file.write_bytes(source)
+        self.tests.write_text(self.tests.read_text(encoding='utf-8').replace('from sample import', 'from demo.sample import'), encoding='utf-8')
+        rule = self.plan['rules'][0]
+        rule['file'] = 'demo/sample.py'
+        for resource in rule['resources']:
+            resource['path'] = 'demo/' + resource['path']
+        rule['resources'] += [
+            {'path': 'demo/direct.ini', 'kind': 'text', 'text': '[test]'},
+            {'path': 'demo/direct.db', 'kind': 'sqlite', 'tables': []}]
+        data = package / 'data'
+        data.mkdir()
+        (data / 'nested').mkdir()
+        originals = {data / 'items.db': b'original database bytes must never be copied',
+                     data / 'label.txt': b'production text must never be copied',
+                     data / 'nested' / 'extra.txt': b'undeclared child of declared directory',
+                     package / 'direct.ini': b'production configuration',
+                     package / 'direct.db': b'production standalone database'}
+        for file, content in originals.items():
+            file.write_bytes(content)
+        for database in (data / 'items.db', package / 'direct.db'):
+            database.unlink()
+            with sqlite3.connect(database) as connection:
+                connection.execute('CREATE TABLE items (id INTEGER PRIMARY KEY, value INTEGER)')
+                connection.execute('INSERT INTO items VALUES (1, 999)')
+            connection.close()
+            originals[database] = database.read_bytes()
+        original_open, original_copytree = builtins.open, shutil.copytree
+        blocked_paths = {os.path.normcase(os.path.abspath(file)) for file in originals}
+        copied_trials = []
+
+        def no_production_reads(file, *args, **kwargs):
+            if isinstance(file, (str, bytes, os.PathLike)):
+                self.assertNotIn(os.path.normcase(os.path.abspath(file)), blocked_paths,
+                                 'package copy must not read a declared production resource')
+            return original_open(file, *args, **kwargs)
+
+        def checked_copytree(source_root, destination, *args, **kwargs):
+            result = original_copytree(source_root, destination, *args, **kwargs)
+            destination = Path(destination)
+            self.assertFalse((destination / 'data').exists())
+            self.assertFalse((destination / 'direct.ini').exists())
+            self.assertFalse((destination / 'direct.db').exists())
+            self.assertTrue((destination / 'sample.py').is_file())
+            copied_trials.append(destination.name)
+            return result
+
+        with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(self.plan),
+                'LLM_UNIT_TEST_RESOURCE_LEASE': str(self.lease), 'PYTHONIOENCODING': 'utf-8'}), \
+                patch('builtins.open', side_effect=no_production_reads), \
+                patch('basic_mutation_runner.shutil.copytree', side_effect=checked_copytree):
+            result = run_mutation_trials(self.file, self.tests, max_mutations=3, timeout_seconds=10,
+                                         target_function='increment', workers=1)
+        self.assertTrue(result['baseline_passed'], result)
+        self.assertGreater(result['counts']['killed'], 0, result)
+        self.assertEqual(result['counts']['error'], 0, result)
+        self.assertGreaterEqual(len(copied_trials), 2, 'both baseline and mutant packages were inspected')
+        self.assertEqual(self.file.read_bytes(), source)
+        for file, content in originals.items():
+            self.assertEqual(file.read_bytes(), content)
+
+    def test_package_resource_ignore_does_not_resolve_declared_links_or_change_legacy_copy(self):
+        sys.path.insert(0, str(TOOLS))
+        try:
+            from basic_mutation_runner import package_copy_ignore
+        finally:
+            sys.path.remove(str(TOOLS))
+        directory = str(self.root)
+        resource = os.path.normcase(os.path.abspath(self.root / 'data'))
+        original_realpath = os.path.realpath
+
+        def guarded_realpath(file, *args, **kwargs):
+            lexical = os.path.normcase(os.path.abspath(file))
+            self.assertNotEqual(lexical, resource, 'declared paths are omitted before following symlinks')
+            return resource if lexical == os.path.normcase(os.path.abspath(self.root / 'data_alias')) else original_realpath(file, *args, **kwargs)
+
+        with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(self.plan)}):
+            ignore, _ = package_copy_ignore()
+            with patch('basic_mutation_runner.os.path.realpath', side_effect=guarded_realpath):
+                self.assertEqual(ignore(directory, ['data', 'data_alias', 'sample.py', '__pycache__']),
+                                 {'data', 'data_alias', '__pycache__'})
+        with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': ''}):
+            ignore, _ = package_copy_ignore()
+            self.assertEqual(ignore(directory, ['data', 'sample.py', '__pycache__', 'cached.pyc']),
+                             {'__pycache__', 'cached.pyc'})
+
+    def test_package_copy_rejects_resource_symlinks_and_junctions_before_resolving_or_copying(self):
+        sys.path.insert(0, str(TOOLS))
+        try:
+            from basic_mutation_runner import package_copy_ignore
+        finally:
+            sys.path.remove(str(TOOLS))
+        original_lstat = os.lstat
+        resource = os.path.normcase(os.path.abspath(self.root / 'data'))
+        for mode, attributes in [(stat.S_IFLNK, 0), (stat.S_IFDIR, 1024)]:
+            with self.subTest(link='symlink' if mode == stat.S_IFLNK else 'junction'):
+                def lstat_metadata(file, *args, **kwargs):
+                    if os.path.normcase(os.path.abspath(file)) == resource:
+                        return SimpleNamespace(st_mode=mode, st_file_attributes=attributes)
+                    return original_lstat(file, *args, **kwargs)
+                with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(self.plan)}), \
+                        patch('basic_mutation_runner.os.lstat', side_effect=lstat_metadata), \
+                        patch('basic_mutation_runner.os.path.realpath', side_effect=AssertionError('must not follow resource link')), \
+                        patch('basic_mutation_runner.shutil.copytree', side_effect=AssertionError('must not copy invalid plan')):
+                    with self.assertRaisesRegex(ValueError, 'symlink or junction'):
+                        package_copy_ignore()
+
+    def test_quality_experiments_bind_the_full_seed_and_reject_replay_after_seed_change(self):
+        source = self.file.read_text(encoding='utf-8') + (
+            '\nclass Counter:\n    def __init__(self):\n'
+            '        with sqlite3.connect(BASE / "data" / "items.db") as connection:\n'
+            '            self.value = connection.execute("SELECT value FROM items WHERE id = 1").fetchone()[0]\n'
+            '    def add(self, amount):\n        self.value += amount\n        return self.value\n')
+        self.file.write_bytes(source.encode('utf-8'))
+        source_hash = hashlib.sha256(self.file.read_bytes()).hexdigest()
+        self.plan['rules'][0].update(sourceHash=source_hash, resourceSourceHash=source_hash)
+        tests = ('import unittest\nfrom sample import Counter\nclass Cases(unittest.TestCase):\n'
+                 '    def test_add(self):\n        subject = Counter()\n        self.assertEqual(subject.add(1), 11)\n')
+        payload = {'sourcePath': str(self.file), 'source': source, 'target': 'Counter.add', 'module': 'sample', 'testCode': tests,
+            'focus': {'id': 'resource-gap', 'kind': 'survivor', 'evidence': 'measured mutant', 'mutant': {
+                'id': 'm1', 'kind': 'AugAssign', 'line': source.splitlines().index('        self.value += amount') + 1,
+                'column': 8, 'position': 0, 'from': 'AugAssign_Add', 'to': 'AugAssign_Sub', 'status': 'SURVIVED'}}}
+        planned = json.loads(self.run_tool('quality_experiment_runner.py', ['--plan'], payload).stdout)
+        self.assertEqual(planned['status'], 'planned', planned)
+        first = json.loads(self.run_tool('quality_experiment_runner.py', ['--run'], payload).stdout)
+        self.assertEqual(first['status'], 'observed', first)
+        self.plan['rules'][0]['resources'][2]['tables'][0]['rows'][0]['value'] = 20
+        self.plan['id'] = 'd' * 64
+        replay = json.loads(self.run_tool('quality_experiment_runner.py', ['--worker'], {
+            'sourcePath': str(self.file), 'experiment': planned['experiments'][0]}).stdout)
+        self.assertEqual(replay['status'], 'unavailable', replay)
+        second = json.loads(self.run_tool('quality_experiment_runner.py', ['--run'], payload).stdout)
+        self.assertEqual(second['status'], 'observed', second)
+        self.assertNotEqual(first['context']['importFixturePlanHash'], second['context']['importFixturePlanHash'])
+        self.assertNotEqual(first['experiments'][0]['fingerprint'], second['experiments'][0]['fingerprint'])
+        self.assertNotEqual(first['experiments'][0]['evidence']['initialState'], second['experiments'][0]['evidence']['initialState'])
+        self.assertEqual(self.file.read_text(encoding='utf-8'), source)
 
 
 if __name__ == '__main__':

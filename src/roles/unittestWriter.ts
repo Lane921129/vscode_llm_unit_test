@@ -3,15 +3,16 @@ import { formatWriterEvidenceBundleForPrompt, WriterEvidenceBundleV3 } from '../
 import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
+import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 
 export function getExecutionWriterSystemPrompt(): string {
     return `You are the test Writer for EXECUTION_VERIFICATION_V1. Return one complete Python unittest file in one python code fence, without prose.
 The goal is meaningful, isolated execution of the real selected target. No exploratory Trace, coverage or mutation measurements are available for this run.
 Use the supplied read-only source, imports, signatures, constructor and dependency context to design a small relevant test. Preserve the exact target import and binding. Never copy, redefine or mock the target or its class.
-Use explicit unittest.mock patches at dependency use points for external operations. Configure dependency return values or side effects within each test. Assert the real target's result, a source-declared exception, or an observable dependency call made by the real target.
+Use explicit unittest.mock patches at dependency use points for external operations${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}. Configure dependency return values or side effects within each test. Assert the real target's result, a source-declared exception, or an observable dependency call made by the real target.
 For a calculation with no identified external operations, use the real target without mocks. Check units, arithmetic, rounding and every returned field before choosing expected constants; a branch threshold is not automatically the result for the chosen inputs.
 Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. Treat these as test hypotheses until executed. Do not invent requirements, APIs, constructors, fixed ambient values or exception types. Never derive the expected value by calling the target or repeat the same implementation as an oracle.
-Do not replace failing assertions with tautologies, skip/expectedFailure, exception swallowing, or unrelated checks. No external filesystem, network or process operations; use mocks or isolated in-memory SQLite.
+Do not replace failing assertions with tautologies, skip/expectedFailure, exception swallowing, or unrelated checks. No external filesystem, network or process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}
 The host validates Python AST, real target binding, signatures and meaningful assertions, then executes the file with its guarded runner. Passing here proves only the executed cases under this setup, not complete application or requirement correctness.`;
 }
 
@@ -37,7 +38,7 @@ Evidence rules:
 4. Selected test-generation rules are scoped guidance for this function, not facts that override source or executed-observation evidence.
 5. Include import unittest, a unittest.TestCase, and test_ methods. Do not copy or redefine the production source. No pytest or top-level assert.
 6. If executed-observation evidence is absent for a proposed path, omit that assertion rather than guessing.
-7. Do not call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.
+7. Do not call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.${isolatedResourceSystemRule()}
 
 The generated file will be rejected unless it passes structural, isolated execution, coverage, and mutation checks.`;
 }
@@ -54,7 +55,7 @@ Your task: use the scaffold as setup guidance and return a COMPLETE runnable uni
 - Call the target function.
 - Write assertions using real return values provided.
 - Check scaffold mock setup against the supplied target source and complete evidence; correct placeholders and mock shapes when needed.
-- Use only isolated mock or in-memory resources. Never perform real external I/O.
+${isolatedResourceSystemRule() ? '- Use isolated mocks, in-memory resources, or host-declared resources accessed by the real target. Never perform direct test I/O.' : '- Use only isolated mock or in-memory resources. Never perform real external I/O.'}${isolatedResourceSystemRule()}
 - Preserve the exact target import, class binding, constructor requirements and verified assertions.
 Output format:
 \`\`\`python
@@ -123,7 +124,7 @@ Rules:
 5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.
    - WRONG: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError — NEVER pass a string as second arg to assertRaises!
 6. ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values or exception types.
-7. Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.`;
+7. Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.${isolatedResourceSystemRule()}`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -145,7 +146,7 @@ Output only that single Python code fence. Do not include analysis, reasoning, h
 
 Guidelines:
 - Use absolute import (e.g. from module_name import target_function).
-- Use unittest.mock (patch, MagicMock) for external dependencies.
+- Use unittest.mock (patch, MagicMock) for external dependencies${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}.${isolatedResourceSystemRule()}
 - Cover branches, boundaries, and exception paths that are supported by the source code, selected test-generation rule cards, or verified execution facts. Do not add None or empty-input tests merely by habit.
 - Do NOT copy the source code into your output.
 - assertRaises syntax: use \`with self.assertRaises(ExceptionType):\` with the exact evidence-supported exception class — NEVER pass a string: \`assertRaises(ValueError, 'msg')\` is a TypeError!

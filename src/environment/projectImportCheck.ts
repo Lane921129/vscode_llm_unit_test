@@ -55,7 +55,9 @@ export async function inspectProjectImports(root: string, python: string, target
             ...(row.issue?.origin ? [localize("    位置：{0}:{1}", row.issue.origin.file, row.issue.origin.line)] : []),
             ...(row.suggestion ? [localize("    可預覽替身：{0}（{1}:{2}）", row.suggestion.operation, row.suggestion.file, row.suggestion.line),
                 localize("    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。"),
-                localize("    影響：略過此初始化呼叫；不驗證其真實副作用，須確認測試不依賴它建立的狀態。")] : []), '',
+                row.suggestion.resourcePath
+                    ? localize('    影響：將 {0} 導向本次建立的空白暫存目錄；不讀取正式資料，每次執行後清理。', row.suggestion.resourcePath)
+                    : localize("    影響：略過此初始化呼叫；不驗證其真實副作用，須確認測試不依賴它建立的狀態。")] : []), '',
             cell(row.issue?.advice || localize("請核對直譯器及預檢工具是否正常執行。")), ''
         ]);
         fs.writeFileSync(path.join(directory, 'import_check.md'), [localize("# 模組載入預檢"), '',
@@ -64,7 +66,7 @@ export async function inspectProjectImports(root: string, python: string, target
             localize("| 模組 | 預檢結果 | 原因 | 來源位置 | 處理方式 |"), '| --- | --- | --- | --- | --- |',
             ...result.rows.map(row => `| ${cell(row.file)} | ${row.status === 'loaded' ? localize("可載入，尚未測試") : localize("受阻／未完成")} | ${cell(row.issue?.issue || '')} | ${cell(row.issue?.origin ? `${row.issue.origin.file}:${row.issue.origin.line}` : '')} | ${cell(row.issue?.advice || '')} |`), '',
             ...(blocked.length ? [localize("## 逐模組診斷"), '', ...details] : []),
-            localize("設定只模擬明確宣告的初始化，不修改受測原檔，也不假造缺少的套件或 API。"),
+            localize("設定只使用明確宣告的暫存資源或初始化替身，不修改受測原檔，也不假造缺少的套件或 API。"),
             localize("所有建議均須預覽後確認；套用後重新檢查，可能發現下一個原先被遮住的障礙。"), ''].join('\n'));
     };
     save();
@@ -97,17 +99,25 @@ export async function inspectProjectImports(root: string, python: string, target
                 const diagnostic = error instanceof AnalysisStageError ? error.diagnostic : undefined;
                 row.issue = describeImportIssue(diagnostic, row.stage);
                 row.diagnostic = summarizeImportException(diagnostic);
-                const proposal = readInitializationCandidate(root, diagnostic);
+                const observed = readInitializationCandidate(root, diagnostic);
+                // A pre-created directory cannot satisfy mkdir(exist_ok=False),
+                // and an unbound path must not silently receive a no-op mock.
+                const proposal = observed?.kind === 'mkdir' && !observed.resourcePath ? undefined : observed;
                 if (proposal) {
                     row.suggestion = proposal;
                     const candidate = fs.realpathSync(path.join(root, proposal.file));
                     let existing = result.proposedRules.find(rule => fs.realpathSync(path.join(root, rule.file)) === candidate);
                     const lines = existing?.entryPointLines?.[proposal.operation];
-                    const needed = proposal.kind === 'mkdir' ? !existing?.mkdir
+                    const needed = proposal.kind === 'mkdir' ? !!proposal.resourcePath && !existing?.resources?.some(resource =>
+                        resource.kind === 'directory' && (resource.path === proposal.resourcePath
+                            || proposal.resourcePath!.startsWith(resource.path + '/')))
                         : !existing?.entryPoints?.includes(proposal.operation) || !!lines && !lines.includes(proposal.line);
                     if (needed) {
                         if (!existing) { existing = { file: proposal.file }; result.proposedRules.push(existing); }
-                        if (proposal.kind === 'mkdir') { existing.mkdir = true; }
+                        if (proposal.kind === 'mkdir') {
+                            existing.resources = [...(existing.resources || []), { path: proposal.resourcePath!, kind: 'directory' }];
+                            existing.resourceSourceHash = proposal.sourceHash;
+                        }
                         else {
                             existing.entryPoints = [...new Set([...(existing.entryPoints || []), proposal.operation])];
                             existing.entryPointLines = { ...existing.entryPointLines,

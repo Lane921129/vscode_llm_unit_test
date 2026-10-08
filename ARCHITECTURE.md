@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 隔離資源生命週期（2026-10-08）
+
+`importFixtures` 規則增加 `resources`／`resourceSourceHash`；宣告、來源與 seed 都納入同一計畫 ID。`isolatedResources.ts` 驗證純資料規格，`processRunner` 擁有外層 lease，等待子樹關閉後核對並清理；清理結果記入 `ExecutionContext` 事件與分析 journal。
+
+`isolated_resources.py` 在匯入前建立每個 worker 的空白資源，只重導明確路徑的 I/O，保留真實來源身分；同 PID 的 import／call 沿用，每個 Trace case、baseline、mutant 分開。`runtime_policy` 只給受測應用存取宣告資源，生成測試仍禁止直接 I/O。`import_fixtures.mutation_environment` 將相同邏輯批准映射到已核對副本；runner 核對資源身分，缺 schema／初始化失敗不能算 killed。
+
+初始化預檢可從真實 `Path.mkdir` receiver 提出目錄資源；額外文字與 SQLite schema／seed 由「隔離測試資源」編輯、預覽、保存、重檢。不複製正式資料、不猜 schema、不代呼叫任意 setup。角色共用 `HOST_ISOLATED_RESOURCE_CONTEXT`，知道可用資源與 suite 範圍，但資源不是 expected oracle。操作與限制見 [隔離測試資源](docs/isolated-test-resources.md)。
+
 ## 初始化預檢的明確終點（2026-10-08）
 
 `ImportSetupController.prepare` 每次操作只有「初次檢查 → 預覽並確認一份清單 → 套用 → 一次實際重檢 → 結束」，取代最多八輪連續確認。若重檢揭露下一個初始化問題，保留新建議與來源位置供下次手動預覽，不再自動彈出下一個確認視窗；仍是原障礙則明示受阻，缺套件／API 或不支援的副作用不猜測替身。批次入口傳入已確認的 targets，避免轉入設定後重新掃到已排除來源；直接專案入口仍檢查所選專案。

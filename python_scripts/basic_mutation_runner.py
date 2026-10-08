@@ -15,6 +15,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from import_fixtures import mutation_environment, read_plan as import_fixture_plan
+from isolated_resources import validate_resources
 from mutation_operators_v2 import VERSION as OPERATOR_SET_VERSION_V2, iter_mutations
 
 
@@ -365,6 +367,57 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
     raise IndexError('Mutation candidate index was not found')
 
 
+def package_copy_ignore():
+    """Omit declared resources before copytree opens or follows them."""
+    ordinary_ignore = shutil.ignore_patterns('__pycache__', '*.pyc')
+    plan = import_fixture_plan()
+    if not plan:
+        return ordinary_ignore, lambda _path: False
+    normalize = lambda value: os.path.normcase(os.path.abspath(os.fspath(value)))
+    root = normalize(plan['root'])
+    resources = [(normalize(os.path.join(root, spec['path'])), spec['kind'])
+                 for rule in plan['rules'] for spec in validate_resources(rule)]
+    if not resources:
+        return ordinary_ignore, lambda _path: False
+    # Match the runtime's no-link contract before copying anything. Only lstat
+    # metadata is inspected; a resource link's target is never traversed/read.
+    # This also prevents a second package alias exposing that outside target.
+    for resource, _kind in resources:
+        current = Path(resource)
+        for component in (current, *current.parents):
+            try:
+                metadata = os.lstat(component)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 1024:
+                raise ValueError('Mutation isolated resource path uses a symlink or junction')
+
+    def declared(candidate):
+        candidate = normalize(candidate)
+        for resource, kind in resources:
+            try:
+                if candidate == resource or kind == 'directory' and os.path.commonpath((candidate, resource)) == resource:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def ignore(directory, names):
+        excluded = set(ordinary_ignore(directory, names))
+        for name in names:
+            candidate = os.path.join(directory, name)
+            # Lexical exclusion comes first: never resolve a declared resource
+            # or enumerate its directory just to decide not to copy it.
+            if declared(candidate):
+                excluded.add(name)
+            elif declared(os.path.realpath(candidate)):
+                # A different package alias may point into declared data.
+                excluded.add(name)
+        return excluded
+
+    return ignore, declared
+
+
 def package_mutant_targets(source_file, test_file, temp_root):
     """Mirror package imports from a test so they resolve to the mutant copy.
 
@@ -408,6 +461,7 @@ def package_mutant_targets(source_file, test_file, temp_root):
 
     targets = []
     copied_roots = set()
+    ignore, is_resource = package_copy_ignore()
     for module_name in modules:
         package_parts = module_name.split('.')[:-1]
         if not package_parts or len(package_parts) > len(source_chain):
@@ -418,11 +472,13 @@ def package_mutant_targets(source_file, test_file, temp_root):
         destination_root = temp_root / package_root.name
         root_key = str(package_root)
         if root_key not in copied_roots:
+            if is_resource(package_root):
+                raise ValueError('Mutation package overlaps a declared isolated resource')
             shutil.copytree(
                 package_root,
                 destination_root,
                 dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns('__pycache__', '*.pyc')
+                ignore=ignore
             )
             copied_roots.add(root_key)
         targets.append(destination_root / source_file.relative_to(package_root))
@@ -464,7 +520,7 @@ def trial_environment(temp_root, source_file):
     }, temp_root, source_file)
 
 
-def read_trial_result(path):
+def read_trial_result(path, expected_fixture_id=None):
     """Read the guarded runner's bounded report; never infer failures from text."""
     try:
         if path.stat().st_size > 512000:
@@ -475,6 +531,9 @@ def read_trial_result(path):
     if (not isinstance(result, dict) or result.get('schemaVersion') != 'generated-test-result-v1'
             or type(result.get('testsRun')) is not int or result['testsRun'] <= 0
             or not isinstance(result.get('testFailures'), list) or len(result['testFailures']) > 1000):
+        return None
+    if expected_fixture_id and (not isinstance(result.get('importFixtures'), dict)
+            or result['importFixtures'].get('id') != expected_fixture_id):
         return None
     for failure in result['testFailures']:
         if not isinstance(failure, dict) or failure.get('kind') not in ('failure', 'error', 'unexpected-success'):
@@ -669,7 +728,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 errors='replace',
                 timeout=trial_timeout(),
             )
-            baseline_result = read_trial_result(baseline_result_path)
+            baseline_result = read_trial_result(baseline_result_path, result['importFixtureId'])
+            result['baselineImportFixtures'] = baseline_result.get('importFixtures') if baseline_result else None
             if (baseline.returncode or baseline_result is None or baseline_result.get('status') != 'passed'
                     or baseline_result['testFailures']):
                 result.update({
@@ -738,7 +798,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 )
                 # A forbidden external operation is missing test isolation,
                 # never proof that an assertion killed the mutant.
-                detail = read_trial_result(trial_result_path)
+                detail = read_trial_result(trial_result_path, result['importFixtureId'])
                 status = 'ERROR'
                 if detail is not None:
                     if completed.returncode == 0 and detail.get('status') == 'passed' and not detail['testFailures']:
@@ -755,6 +815,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 output = str(error)
 
             record = {**candidate, 'status': status, 'output': output,
+                      'importFixtures': detail.get('importFixtures') if detail else None,
                       'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
             if status == 'KILLED':
                 record['killedBy'] = sorted({item['testId'] for item in detail['testFailures']})

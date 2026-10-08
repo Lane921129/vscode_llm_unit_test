@@ -4,6 +4,7 @@ import sys
 
 from dynamic_tracer import _trace_function_local
 from trace_value_codec import restore_value
+from import_fixtures import evidence as import_fixture_evidence
 
 
 def main():
@@ -13,6 +14,7 @@ def main():
         payload['file_path'], payload['func_name'], inputs,
         exact_inputs=payload['mode'] == 'case', prepare_only=payload['mode'] == 'plan',
     )
+    result['importFixtures'] = import_fixture_evidence()
     print(json.dumps(result, ensure_ascii=True))
 
 

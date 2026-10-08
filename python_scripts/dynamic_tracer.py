@@ -1178,9 +1178,14 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
     def append_case(case, observations=None):
         observations = observations or {}
         examples, errors = observations.get('examples', []), observations.get('errors', [])
+        fixtures = observations.get('importFixtures')
         for record in examples + errors:
             record['case_id'] = case['case_id']
             record['source'] = case['source']
+            if fixtures:
+                record['importFixtures'] = fixtures
+        if fixtures:
+            case['importFixtures'] = fixtures
         result['cases'].append(case)
         result['examples'].extend(examples)
         result['errors'].extend(errors)
@@ -1203,6 +1208,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         planned = _worker_result({'mode': 'plan', 'file_path': file_path, 'func_name': func_name,
                                   'inputs': valid_supplied}, min(5.0, remaining))
         result['args'] = planned.get('args', [])
+        if planned.get('importFixtures'):
+            result['importFixtures'] = planned['importFixtures']
         result['load_error'] = planned.get('load_error')
         if planned.get('load_diagnostic'):
             result['load_diagnostic'] = planned['load_diagnostic']
@@ -1219,6 +1226,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
     result['planning']['duration_ms'] = round((time.monotonic() - plan_started) * 1000, 3)
     pending = planned.get('planned_inputs', []) if not result['load_error'] else (valid_supplied or [])
     journal('planning_completed', planning=result['planning'], args=result['args'], load_error=result['load_error'],
+            **({'importFixtures': result['importFixtures']} if result.get('importFixtures') else {}),
             load_diagnostic=result.get('load_diagnostic'), blocked_operations=result['blocked_operations'],
             planned_cases=[case_base(encoded, index + len(invalid_supplied)) for index, encoded in enumerate(pending)])
     for index, encoded in enumerate(pending):
