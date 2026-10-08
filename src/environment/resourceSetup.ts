@@ -89,3 +89,9 @@ export function projectParentResourcePaths(rules: ImportFixtureRule[]): string[]
     return [...new Set(rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'project-parent')
         .map(resourceLogicalPath)))];
 }
+
+/** Exact locations stay visible in local previews so users can review every mapping. */
+export function externalExactResourcePaths(rules: ImportFixtureRule[]): string[] {
+    return [...new Set(rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'external-exact')
+        .map(resourceLogicalPath)))];
+}

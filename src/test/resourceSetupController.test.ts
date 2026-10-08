@@ -4,8 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { getLanguage, setLanguage } from '../i18n/core';
+import { getLanguage, localize, setLanguage } from '../i18n/core';
 import { createImportFixturePlan } from '../pipeline/importFixtures';
+import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
 import type { ResourceSetupDraft } from '../environment/resourceSetup';
 
 const digest = (source: string) => createHash('sha256').update(source).digest('hex');
@@ -135,6 +136,36 @@ test('resource setup UI preserves drafts, explicit consent and source-bound appr
             assert.equal(fs.existsSync(path.join(path.dirname(root), 'SiblingData')), false);
             assert.equal(fs.readFileSync(file, 'utf8'), source);
         });
+        for (const outcome of ['confirm', 'decline', 'source-changed', 'settings-changed'] as const) {
+            await t.test(`external exact manual resources retain explicit consent: ${outcome}`, async () => {
+                const f = await fixture('external-' + outcome); f.saveResources();
+                const external = canonicalExternalResourcePath(path.join(base, 'external', outcome));
+                f.draft.rules[0].resources = [{ path: external, scope: 'external-exact', kind: 'directory' },
+                    { path: external + '/seed.txt', scope: 'external-exact', kind: 'text', text: 'explicit test seed' }];
+                fs.writeFileSync(f.draftPath, JSON.stringify(f.draft, null, 2));
+                approve = outcome !== 'decline';
+                if (outcome === 'source-changed') { beforeConfirmation = () => fs.appendFileSync(file, '# changed after preview\n'); }
+                if (outcome === 'settings-changed') { beforeConfirmation = () => { settings.importFixtures[0].mkdir = false; }; }
+                const english = outcome === 'decline';
+                if (english) { setLanguage('en'); action = localize(applyLabel); }
+                try {
+                    assert.equal(await f.apply(), outcome === 'confirm');
+                    assert.equal(confirmations, 1); assert.equal(updates, outcome === 'confirm' ? 2 : 0);
+                    const confirmation = warnings[0];
+                    for (const exact of [external, external + '/seed.txt']) {
+                        assert.ok(confirmation.split('\n').some(line => line.includes(exact)
+                            && line.includes(english ? 'neither read nor written' : '不讀取或寫入原位置')));
+                    }
+                    if (english) { assert.doesNotMatch(confirmation.replaceAll(external, ''), /[\u3400-\u9fff]/); }
+                    const preview = JSON.parse(fs.readFileSync(f.draftPath.replace(/\.json$/, '.preview.json'), 'utf8'));
+                    assert.deepEqual(preview.rules[0].resources, f.draft.rules[0].resources);
+                    if (outcome === 'confirm') { assert.deepEqual(settings.importFixtures[0].resources, f.draft.rules[0].resources); }
+                    else { assert.equal(settings.importFixtures[0].resources, undefined); }
+                    assert.equal(fs.existsSync(external), false, 'preview and approval cannot create the original external resource');
+                    if (outcome !== 'source-changed') { assert.equal(fs.readFileSync(file, 'utf8'), source); }
+                } finally { setLanguage('zh-tw'); }
+            });
+        }
         for (const changed of ['source', 'settings', 'saved draft'] as const) {
             await t.test(`a ${changed} change during the preview cannot be applied`, async () => {
                 const f = await fixture(changed.replace(' ', '-')); f.saveResources(); approve = true;

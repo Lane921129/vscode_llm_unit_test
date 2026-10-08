@@ -234,7 +234,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "path": { "type": "string", "minLength": 1, "maxLength": 240 },
-                    "scope": { "type": "string", "enum": ["project-parent"], "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.items.properties.scope.description%" },
+                    "scope": { "type": "string", "enum": ["project-parent", "external-exact"], "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.items.properties.scope.description%" },
                     "kind": { "type": "string", "enum": ["directory", "text", "sqlite"] },
                     "text": { "type": "string", "maxLength": 65536 },
                     "tables": {

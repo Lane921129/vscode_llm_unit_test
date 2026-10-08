@@ -36,6 +36,7 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_quality_policy.py',
         'python_scripts/test_runtime_policy.py',
         'python_scripts/test_isolated_resources.py',
+        'python_scripts/test_external_isolated_resources.py',
         'python_scripts/test_import_fixtures.py',
         'python_scripts/test_import_setup_advisor.py',
         'python_scripts/test_export_results.py',

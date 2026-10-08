@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { createImportFixturePlan } from '../pipeline/importFixtures';
+import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
 import type { ImportCheck, ImportCheckTarget } from '../environment/projectImportCheck';
 import type { ImportSetupReason } from '../environment/importSetupSession';
 import { getLanguage, setLanguage } from '../i18n/core';
@@ -105,6 +106,38 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(fs.existsSync(path.join(root, 'VMS_Data')), false);
             fixture.controller.dispose();
         });
+        for (const outcome of ['confirm', 'decline', 'source-changed', 'cancel'] as const) {
+            await t.test(`external exact initialization requires an unchanged confirmed proposal: ${outcome}`, async () => {
+                const external = canonicalExternalResourcePath(path.join(base, 'external', outcome));
+                const fixture = createFixture('external-' + outcome, 'from pathlib import Path\n'
+                    + `DATA = Path(${JSON.stringify(external)})\n`
+                    + 'DATA.mkdir(parents=True, exist_ok=True)\ndef target(): return DATA.is_dir()\n');
+                const language = getLanguage();
+                if (outcome === 'decline') { approve = false; setLanguage('en'); }
+                if (outcome === 'source-changed') { duringConfirmation = () => fs.appendFileSync(fixture.file, '# changed after preview\n'); }
+                if (outcome === 'cancel') { duringConfirmation = () => fixture.controller.dispose(); }
+                try {
+                    const result = await run(fixture);
+                    assert.equal(confirmations, 1); assert.equal(updates, outcome === 'confirm' ? 2 : 0);
+                    assert.equal(result.session.applied, outcome === 'confirm');
+                    assert.equal(result.session.status, { confirm: 'ready', decline: 'blocked', 'source-changed': 'incomplete', cancel: 'cancelled' }[outcome]);
+                    assert.equal(result.session.reason, { confirm: 'recheck-ready', decline: 'proposal-declined', 'source-changed': 'error', cancel: 'interrupted' }[outcome]);
+                    assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]),
+                        outcome === 'confirm' ? [[0, 1], [1, 0]] : [[0, 1]]);
+                    assert.ok(confirmationMessages[0].includes(external));
+                    assert.ok(confirmationMessages[0].includes(outcome === 'decline' ? 'neither read nor written' : '不讀取或寫入原位置'));
+                    if (outcome === 'decline') { assert.doesNotMatch(confirmationMessages[0].replaceAll(external, ''), /[\u3400-\u9fff]/); }
+                    const preview = JSON.parse(fs.readFileSync(path.join(result.directory, '1', 'setup_proposal.json'), 'utf8'));
+                    assert.equal(preview.evidence[0].resourceScope, 'external-exact');
+                    assert.equal(preview.evidence[0].resourcePath, external);
+                    if (outcome === 'confirm') {
+                        assert.deepEqual(settings.importFixtures[0].resources, [{ path: external, scope: 'external-exact', kind: 'directory' }]);
+                    } else { assert.deepEqual(settings.importFixtures, []); assert.equal(fs.existsSync(path.join(result.directory, '2')), false); }
+                    assert.equal(fs.existsSync(external), false, 'even confirmed initialization only creates temporary resources');
+                    if (outcome !== 'source-changed') { assert.equal(fs.readFileSync(fixture.file, 'utf8'), fixture.source); }
+                } finally { fixture.controller.dispose(); setLanguage(language); }
+            });
+        }
         await t.test('a second hidden startup call needs a separate manual action, even when the blocked count is unchanged', async () => {
             const fixture = createFixture('successive', 'import neutral_runtime as rt\nrt.launch()\nrt.launch()\ndef target(): return 4\n');
             const first = await run(fixture);

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { localize } from '../i18n/core';
 import { pythonEnvironmentActivity } from './pythonEnvironmentSetup';
 import { createImportFixturePlan, ImportFixtureRule, selectImportFixtureRules } from '../pipeline/importFixtures';
-import { mergeResourceSetupRules, newResourceSetupRule, projectParentResourcePaths, readResourceSetupDraft, refreshResourceSetupDraft, resourceSetupCounts } from './resourceSetup';
+import { externalExactResourcePaths, mergeResourceSetupRules, newResourceSetupRule, projectParentResourcePaths, readResourceSetupDraft, refreshResourceSetupDraft, resourceSetupCounts } from './resourceSetup';
 
 /** Drafts live with reports. Explicit apply saves the previewed host configuration. */
 export async function configureTestResources(projectRoot?: string, outputPath?: string): Promise<boolean> {
@@ -68,6 +68,7 @@ export async function configureTestResources(projectRoot?: string, outputPath?: 
         const plan = createImportFixturePlan(root, mergedRules, root);
         const count = resourceSetupCounts(mergedRules);
         const parentResources = projectParentResourcePaths(mergedRules);
+        const externalResources = externalExactResourcePaths(mergedRules);
         const revokedEntries = selectImportFixtureRules(root, beforeRules, beforeRoot).filter(rule => rule.entryPointSourceHash
             && !mergedRules.find(item => item.file === rule.file)?.entryPointSourceHash).map(rule => rule.file);
         const previewPath = draftPath.replace(/\.json$/, '.preview.json');
@@ -79,6 +80,7 @@ export async function configureTestResources(projectRoot?: string, outputPath?: 
             '將建立 {0} 個暫存目錄、{1} 個測試文字檔、{2} 個 SQLite（{3} 個資料表、{4} 筆測試資料）。每次執行與突變獨立建立並清理；不匯入正式資料。',
             count.directories, count.files, count.databases, count.tables, count.rows)
             + (parentResources.length ? '\n' + localize('專案父層資源：{0}。這些邏輯路徑將導向全新暫存資源；不讀取或寫入原位置。', parentResources.join(', ')) : '')
+            + externalResources.map(resource => '\n' + localize('外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。', resource)).join('')
             + (revokedEntries.length ? '\n' + localize('以下來源的舊初始化入口批准會撤銷，重新預檢後才可另行核准：{0}', revokedEntries.join(', ')) : ''),
             { modal: true }, confirm);
         if (approved !== confirm) { return false; }

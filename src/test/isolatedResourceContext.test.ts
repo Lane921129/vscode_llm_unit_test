@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import { withImportFixtures, type ImportFixturePlan } from '../pipeline/importFixtures';
 import { buildIsolatedResourceContext, ISOLATED_RESOURCE_ROLE_RULE, isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { getExecutionWriterSystemPrompt, getSystemPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt } from '../roles/unittestWriter';
@@ -7,6 +8,7 @@ import { getSemanticAnalyzerSystemPrompt } from '../roles/semanticAnalyzer';
 import { getTestReviewerSystemPrompt } from '../roles/testReviewer';
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 import { validateUnittestStructure } from '../validation/generatedTestValidator';
+import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
 
 const plan = (): ImportFixturePlan => ({ schemaVersion: 'import-fixtures-v1', id: 'a'.repeat(64), root: '/private/application',
     rules: [{ file: 'settings.py', sourceHash: 'b'.repeat(64), resourceSourceHash: 'b'.repeat(64), resources: [
@@ -49,6 +51,42 @@ test('resource prompt keeps the logical scope so equal sibling and project names
     assert.equal(records[1].scope, 'project-parent');
     assert.equal(records[0].path, records[1].path);
     assert.ok(!JSON.stringify(records).includes('/private/application'));
+});
+
+test('external resource context uses stable aliases and hashes without adding the original path', () => {
+    const value = plan();
+    const original = process.platform === 'win32' ? 'C:\\NeutralExternal\\PrivateData' : '/neutral-external/PrivateData';
+    value.rules[0].resources = [{ path: original, scope: 'external-exact', kind: 'directory' }];
+    const context = buildIsolatedResourceContext(value);
+    const records = context.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+    const pathHash = createHash('sha256').update(canonicalExternalResourcePath(original)).digest('hex');
+    assert.equal(records.length, 1);
+    assert.equal(records[0].scope, 'external-exact');
+    assert.equal(records[0].path, undefined);
+    assert.equal(records[0].pathAlias, `external-${pathHash.slice(0, 16)}`);
+    assert.equal(records[0].pathHash, pathHash);
+    assert.doesNotMatch(context, /PrivateData|privatedata|NeutralExternal|neutral-external/);
+    assert.match(context, /never use the alias as a literal path or an expected value/);
+    if (process.platform === 'win32') {
+        value.rules[0].resources[0].path = original.replace(/\\/g, '/').toUpperCase();
+        assert.equal(buildIsolatedResourceContext(value), context);
+    }
+    assert.equal(value.rules[0].resources[0].kind, 'directory', 'the private runtime plan is not rewritten');
+});
+
+test('resource context withholds seed rows that repeat an approved external path', () => {
+    const value = plan();
+    const original = process.platform === 'win32' ? 'C:\\NeutralExternal\\PrivateData' : '/neutral-external/PrivateData';
+    value.rules[0].resources!.push({ path: original, scope: 'external-exact', kind: 'directory' });
+    const db = value.rules[0].resources![0]; assert.equal(db.kind, 'sqlite');
+    if (db.kind === 'sqlite') { db.tables[0].rows![0].label = 'configured path: ' + original; }
+    const context = buildIsolatedResourceContext(value);
+    assert.doesNotMatch(context, /PrivateData|privatedata|NeutralExternal|neutral-external/);
+    assert.match(context, /"rowCount":1,"rowsStatus":"withheld"/);
+    assert.ok(!context.includes('"rows":[]'), 'withheld path-bearing rows are unknown, not an empty seed');
+    const compact = buildIsolatedResourceContext(value, 1800);
+    assert.ok(compact.length <= 1800);
+    for (const line of compact.split('\n').filter(item => item.startsWith('{'))) { assert.doesNotThrow(() => JSON.parse(line)); }
 });
 
 test('resource prompt budgets omit complete records without cutting schema or seed values', () => {

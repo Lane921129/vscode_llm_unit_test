@@ -60,12 +60,21 @@ def is_redirect_frame(frame):
 
 def _has_link(path):
     """Reject links/junctions, including existing ancestors of a new resource."""
+    spelling = os.fsdecode(path).replace('\\', '/')
+    # This helper also protects leases/aliases. Refuse network/device spellings
+    # before normalization or metadata calls, even outside declaration parsing.
+    if spelling.startswith('//') or os.name == 'nt' and spelling.startswith('/??/'):
+        return True
     current = Path(absolute(path))
-    for item in (current, *current.parents):
+    if str(current).replace('\\', '/').startswith('//'):
+        return True
+    # Descendant lstat would already traverse an intermediate junction. Inspect
+    # from the filesystem anchor first and stop before crossing any such link.
+    for item in reversed((current, *current.parents)):
         try:
             info = _ORIGINAL_LSTAT(item)
         except FileNotFoundError:
-            continue
+            return False
         if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 1024:
             return True
     return False
@@ -81,6 +90,27 @@ def _relative_path(value):
             or Path(value).suffix.lower() in _FORBIDDEN_SUFFIXES):
         raise ValueError('Invalid isolated resource path')
     return value
+
+
+def _external_path(value):
+    """Validate a native absolute declaration, in canonical slash spelling."""
+    if type(value) is not str or not 1 <= len(value) <= 240 or '\\' in value:
+        raise ValueError('Invalid isolated external resource path')
+    if os.name == 'nt':
+        if not re.match(r'^[A-Za-z]:/', value):
+            raise ValueError('External resource requires a local drive absolute path')
+        tail = value[3:]
+    else:
+        if not value.startswith('/') or value.startswith('//'):
+            raise ValueError('External resource requires a local absolute path')
+        tail = value[1:]
+    _relative_path(tail)
+    return value
+
+
+def external_resource_identity(value):
+    """Same platform-aware canonical identity used by the host plan/hash."""
+    return absolute(value).replace('\\', '/')
 
 
 def _unsafe_raw_components(value):
@@ -103,15 +133,20 @@ def logical_resource_path(root, spec):
     """
     root = absolute(root)
     scope = spec.get('scope')
-    if scope is not None and scope != 'project-parent' or 'scope' in spec and scope is None:
+    if scope is not None and scope not in ('project-parent', 'external-exact') or 'scope' in spec and scope is None:
         raise ValueError('Invalid isolated resource scope')
-    relative = _relative_path(spec.get('path'))
-    anchor = os.path.dirname(root) if scope == 'project-parent' else root
-    logical = absolute(os.path.join(anchor, relative))
-    if logical == anchor or not inside(logical, anchor) or logical == os.path.dirname(logical):
-        raise ValueError('Isolated resource path escapes declared scope')
-    if scope == 'project-parent' and (inside(logical, root) or inside(root, logical)):
-        raise ValueError('Project-parent resource must be disjoint from source root')
+    if scope == 'external-exact':
+        logical = absolute(_external_path(spec.get('path')))
+        if inside(logical, os.path.dirname(root)) or inside(root, logical):
+            raise ValueError('External resource must be outside project-parent scope and source')
+    else:
+        relative = _relative_path(spec.get('path'))
+        anchor = os.path.dirname(root) if scope == 'project-parent' else root
+        logical = absolute(os.path.join(anchor, relative))
+        if logical == anchor or not inside(logical, anchor) or logical == os.path.dirname(logical):
+            raise ValueError('Isolated resource path escapes declared scope')
+        if scope == 'project-parent' and (inside(logical, root) or inside(root, logical)):
+            raise ValueError('Project-parent resource must be disjoint from source root')
     if _has_link(logical):
         raise ValueError('Isolated resource path uses a symlink or junction')
     return logical
@@ -131,9 +166,9 @@ def validate_resources(rule):
     for spec in specs:
         if type(spec) is not dict or spec.get('kind') not in ('directory', 'text', 'sqlite'):
             raise ValueError('Invalid isolated resource kind')
-        _relative_path(spec.get('path'))
-        if 'scope' in spec and spec['scope'] != 'project-parent':
+        if 'scope' in spec and spec['scope'] not in ('project-parent', 'external-exact'):
             raise ValueError('Invalid isolated resource scope')
+        (_external_path if spec.get('scope') == 'external-exact' else _relative_path)(spec.get('path'))
         allowed = {'path', 'kind', 'scope'} | ({'text'} if spec['kind'] == 'text' else {'tables'} if spec['kind'] == 'sqlite' else set())
         if set(spec) - allowed:
             raise ValueError('Invalid isolated resource fields')
@@ -219,6 +254,7 @@ class IsolatedResources:
                 if rule.get('resolvedFile'):
                     if not self.trial_root or not inside(rule['resolvedFile'], self.trial_root):
                         raise ValueError('Isolated resource mutation source escapes trial')
+                if rule.get('resolvedFile') and spec.get('scope') != 'external-exact':
                     original = absolute(os.path.join(self.root, rule['file']))
                     derived = absolute(os.path.join(os.path.dirname(rule['resolvedFile']),
                         os.path.relpath(logical, os.path.dirname(original))))
@@ -241,6 +277,13 @@ class IsolatedResources:
         for logical, spec in self.specs.items():
             if spec['kind'] != 'directory' and any(other != logical and inside(other, logical) for other in self.specs):
                 raise ValueError('An isolated file resource cannot contain another resource')
+        external_specs = [(logical, spec['kind']) for logical, spec in self.specs.items()
+                          if spec.get('scope') == 'external-exact']
+        # Only declared ancestors can group nested seeds. Unrelated external
+        # roots get separate hashes even when their basenames are identical.
+        self.external_roots = [(logical, kind) for logical, kind in external_specs
+            if not any(other != logical and other_kind == 'directory' and inside(logical, other)
+                       for other, other_kind in external_specs)]
         self.mounts = sorted(set(self.mounts), key=lambda item: len(item[0]), reverse=True)
         aliases = {}
         for alias, logical, _ in self.mounts:
@@ -290,10 +333,18 @@ class IsolatedResources:
     def _physical(self, logical):
         if inside(logical, self.root):
             namespace, anchor = 'project', self.root
-        else:
+        elif inside(logical, os.path.dirname(self.root)):
             namespace, anchor = 'project-parent', os.path.dirname(self.root)
             if not inside(logical, anchor) or inside(self.root, logical):
                 raise ValueError('Isolated resource physical mapping escapes declared scope')
+        else:
+            for anchor, kind in self.external_roots:
+                if logical == anchor or kind == 'directory' and inside(logical, anchor):
+                    identity = hashlib.sha256(external_resource_identity(anchor).encode('utf-8')).hexdigest()
+                    namespace = os.path.join('external', identity)
+                    break
+            else:
+                raise ValueError('Isolated resource physical mapping escapes declared external roots')
         result = absolute(os.path.join(self.data, namespace, os.path.relpath(logical, anchor)))
         if not inside(result, os.path.join(self.data, namespace)):
             raise ValueError('Isolated resource physical mapping escapes worker')
@@ -391,8 +442,11 @@ class IsolatedResources:
                 if not inside(mapped, self.data) or _has_link(mapped):
                     self.block('isolated resource path escape or symlink')
                 try:
-                    relative = os.path.relpath(mapped, self.data).replace(os.sep, '/')
-                    _relative_path(relative.split('/', 1)[1])
+                    if not inside(logical, os.path.dirname(self.root)):
+                        _external_path(external_resource_identity(logical))
+                    else:
+                        relative = os.path.relpath(mapped, self.data).replace(os.sep, '/')
+                        _relative_path(relative.split('/', 1)[1])
                 except ValueError:
                     self.block('isolated resource executable or unsupported filename')
                 self.operations[operation] = min(self.operations.get(operation, 0) + 1, 1000000)

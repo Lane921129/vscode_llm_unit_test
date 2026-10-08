@@ -10,7 +10,7 @@ export interface ResourceColumn {
     primaryKey?: boolean; notNull?: boolean;
 }
 export interface ResourceTable { name: string; columns: ResourceColumn[]; rows?: Array<Record<string, ResourceCell>> }
-export type TestResourceSpec = { path: string; scope?: 'project-parent' } & (
+export type TestResourceSpec = { path: string; scope?: 'project-parent' | 'external-exact' } & (
     { kind: 'directory' } | { kind: 'text'; text: string } | { kind: 'sqlite'; tables: ResourceTable[] });
 type ResourceRule = { file: string; resources?: TestResourceSpec[] };
 export interface ResourceLifecycle {
@@ -52,26 +52,50 @@ const keys = (value: Record<string, unknown>, allowed: string[]) => Object.keys(
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z_][A-Za-z_0-9]{0,63}$/.test(value);
 const identity = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
 const invalid = () => new Error('Invalid isolated resource declaration.');
+const unsafePathPart = (part: string) => !part || part === '.' || part === '..' || /[. ]$/.test(part)
+    || /[\\:<>"|?*\u0000-\u001f\u007f]/.test(part)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part);
+const executableSuffix = /\.(?:py|pyc|pyo|so|pyd|dll|exe|sh|bat|cmd|ps1)$/i;
+
+/** Canonical spelling only; this does not inspect or access the external location. */
+export function canonicalExternalResourcePath(value: unknown): string {
+    if (typeof value !== 'string' || !value.length || value.length > 240) { throw invalid(); }
+    const windows = process.platform === 'win32';
+    if (windows ? !/^[A-Za-z]:[\\/]/.test(value) : !value.startsWith('/') || value.startsWith('//')) { throw invalid(); }
+    const normalized = windows ? value.replace(/\\/g, '/') : value;
+    const tail = normalized.slice(windows ? 3 : 1);
+    if (tail.split('/').some(unsafePathPart) || executableSuffix.test(tail)) { throw invalid(); }
+    return identity(normalized);
+}
 
 /** The same spelling inside and beside a project identifies different resources. */
 export const resourceSpecKey = (resource: Pick<TestResourceSpec, 'path' | 'scope'>): string =>
-    `${resource.scope || 'project'}:${identity(resource.path)}`;
+    `${resource.scope || 'project'}:${resource.scope === 'external-exact'
+        ? canonicalExternalResourcePath(resource.path) : identity(resource.path)}`;
 export const resourceLogicalPath = (resource: Pick<TestResourceSpec, 'path' | 'scope'>): string =>
-    `${resource.scope === 'project-parent' ? '../' : ''}${resource.path}`;
+    resource.scope === 'external-exact' ? canonicalExternalResourcePath(resource.path)
+        : `${resource.scope === 'project-parent' ? '../' : ''}${resource.path}`;
 
 /** Inspect path metadata only; never open, create or reuse the original resource. */
 export function validateResourceLocation(root: string, resource: TestResourceSpec): void {
     root = fs.realpathSync(root);
     const base = resource.scope === 'project-parent' ? path.dirname(root) : root;
-    const selected = path.resolve(base, ...resource.path.split('/'));
+    const external = resource.scope === 'external-exact';
+    const selected = external ? path.resolve(canonicalExternalResourcePath(resource.path))
+        : path.resolve(base, ...resource.path.split('/'));
     const contains = (parent: string, child: string) => {
         const relative = path.relative(parent, child);
         return !relative || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
     };
-    if (!contains(base, selected) || identity(base) === identity(selected)
+    if (external) {
+        // Existing project/sibling paths must keep their existing scopes. An
+        // external mount can never include the selected application source.
+        if (contains(path.dirname(root), selected) || contains(selected, root)) { throw invalid(); }
+    } else if (!contains(base, selected) || identity(base) === identity(selected)
         || resource.scope === 'project-parent' && (contains(root, selected) || contains(selected, root))) { throw invalid(); }
-    let current = base;
-    for (const component of resource.path.split('/')) {
+    let current = external ? path.parse(selected).root : base;
+    const components = external ? selected.slice(current.length).split(path.sep) : resource.path.split('/');
+    for (const component of components) {
         current = path.join(current, component);
         try { if (fs.lstatSync(current).isSymbolicLink()) { throw invalid(); } }
         catch (error) {
@@ -87,12 +111,12 @@ export function validateTestResources(input: unknown): TestResourceSpec[] {
     const result: TestResourceSpec[] = [];
     for (const value of input) {
         if (!object(value) || typeof value.path !== 'string' || value.path.length > 240
-            || value.scope !== undefined && value.scope !== 'project-parent'
-            || /[\\:<>"|?*\u0000-\u001f\u007f]/.test(value.path)
-            || value.path.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part)
-                || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
-            || /\.(?:py|pyc|pyo|so|pyd|dll|exe|sh|bat|cmd|ps1)$/i.test(value.path)) { throw invalid(); }
-        const location = { path: value.path, ...(value.scope === 'project-parent' ? { scope: value.scope as 'project-parent' } : {}) };
+            || value.scope !== undefined && value.scope !== 'project-parent' && value.scope !== 'external-exact') { throw invalid(); }
+        const resourcePath = value.scope === 'external-exact' ? canonicalExternalResourcePath(value.path) : value.path;
+        if (value.scope !== 'external-exact' && (resourcePath.split('/').some(unsafePathPart)
+            || executableSuffix.test(resourcePath))) { throw invalid(); }
+        const location = { path: resourcePath, ...(value.scope === 'project-parent' || value.scope === 'external-exact'
+            ? { scope: value.scope } : {}) } as Pick<TestResourceSpec, 'path' | 'scope'>;
         if (value.kind === 'directory') {
             if (!keys(value, ['path', 'scope', 'kind'])) { throw invalid(); }
             result.push({ ...location, kind: value.kind });

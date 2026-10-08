@@ -57,7 +57,9 @@ export async function inspectProjectImports(root: string, python: string, target
             ...(row.suggestion ? [localize("    可預覽替身：{0}（{1}:{2}）", row.suggestion.operation, row.suggestion.file, row.suggestion.line),
                 localize("    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。"),
                 row.suggestion.resourcePath
-                    ? row.suggestion.resourceScope === 'project-parent'
+                    ? row.suggestion.resourceScope === 'external-exact'
+                        ? localize('    影響：外部絕對路徑 {0} 只映射至全新暫存目錄；不讀取或寫入原位置，每次執行後清理。', row.suggestion.resourcePath)
+                        : row.suggestion.resourceScope === 'project-parent'
                         ? localize('    影響：專案父層邏輯路徑 {0} 將導向全新暫存目錄；不讀取或寫入原位置，每次執行後清理。',
                             resourceLogicalPath({ path: row.suggestion.resourcePath, scope: row.suggestion.resourceScope }))
                         : localize('    影響：將 {0} 導向本次建立的空白暫存目錄；不讀取正式資料，每次執行後清理。', row.suggestion.resourcePath)

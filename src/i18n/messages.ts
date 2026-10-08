@@ -1,5 +1,7 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。": "External absolute path: {0}. Mapped only to fresh temporary resources; the original location is neither read nor written.",
+    "    影響：外部絕對路徑 {0} 只映射至全新暫存目錄；不讀取或寫入原位置，每次執行後清理。": "    Effect: External absolute path {0} is mapped only to a fresh temporary directory; the original location is neither read nor written, and resources are cleaned after each execution.",
     "模組預檢工具未完成（{0}）；未取得可確認的模組載入診斷。": "Module preflight did not complete ({0}); no confirmed module-loading diagnostic was obtained.",
     "本次未取得完整模組診斷；請依原因碼檢查 Python 預檢程序後重新檢查。前次障礙只保留為歷史證據。": "Complete module diagnostics were not obtained. Check the Python preflight process using the reason code, then recheck. Previous blockers remain historical evidence only.",
     "仍有載入障礙，但診斷不完整或無法確認障礙是否改變；請對照各輪報告，前次原因不代表本次已確認的原因。": "Loading is still blocked, but diagnostics are incomplete or do not establish whether the blocker changed. Compare the reports from each check; a previous cause is not a confirmed cause for this check.",

@@ -11,6 +11,7 @@ from unittest import mock
 import uuid
 
 TOOLS = Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS))
 VENDOR = 'from pathlib import Path\ndef launch(*args, **kwargs):\n    Path("must_not_exist").mkdir()\n'
 
 
@@ -128,7 +129,7 @@ class ImportSetupAdvisorTests(unittest.TestCase):
             sys.modules.pop(file.stem, None)
 
     @unittest.skipUnless(os.name == 'nt', 'native Windows drive semantics')
-    def test_windows_cross_drive_mkdir_is_blocked_and_keeps_candidate_without_a_resource_mount(self):
+    def test_windows_cross_drive_mkdir_is_blocked_and_proposes_only_exact_resource_mapping(self):
         other_drive = next(drive for drive in ('C:', 'D:') if drive.lower() != self.root.drive.lower())
         external = Path(other_drive + '\\llm-unit-test-guard-' + uuid.uuid4().hex)
         self.assertFalse(external.exists())
@@ -144,15 +145,55 @@ class ImportSetupAdvisorTests(unittest.TestCase):
         self.assertEqual(candidate['kind'], 'mkdir')
         self.assertEqual(candidate['operation'], 'pathlib.Path.mkdir')
         self.assertEqual(candidate['sourceHash'], hashlib.sha256(self.file.read_bytes()).hexdigest())
-        self.assertNotIn('resourcePath', candidate)
-        self.assertNotIn('resourceScope', candidate)
+        self.assertEqual(candidate['resourcePath'], os.path.normcase(str(external)).replace('\\', '/'))
+        self.assertEqual(candidate['resourceScope'], 'external-exact')
         self.assertFalse(external.exists(), 'the guarded probe must never create the original directory')
         self.assertEqual(self.file.read_text(encoding='utf-8'), source)
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows network/device path semantics')
+    def test_unc_and_device_receivers_keep_evidence_without_resolving_or_stating_remote_paths(self):
+        import import_setup_advisor
+        import isolated_resources
+        from module_preflight import preflight
+        original_realpath, original_lstat = os.path.realpath, isolated_resources._ORIGINAL_LSTAT
+        def reject_remote_then_call(function, value, *args, **kwargs):
+            if isinstance(value, (str, bytes, os.PathLike)):
+                self.assertFalse(os.fsdecode(value).replace('\\', '/').startswith('//'),
+                                 'unapproved network/device receiver must not trigger metadata access')
+            return function(value, *args, **kwargs)
+        for index, receiver in enumerate(['//test-server.invalid/test-share',
+                '//test-server.invalid/test-share/data', '//?/C:/not-approved-device-data']):
+            with self.subTest(receiver=receiver):
+                file = self.root / f'network_candidate_probe_{index}.py'
+                source = 'from pathlib import Path\nPath(' + repr(receiver) + ').mkdir(exist_ok=True)\n'
+                file.write_text(source, encoding='utf-8')
+                previous_path = list(sys.path)
+                try:
+                    with mock.patch.dict(os.environ):
+                        os.environ.pop('LLM_UNIT_TEST_IMPORT_FIXTURES', None)
+                        os.environ.pop('LLM_UNIT_TEST_RESOURCE_LEASE', None)
+                        with mock.patch.object(import_setup_advisor.os.path, 'realpath',
+                                side_effect=lambda value, *args, **kwargs: reject_remote_then_call(original_realpath, value, *args, **kwargs)), \
+                                mock.patch.object(isolated_resources, '_ORIGINAL_LSTAT',
+                                side_effect=lambda value, *args, **kwargs: reject_remote_then_call(original_lstat, value, *args, **kwargs)):
+                            result = preflight({'file': str(file), 'module': file.stem, 'sourceRoot': str(self.root),
+                                                'importPaths': [str(self.root)]})
+                    self.assertFalse(result['ok'], result)
+                    self.assertEqual(result['diagnostic']['blocked_operation'], 'os.mkdir')
+                    candidate = self.candidate(result)
+                    self.assertIsNotNone(candidate, result)
+                    self.assertEqual(candidate['file'], file.name)
+                    self.assertEqual(candidate['line'], 2)
+                    self.assertEqual(candidate['sourceHash'], hashlib.sha256(file.read_bytes()).hexdigest())
+                    self.assertNotIn('resourcePath', candidate)
+                    self.assertNotIn('resourceScope', candidate)
+                finally:
+                    sys.path[:] = previous_path
+                    sys.modules.pop(file.stem, None)
 
     def test_ancestor_escape_and_non_idempotent_mkdir_do_not_propose_sibling_mounts(self):
         for expression, option in [('Path(__file__).parent', 'exist_ok=True'),
                 ('Path(__file__).parent.parent', 'exist_ok=True'),
-                ('Path(__file__).parent.parent.parent / "too_far"', 'exist_ok=True'),
                 ('Path("../VMS_Data")', 'exist_ok=True'),
                 ('Path(__file__).parent.parent / "VMS_Data"', ''),
                 ('Path(__file__).parent.parent / "bad.py"', 'exist_ok=True')]:

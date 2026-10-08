@@ -8,7 +8,7 @@ export interface ImportInitializationCandidate {
     kind: 'mkdir' | 'entry-point'; file: string; line: number; sourceHash: string; operation: string;
     evidence: 'blocked-direct-module-call'; returnValue: 'discarded';
     resourcePath?: string;
-    resourceScope?: 'project-parent';
+    resourceScope?: 'project-parent' | 'external-exact';
 }
 
 /** Recheck the Python observation against the selected root and current bytes. */
@@ -32,17 +32,20 @@ export function readInitializationCandidate(root: string, diagnostic: any): Impo
         const relative = path.relative(root, file);
         if (relative.startsWith('..') || path.isAbsolute(relative)
             || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== value.sourceHash) { return undefined; }
-        if (value.resourceScope !== undefined && (value.resourceScope !== 'project-parent' || value.resourcePath === undefined)) { return undefined; }
+        if (value.resourceScope !== undefined && (!['project-parent', 'external-exact'].includes(value.resourceScope)
+            || value.resourcePath === undefined)) { return undefined; }
+        let resourcePath: string | undefined;
         if (value.resourcePath !== undefined) {
             if (value.kind !== 'mkdir') { return undefined; }
             const resource = validateTestResources([{ path: value.resourcePath, kind: 'directory',
                 ...(value.resourceScope ? { scope: value.resourceScope } : {}) }])[0];
             validateResourceLocation(root, resource);
+            resourcePath = resource.path;
         }
         return { schemaVersion: value.schemaVersion, kind: value.kind, file: relative.replace(/\\/g, '/'),
             line: value.line, sourceHash: value.sourceHash, operation: value.operation,
             evidence: value.evidence, returnValue: value.returnValue,
-            ...(value.resourcePath ? { resourcePath: value.resourcePath } : {}),
+            ...(resourcePath ? { resourcePath } : {}),
             ...(value.resourceScope ? { resourceScope: value.resourceScope } : {}) };
     } catch { return undefined; }
 }

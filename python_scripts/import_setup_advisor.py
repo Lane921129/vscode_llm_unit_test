@@ -8,7 +8,7 @@ import sys
 import types
 
 from import_fixtures import ImportFixtures
-from isolated_resources import logical_resource_path, inside as _lexically_inside
+from isolated_resources import logical_resource_path, external_resource_identity, inside as _lexically_inside
 
 _PATH_MKDIR_CODE = Path.mkdir.__code__
 _FIXTURE_MKDIR_CODE = next(code for code in ImportFixtures.__enter__.__code__.co_consts
@@ -51,7 +51,14 @@ def _observed_directory(following, root):
         if type(receiver) is not type(Path()) or entry.tb_frame.f_locals.get('exist_ok') is not True:
             return None
         raw = os.fspath(receiver)
-        if not os.path.isabs(raw) and any(part == '..' for part in raw.replace('\\', '/').split('/')):
+        spelling = raw.replace('\\', '/') if os.name == 'nt' else raw
+        # Classify unsupported network/device paths before any realpath/lstat.
+        # Even metadata inspection of an unapproved UNC receiver can contact a
+        # network share. Absolute Windows receivers need a local drive prefix.
+        if spelling.startswith('//') or (os.name == 'nt' and os.path.isabs(raw)
+                and not re.match(r'^[A-Za-z]:/', spelling)):
+            return None
+        if any(part == '..' for part in raw.replace('\\', '/').split('/')):
             return None
         # Relative declarations are explicitly bound to the project logical
         # root, independent of the report/worker current directory.
@@ -59,19 +66,23 @@ def _observed_directory(following, root):
         # Sibling paths may be bound explicitly, without opening their contents.
         # Keep the observed receiver; never guess from an identifier or source
         # expression, and never allow an ancestor or descendant source mount.
-        if os.path.normcase(lexical) != _absolute(lexical):
-            return None
+        # logical_resource_path checks links with lstat only; do not resolve a
+        # local junction/symlink into another (possibly remote) location first.
         internal = _lexically_inside(lexical, root)
-        anchor = root if internal else os.path.dirname(root)
-        try:
-            relative = os.path.relpath(lexical, anchor).replace('\\', '/')
-        except ValueError:
-            # A different Windows drive is outside supported resource scopes.
-            # Retain the observed mkdir candidate, without proposing a mount.
-            return None
-        spec = {'path': relative, 'kind': 'directory'}
-        if not internal:
-            spec['scope'] = 'project-parent'
+        sibling = not internal and _lexically_inside(lexical, os.path.dirname(root))
+        if internal or sibling:
+            anchor = root if internal else os.path.dirname(root)
+            try:
+                relative = os.path.relpath(lexical, anchor).replace('\\', '/')
+            except ValueError:
+                return None
+            spec = {'path': relative, 'kind': 'directory'}
+            if sibling:
+                spec['scope'] = 'project-parent'
+        else:
+            # Preserve this exact observed receiver. Mutation workers must not
+            # guess a new external location from copied __file__ expressions.
+            spec = {'path': external_resource_identity(lexical), 'kind': 'directory', 'scope': 'external-exact'}
         try:
             logical_resource_path(root, spec)
         except ValueError:

@@ -9,6 +9,40 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
 import { preflightFailureCacheSize, preflightTargetModule } from '../pipeline/modulePreflight';
 import { newResourceSetupRule } from '../environment/resourceSetup';
+import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
+import { getLanguage, setLanguage } from '../i18n/core';
+
+test('observed absolute mkdir retains an exact external proposal without reading or writing original data', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'external-import-'));
+    const root = path.join(base, 'selected', 'app'); fs.mkdirSync(root, { recursive: true });
+    const external = canonicalExternalResourcePath(path.join(base, 'external', 'data'));
+    fs.mkdirSync(external, { recursive: true }); fs.writeFileSync(path.join(external, 'existing.txt'), 'original must remain untouched');
+    const file = path.join(root, 'sample.py');
+    const source = 'from pathlib import Path\n' + `DATA = Path(${JSON.stringify(external)})\n`
+        + 'DATA.mkdir(parents=True, exist_ok=True)\n'
+        + 'assert not (DATA / "existing.txt").exists()\ndef target(): return DATA.is_dir()\n';
+    fs.writeFileSync(file, source);
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const language = getLanguage();
+    try {
+        setLanguage('en');
+        const first = await inspectProjectImports(root, python, [{ file, target: 'target' }], path.join(base, 'r1'), []);
+        assert.equal(first.rows[0].status, 'blocked');
+        assert.equal(first.rows[0].suggestion?.resourceScope, 'external-exact');
+        assert.equal(first.rows[0].suggestion?.resourcePath, external);
+        assert.deepEqual(first.proposedRules[0].resources, [{ path: external, scope: 'external-exact', kind: 'directory' }]);
+        const report = fs.readFileSync(path.join(base, 'r1', 'import_check.md'), 'utf8');
+        assert.ok(report.includes('External absolute path ' + external));
+        assert.ok(report.includes('neither read nor written'));
+        verifyImportProposal(first);
+        const second = await inspectProjectImports(root, python, [{ file, target: 'target' }], path.join(base, 'r2'), first.proposedRules);
+        assert.equal(second.rows[0].status, 'loaded', JSON.stringify(second.rows));
+        assert.equal(second.proposedPlan, null);
+        assert.equal(fs.readFileSync(file, 'utf8'), source);
+        assert.deepEqual(fs.readdirSync(external), ['existing.txt']);
+        assert.equal(fs.readFileSync(path.join(external, 'existing.txt'), 'utf8'), 'original must remain untouched');
+    } finally { setLanguage(language); fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 test('parent mkdir proposals remain separate from equal project paths and recheck without touching original data', async () => {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'parent-import-'));
