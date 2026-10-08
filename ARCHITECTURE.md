@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## UNC 名稱的本機虛擬資源（2026-10-09）
+
+Windows 新增獨立的 `scope=unc-virtual`。`canonicalUncResourcePath` 將支援的網路樣式名稱正規化為 `//server/share[/tail]`，接受共享根目錄並核對裝置名稱、`IPC$`、跨層與來源交集；整個核對不查詢原 UNC metadata、不解析或連線原共享位置。`external-exact` 維持只接受本機絕對路徑，不將 UNC 混入原 scope。
+
+advisor 僅從實際受阻的 `Path.mkdir(exist_ok=True)` receiver 提出精確候選；手動資源草稿使用同一契約。兩者沿用來源雜湊及設定版本核對，清單逐項顯示完整名稱與「僅本機暫存、不是網路授權」的說明，確認後才保存，再執行唯一一次重檢。取消不保存、不重新預檢；重檢發現下一個障礙便保存報告並結束。
+
+Python 在本機 owned lease 內建立 worker 專屬空白目錄或明確文字／SQLite seed；原 UNC 名稱只作邏輯匹配，不讀取原 metadata 或內容、不寫回、不連線。同一 worker 沿用資源，下一個 Trace case、baseline 或 mutant 重建；外層於子樹停止後核對擁有權並清理，取消／逾時及清理失敗沿用原契約。突變中的 UNC 字面地址不變，不從副本布局推導其他遠端位置。
+
+runtime 前置 guard 涵蓋支援的標準 Python 檔案／路徑 API 及已知 `ntpath` 別名，在底層檔案或名稱解析動作前阻擋未宣告操作或改用已宣告的本機資源。這不是 OS sandbox，不承諾隔離任意原生 extension 或未支援私有 API。模型資源語境僅新增穩定 alias／path hash；完整名稱留在本機確認清單，alias、schema 與 seed 不能冒充 assertion oracle。
+
 ## 精確外部路徑使用暫存資源（2026-10-09）
 
 固定本機絕對路徑可使用 `scope=external-exact`；只支援專案父層範圍之外、與來源不相交的精確邏輯路徑。預檢由實際受阻的 `Path.mkdir(exist_ok=True)` receiver 提出候選，仍須走清單預覽、明示確認、來源／設定重核對與一次重新預檢；也可由資源草稿宣告。沒有確認就不寫入設定、不批准原路徑 I/O。

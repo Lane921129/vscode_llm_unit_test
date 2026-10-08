@@ -9,8 +9,40 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
 import { preflightFailureCacheSize, preflightTargetModule } from '../pipeline/modulePreflight';
 import { newResourceSetupRule } from '../environment/resourceSetup';
-import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
+import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
 import { getLanguage, setLanguage } from '../i18n/core';
+import { withoutUncFileSystem } from './uncPathGuard';
+
+test('observed UNC mkdir is explicitly previewed and rechecked using only local resources', { skip: process.platform !== 'win32' }, async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'unc-import-'));
+    const root = path.join(base, 'app'); fs.mkdirSync(root);
+    const exact = canonicalUncResourcePath('//fixture-host/test-share');
+    const file = path.join(root, 'sample.py');
+    const source = 'from pathlib import Path\n' + `DATA = Path(${JSON.stringify(exact)})\n`
+        + 'DATA.mkdir(parents=True, exist_ok=True)\n'
+        + 'assert not (DATA / "original.txt").exists()\ndef target(): return DATA.is_dir()\n';
+    fs.writeFileSync(file, source);
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const language = getLanguage();
+    try {
+        setLanguage('en');
+        await withoutUncFileSystem(async () => {
+            const first = await inspectProjectImports(root, python, [{ file, target: 'target' }], path.join(base, 'r1'), []);
+            assert.equal(first.rows[0].status, 'blocked');
+            assert.equal(first.rows[0].suggestion?.resourceScope, 'unc-virtual');
+            assert.equal(first.rows[0].suggestion?.resourcePath, exact);
+            assert.deepEqual(first.proposedRules[0].resources, [{ path: exact, scope: 'unc-virtual', kind: 'directory' }]);
+            const report = fs.readFileSync(path.join(base, 'r1', 'import_check.md'), 'utf8');
+            assert.ok(report.includes('Network-style path ' + exact));
+            assert.ok(report.includes('does not grant network access'));
+            verifyImportProposal(first);
+            const second = await inspectProjectImports(root, python, [{ file, target: 'target' }], path.join(base, 'r2'), first.proposedRules);
+            assert.equal(second.rows[0].status, 'loaded', JSON.stringify(second.rows));
+            assert.equal(second.proposedPlan, null);
+            assert.equal(fs.readFileSync(file, 'utf8'), source);
+        });
+    } finally { setLanguage(language); fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 test('observed absolute mkdir retains an exact external proposal without reading or writing original data', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'external-import-'));

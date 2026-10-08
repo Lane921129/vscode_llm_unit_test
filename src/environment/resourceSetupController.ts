@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { localize } from '../i18n/core';
 import { pythonEnvironmentActivity } from './pythonEnvironmentSetup';
 import { createImportFixturePlan, ImportFixtureRule, selectImportFixtureRules } from '../pipeline/importFixtures';
-import { externalExactResourcePaths, mergeResourceSetupRules, newResourceSetupRule, projectParentResourcePaths, readResourceSetupDraft, refreshResourceSetupDraft, resourceSetupCounts } from './resourceSetup';
+import { externalExactResourcePaths, mergeResourceSetupRules, newResourceSetupRule, projectParentResourcePaths, readResourceSetupDraft, refreshResourceSetupDraft, resourceSetupCounts, uncVirtualResourcePaths } from './resourceSetup';
 
 /** Drafts live with reports. Explicit apply saves the previewed host configuration. */
 export async function configureTestResources(projectRoot?: string, outputPath?: string): Promise<boolean> {
@@ -69,6 +69,7 @@ export async function configureTestResources(projectRoot?: string, outputPath?: 
         const count = resourceSetupCounts(mergedRules);
         const parentResources = projectParentResourcePaths(mergedRules);
         const externalResources = externalExactResourcePaths(mergedRules);
+        const uncResources = uncVirtualResourcePaths(mergedRules);
         const revokedEntries = selectImportFixtureRules(root, beforeRules, beforeRoot).filter(rule => rule.entryPointSourceHash
             && !mergedRules.find(item => item.file === rule.file)?.entryPointSourceHash).map(rule => rule.file);
         const previewPath = draftPath.replace(/\.json$/, '.preview.json');
@@ -81,6 +82,7 @@ export async function configureTestResources(projectRoot?: string, outputPath?: 
             count.directories, count.files, count.databases, count.tables, count.rows)
             + (parentResources.length ? '\n' + localize('專案父層資源：{0}。這些邏輯路徑將導向全新暫存資源；不讀取或寫入原位置。', parentResources.join(', ')) : '')
             + externalResources.map(resource => '\n' + localize('外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。', resource)).join('')
+            + uncResources.map(resource => '\n' + localize('網路樣式路徑：{0}。只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此確認不授予網路存取權限。', resource)).join('')
             + (revokedEntries.length ? '\n' + localize('以下來源的舊初始化入口批准會撤銷，重新預檢後才可另行核准：{0}', revokedEntries.join(', ')) : ''),
             { modal: true }, confirm);
         if (approved !== confirm) { return false; }

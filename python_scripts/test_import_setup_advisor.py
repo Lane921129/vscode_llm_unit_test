@@ -185,8 +185,12 @@ class ImportSetupAdvisorTests(unittest.TestCase):
                     self.assertEqual(candidate['file'], file.name)
                     self.assertEqual(candidate['line'], 2)
                     self.assertEqual(candidate['sourceHash'], hashlib.sha256(file.read_bytes()).hexdigest())
-                    self.assertNotIn('resourcePath', candidate)
-                    self.assertNotIn('resourceScope', candidate)
+                    if receiver.startswith('//?/'):
+                        self.assertNotIn('resourcePath', candidate)
+                        self.assertNotIn('resourceScope', candidate)
+                    else:
+                        self.assertEqual(candidate['resourcePath'], receiver)
+                        self.assertEqual(candidate['resourceScope'], 'unc-virtual')
                 finally:
                     sys.path[:] = previous_path
                     sys.modules.pop(file.stem, None)

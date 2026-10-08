@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { currentImportFixtures, type ImportFixturePlan } from '../pipeline/importFixtures';
 import { containsCredential } from '../pipeline/artifactSafety';
-import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
+import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
 
 /** The exception is for application code, never a generated test's direct I/O. */
 export const ISOLATED_RESOURCE_ROLE_RULE = 'When HOST_ISOLATED_RESOURCE_CONTEXT is supplied, the host prepares only its declared resources before application import. Call the real target through its public API; do not create files, open database connections, invent tables, or replace a declared connection with a scalar mock. The seed is controlled input, not proof of an expected output. Each process starts fresh, but methods in one unittest suite share resources: arrange and clean up through supported public application APIs so tests do not depend on order. Undeclared boundaries still need explicit use-point mocks; network, shell, direct test I/O and shared databases remain forbidden.';
@@ -22,27 +22,35 @@ export function buildIsolatedResourceContext(
         ? 'Scope project-parent means a logical sibling path under the project parent; the host redirects it to fresh temporary resources without reading or writing the original location. Omitted scope means project-relative.\n' : '';
     const externalPaths = rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'external-exact')
         .map(resource => canonicalExternalResourcePath(resource.path)));
+    const uncPaths = rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'unc-virtual')
+        .map(resource => canonicalUncResourcePath(resource.path)));
     const externalScope = externalPaths.length
         ? 'Scope external-exact is a user-approved external logical path redirected to fresh temporary resources. Only its alias and hash are shown; never use the alias as a literal path or an expected value.\n' : '';
-    const containsExternalPath = (value: unknown): boolean => {
+    const uncScope = uncPaths.length
+        ? 'Scope unc-virtual treats a network-style name only as an identifier for fresh local temporary resources. It grants no network connection or remote I/O. Only its alias and hash are shown; never use the alias as a literal path or expected value.\n' : '';
+    const comparable = (value: string) => process.platform === 'win32' ? value.replace(/[\\/]+/g, '/').toLowerCase() : value;
+    const privatePaths = [...externalPaths, ...uncPaths].map(comparable);
+    const containsPrivatePath = (value: unknown): boolean => {
         if (typeof value === 'string') {
-            const normalized = process.platform === 'win32' ? value.replace(/\\+/g, '/').toLowerCase() : value;
-            return externalPaths.some(external => normalized.includes(external));
+            const normalized = comparable(value);
+            return privatePaths.some(privatePath => normalized.includes(privatePath));
         }
-        if (Array.isArray(value)) { return value.some(containsExternalPath); }
-        return !!value && typeof value === 'object' && Object.values(value).some(containsExternalPath);
+        if (Array.isArray(value)) { return value.some(containsPrivatePath); }
+        return !!value && typeof value === 'object' && Object.values(value).some(containsPrivatePath);
     };
-    const header = `HOST_ISOLATED_RESOURCE_CONTEXT\nPlan identity (includes source, schema and seed): ${plan.id}\n${ISOLATED_RESOURCE_ROLE_RULE}\n${parentScope}${externalScope}Resource declarations are setup facts, not execution results. Text contents are withheld. Omitted rows are unknown, never empty.\n`;
+    const header = `HOST_ISOLATED_RESOURCE_CONTEXT\nPlan identity (includes source, schema and seed): ${plan.id}\n${ISOLATED_RESOURCE_ROLE_RULE}\n${parentScope}${externalScope}${uncScope}Resource declarations are setup facts, not execution results. Text contents are withheld. Omitted rows are unknown, never empty.\n`;
     if (maxChars < header.length + 100) { return ''; }
     const records: string[] = [];
     let omitted = 0;
     const fits = (record: string) => header.length + records.join('\n').length + record.length + 100 <= maxChars;
     for (const rule of rules) {
         for (const resource of rule.resources || []) {
-            const pathHash = resource.scope === 'external-exact'
-                ? createHash('sha256').update(canonicalExternalResourcePath(resource.path)).digest('hex') : undefined;
+            const privatePath = resource.scope === 'external-exact' ? canonicalExternalResourcePath(resource.path)
+                : resource.scope === 'unc-virtual' ? canonicalUncResourcePath(resource.path) : undefined;
+            const pathHash = privatePath ? createHash('sha256').update(resource.scope + ':' + privatePath).digest('hex') : undefined;
             const common = { declaredBy: rule.file, sourceHash: rule.sourceHash,
-                ...(pathHash ? { pathAlias: `external-${pathHash.slice(0, 16)}`, pathHash } : { path: resource.path }),
+                ...(pathHash ? { pathAlias: `${resource.scope === 'unc-virtual' ? 'unc' : 'external'}-${pathHash.slice(0, 16)}`, pathHash }
+                    : { path: resource.path }),
                 ...(resource.scope ? { scope: resource.scope } : {}), kind: resource.kind };
             const summary = resource.kind === 'sqlite'
                 ? { ...common, tables: resource.tables.map(table => ({ name: table.name, columns: table.columns,
@@ -56,8 +64,8 @@ export function buildIsolatedResourceContext(
                     rowCount: table.rows?.length || 0, rowsStatus: 'complete', rows: table.rows || [] })) }
                 : summary;
             const full = JSON.stringify(complete), brief = JSON.stringify(summary);
-            if (!containsExternalPath(complete) && !containsCredential(full, knownSecrets) && fits(full)) { records.push(full); }
-            else if (!containsExternalPath(summary) && !containsCredential(brief, knownSecrets) && fits(brief)) { records.push(brief); }
+            if (!containsPrivatePath(complete) && !containsCredential(full, knownSecrets) && fits(full)) { records.push(full); }
+            else if (!containsPrivatePath(summary) && !containsCredential(brief, knownSecrets) && fits(brief)) { records.push(brief); }
             else { omitted++; }
         }
     }

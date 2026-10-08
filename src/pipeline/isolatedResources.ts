@@ -10,7 +10,7 @@ export interface ResourceColumn {
     primaryKey?: boolean; notNull?: boolean;
 }
 export interface ResourceTable { name: string; columns: ResourceColumn[]; rows?: Array<Record<string, ResourceCell>> }
-export type TestResourceSpec = { path: string; scope?: 'project-parent' | 'external-exact' } & (
+export type TestResourceSpec = { path: string; scope?: 'project-parent' | 'external-exact' | 'unc-virtual' } & (
     { kind: 'directory' } | { kind: 'text'; text: string } | { kind: 'sqlite'; tables: ResourceTable[] });
 type ResourceRule = { file: string; resources?: TestResourceSpec[] };
 export interface ResourceLifecycle {
@@ -68,16 +68,43 @@ export function canonicalExternalResourcePath(value: unknown): string {
     return identity(normalized);
 }
 
+/** A UNC spelling is only a local virtual-resource identifier, never a network grant. */
+export function canonicalUncResourcePath(value: unknown): string {
+    if (process.platform !== 'win32' || typeof value !== 'string' || !value.length || value.length > 240) { throw invalid(); }
+    const normalized = value.replace(/\\/g, '/');
+    if (!normalized.startsWith('//')) { throw invalid(); }
+    const parts = normalized.slice(2).split('/');
+    // Windows Path preserves the separator on a share root. No other empty
+    // component is accepted, including a repeated separator at that root.
+    if (parts.length === 3 && parts[2] === '') { parts.pop(); }
+    if (parts.length < 2 || parts.some(unsafePathPart) || parts[1].toLowerCase() === 'ipc$'
+        || executableSuffix.test(parts[parts.length - 1])) { throw invalid(); }
+    return '//' + parts.join('/').toLowerCase();
+}
+
 /** The same spelling inside and beside a project identifies different resources. */
 export const resourceSpecKey = (resource: Pick<TestResourceSpec, 'path' | 'scope'>): string =>
     `${resource.scope || 'project'}:${resource.scope === 'external-exact'
-        ? canonicalExternalResourcePath(resource.path) : identity(resource.path)}`;
+        ? canonicalExternalResourcePath(resource.path) : resource.scope === 'unc-virtual'
+            ? canonicalUncResourcePath(resource.path) : identity(resource.path)}`;
 export const resourceLogicalPath = (resource: Pick<TestResourceSpec, 'path' | 'scope'>): string =>
     resource.scope === 'external-exact' ? canonicalExternalResourcePath(resource.path)
-        : `${resource.scope === 'project-parent' ? '../' : ''}${resource.path}`;
+        : resource.scope === 'unc-virtual' ? canonicalUncResourcePath(resource.path)
+            : `${resource.scope === 'project-parent' ? '../' : ''}${resource.path}`;
 
 /** Inspect path metadata only; never open, create or reuse the original resource. */
 export function validateResourceLocation(root: string, resource: TestResourceSpec): void {
+    if (resource.scope === 'unc-virtual') {
+        const selected = canonicalUncResourcePath(resource.path);
+        // Do not resolve, stat, open or enumerate a network-style identifier.
+        // The source root has its existing validation at plan construction;
+        // only a lexical comparison is needed to reject a source overlap here.
+        let source = path.resolve(root).replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+        if (source.startsWith('//?/unc/')) { source = '//' + source.slice(8); }
+        const contains = (parent: string, child: string) => child === parent || child.startsWith(parent + '/');
+        if (contains(source, selected) || contains(selected, source)) { throw invalid(); }
+        return;
+    }
     root = fs.realpathSync(root);
     const base = resource.scope === 'project-parent' ? path.dirname(root) : root;
     const external = resource.scope === 'external-exact';
@@ -111,11 +138,13 @@ export function validateTestResources(input: unknown): TestResourceSpec[] {
     const result: TestResourceSpec[] = [];
     for (const value of input) {
         if (!object(value) || typeof value.path !== 'string' || value.path.length > 240
-            || value.scope !== undefined && value.scope !== 'project-parent' && value.scope !== 'external-exact') { throw invalid(); }
-        const resourcePath = value.scope === 'external-exact' ? canonicalExternalResourcePath(value.path) : value.path;
-        if (value.scope !== 'external-exact' && (resourcePath.split('/').some(unsafePathPart)
+            || value.scope !== undefined && value.scope !== 'project-parent' && value.scope !== 'external-exact'
+                && value.scope !== 'unc-virtual') { throw invalid(); }
+        const resourcePath = value.scope === 'external-exact' ? canonicalExternalResourcePath(value.path)
+            : value.scope === 'unc-virtual' ? canonicalUncResourcePath(value.path) : value.path;
+        if (value.scope !== 'external-exact' && value.scope !== 'unc-virtual' && (resourcePath.split('/').some(unsafePathPart)
             || executableSuffix.test(resourcePath))) { throw invalid(); }
-        const location = { path: resourcePath, ...(value.scope === 'project-parent' || value.scope === 'external-exact'
+        const location = { path: resourcePath, ...(value.scope === 'project-parent' || value.scope === 'external-exact' || value.scope === 'unc-virtual'
             ? { scope: value.scope } : {}) } as Pick<TestResourceSpec, 'path' | 'scope'>;
         if (value.kind === 'directory') {
             if (!keys(value, ['path', 'scope', 'kind'])) { throw invalid(); }

@@ -8,7 +8,7 @@ import sys
 import types
 
 from import_fixtures import ImportFixtures
-from isolated_resources import logical_resource_path, external_resource_identity, inside as _lexically_inside
+from isolated_resources import logical_resource_path, external_resource_identity, unc_resource_identity, inside as _lexically_inside
 
 _PATH_MKDIR_CODE = Path.mkdir.__code__
 _FIXTURE_MKDIR_CODE = next(code for code in ImportFixtures.__enter__.__code__.co_consts
@@ -55,7 +55,14 @@ def _observed_directory(following, root):
         # Classify unsupported network/device paths before any realpath/lstat.
         # Even metadata inspection of an unapproved UNC receiver can contact a
         # network share. Absolute Windows receivers need a local drive prefix.
-        if spelling.startswith('//') or (os.name == 'nt' and os.path.isabs(raw)
+        if spelling.startswith('//'):
+            try:
+                spec = {'path': unc_resource_identity(spelling), 'scope': 'unc-virtual', 'kind': 'directory'}
+                logical_resource_path(root, spec)
+                return spec
+            except ValueError:
+                return None
+        if (os.name == 'nt' and os.path.isabs(raw)
                 and not re.match(r'^[A-Za-z]:/', spelling)):
             return None
         if any(part == '..' for part in raw.replace('\\', '/').split('/')):

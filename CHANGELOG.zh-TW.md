@@ -4,6 +4,16 @@
 
 ## 2026-10-09
 
+### UNC 邏輯名稱映射至本機測試資源
+
+- 新增 Windows 專用 `scope: "unc-virtual"`，以精確 `//server/share[/tail]` 名稱映射至本機 owned lease 內的空白目錄及明確文字／SQLite seed，保留應用原字面地址。`external-exact` 仍拒絕 UNC；裝置路徑、`IPC$`、跨層及來源交集保持拒絕。
+- 自動候選只依實際受阻的 `Path.mkdir(exist_ok=True)` receiver；手動草稿共用來源／設定核對。中英文確認逐項列出完整名稱，明示只使用本機暫存、不連線、不讀寫原共享、不授予網路權限。取消或確認期間來源／設定變動均不套用，批准後只重檢一次。
+- UNC 核對與映射不查詢原 metadata、資料或連線；runtime 前置 guard 處理支援的標準 Python API 與已知 `ntpath` 別名，不宣稱 OS sandbox 或支援任意原生／私有 API。各 worker、baseline、mutant 重建並清理本機資源，突變不推導其他遠端別名。
+- 角色資源語境只提供 alias／path hash，設定與 seed 不是 assertion oracle。新增候選、手動清單、確認／取消／來源變動、英文、單次重檢及 UNC 檔案系統查詢攔截的回歸案例；不以中性 fixture 冒充實驗室完整專案或模型通過。
+- 核對本機同版 `config.py` 的隔離副本與中性目錄 probe：未配置時受阻並提出 UNC 候選，加入一筆已核對的虛擬目錄後可載入。獨立前置 sentinel 記錄原 UNC metadata／內容／網路存取嘗試為零；原檔不變、worker 已清除，私有副本已刪除。未啟動 GUI、原應用完整流程或真實模型。
+- 保留 `Path.absolute()`／`abspath()` 的純字串計算及 Windows 分享根語義；真正的路徑解析仍受資源限制。目錄列舉物件也檢查呼叫者，生成測試不能接手做直接 I/O；突變複製先排除 symlink／junction，再處理一般來源，不解析連結目標。
+- 驗證：Node 全套 700／700 通過；Python 全套 464 項，463 通過、1 項因目前使用者無法建立 symbolic link 略過。完整相關 10 個 Python 模組另跑 134／134、0 略過，包含 UNC、真實 Mutatest 與 C→D 跨磁碟。核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／Git 歷史密鑰掃描及差異檢查通過。原工作區 32 個未提交檔案獨立備份並保留，不混入修復提交；未重跑實驗室整批或真實模型。
+
 ### 明確映射本機外部資料路徑並保留 UNC 障礙
 
 - 新增 `scope: "external-exact"`，讓專案父層範圍以外、與來源不相交的固定本機絕對路徑使用空白暫存目錄及明確文字／SQLite seed。預檢只依實際受阻的 `Path.mkdir(exist_ok=True)` receiver 提案，確認清單逐項顯示精確路徑；取消、來源或設定在確認期間改變均不套用，仍只重新預檢一次。

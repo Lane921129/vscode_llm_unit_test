@@ -8,7 +8,7 @@ import { getSemanticAnalyzerSystemPrompt } from '../roles/semanticAnalyzer';
 import { getTestReviewerSystemPrompt } from '../roles/testReviewer';
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 import { validateUnittestStructure } from '../validation/generatedTestValidator';
-import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
+import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
 
 const plan = (): ImportFixturePlan => ({ schemaVersion: 'import-fixtures-v1', id: 'a'.repeat(64), root: '/private/application',
     rules: [{ file: 'settings.py', sourceHash: 'b'.repeat(64), resourceSourceHash: 'b'.repeat(64), resources: [
@@ -59,7 +59,7 @@ test('external resource context uses stable aliases and hashes without adding th
     value.rules[0].resources = [{ path: original, scope: 'external-exact', kind: 'directory' }];
     const context = buildIsolatedResourceContext(value);
     const records = context.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
-    const pathHash = createHash('sha256').update(canonicalExternalResourcePath(original)).digest('hex');
+    const pathHash = createHash('sha256').update('external-exact:' + canonicalExternalResourcePath(original)).digest('hex');
     assert.equal(records.length, 1);
     assert.equal(records[0].scope, 'external-exact');
     assert.equal(records[0].path, undefined);
@@ -84,6 +84,48 @@ test('resource context withholds seed rows that repeat an approved external path
     assert.doesNotMatch(context, /PrivateData|privatedata|NeutralExternal|neutral-external/);
     assert.match(context, /"rowCount":1,"rowsStatus":"withheld"/);
     assert.ok(!context.includes('"rows":[]'), 'withheld path-bearing rows are unknown, not an empty seed');
+    const compact = buildIsolatedResourceContext(value, 1800);
+    assert.ok(compact.length <= 1800);
+    for (const line of compact.split('\n').filter(item => item.startsWith('{'))) { assert.doesNotThrow(() => JSON.parse(line)); }
+});
+
+test('UNC virtual context exposes only scope-bound aliases and grants no network I/O', {
+    skip: process.platform !== 'win32'
+}, () => {
+    const value = plan(), original = '\\\\Neutral-Server\\TestShare\\';
+    value.rules[0].resources = [{ path: original, scope: 'unc-virtual', kind: 'directory' }];
+    const context = buildIsolatedResourceContext(value);
+    const records = context.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+    const canonical = canonicalUncResourcePath(original);
+    const pathHash = createHash('sha256').update('unc-virtual:' + canonical).digest('hex');
+    assert.equal(records.length, 1);
+    assert.equal(records[0].scope, 'unc-virtual');
+    assert.equal(records[0].path, undefined);
+    assert.equal(records[0].pathHash, pathHash);
+    assert.equal(records[0].pathAlias, `unc-${pathHash.slice(0, 16)}`);
+    assert.notEqual(pathHash, createHash('sha256').update(canonical).digest('hex'), 'the hash binds its namespace');
+    assert.doesNotMatch(context, /neutral-server|testshare/i);
+    assert.match(context, /grants no network connection or remote I\/O/);
+    assert.match(context, /never use the alias as a literal path or expected value/);
+    value.rules[0].resources[0].path = '//NEUTRAL-SERVER/TESTSHARE';
+    assert.equal(buildIsolatedResourceContext(value), context);
+    assert.equal(value.rules[0].resources[0].path, '//NEUTRAL-SERVER/TESTSHARE', 'the runtime declaration is not rewritten');
+});
+
+test('UNC path-bearing seed rows stay withheld across native and escaped spellings', {
+    skip: process.platform !== 'win32'
+}, () => {
+    const value = plan(), original = '\\\\Neutral-Server\\TestShare';
+    value.rules[0].resources!.push({ path: original, scope: 'unc-virtual', kind: 'directory' });
+    const db = value.rules[0].resources![0]; assert.equal(db.kind, 'sqlite');
+    for (const spelling of [original + '\\child', '//NEUTRAL-SERVER/TESTSHARE/child', JSON.stringify(original + '\\child')]) {
+        if (db.kind === 'sqlite') { db.tables[0].rows![0].label = 'configured path: ' + spelling; }
+        const context = buildIsolatedResourceContext(value);
+        assert.doesNotMatch(context, /neutral-server|testshare/i);
+        assert.match(context, /"rowCount":1,"rowsStatus":"withheld"/);
+        assert.ok(!context.includes('"rows":[]'), 'unknown rows must not be represented as empty');
+        if (db.kind === 'sqlite') { assert.equal(db.tables[0].rows![0].label, 'configured path: ' + spelling); }
+    }
     const compact = buildIsolatedResourceContext(value, 1800);
     assert.ok(compact.length <= 1800);
     for (const line of compact.split('\n').filter(item => item.startsWith('{'))) { assert.doesNotThrow(() => JSON.parse(line)); }

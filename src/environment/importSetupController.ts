@@ -12,7 +12,7 @@ import { createImportFixturePlan, ImportFixtureRule, refreshEntryPointApprovals 
 import { inspectProjectImports, ImportCheck, ImportCheckTarget, verifyImportProposal } from './projectImportCheck';
 import { hasDummyFunctionNameMarker } from '../tier/stubClassifier';
 import { importSetupMessage, ImportSetupReason, recheckReason, saveImportSetupSession } from './importSetupSession';
-import { externalExactResourcePaths, projectParentResourcePaths } from './resourceSetup';
+import { externalExactResourcePaths, projectParentResourcePaths, uncVirtualResourcePaths } from './resourceSetup';
 
 /** Explicit setup preview. No package installation or target source edits. */
 export class ImportSetupController {
@@ -100,10 +100,12 @@ export class ImportSetupController {
                     const applyLabel = localize("套用此清單並重新檢查");
                     const parentResources = projectParentResourcePaths(check.proposedRules);
                     const externalResources = externalExactResourcePaths(check.proposedRules);
+                    const uncResources = uncVirtualResourcePaths(check.proposedRules);
                     const approved = await vscode.window.showWarningMessage(
                         localize("已開啟初始化與隔離資源清單。套用會保存測試工具設定，再重新檢查；受測原檔不變，缺少的套件、資料表或 API 仍會失敗。")
                             + (parentResources.length ? '\n' + localize('專案父層資源：{0}。這些邏輯路徑將導向全新暫存資源；不讀取或寫入原位置。', parentResources.join(', ')) : '')
-                            + externalResources.map(resource => '\n' + localize('外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。', resource)).join(''),
+                            + externalResources.map(resource => '\n' + localize('外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。', resource)).join('')
+                            + uncResources.map(resource => '\n' + localize('網路樣式路徑：{0}。只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此確認不授予網路存取權限。', resource)).join(''),
                         { modal: true }, applyLabel);
                     throwIfExecutionCancelled();
                     if (approved !== applyLabel) {

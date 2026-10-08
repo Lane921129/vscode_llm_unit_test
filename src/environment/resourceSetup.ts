@@ -8,13 +8,32 @@ export interface ResourceSetupDraft {
     schemaVersion: 'isolated-resource-setup-v1'; root: string; rules: ImportFixtureRule[];
 }
 
+/** A draft cannot introduce a new remote source root merely by being previewed. */
+function draftBelongsToSelectedRoot(root: string, declaredRoot: string): boolean {
+    const selected = fs.realpathSync(root);
+    if (/^[\\/]{2}/.test(declaredRoot)) {
+        const lexical = (value: string) => {
+            let normalized = path.resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
+            if (process.platform === 'win32') {
+                normalized = normalized.toLowerCase();
+                if (normalized.startsWith('//?/unc/')) { normalized = '//' + normalized.slice(8); }
+            }
+            return normalized;
+        };
+        // Metadata access to the selected source follows its existing rules.
+        // An unselected network-style draft value is compared as text only.
+        return lexical(declaredRoot) === lexical(selected);
+    }
+    return fs.realpathSync(declaredRoot) === selected;
+}
+
 /** Validate the exact edited declaration and its original source approvals. */
 export function readResourceSetupDraft(root: string, text: string): { draft: ResourceSetupDraft; plan: ImportFixturePlan | null } {
     if (Buffer.byteLength(text, 'utf8') > 262144) { throw new Error('Resource setup exceeds the size limit.'); }
     const value = JSON.parse(text) as ResourceSetupDraft;
     if (!value || value.schemaVersion !== 'isolated-resource-setup-v1'
         || Object.keys(value).some(key => !['schemaVersion', 'root', 'rules'].includes(key))
-        || typeof value.root !== 'string' || fs.realpathSync(value.root) !== fs.realpathSync(root)
+        || typeof value.root !== 'string' || !draftBelongsToSelectedRoot(root, value.root)
         || !Array.isArray(value.rules) || value.rules.some(rule => !rule || typeof rule !== 'object'
             || Object.keys(rule).some(key => !['file', 'resources', 'resourceSourceHash'].includes(key)))) {
         throw new Error('Resource setup belongs to a different project or has an invalid schema.');
@@ -62,7 +81,7 @@ export function refreshResourceSetupDraft(root: string, text: string): ResourceS
     if (Buffer.byteLength(text, 'utf8') > 262144) { throw new Error('Resource setup exceeds the size limit.'); }
     const draft = JSON.parse(text) as ResourceSetupDraft;
     if (!draft || draft.schemaVersion !== 'isolated-resource-setup-v1' || typeof draft.root !== 'string'
-        || fs.realpathSync(draft.root) !== fs.realpathSync(root) || !Array.isArray(draft.rules)) {
+        || !draftBelongsToSelectedRoot(root, draft.root) || !Array.isArray(draft.rules)) {
         throw new Error('Resource setup belongs to a different project or has an invalid schema.');
     }
     for (const rule of draft.rules) {
@@ -93,5 +112,11 @@ export function projectParentResourcePaths(rules: ImportFixtureRule[]): string[]
 /** Exact locations stay visible in local previews so users can review every mapping. */
 export function externalExactResourcePaths(rules: ImportFixtureRule[]): string[] {
     return [...new Set(rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'external-exact')
+        .map(resourceLogicalPath)))];
+}
+
+/** Network-style names are displayed locally, without inspecting the remote location. */
+export function uncVirtualResourcePaths(rules: ImportFixtureRule[]): string[] {
+    return [...new Set(rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'unc-virtual')
         .map(resourceLogicalPath)))];
 }

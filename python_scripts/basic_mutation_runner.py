@@ -375,7 +375,7 @@ def package_copy_ignore():
         return ordinary_ignore, lambda _path: False
     normalize = lambda value: os.path.normcase(os.path.abspath(os.fspath(value)))
     root = normalize(plan['root'])
-    from isolated_resources import logical_resource_path
+    from isolated_resources import logical_resource_path, is_unc_or_device
     resources = [(logical_resource_path(root, spec), spec['kind'])
                  for rule in plan['rules'] for spec in validate_resources(rule)]
     if not resources:
@@ -384,14 +384,28 @@ def package_copy_ignore():
     # metadata is inspected; a resource link's target is never traversed/read.
     # This also prevents a second package alias exposing that outside target.
     for resource, _kind in resources:
+        if is_unc_or_device(resource):
+            # Virtual UNC identifiers have no source directory to inspect/copy.
+            continue
         current = Path(resource)
-        for component in (current, *current.parents):
+        for component in reversed((current, *current.parents)):
             try:
                 metadata = os.lstat(component)
             except FileNotFoundError:
-                continue
+                break
             if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 1024:
                 raise ValueError('Mutation isolated resource path uses a symlink or junction')
+
+    def linked(candidate):
+        current = Path(candidate)
+        for component in reversed((current, *current.parents)):
+            try:
+                metadata = os.lstat(component)
+            except FileNotFoundError:
+                return False
+            if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 1024:
+                return True
+        return False
 
     def declared(candidate):
         candidate = normalize(candidate)
@@ -410,6 +424,10 @@ def package_copy_ignore():
             # Lexical exclusion comes first: never resolve a declared resource
             # or enumerate its directory just to decide not to copy it.
             if declared(candidate):
+                excluded.add(name)
+            elif linked(candidate):
+                # Do not resolve/follow package links: their target may be an
+                # unapproved UNC location before the runtime guard even starts.
                 excluded.add(name)
             elif declared(os.path.realpath(candidate)):
                 # A different package alias may point into declared data.

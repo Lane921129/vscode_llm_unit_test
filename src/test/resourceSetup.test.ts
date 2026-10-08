@@ -3,9 +3,10 @@ import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { externalExactResourcePaths, newResourceSetupRule, readResourceSetupDraft, refreshResourceSetupDraft, resourceSetupCounts } from '../environment/resourceSetup';
+import { externalExactResourcePaths, newResourceSetupRule, readResourceSetupDraft, refreshResourceSetupDraft, resourceSetupCounts, uncVirtualResourcePaths } from '../environment/resourceSetup';
 import { readInitializationCandidate } from '../environment/importSetupProposal';
-import { canonicalExternalResourcePath } from '../pipeline/isolatedResources';
+import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
+import { withoutUncFileSystem } from './uncPathGuard';
 
 test('resource drafts bind exact project/source/seed and never refresh an expired approval', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-draft-'));
@@ -94,4 +95,52 @@ test('external exact candidates and manual drafts retain the approved absolute m
         assert.throws(() => readResourceSetupDraft(root, JSON.stringify(draft)), /approval|來源|source/i);
         assert.equal(fs.existsSync(exact), false);
     } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('UNC candidate and manual draft normalize the exact reviewed name without querying its metadata', { skip: process.platform !== 'win32' }, async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'unc-resource-draft-'));
+    const root = path.join(base, 'app'); fs.mkdirSync(root);
+    const file = path.join(root, 'settings.py'); fs.writeFileSync(file, 'VALUE = 1\n');
+    const exact = canonicalUncResourcePath('//fixture-host/test-share/');
+    try {
+        await withoutUncFileSystem(() => {
+            const rule = newResourceSetupRule(root, file);
+            const candidate = { schemaVersion: 'import-initialization-candidate-v1', kind: 'mkdir', file: 'settings.py', line: 1,
+                sourceHash: rule.resourceSourceHash, operation: 'pathlib.Path.mkdir', evidence: 'blocked-direct-module-call',
+                returnValue: 'discarded', resourceScope: 'unc-virtual', resourcePath: '//FIXTURE-HOST/TEST-SHARE/' };
+            const advise = (change: object = {}) => readInitializationCandidate(root,
+                { exception_type: 'TraceSafetyError', initialization_candidate: { ...candidate, ...change } });
+            assert.deepEqual(advise(), { ...candidate, resourcePath: exact });
+            for (const resourcePath of ['data', '../data', '//fixture-host', '//fixture-host/test-share/../other', root]) {
+                assert.equal(advise({ resourcePath }), undefined);
+            }
+            assert.equal(advise({ resourcePath: undefined }), undefined);
+            assert.equal(advise({ kind: 'entry-point' }), undefined);
+            rule.resources = [{ path: exact, scope: 'unc-virtual', kind: 'directory' },
+                { path: exact + '/seed.txt', scope: 'unc-virtual', kind: 'text', text: 'explicit seed' }];
+            const draft = { schemaVersion: 'isolated-resource-setup-v1', root, rules: [rule] };
+            assert.deepEqual(readResourceSetupDraft(root, JSON.stringify(draft)).plan!.rules[0].resources, rule.resources);
+            assert.deepEqual(uncVirtualResourcePaths([rule]), [exact, exact + '/seed.txt']);
+            fs.appendFileSync(file, '# newer source\n');
+            assert.equal(advise(), undefined);
+            assert.throws(() => readResourceSetupDraft(root, JSON.stringify(draft)), /approval|來源|source/i);
+        });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('a draft cannot query an unselected UNC source root during validation or refresh', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unc-draft-root-'));
+    const file = path.join(root, 'settings.py'); fs.writeFileSync(file, 'VALUE = 1\n');
+    const rule = newResourceSetupRule(root, file);
+    rule.resources = [{ path: 'data', kind: 'directory' }];
+    try {
+        await withoutUncFileSystem(() => {
+            for (const unselected of ['//unselected-fixture-host/test-share', '\\\\unselected-fixture-host\\test-share',
+                '\\\\?\\UNC\\unselected-fixture-host\\test-share']) {
+                const draft = JSON.stringify({ schemaVersion: 'isolated-resource-setup-v1', root: unselected, rules: [rule] });
+                assert.throws(() => readResourceSetupDraft(root, draft), /different project/);
+                assert.throws(() => refreshResourceSetupDraft(root, draft), /different project/);
+            }
+        });
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

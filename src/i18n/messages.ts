@@ -1,5 +1,7 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "網路樣式路徑：{0}。只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此確認不授予網路存取權限。": "Network-style path: {0}. Test resources are created only in local temporary storage, without connecting to, reading or writing the original share. This confirmation does not grant network access.",
+    "    影響：網路樣式路徑 {0} 只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此設定不授予網路存取權限，每次執行後清理。": "    Effect: Network-style path {0} uses only local temporary test resources, without connecting to, reading or writing the original share. This setup does not grant network access; resources are cleaned after each execution.",
     "外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。": "External absolute path: {0}. Mapped only to fresh temporary resources; the original location is neither read nor written.",
     "    影響：外部絕對路徑 {0} 只映射至全新暫存目錄；不讀取或寫入原位置，每次執行後清理。": "    Effect: External absolute path {0} is mapped only to a fresh temporary directory; the original location is neither read nor written, and resources are cleaned after each execution.",
     "模組預檢工具未完成（{0}）；未取得可確認的模組載入診斷。": "Module preflight did not complete ({0}); no confirmed module-loading diagnostic was obtained.",

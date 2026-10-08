@@ -8,7 +8,7 @@ export interface ImportInitializationCandidate {
     kind: 'mkdir' | 'entry-point'; file: string; line: number; sourceHash: string; operation: string;
     evidence: 'blocked-direct-module-call'; returnValue: 'discarded';
     resourcePath?: string;
-    resourceScope?: 'project-parent' | 'external-exact';
+    resourceScope?: 'project-parent' | 'external-exact' | 'unc-virtual';
 }
 
 /** Recheck the Python observation against the selected root and current bytes. */
@@ -32,7 +32,7 @@ export function readInitializationCandidate(root: string, diagnostic: any): Impo
         const relative = path.relative(root, file);
         if (relative.startsWith('..') || path.isAbsolute(relative)
             || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== value.sourceHash) { return undefined; }
-        if (value.resourceScope !== undefined && (!['project-parent', 'external-exact'].includes(value.resourceScope)
+        if (value.resourceScope !== undefined && (!['project-parent', 'external-exact', 'unc-virtual'].includes(value.resourceScope)
             || value.resourcePath === undefined)) { return undefined; }
         let resourcePath: string | undefined;
         if (value.resourcePath !== undefined) {

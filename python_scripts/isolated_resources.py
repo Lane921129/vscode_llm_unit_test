@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import math
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -38,14 +39,39 @@ _FORBIDDEN_SUFFIXES = {'.py', '.pyc', '.pyo', '.so', '.pyd', '.dll', '.exe', '.s
 
 
 def absolute(path):
+    if os.name == 'nt' and is_unc_or_device(path):
+        # UNC identity is lexical. Never ask Windows to resolve its location.
+        return ntpath.normpath(os.fsdecode(path)).lower()
     return os.path.normcase(os.path.abspath(os.path.normpath(os.fsdecode(path))))
 
 
 def inside(path, root):
     try:
+        if os.name == 'nt' and (is_unc_or_device(path) or is_unc_or_device(root)):
+            def comparable(value):
+                value = absolute(value).replace('\\', '/').rstrip('/')
+                return '//' + value[8:] if value.startswith('//?/unc/') else value
+            path, root = comparable(path), comparable(root)
+            return path == root or path.startswith(root + '/')
         return os.path.commonpath((absolute(path), absolute(root))) == absolute(root)
     except (ValueError, TypeError):
         return False
+
+
+def is_unc_or_device(value):
+    if not isinstance(value, (str, bytes, os.PathLike)):
+        return False
+    spelling = os.fsdecode(value).replace('\\', '/')
+    return spelling.startswith('//') or os.name == 'nt' and spelling.startswith('/??/')
+
+
+def _logical_relative(path, root):
+    if os.name == 'nt' and is_unc_or_device(path):
+        path, root = unc_resource_identity(os.fsdecode(path)), unc_resource_identity(os.fsdecode(root))
+        if path != root and not path.startswith(root + '/'):
+            raise ValueError('Virtual UNC resource escapes declared root')
+        return path[len(root):].lstrip('/') or '.'
+    return os.path.relpath(path, root)
 
 
 def set_generated_test_file(path):
@@ -113,6 +139,22 @@ def external_resource_identity(value):
     return absolute(value).replace('\\', '/')
 
 
+def unc_resource_identity(value):
+    """Validate an approved virtual UNC identifier without consulting Windows."""
+    if os.name != 'nt' or type(value) is not str or not 1 <= len(value) <= 240:
+        raise ValueError('Invalid virtual UNC resource path')
+    value = value.replace('\\', '/')
+    if not value.startswith('//'):
+        raise ValueError('Virtual UNC resource requires server and share')
+    parts = value[2:].split('/')
+    if len(parts) == 3 and parts[-1] == '':
+        parts.pop()  # The share root's customary trailing slash is lexical.
+    if len(parts) < 2 or parts[1].lower() == 'ipc$':
+        raise ValueError('Invalid virtual UNC share')
+    _relative_path('/'.join(parts))
+    return '//' + '/'.join(parts).lower()
+
+
 def _unsafe_raw_components(value):
     # Windows abspath normalizes away trailing dots/spaces. Inspect the spelling
     # before normalization, so an invalid requested name cannot become valid.
@@ -133,8 +175,13 @@ def logical_resource_path(root, spec):
     """
     root = absolute(root)
     scope = spec.get('scope')
-    if scope is not None and scope not in ('project-parent', 'external-exact') or 'scope' in spec and scope is None:
+    if scope is not None and scope not in ('project-parent', 'external-exact', 'unc-virtual') or 'scope' in spec and scope is None:
         raise ValueError('Invalid isolated resource scope')
+    if scope == 'unc-virtual':
+        logical = absolute(unc_resource_identity(spec.get('path')))
+        if inside(logical, root) or inside(root, logical):
+            raise ValueError('Virtual UNC resource must be disjoint from source')
+        return logical  # No link/stat/realpath operation is valid on this name.
     if scope == 'external-exact':
         logical = absolute(_external_path(spec.get('path')))
         if inside(logical, os.path.dirname(root)) or inside(root, logical):
@@ -166,9 +213,10 @@ def validate_resources(rule):
     for spec in specs:
         if type(spec) is not dict or spec.get('kind') not in ('directory', 'text', 'sqlite'):
             raise ValueError('Invalid isolated resource kind')
-        if 'scope' in spec and spec['scope'] not in ('project-parent', 'external-exact'):
+        if 'scope' in spec and spec['scope'] not in ('project-parent', 'external-exact', 'unc-virtual'):
             raise ValueError('Invalid isolated resource scope')
-        (_external_path if spec.get('scope') == 'external-exact' else _relative_path)(spec.get('path'))
+        validator = {'external-exact': _external_path, 'unc-virtual': unc_resource_identity}.get(spec.get('scope'), _relative_path)
+        validator(spec.get('path'))
         allowed = {'path', 'kind', 'scope'} | ({'text'} if spec['kind'] == 'text' else {'tables'} if spec['kind'] == 'sqlite' else set())
         if set(spec) - allowed:
             raise ValueError('Invalid isolated resource fields')
@@ -221,8 +269,61 @@ def validate_resources(rule):
 def _spec_key(spec):
     # Windows aliases may differ only in path case. Scope and seed values retain
     # their exact identity; normalizing data here would hide conflicting inputs.
-    normalized = {**spec, 'path': os.path.normcase(spec['path'])}
+    normalized = {**spec, 'path': unc_resource_identity(spec['path']) if spec.get('scope') == 'unc-virtual'
+                  else os.path.normcase(spec['path'])}
     return json.dumps(normalized, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+
+
+class _LogicalDirEntry:
+    """A local entry whose public path stays in the approved logical namespace."""
+    def __init__(self, entry, directory, resources):
+        self._entry, self._resources = entry, resources
+        self.name = entry.name
+        self.path = os.path.join(os.fspath(directory), self.name)
+
+    def __fspath__(self):
+        return self.path
+
+    def stat(self, *args, **kwargs):
+        self._resources.require_application_caller()
+        return self._entry.stat(*args, **kwargs)
+
+    def is_dir(self, *args, **kwargs):
+        self._resources.require_application_caller()
+        return self._entry.is_dir(*args, **kwargs)
+
+    def is_file(self, *args, **kwargs):
+        self._resources.require_application_caller()
+        return self._entry.is_file(*args, **kwargs)
+
+    def is_symlink(self):
+        self._resources.require_application_caller()
+        return self._entry.is_symlink()
+
+    def inode(self):
+        self._resources.require_application_caller()
+        return self._entry.inode()
+
+
+class _LogicalScandir:
+    def __init__(self, iterator, directory, resources):
+        self._iterator, self._directory, self._resources = iterator, directory, resources
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._resources.require_application_caller()
+        return _LogicalDirEntry(next(self._iterator), self._directory, self._resources)
+
+    def close(self):
+        self._iterator.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
 
 
 class IsolatedResources:
@@ -254,7 +355,7 @@ class IsolatedResources:
                 if rule.get('resolvedFile'):
                     if not self.trial_root or not inside(rule['resolvedFile'], self.trial_root):
                         raise ValueError('Isolated resource mutation source escapes trial')
-                if rule.get('resolvedFile') and spec.get('scope') != 'external-exact':
+                if rule.get('resolvedFile') and spec.get('scope') not in ('external-exact', 'unc-virtual'):
                     original = absolute(os.path.join(self.root, rule['file']))
                     derived = absolute(os.path.join(os.path.dirname(rule['resolvedFile']),
                         os.path.relpath(logical, os.path.dirname(original))))
@@ -271,7 +372,7 @@ class IsolatedResources:
                             raise ValueError('Isolated resource mutation alias overlaps source')
                         aliases.append(derived)
                 for alias in aliases:
-                    if _has_link(alias):
+                    if spec.get('scope') != 'unc-virtual' and _has_link(alias):
                         raise ValueError('Isolated resource alias uses a link')
                     self.mounts.append((alias, logical, spec['kind']))
         for logical, spec in self.specs.items():
@@ -284,6 +385,11 @@ class IsolatedResources:
         self.external_roots = [(logical, kind) for logical, kind in external_specs
             if not any(other != logical and other_kind == 'directory' and inside(logical, other)
                        for other, other_kind in external_specs)]
+        unc_specs = [(logical, spec['kind']) for logical, spec in self.specs.items()
+                     if spec.get('scope') == 'unc-virtual']
+        self.unc_roots = [(logical, kind) for logical, kind in unc_specs
+            if not any(other != logical and other_kind == 'directory' and inside(logical, other)
+                       for other, other_kind in unc_specs)]
         self.mounts = sorted(set(self.mounts), key=lambda item: len(item[0]), reverse=True)
         aliases = {}
         for alias, logical, _ in self.mounts:
@@ -331,6 +437,19 @@ class IsolatedResources:
         atexit.register(self.cleanup)
 
     def _physical(self, logical):
+        if is_unc_or_device(logical):
+            canonical = unc_resource_identity(os.fsdecode(logical))
+            for anchor, kind in self.unc_roots:
+                if logical == anchor or kind == 'directory' and inside(logical, anchor):
+                    root = unc_resource_identity(anchor)
+                    identity = hashlib.sha256(('unc-virtual:' + root).encode('utf-8')).hexdigest()
+                    namespace = os.path.join('unc-virtual', identity)
+                    tail = canonical[len(root):].lstrip('/')
+                    result = absolute(os.path.join(self.data, namespace, *tail.split('/')))
+                    if not inside(result, os.path.join(self.data, namespace)):
+                        raise ValueError('Virtual UNC resource escapes worker')
+                    return result
+            raise ValueError('Virtual UNC path has no declared resource')
         if inside(logical, self.root):
             namespace, anchor = 'project', self.root
         elif inside(logical, os.path.dirname(self.root)):
@@ -431,6 +550,11 @@ class IsolatedResources:
             return value, False
         if type(value) is str and value.startswith('file:'):
             self.block('SQLite URI is not an isolated resource path')
+        if is_unc_or_device(value):
+            try:
+                unc_resource_identity(os.fsdecode(value))
+            except ValueError:
+                self.block('unsupported UNC or device resource path')
         logical = self._logical(value)
         for alias, origin, kind in self.mounts:
             if logical == alias or kind == 'directory' and inside(logical, alias):
@@ -438,11 +562,14 @@ class IsolatedResources:
                     self.block('isolated resource executable or unsupported filename')
                 if not self._application_caller():
                     self.block('generated test direct resource I/O')
-                mapped = self._physical(os.path.join(origin, os.path.relpath(logical, alias)))
+                relative = _logical_relative(logical, alias)
+                mapped = self._physical(origin if relative == '.' else os.path.join(origin, relative))
                 if not inside(mapped, self.data) or _has_link(mapped):
                     self.block('isolated resource path escape or symlink')
                 try:
-                    if not inside(logical, os.path.dirname(self.root)):
+                    if is_unc_or_device(logical):
+                        unc_resource_identity(logical)
+                    elif not inside(logical, os.path.dirname(self.root)):
                         _external_path(external_resource_identity(logical))
                     else:
                         relative = os.path.relpath(mapped, self.data).replace(os.sep, '/')
@@ -509,11 +636,19 @@ class IsolatedResources:
                         or kwargs.get('follow_symlinks') is False):
                     block('unsupported isolated resource descriptor or symlink operation')
                 if len(args) > path_index:
-                    args[path_index] = mapped
+                    args[path_index] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
                 else:
-                    kwargs[key] = mapped
+                    kwargs[key] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
                 with self.authorize((absolute(mapped),)):
-                    return function(*args, **kwargs)
+                    try:
+                        result = function(*args, **kwargs)
+                    except OSError as error:
+                        if is_unc_or_device(value) and getattr(error, 'filename', None) is not None:
+                            error.filename = os.fspath(value)
+                        raise
+                if operation == 'os.scandir' and is_unc_or_device(value):
+                    return _LogicalScandir(result, value, self)
+                return result
             _REDIRECT_CODES.add(redirected.__code__)
             return redirected
         try:

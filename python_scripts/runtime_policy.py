@@ -7,10 +7,13 @@ extensions. Generated tests still use mocks instead of direct filesystem I/O.
 """
 from contextlib import contextmanager, ExitStack
 import ast
+import builtins
 import importlib._bootstrap_external
 import importlib.metadata
 import linecache
+import io
 import os
+import ntpath
 import sqlite3
 import sys
 import threading
@@ -22,7 +25,9 @@ from pathlib import Path
 from unittest.mock import patch
 from trace_value_codec import type_field
 from import_fixtures import ImportFixtures
-from isolated_resources import for_plan as isolated_resources_for_plan, is_redirect_frame
+from isolated_resources import (for_plan as isolated_resources_for_plan, is_redirect_frame,
+                                is_unc_or_device, absolute as resource_absolute, inside as resource_inside,
+                                _LogicalScandir)
 
 POLICY_VERSION = 'python-execution-policy-v1'
 ISOLATION_EXIT_CODE = 86
@@ -76,6 +81,8 @@ def _prepare_metadata_reads():
 
 def _package_metadata_read(filename, frame):
     if not isinstance(filename, (str, bytes, os.PathLike)):
+        return False
+    if is_unc_or_device(filename):
         return False
     filename = os.path.normcase(os.path.realpath(os.fsdecode(filename)))
     owner = _METADATA_ZIP_CODE if filename in _STDLIB_ARCHIVES else _METADATA_READ_CODE
@@ -289,6 +296,10 @@ def _audit(event, args):
     resources = _active.get('resources')
     resource_operation = bool(resources and resources.allows_audit(event, args)) if event in (
         'open', 'sqlite3.connect', 'os.remove', 'os.rename', 'os.rmdir', 'os.mkdir') else False
+    if event in ('open', 'sqlite3.connect', 'os.listdir', 'os.scandir') and args and is_unc_or_device(args[0]):
+        # Import/traceback permissions never extend to an original network path.
+        # Approved normal API calls have already become local physical paths.
+        block_operation('unapproved UNC or device filesystem access')
     if event == 'sqlite3.connect' and not (type(args[0]) is str and args[0] == ':memory:') and not resource_operation:
         block_operation('non-isolated SQLite connection')
     if event == 'sqlite3.connect/handle' and not isinstance(args[0], _MemoryConnection):
@@ -312,6 +323,90 @@ def _audit(event, args):
 
 
 sys.addaudithook(_audit)
+
+
+@contextmanager
+def _guard_unc_metadata(resources):
+    """Block before Windows metadata APIs that have no audit event.
+
+    Patch both public APIs and the known C-function aliases captured by ntpath.
+    This is a standard-library boundary, not a sandbox for arbitrary retained
+    native function pointers or hostile extensions.
+    """
+    def wrap(function, operation, *, resolve=False, unsupported=False, path_key='path', lexical=False):
+        def guarded(*args, **kwargs):
+            value = args[0] if args else kwargs.get(path_key)
+            if not is_unc_or_device(value):
+                return function(*args, **kwargs)
+            if lexical:
+                # GetFullPathName is lexical. Preserve Path.absolute/abspath
+                # without contacting Windows or requiring a resource approval.
+                logical = ntpath.normpath(os.fsdecode(value))
+                return os.fsencode(logical) if isinstance(value, bytes) else logical
+            if unsupported or not resources:
+                block_operation(operation)
+            mapped, matched = resources.translate(value, operation)
+            if not matched:
+                block_operation(operation)
+            if kwargs.get('dir_fd') is not None or kwargs.get('follow_symlinks') is False:
+                block_operation('unsupported isolated resource descriptor or symlink operation')
+            new_args, new_kwargs = list(args), dict(kwargs)
+            if new_args:
+                new_args[0] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
+            else:
+                new_kwargs[path_key] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
+            with resources.authorize((resource_absolute(mapped),)):
+                try:
+                    result = function(*new_args, **new_kwargs)
+                except OSError as error:
+                    # A missing strict path is about the controlled resource;
+                    # avoid exposing its physical worker directory as evidence.
+                    if getattr(error, 'filename', None) is not None:
+                        error.filename = os.fspath(value)
+                    raise
+            if resolve:
+                resolved = os.fsdecode(result)
+                if resolved.startswith('\\\\?\\'):
+                    resolved = resolved[4:]
+                if not resource_inside(resolved, resources.data):
+                    block_operation('resolved isolated resource escapes worker')
+                logical = ntpath.normpath(os.fsdecode(value))
+                return os.fsencode(logical) if isinstance(value, bytes) else logical
+            if operation in ('os.scandir', 'nt.scandir'):
+                return _LogicalScandir(result, value, resources)
+            return result
+        return guarded
+
+    with ExitStack() as stack:
+        # Path.stat/exists/is_dir/is_file, Path.iterdir and direct os metadata.
+        for name in ('stat', 'lstat', 'listdir', 'scandir', 'access', 'mkdir', 'open', 'remove', 'unlink', 'rmdir'):
+            stack.enter_context(patch.object(os, name, wrap(getattr(os, name), 'os.' + name)))
+        for module in (builtins, io):
+            stack.enter_context(patch.object(module, 'open', wrap(module.open, 'file read/write', path_key='file')))
+        stack.enter_context(patch.object(os.path, 'realpath', wrap(os.path.realpath, 'path.resolve', resolve=True)))
+        for name in ('exists', 'lexists', 'isfile', 'isdir', 'islink', 'isjunction'):
+            if hasattr(os.path, name):
+                stack.enter_context(patch.object(os.path, name, wrap(getattr(os.path, name), 'path.' + name)))
+        for name in ('ismount', 'isdevdrive'):
+            if hasattr(os.path, name):
+                stack.enter_context(patch.object(os.path, name, wrap(getattr(os.path, name), 'path.' + name, unsupported=True)))
+        if hasattr(os, 'readlink'):
+            stack.enter_context(patch.object(os, 'readlink', wrap(os.readlink, 'os.readlink', unsupported=True)))
+        if os.name == 'nt':
+            import nt
+            for module in (nt, ntpath):
+                for name in ('_getfinalpathname', '_getfullpathname', '_path_exists', '_path_lexists', '_path_isfile',
+                             '_path_isdir', '_path_islink', '_path_isjunction'):
+                    if hasattr(module, name):
+                        stack.enter_context(patch.object(module, name, wrap(getattr(module, name), 'nt.' + name,
+                            resolve=name == '_getfinalpathname', lexical=name == '_getfullpathname')))
+                for name in ('_findfirstfile', '_getvolumepathname', '_path_isdevdrive', '_nt_readlink', 'readlink'):
+                    if hasattr(module, name):
+                        stack.enter_context(patch.object(module, name, wrap(getattr(module, name), 'nt.' + name, unsupported=True)))
+            # os imported these C operations from nt; protect direct nt calls too.
+            for name in ('stat', 'lstat', 'listdir', 'scandir', 'access', 'mkdir', 'open', 'remove', 'unlink', 'rmdir'):
+                stack.enter_context(patch.object(nt, name, wrap(getattr(nt, name), 'nt.' + name)))
+        yield
 
 
 def _drain_background_threads(initial_threads):
@@ -377,6 +472,7 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
                     if hasattr(threading, name):
                         stack.enter_context(patch.object(threading, name, block_profile_replacement))
             stack.enter_context(fixtures)
+            stack.enter_context(_guard_unc_metadata(resources))
             if resources:
                 stack.enter_context(resources.guarding(block_operation))
             try:
