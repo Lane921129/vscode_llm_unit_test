@@ -75,6 +75,30 @@ class ImportSetupAdvisorTests(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertIsNone(self.candidate(result))
 
+    def test_observed_sibling_directory_has_explicit_project_parent_scope(self):
+        source = ('from pathlib import Path\nBASE_DIR = Path(__file__).resolve().parent\n'
+                  'DATA_DIR = BASE_DIR.parent / "VMS_Data"\n'
+                  'DATA_DIR.mkdir(parents=True, exist_ok=True)\ndef target(): return 4\n')
+        result = self.check(source)
+        self.assertFalse(result['ok'], result)
+        candidate = self.candidate(result)
+        self.assertEqual(candidate['resourcePath'], 'VMS_Data', result)
+        self.assertEqual(candidate['resourceScope'], 'project-parent', result)
+        self.assertFalse((self.base / 'VMS_Data').exists())
+        self.assertEqual(self.file.read_text(encoding='utf-8'), source)
+
+    def test_ancestor_escape_and_non_idempotent_mkdir_do_not_propose_sibling_mounts(self):
+        for expression, option in [('Path(__file__).parent', 'exist_ok=True'),
+                ('Path(__file__).parent.parent', 'exist_ok=True'),
+                ('Path(__file__).parent.parent.parent / "too_far"', 'exist_ok=True'),
+                ('Path("../VMS_Data")', 'exist_ok=True'),
+                ('Path(__file__).parent.parent / "VMS_Data"', ''),
+                ('Path(__file__).parent.parent / "bad.py"', 'exist_ok=True')]:
+            with self.subTest(expression=expression, option=option):
+                result = self.check('from pathlib import Path\n(' + expression + ').mkdir(' + option + ')\n')
+                self.assertFalse(result['ok'], result)
+                self.assertNotIn('resourcePath', self.candidate(result) or {}, result)
+
     def test_function_local_imports_and_bindings_do_not_hide_module_entry(self):
         for body in ['def target():\n    import math\n    driver = math\n    return driver.pi\n',
                      'async def target():\n    import math\n    return math.pi\n',

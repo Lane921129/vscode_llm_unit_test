@@ -102,7 +102,7 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
             ...(rule.entryPointSourceHash ? { entryPointSourceHash: rule.entryPointSourceHash } : {}),
             ...(resources.length ? { resources, resourceSourceHash: rule.resourceSourceHash } : {}) };
     });
-    validateResourcePlanConflicts(rules);
+    validateResourcePlanConflicts(rules, root);
     const body = { schemaVersion: 'import-fixtures-v1' as const, root, rules };
     const encoded = JSON.stringify(body);
     if (Buffer.byteLength(encoded, 'utf8') > 262144) { throw new Error(localize("匯入測試設定超過大小限制。")); }

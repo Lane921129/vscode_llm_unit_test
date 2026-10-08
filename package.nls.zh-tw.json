@@ -1,7 +1,8 @@
 {
   "contributes.commands.5.title": "LLM Unit Test：設定隔離測試資源",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resourceSourceHash.description": "隔離資源清單核准時的來源 SHA-256；來源變更須重新預覽。",
-  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.description": "專案相對路徑的暫存資源：空白目錄、測試文字或 SQLite schema／測試資料。不複製正式資料，格式見 docs/isolated-test-resources.md。",
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.description": "暫存資源：空白目錄、測試文字或 SQLite schema／測試資料。路徑預設相對專案；scope 可明確指定專案父層的兄弟路徑。不讀取或寫入原資源，格式見 docs/isolated-test-resources.md。",
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.items.properties.scope.description": "省略時為專案相對路徑。project-parent 表示專案父層內、與專案完全分離的邏輯路徑，執行時導向全新暫存資源而非原位置。拒絕絕對路徑、跨層路徑及符號連結。",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0": "內建變異規則與隔離執行（預設）。",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1": "使用 Mutatest 變異規則，由擴充套件隔離執行。須先安裝並通過版本與環境檢查。",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2": "Mutmut 尚未支援，選取後會在預檢停止。",

@@ -8,6 +8,9 @@ import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
+from types import SimpleNamespace
+import stat
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
@@ -88,6 +91,203 @@ def target(): return (DATA / 'result.txt').read_text()
         self.assertEqual((original / 'app.db').read_bytes(), b'NOT A DATABASE; never copy it')
         self.assertFalse((original / 'result.txt').exists())
         self.assertEqual(list(self.lease.iterdir()), [self.lease / '.llm-unit-test-resource-lease.json'])
+
+    def test_project_parent_resource_has_separate_namespace_and_preserves_both_originals(self):
+        for directory in (self.root / 'VMS_Data', self.base / 'VMS_Data'):
+            directory.mkdir()
+            (directory / 'settings.txt').write_text('ORIGINAL:' + directory.parent.name)
+        originals = {file: file.read_bytes() for directory in (self.root / 'VMS_Data', self.base / 'VMS_Data')
+                     for file in directory.iterdir()}
+        source = ('from pathlib import Path\nBASE_DIR=Path(__file__).resolve().parent\n'
+            'DATA_DIR=BASE_DIR.parent/"VMS_Data"\nDATA_DIR.mkdir(parents=True, exist_ok=True)\n'
+            'assert (DATA_DIR/"settings.txt").read_text() == "external-seed"\n'
+            'assert (BASE_DIR/"VMS_Data"/"settings.txt").read_text() == "internal-seed"\n'
+            '(DATA_DIR/"created.txt").write_text("outside-project-but-owned")\n'
+            '(BASE_DIR/"VMS_Data"/"created.txt").write_text("inside-project-but-owned")\n'
+            'def target(): return (DATA_DIR/"created.txt").read_text()\n')
+        plan = self.plan(source, [{'path': 'VMS_Data', 'kind': 'directory'},
+            {'path': 'VMS_Data/settings.txt', 'kind': 'text', 'text': 'internal-seed'},
+            {'path': 'VMS_Data', 'scope': 'project-parent', 'kind': 'directory'},
+            {'path': 'VMS_Data/settings.txt', 'scope': 'project-parent', 'kind': 'text', 'text': 'external-seed'}])
+        strict = {**plan, 'rules': []}
+        self.assertFalse(self.preflight(strict)['ok'])
+        value = self.preflight(plan)
+        self.assertTrue(value['ok'], value)
+        self.assertEqual(value['importFixtures']['resources']['resourceCount'], 4)
+        self.assertEqual(self.file.read_text(), source)
+        for file, content in originals.items():
+            self.assertEqual(file.read_bytes(), content)
+            self.assertFalse(file.with_name('created.txt').exists())
+
+    @unittest.skipUnless(os.path.normcase('A') == 'a', 'resource paths are case-sensitive on this platform')
+    def test_windows_case_aliases_share_one_seed_but_different_seed_stays_rejected(self):
+        from isolated_resources import IsolatedResources, logical_resource_path
+        for scope in (None, 'project-parent'):
+            with self.subTest(scope=scope):
+                specs = [{'path': 'Shared_Data', 'kind': 'directory'},
+                         {'path': 'Shared_Data/Label.txt', 'kind': 'text', 'text': 'SeedValue'}]
+                if scope:
+                    specs = [{**spec, 'scope': scope} for spec in specs]
+                plan = self.plan('def target(): return 1\n', specs)
+                helper = self.root / 'helper.py'
+                helper.write_text('def helper(): return 2\n')
+                helper_hash = hashlib.sha256(helper.read_bytes()).hexdigest()
+                plan['rules'].append({'file': 'helper.py', 'sourceHash': helper_hash,
+                    'resourceSourceHash': helper_hash,
+                    'resources': [{**spec, 'path': spec['path'].lower()} for spec in specs]})
+                with patch.dict(os.environ, {'LLM_UNIT_TEST_RESOURCE_LEASE': str(self.lease)}):
+                    resources = IsolatedResources(plan)
+                    try:
+                        self.assertEqual(resources.evidence()['resourceCount'], 2)
+                        first = resources._physical(logical_resource_path(self.root, specs[1]))
+                        second = resources._physical(logical_resource_path(self.root, plan['rules'][1]['resources'][1]))
+                        self.assertEqual(first, second)
+                        self.assertEqual(Path(first).read_text(), 'SeedValue')
+                        conflicting = json.loads(json.dumps(plan))
+                        conflicting['rules'][1]['resources'][1]['text'] = 'seedvalue'
+                        with self.assertRaisesRegex(ValueError, 'Conflicting isolated resource'):
+                            IsolatedResources(conflicting)
+                    finally:
+                        resources.cleanup()
+
+    def test_project_parent_scope_rejects_root_descendants_ancestors_and_other_scopes(self):
+        from isolated_resources import logical_resource_path, validate_resources
+        for spec in [{'path': self.root.name, 'kind': 'directory', 'scope': 'project-parent'},
+                     {'path': self.root.name + '/data', 'kind': 'directory', 'scope': 'project-parent'},
+                     {'path': '.', 'kind': 'directory', 'scope': 'project-parent'},
+                     {'path': '../external', 'kind': 'directory', 'scope': 'project-parent'},
+                     {'path': str(self.base / 'VMS_Data'), 'kind': 'directory', 'scope': 'project-parent'},
+                     {'path': 'VMS_Data', 'kind': 'directory', 'scope': 'arbitrary-host'},
+                     {'path': 'VMS_Data', 'kind': 'directory', 'scope': None},
+                     {'path': 'run.py', 'kind': 'text', 'text': 'pass', 'scope': 'project-parent'}]:
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                validate_resources({'resources': [spec], 'sourceHash': 'a' * 64, 'resourceSourceHash': 'a' * 64})
+                logical_resource_path(self.root, spec)
+
+    def test_project_parent_scope_rejects_symlinks_and_junctions_before_reading_content(self):
+        from isolated_resources import absolute, logical_resource_path
+        original_lstat = os.lstat
+        resource = absolute(self.base / 'VMS_Data')
+        for mode, attributes in [(stat.S_IFLNK, 0), (stat.S_IFDIR, 1024)]:
+            def fake_lstat(path, *args, **kwargs):
+                if absolute(path) == resource:
+                    return SimpleNamespace(st_mode=mode, st_file_attributes=attributes)
+                return original_lstat(path, *args, **kwargs)
+            with self.subTest(attributes=attributes), patch('isolated_resources._ORIGINAL_LSTAT', side_effect=fake_lstat):
+                with self.assertRaisesRegex(ValueError, 'symlink or junction'):
+                    logical_resource_path(self.root, {'path': 'VMS_Data', 'scope': 'project-parent', 'kind': 'directory'})
+
+    def test_project_parent_seed_replays_through_trace_runner_and_both_mutation_engines(self):
+        data = self.base / 'VMS_Data'
+        data.mkdir()
+        originals = {data / 'items.db': b'original database must not be opened', data / 'label.txt': b'original secret label'}
+        for file, content in originals.items():
+            file.write_bytes(content)
+        source = ('from pathlib import Path\nimport sqlite3\n'
+            'BASE_DIR=Path(__file__).resolve().parent\nDATA_DIR=BASE_DIR.parent/"VMS_Data"\n'
+            'DATA_DIR.mkdir(parents=True, exist_ok=True)\n'
+            'LABEL=(DATA_DIR/"label.txt").read_text()\n'
+            'def target(amount):\n    with sqlite3.connect(DATA_DIR/"items.db") as connection:\n'
+            '        value=connection.execute("SELECT value FROM items WHERE id=1").fetchone()[0]\n'
+            '        connection.execute("UPDATE items SET value=? WHERE id=1", (value+amount,))\n'
+            '        return value+amount+len(LABEL)\n')
+        plan = self.plan(source, [{'path': 'VMS_Data', 'scope': 'project-parent', 'kind': 'directory'},
+            {'path': 'VMS_Data/label.txt', 'scope': 'project-parent', 'kind': 'text', 'text': 'abc'},
+            {'path': 'VMS_Data/items.db', 'scope': 'project-parent', 'kind': 'sqlite', 'tables': [{'name': 'items',
+                'columns': [{'name': 'id', 'type': 'INTEGER', 'primaryKey': True}, {'name': 'value', 'type': 'INTEGER'}],
+                'rows': [{'id': 1, 'value': 10}]}]}])
+        loaded = self.preflight(plan)
+        self.assertTrue(loaded['ok'], loaded)
+        traced = self.run_tool('dynamic_tracer.py', plan, [self.file, 'target', '[[1],[2]]'])
+        self.assertEqual(traced.returncode, 0, traced.stderr)
+        observed = json.loads(traced.stdout)
+        self.assertEqual([item['result'] for item in observed['examples']], ['14', '15'], observed)
+        test = self.output / 'test_parent.py'
+        test.write_text('import unittest\nfrom app import target\nclass Cases(unittest.TestCase):\n'
+                        '    def test_value(self): self.assertEqual(target(1), 14)\n')
+        suite = self.run_tool('generated_test_runner.py', plan, [test.stem])
+        self.assertEqual(suite.returncode, 0, suite.stderr)
+        for tool, prefix in [('basic_mutation_runner.py', []), ('external_mutation_runner.py', ['mutatest'])]:
+            with self.subTest(engine=tool):
+                if prefix:
+                    from external_mutation_runner import probe_engine
+                    if not probe_engine('mutatest')['supported']:
+                        self.skipTest('verified mutatest 3.1.0 AST API is not installed')
+                mutated = self.run_tool(tool, plan, [*prefix, self.file, test, 3, 10, 'target'])
+                self.assertEqual(mutated.returncode, 0, mutated.stderr)
+                value = json.loads(mutated.stdout)
+                self.assertTrue(value['baseline_passed'], value)
+                self.assertGreater(value['counts']['killed'], 0, value)
+                self.assertEqual(value['counts']['error'], 0, value)
+                self.assertEqual(value['engine'], 'mutatest' if prefix else 'builtin')
+                self.assertEqual(value['baselineImportFixtures']['resources']['planId'], plan['id'])
+        for file, content in originals.items():
+            self.assertEqual(file.read_bytes(), content)
+        self.assertEqual(self.file.read_text(), source)
+
+    def test_project_parent_copy_filter_omits_sibling_data_before_open_or_resolve(self):
+        from basic_mutation_runner import package_copy_ignore
+        from isolated_resources import absolute
+        plan = self.plan('def target(): return 1\n', [{'path': 'VMS_Data', 'scope': 'project-parent', 'kind': 'directory'}])
+        resource = absolute(self.base / 'VMS_Data')
+        original_realpath = os.path.realpath
+        def guarded_realpath(path, *args, **kwargs):
+            self.assertNotEqual(absolute(path), resource, 'never resolve or read an excluded resource')
+            return resource if absolute(path) == absolute(self.base / 'data_alias') else original_realpath(path, *args, **kwargs)
+        with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan)}):
+            ignore, declared = package_copy_ignore()
+            self.assertTrue(declared(self.base / 'VMS_Data' / 'private.db'))
+            self.assertFalse(declared(self.root / 'VMS_Data' / 'private.db'))
+            with patch('basic_mutation_runner.os.path.realpath', side_effect=guarded_realpath):
+                self.assertEqual(ignore(str(self.base), ['VMS_Data', 'data_alias', self.root.name]), {'VMS_Data', 'data_alias'})
+
+    def test_package_mutation_omits_parent_scope_data_when_copy_root_is_project_ancestor(self):
+        import builtins
+        import shutil
+        from basic_mutation_runner import run_mutation_trials
+        container = self.base / 'container'
+        container.mkdir()
+        self.root = container / 'project'
+        self.root.mkdir()
+        for package in (container, self.root):
+            (package / '__init__.py').write_text('')
+        data = container / 'VMS_Data'
+        data.mkdir()
+        original = data / 'label.txt'
+        original.write_text('ORIGINAL-CONTENT-MUST-NOT-BE-COPIED')
+        plan = self.plan('from pathlib import Path\nDATA=Path(__file__).resolve().parent.parent/"VMS_Data"\n'
+            'DATA.mkdir(exist_ok=True)\nLABEL=(DATA/"label.txt").read_text()\n'
+            'def target(value): return value+len(LABEL)\n',
+            [{'path': 'VMS_Data', 'scope': 'project-parent', 'kind': 'directory'},
+             {'path': 'VMS_Data/label.txt', 'scope': 'project-parent', 'kind': 'text', 'text': 'abc'}])
+        test = self.output / 'test_package.py'
+        test.write_text('import unittest\nfrom container.project.app import target\n'
+                       'class Cases(unittest.TestCase):\n    def test_value(self): self.assertEqual(target(4), 7)\n')
+        original_open, original_copytree = builtins.open, shutil.copytree
+        copied = []
+        def guarded_open(file, *args, **kwargs):
+            if isinstance(file, (str, bytes, os.PathLike)):
+                self.assertNotEqual(os.path.normcase(os.path.abspath(file)), os.path.normcase(str(original)))
+            return original_open(file, *args, **kwargs)
+        def checked_copytree(source, destination, *args, **kwargs):
+            result = original_copytree(source, destination, *args, **kwargs)
+            if Path(source) == container:
+                self.assertFalse((Path(destination) / 'VMS_Data').exists())
+                self.assertTrue((Path(destination) / 'project' / 'app.py').is_file())
+                copied.append(str(destination))
+            return result
+        with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan),
+                'LLM_UNIT_TEST_RESOURCE_LEASE': str(self.lease), 'PYTHONIOENCODING': 'utf-8'}), \
+                patch('builtins.open', side_effect=guarded_open), \
+                patch('basic_mutation_runner.shutil.copytree', side_effect=checked_copytree):
+            value = run_mutation_trials(self.file, test, max_mutations=3, timeout_seconds=10,
+                                        target_function='target', workers=1)
+        self.assertTrue(value['baseline_passed'], value)
+        self.assertGreater(value['counts']['killed'], 0, value)
+        self.assertEqual(value['counts']['error'], 0, value)
+        self.assertGreaterEqual(len(copied), 2)
+        self.assertEqual(original.read_text(), 'ORIGINAL-CONTENT-MUST-NOT-BE-COPIED')
+        self.assertEqual(self.file.read_text(), self.source)
 
     def test_relative_paths_bind_to_project_not_output_and_existing_mkdir_mock_cannot_swallow(self):
         plan = self.plan('from pathlib import Path\nPath("data").mkdir(exist_ok=True)\n'

@@ -11,6 +11,7 @@ import { throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { describeImportIssue, ImportExceptionSummary, ImportIssue, summarizeImportException } from './importDiagnostics';
 import { ImportInitializationCandidate, readInitializationCandidate } from './importSetupProposal';
+import { resourceLogicalPath, resourceSpecKey } from '../pipeline/isolatedResources';
 
 export interface ImportCheckTarget { file: string; target: string }
 export interface ImportCheckRow {
@@ -56,7 +57,10 @@ export async function inspectProjectImports(root: string, python: string, target
             ...(row.suggestion ? [localize("    可預覽替身：{0}（{1}:{2}）", row.suggestion.operation, row.suggestion.file, row.suggestion.line),
                 localize("    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。"),
                 row.suggestion.resourcePath
-                    ? localize('    影響：將 {0} 導向本次建立的空白暫存目錄；不讀取正式資料，每次執行後清理。', row.suggestion.resourcePath)
+                    ? row.suggestion.resourceScope === 'project-parent'
+                        ? localize('    影響：專案父層邏輯路徑 {0} 將導向全新暫存目錄；不讀取或寫入原位置，每次執行後清理。',
+                            resourceLogicalPath({ path: row.suggestion.resourcePath, scope: row.suggestion.resourceScope }))
+                        : localize('    影響：將 {0} 導向本次建立的空白暫存目錄；不讀取正式資料，每次執行後清理。', row.suggestion.resourcePath)
                     : localize("    影響：略過此初始化呼叫；不驗證其真實副作用，須確認測試不依賴它建立的狀態。")] : []), '',
             cell(row.issue?.advice || localize("請核對直譯器及預檢工具是否正常執行。")), ''
         ]);
@@ -108,14 +112,16 @@ export async function inspectProjectImports(root: string, python: string, target
                     const candidate = fs.realpathSync(path.join(root, proposal.file));
                     let existing = result.proposedRules.find(rule => fs.realpathSync(path.join(root, rule.file)) === candidate);
                     const lines = existing?.entryPointLines?.[proposal.operation];
+                    const proposedResource = { path: proposal.resourcePath || '',
+                        ...(proposal.resourceScope ? { scope: proposal.resourceScope } : {}) };
                     const needed = proposal.kind === 'mkdir' ? !!proposal.resourcePath && !existing?.resources?.some(resource =>
-                        resource.kind === 'directory' && (resource.path === proposal.resourcePath
-                            || proposal.resourcePath!.startsWith(resource.path + '/')))
+                        resource.kind === 'directory' && (resourceSpecKey(resource) === resourceSpecKey(proposedResource)
+                            || resourceSpecKey(proposedResource).startsWith(resourceSpecKey(resource) + '/')))
                         : !existing?.entryPoints?.includes(proposal.operation) || !!lines && !lines.includes(proposal.line);
                     if (needed) {
                         if (!existing) { existing = { file: proposal.file }; result.proposedRules.push(existing); }
                         if (proposal.kind === 'mkdir') {
-                            existing.resources = [...(existing.resources || []), { path: proposal.resourcePath!, kind: 'directory' }];
+                            existing.resources = [...(existing.resources || []), { ...proposedResource, kind: 'directory' }];
                             existing.resourceSourceHash = proposal.sourceHash;
                         }
                         else {

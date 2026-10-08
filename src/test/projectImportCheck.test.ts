@@ -8,6 +8,38 @@ import { createImportFixturePlan } from '../pipeline/importFixtures';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
 import { preflightFailureCacheSize, preflightTargetModule } from '../pipeline/modulePreflight';
+import { newResourceSetupRule } from '../environment/resourceSetup';
+
+test('parent mkdir proposals remain separate from equal project paths and recheck without touching original data', async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'parent-import-'));
+    const root = path.join(parent, 'app'); fs.mkdirSync(root);
+    const file = path.join(root, 'sample.py');
+    const source = 'from pathlib import Path\nDATA = Path(__file__).resolve().parent.parent / "SiblingData"\n'
+        + 'DATA.mkdir(parents=True, exist_ok=True)\ndef target(): return DATA.is_dir()\n';
+    fs.writeFileSync(file, source);
+    const original = path.join(parent, 'SiblingData'); fs.mkdirSync(original);
+    fs.writeFileSync(path.join(original, 'existing.txt'), 'must remain untouched');
+    const rule = newResourceSetupRule(root, file);
+    rule.resources = [{ path: 'SiblingData', kind: 'directory' }];
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    try {
+        const first = await inspectProjectImports(root, python, [{ file, target: 'target' }], path.join(parent, 'r1'), [rule]);
+        assert.equal(first.rows[0].status, 'blocked');
+        assert.equal(first.rows[0].suggestion?.resourcePath, 'SiblingData');
+        assert.equal(first.rows[0].suggestion?.resourceScope, 'project-parent');
+        assert.deepEqual(first.proposedRules[0].resources, [{ path: 'SiblingData', kind: 'directory' },
+            { path: 'SiblingData', scope: 'project-parent', kind: 'directory' }]);
+        assert.match(fs.readFileSync(path.join(parent, 'r1/import_check.md'), 'utf8'), /專案父層邏輯路徑 \.\.\/SiblingData/);
+        verifyImportProposal(first);
+        const second = await inspectProjectImports(root, python, [{ file, target: 'target' }], path.join(parent, 'r2'), first.proposedRules);
+        assert.equal(second.rows[0].status, 'loaded', JSON.stringify(second.rows));
+        assert.equal(second.proposedPlan, null);
+        assert.deepEqual(fs.readdirSync(original), ['existing.txt']);
+        assert.equal(fs.readFileSync(path.join(original, 'existing.txt'), 'utf8'), 'must remain untouched');
+        assert.equal(fs.existsSync(path.join(root, 'SiblingData')), false);
+        assert.equal(fs.readFileSync(file, 'utf8'), source);
+    } finally { fs.rmSync(parent, { recursive: true, force: true }); }
+});
 
 test('mkdir that requires an absent directory does not receive a contradictory pre-created resource proposal', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mkdir-absent-'));

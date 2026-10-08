@@ -1,6 +1,6 @@
 import { localize } from '../i18n/core';
 import { pythonToolPath } from './pythonTools';
-import { runSpawn } from '../utils/processRunner';
+import { ProcessTimeoutError, runSpawn } from '../utils/processRunner';
 import { buildGeneratedTestEnvironment } from '../utils/pythonTestEnvironment';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { currentExecution, ExecutionContext, throwIfExecutionCancelled } from './executionContext';
@@ -12,6 +12,20 @@ import { SourceVersion, SOURCE_VERSIONS_VERSION, validSourceVersions } from './s
 
 export interface ResolvedDependency {
     module: string; name: string; level?: number; file?: string; resolvedModule?: string; reason?: string;
+}
+
+export type PreflightToolReason = 'timeout' | 'process-failed' | 'invalid-result';
+export interface PreflightToolDiagnostic {
+    schemaVersion: 'module-preflight-tool-diagnostic-v1';
+    reasonCode: PreflightToolReason;
+    exitCode?: number | null;
+    detailCode?: 'missing-or-invalid-source-versions';
+}
+
+function toolFailure(reasonCode: PreflightToolReason, details: Partial<Pick<PreflightToolDiagnostic, 'exitCode' | 'detailCode'>> = {}): AnalysisStageError {
+    return new AnalysisStageError('environment', 'module-preflight',
+        localize('模組預檢工具未完成（{0}）；未取得可確認的模組載入診斷。', details.detailCode || reasonCode),
+        { schemaVersion: 'module-preflight-tool-diagnostic-v1', reasonCode, ...details } satisfies PreflightToolDiagnostic);
 }
 
 export interface PreflightResult {
@@ -109,11 +123,18 @@ async function executePreflight(python: string, file: string, module: string, im
         });
         throwIfExecutionCancelled();
         if (result.code !== 0) {
-            throw new AnalysisStageError('environment', 'module-preflight',
-                localize("模組預檢工具未完成：{0}", (result.stderr || result.stdout).slice(-2000)));
+            throw toolFailure('process-failed', { exitCode: result.code });
         }
-        const value = JSON.parse(result.stdout);
-        if (value.ok !== true) {
+        let value: any;
+        try { value = JSON.parse(result.stdout); }
+        catch { throw toolFailure('invalid-result'); }
+        if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.ok !== 'boolean') {
+            throw toolFailure('invalid-result');
+        }
+        if (value.ok === false) {
+            if (!['module-import', 'module-resolution'].includes(value.stage) || typeof value.reason !== 'string') {
+                throw toolFailure('invalid-result');
+            }
             const error = new AnalysisStageError('environment', value.stage || 'module-preflight',
                 localize("被測模組尚不可在隔離環境載入：{0}", value.reason || 'unknown'),
                 value.importFixtures ? { ...value.diagnostic, importFixtures: value.importFixtures } : value.diagnostic);
@@ -123,14 +144,13 @@ async function executePreflight(python: string, file: string, module: string, im
             throw error;
         }
         if (value.sourceVersionsVersion !== SOURCE_VERSIONS_VERSION || !validSourceVersions(value.sourceVersions)) {
-            throw new AnalysisStageError('environment', 'module-preflight',
-                localize('模組預檢無法完成：{0}', 'missing-or-invalid-source-versions'));
+            throw toolFailure('invalid-result', { detailCode: 'missing-or-invalid-source-versions' });
         }
         return value as PreflightResult;
     } catch (error) {
         throwIfExecutionCancelled();
         const stageError = error instanceof AnalysisStageError ? error
-            : new AnalysisStageError('environment', 'module-preflight', localize("模組預檢無法完成：{0}", String(error)));
+            : toolFailure(error instanceof ProcessTimeoutError ? 'timeout' : 'process-failed');
         throw stageError;
     }
 }

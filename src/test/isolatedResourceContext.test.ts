@@ -39,6 +39,18 @@ test('resource context withholds a whole credential seed and never treats omitte
     assert.ok(!context.includes('"rows":[]'));
 });
 
+test('resource prompt keeps the logical scope so equal sibling and project names cannot be confused', () => {
+    const value = plan();
+    value.rules[0].resources = [{ path: 'data/items.db', kind: 'sqlite', tables: [] },
+        { path: 'data/items.db', scope: 'project-parent', kind: 'sqlite', tables: [] }];
+    const records = buildIsolatedResourceContext(value).split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+    assert.equal(records.length, 2);
+    assert.equal(records[0].scope, undefined);
+    assert.equal(records[1].scope, 'project-parent');
+    assert.equal(records[0].path, records[1].path);
+    assert.ok(!JSON.stringify(records).includes('/private/application'));
+});
+
 test('resource prompt budgets omit complete records without cutting schema or seed values', () => {
     const value = plan(), db = value.rules[0].resources![0];
     if (db.kind === 'sqlite') { db.tables[0].rows![0].label = 'x'.repeat(10000); }

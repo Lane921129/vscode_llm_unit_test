@@ -17,14 +17,17 @@ export function buildIsolatedResourceContext(
 ): string {
     const rules = plan?.rules.filter(rule => rule.resources?.length) || [];
     if (!plan || !rules.length) { return ''; }
-    const header = `HOST_ISOLATED_RESOURCE_CONTEXT\nPlan identity (includes source, schema and seed): ${plan.id}\n${ISOLATED_RESOURCE_ROLE_RULE}\nResource declarations are setup facts, not execution results. Text contents are withheld. Omitted rows are unknown, never empty.\n`;
+    const parentScope = rules.some(rule => rule.resources?.some(resource => resource.scope === 'project-parent'))
+        ? 'Scope project-parent means a logical sibling path under the project parent; the host redirects it to fresh temporary resources without reading or writing the original location. Omitted scope means project-relative.\n' : '';
+    const header = `HOST_ISOLATED_RESOURCE_CONTEXT\nPlan identity (includes source, schema and seed): ${plan.id}\n${ISOLATED_RESOURCE_ROLE_RULE}\n${parentScope}Resource declarations are setup facts, not execution results. Text contents are withheld. Omitted rows are unknown, never empty.\n`;
     if (maxChars < header.length + 100) { return ''; }
     const records: string[] = [];
     let omitted = 0;
     const fits = (record: string) => header.length + records.join('\n').length + record.length + 100 <= maxChars;
     for (const rule of rules) {
         for (const resource of rule.resources || []) {
-            const common = { declaredBy: rule.file, sourceHash: rule.sourceHash, path: resource.path, kind: resource.kind };
+            const common = { declaredBy: rule.file, sourceHash: rule.sourceHash, path: resource.path,
+                ...(resource.scope ? { scope: resource.scope } : {}), kind: resource.kind };
             const summary = resource.kind === 'sqlite'
                 ? { ...common, tables: resource.tables.map(table => ({ name: table.name, columns: table.columns,
                     rowCount: table.rows?.length || 0, rowsStatus: 'withheld' })) }

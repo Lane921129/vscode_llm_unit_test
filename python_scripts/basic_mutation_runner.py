@@ -375,7 +375,8 @@ def package_copy_ignore():
         return ordinary_ignore, lambda _path: False
     normalize = lambda value: os.path.normcase(os.path.abspath(os.fspath(value)))
     root = normalize(plan['root'])
-    resources = [(normalize(os.path.join(root, spec['path'])), spec['kind'])
+    from isolated_resources import logical_resource_path
+    resources = [(logical_resource_path(root, spec), spec['kind'])
                  for rule in plan['rules'] for spec in validate_resources(rule)]
     if not resources:
         return ordinary_ignore, lambda _path: False

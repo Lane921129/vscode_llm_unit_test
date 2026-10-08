@@ -8,6 +8,7 @@ import sys
 import types
 
 from import_fixtures import ImportFixtures
+from isolated_resources import logical_resource_path, inside as _lexically_inside
 
 _PATH_MKDIR_CODE = Path.mkdir.__code__
 _FIXTURE_MKDIR_CODE = next(code for code in ImportFixtures.__enter__.__code__.co_consts
@@ -55,15 +56,23 @@ def _observed_directory(following, root):
         # Relative declarations are explicitly bound to the project logical
         # root, independent of the report/worker current directory.
         lexical = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(root, raw))
-        # Reject existing symlink components and out-of-project destinations.
-        if os.path.normcase(lexical) != _absolute(lexical) or not _inside(lexical, root):
+        # Sibling paths may be bound explicitly, without opening their contents.
+        # Keep the observed receiver; never guess from an identifier or source
+        # expression, and never allow an ancestor or descendant source mount.
+        if os.path.normcase(lexical) != _absolute(lexical):
             return None
-        relative = os.path.relpath(lexical, root).replace('\\', '/')
-        if relative == '.' or any(part in ('', '.', '..') for part in relative.split('/')):
+        internal = _lexically_inside(lexical, root)
+        anchor = root if internal else os.path.dirname(root)
+        spec = {'path': os.path.relpath(lexical, anchor).replace('\\', '/'), 'kind': 'directory'}
+        if not internal:
+            spec['scope'] = 'project-parent'
+        try:
+            logical_resource_path(root, spec)
+        except ValueError:
             return None
-        if any(part.lower().endswith(('.py', '.pyc', '.pyo', '.pyd', '.dll', '.so')) for part in relative.split('/')):
+        if any(part.lower().endswith(('.py', '.pyc', '.pyo', '.pyd', '.dll', '.so')) for part in spec['path'].split('/')):
             return None
-        return relative
+        return spec
     return None
 
 
@@ -217,9 +226,11 @@ def advise_blocked_initialization(error, source_root):
                     'line': item.tb_lineno, 'sourceHash': hashlib.sha256(source).hexdigest(),
                     'operation': operation, 'evidence': 'blocked-direct-module-call', 'returnValue': 'discarded'}
             if direct_mkdir:
-                resource_path = _observed_directory(following, root)
-                if resource_path:
-                    candidate['resourcePath'] = resource_path
+                resource = _observed_directory(following, root)
+                if resource:
+                    candidate['resourcePath'] = resource['path']
+                    if resource.get('scope'):
+                        candidate['resourceScope'] = resource['scope']
             return candidate
     except (OSError, ValueError, TypeError, SyntaxError, RecursionError):
         # Advice is optional and must never replace the actual import failure.

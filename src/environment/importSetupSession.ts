@@ -4,7 +4,14 @@ import { localize } from '../i18n/core';
 import { ImportCheck, ImportCheckRow } from './projectImportCheck';
 
 export type ImportSetupReason = 'initial-check' | 'recheck-ready' | 'recheck-unchanged'
-    | 'recheck-new-blockers' | 'proposal-declined' | 'configuration-pending' | 'no-targets' | 'interrupted' | 'error';
+    | 'recheck-new-blockers' | 'recheck-diagnostic-incomplete' | 'proposal-declined' | 'configuration-pending' | 'no-targets' | 'interrupted' | 'error';
+
+type BlockerChange = 'unchanged' | 'new-blocker' | 'diagnostic-incomplete' | 'diagnostic-changed' | 'loaded';
+
+function hasObservedBlocker(row: ImportCheckRow): boolean {
+    return row.stage !== 'module-preflight' && !row.diagnostic?.reasonCode && !!row.issue
+        && (row.issue.kind !== 'other' || !!row.diagnostic || !!row.issue.origin || !!row.suggestion);
+}
 
 function blockerKey(row: ImportCheckRow, directory: string): string {
     const diagnostic = row.diagnostic && { ...row.diagnostic,
@@ -13,14 +20,43 @@ function blockerKey(row: ImportCheckRow, directory: string): string {
         diagnostic, row.suggestion && [row.suggestion.file, row.suggestion.line, row.suggestion.operation]]);
 }
 
+function compareBlocker(previous: ImportCheckRow | undefined, row: ImportCheckRow,
+    beforeDirectory: string, afterDirectory: string): BlockerChange {
+    if (row.status === 'loaded') { return 'loaded'; }
+    if (!hasObservedBlocker(row)) { return 'diagnostic-incomplete'; }
+    if (!previous || previous.status !== 'blocked') { return 'new-blocker'; }
+    if (!hasObservedBlocker(previous)) { return 'diagnostic-changed'; }
+    // A different observed operation/type or a different known source location
+    // is evidence of a new blocker. Lost metadata alone is not that evidence.
+    if (JSON.stringify([previous.stage, previous.issue?.kind, previous.issue?.issue])
+        !== JSON.stringify([row.stage, row.issue?.kind, row.issue?.issue])) { return 'new-blocker'; }
+    if (previous.issue?.origin && row.issue?.origin
+        && JSON.stringify(previous.issue.origin) !== JSON.stringify(row.issue.origin)) { return 'new-blocker'; }
+    if (previous.suggestion && row.suggestion
+        && JSON.stringify([previous.suggestion.file, previous.suggestion.line, previous.suggestion.operation])
+        !== JSON.stringify([row.suggestion.file, row.suggestion.line, row.suggestion.operation])) { return 'new-blocker'; }
+    if (previous.issue?.origin && !row.issue?.origin || previous.diagnostic && !row.diagnostic
+        || previous.suggestion && !row.suggestion) { return 'diagnostic-incomplete'; }
+    return blockerKey(previous, beforeDirectory) === blockerKey(row, afterDirectory) ? 'unchanged' : 'diagnostic-changed';
+}
+
+function compareChecks(before: ImportCheck, after: ImportCheck): Array<{ file: string; change: BlockerChange }> {
+    const previous = new Map(before.rows.map(row => [row.file, row]));
+    return after.rows.map(row => ({ file: row.file,
+        change: compareBlocker(previous.get(row.file), row, before.directory, after.directory) }));
+}
+
 /** Compare observed blockers, not a changed fixture ID or an unchanged total count. */
 export function recheckReason(before: ImportCheck, after: ImportCheck): ImportSetupReason {
     const remaining = after.rows.filter(row => row.status === 'blocked');
     if (!remaining.length) {
         return !after.rows.length ? 'no-targets' : after.proposedPlan ? 'configuration-pending' : 'recheck-ready';
     }
-    const previous = new Set(before.rows.filter(row => row.status === 'blocked').map(row => blockerKey(row, before.directory)));
-    return remaining.some(row => !previous.has(blockerKey(row, after.directory))) ? 'recheck-new-blockers' : 'recheck-unchanged';
+    const changes = compareChecks(before, after);
+    if (changes.some(row => row.change === 'diagnostic-incomplete' || row.change === 'diagnostic-changed')) {
+        return 'recheck-diagnostic-incomplete';
+    }
+    return changes.some(row => row.change === 'new-blocker') ? 'recheck-new-blockers' : 'recheck-unchanged';
 }
 
 export function importSetupMessage(reason: ImportSetupReason, check?: ImportCheck): string {
@@ -32,6 +68,7 @@ export function importSetupMessage(reason: ImportSetupReason, check?: ImportChec
         case 'recheck-ready': return summary + ' ' + localize('重新預檢完成，模組已可載入。請按「開始測試」執行函式測試。');
         case 'recheck-unchanged': return summary + ' ' + localize('重新預檢完成，仍有原先的障礙；已停止重複初始化，請依報告處理原因。');
         case 'recheck-new-blockers': return summary + ' ' + localize('重新預檢發現下一個載入障礙，詳見報告；本次已結束，未自動套用下一份設定。');
+        case 'recheck-diagnostic-incomplete': return summary + ' ' + localize('仍有載入障礙，但診斷不完整或無法確認障礙是否改變；請對照各輪報告，前次原因不代表本次已確認的原因。');
         case 'proposal-declined': return summary + ' ' + localize('未套用初始化替身；本次預檢已結束。');
         case 'configuration-pending': return summary + ' ' + localize('模組在預覽設定下可載入，但尚有設定未確認保存；正式測試環境尚未就緒。');
         case 'interrupted': return localize('已中止模組預檢。');
@@ -53,8 +90,13 @@ export function saveImportSetupSession(directory: string, checks: ImportCheck[],
     const rounds = checks.map(check => ({ directory: path.relative(directory, check.directory).replace(/\\/g, '/'),
         blocked: check.rows.filter(row => row.status === 'blocked').length,
         loaded: check.rows.filter(row => row.status === 'loaded').length }));
+    const comparisons = checks.slice(1).map((check, index) => ({
+        before: `${rounds[index].directory}/import_check.json`,
+        after: `${rounds[index + 1].directory}/import_check.json`,
+        rows: compareChecks(checks[index], check)
+    }));
     fs.writeFileSync(path.join(directory, 'import_setup.json'), JSON.stringify({ schemaVersion: 'import-setup-session-v1',
-        status, reason, applied, nextSetupAvailable, checks: rounds }, null, 2));
+        status, reason, applied, nextSetupAvailable, checks: rounds, comparisons }, null, 2));
     const report = path.join(directory, 'import_setup.md');
     fs.writeFileSync(report, [localize('# 模組預檢結果'), '', message, '',
         ...rounds.map((round, index) => localize('- 第 {0} 次檢查：{1} 個可載入、{2} 個受阻。', index + 1, round.loaded, round.blocked)

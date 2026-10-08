@@ -24,6 +24,13 @@ test('resource drafts bind exact project/source/seed and never refresh an expire
             returnValue: 'discarded', resourcePath: 'data' };
         const advise = (change: object) => readInitializationCandidate(root, { exception_type: 'TraceSafetyError', initialization_candidate: { ...candidate, ...change } });
         assert.equal(advise({})?.resourcePath, 'data');
+        assert.deepEqual(advise({ resourceScope: 'project-parent' }), { ...candidate, resourceScope: 'project-parent' });
+        for (const resourceScope of ['project', 'absolute', null]) {
+            assert.equal(advise({ resourceScope }), undefined);
+        }
+        assert.equal(advise({ resourceScope: 'project-parent', resourcePath: undefined }), undefined);
+        assert.equal(advise({ resourceScope: 'project-parent', resourcePath: path.basename(root) }), undefined);
+        assert.equal(advise({ resourceScope: 'project-parent', resourcePath: path.basename(root) + '/data' }), undefined);
         for (const resourcePath of ['../data', '/data', 'C:/data', 'data\\child', 'source.py']) {
             assert.equal(advise({ resourcePath }), undefined);
         }
@@ -38,4 +45,22 @@ test('resource drafts bind exact project/source/seed and never refresh an expire
         assert.throws(() => newResourceSetupRule(root, __filename), /inside/);
         assert.throws(() => readResourceSetupDraft(path.dirname(root), JSON.stringify(draft)), /different project/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('manual resource drafts preserve parent scope and do not conflate equal in-project names', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-scopes-'));
+    const root = path.join(parent, 'app'); fs.mkdirSync(root);
+    const file = path.join(root, 'settings.py'); fs.writeFileSync(file, 'VALUE = 1\n');
+    try {
+        const rule = newResourceSetupRule(root, file);
+        rule.resources = [{ path: 'data', kind: 'directory' }, { path: 'data', scope: 'project-parent', kind: 'directory' },
+            { path: 'data/seed.txt', kind: 'text', text: 'inside' },
+            { path: 'data/seed.txt', scope: 'project-parent', kind: 'text', text: 'outside' }];
+        const draft = { schemaVersion: 'isolated-resource-setup-v1', root, rules: [rule] };
+        const plan = readResourceSetupDraft(root, JSON.stringify(draft)).plan!;
+        assert.deepEqual(plan.rules[0].resources, rule.resources);
+        assert.deepEqual(resourceSetupCounts([rule]), { directories: 2, files: 2, databases: 0, tables: 0, rows: 0 });
+        assert.equal(fs.existsSync(path.join(parent, 'data')), false);
+        assert.equal(fs.existsSync(path.join(root, 'data')), false);
+    } finally { fs.rmSync(parent, { recursive: true, force: true }); }
 });

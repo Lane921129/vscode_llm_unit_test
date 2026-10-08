@@ -10,9 +10,8 @@ export interface ResourceColumn {
     primaryKey?: boolean; notNull?: boolean;
 }
 export interface ResourceTable { name: string; columns: ResourceColumn[]; rows?: Array<Record<string, ResourceCell>> }
-export type TestResourceSpec = { path: string; kind: 'directory' }
-    | { path: string; kind: 'text'; text: string }
-    | { path: string; kind: 'sqlite'; tables: ResourceTable[] };
+export type TestResourceSpec = { path: string; scope?: 'project-parent' } & (
+    { kind: 'directory' } | { kind: 'text'; text: string } | { kind: 'sqlite'; tables: ResourceTable[] });
 type ResourceRule = { file: string; resources?: TestResourceSpec[] };
 export interface ResourceLifecycle {
     schemaVersion: 'isolated-resource-lifecycle-v1'; planId: string; created: true; cleaned: boolean;
@@ -54,25 +53,55 @@ const identifier = (value: unknown): value is string => typeof value === 'string
 const identity = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
 const invalid = () => new Error('Invalid isolated resource declaration.');
 
-/** A resource is declarative data at a project-relative path, never executable source. */
+/** The same spelling inside and beside a project identifies different resources. */
+export const resourceSpecKey = (resource: Pick<TestResourceSpec, 'path' | 'scope'>): string =>
+    `${resource.scope || 'project'}:${identity(resource.path)}`;
+export const resourceLogicalPath = (resource: Pick<TestResourceSpec, 'path' | 'scope'>): string =>
+    `${resource.scope === 'project-parent' ? '../' : ''}${resource.path}`;
+
+/** Inspect path metadata only; never open, create or reuse the original resource. */
+export function validateResourceLocation(root: string, resource: TestResourceSpec): void {
+    root = fs.realpathSync(root);
+    const base = resource.scope === 'project-parent' ? path.dirname(root) : root;
+    const selected = path.resolve(base, ...resource.path.split('/'));
+    const contains = (parent: string, child: string) => {
+        const relative = path.relative(parent, child);
+        return !relative || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+    };
+    if (!contains(base, selected) || identity(base) === identity(selected)
+        || resource.scope === 'project-parent' && (contains(root, selected) || contains(selected, root))) { throw invalid(); }
+    let current = base;
+    for (const component of resource.path.split('/')) {
+        current = path.join(current, component);
+        try { if (fs.lstatSync(current).isSymbolicLink()) { throw invalid(); } }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') { break; }
+            throw error;
+        }
+    }
+}
+
+/** A resource is declarative data at a bounded logical path, never executable source. */
 export function validateTestResources(input: unknown): TestResourceSpec[] {
     if (!Array.isArray(input) || input.length > 16) { throw invalid(); }
     const result: TestResourceSpec[] = [];
     for (const value of input) {
         if (!object(value) || typeof value.path !== 'string' || value.path.length > 240
+            || value.scope !== undefined && value.scope !== 'project-parent'
             || /[\\:<>"|?*\u0000-\u001f\u007f]/.test(value.path)
             || value.path.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part)
                 || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
             || /\.(?:py|pyc|pyo|so|pyd|dll|exe|sh|bat|cmd|ps1)$/i.test(value.path)) { throw invalid(); }
+        const location = { path: value.path, ...(value.scope === 'project-parent' ? { scope: value.scope as 'project-parent' } : {}) };
         if (value.kind === 'directory') {
-            if (!keys(value, ['path', 'kind'])) { throw invalid(); }
-            result.push({ path: value.path, kind: value.kind });
+            if (!keys(value, ['path', 'scope', 'kind'])) { throw invalid(); }
+            result.push({ ...location, kind: value.kind });
         } else if (value.kind === 'text') {
-            if (!keys(value, ['path', 'kind', 'text']) || typeof value.text !== 'string'
+            if (!keys(value, ['path', 'scope', 'kind', 'text']) || typeof value.text !== 'string'
                 || Buffer.byteLength(value.text, 'utf8') > 65536) { throw invalid(); }
-            result.push({ path: value.path, kind: value.kind, text: value.text });
+            result.push({ ...location, kind: value.kind, text: value.text });
         } else if (value.kind === 'sqlite') {
-            if (!keys(value, ['path', 'kind', 'tables']) || !Array.isArray(value.tables) || value.tables.length > 16) { throw invalid(); }
+            if (!keys(value, ['path', 'scope', 'kind', 'tables']) || !Array.isArray(value.tables) || value.tables.length > 16) { throw invalid(); }
             const names = new Set<string>();
             const tables: ResourceTable[] = value.tables.map(table => {
                 if (!object(table) || !keys(table, ['name', 'columns', 'rows']) || !identifier(table.name)
@@ -107,21 +136,23 @@ export function validateTestResources(input: unknown): TestResourceSpec[] {
                 });
                 return { name: table.name, columns, ...(rows !== undefined ? { rows } : {}) };
             });
-            result.push({ path: value.path, kind: value.kind, tables });
+            result.push({ ...location, kind: value.kind, tables });
         } else { throw invalid(); }
     }
     return result;
 }
 
 /** Aliases may share an identical seed; they may not disagree or mount source directories. */
-export function validateResourcePlanConflicts(rules: readonly ResourceRule[]): void {
+export function validateResourcePlanConflicts(rules: readonly ResourceRule[], root?: string): void {
     const mounted = new Map<string, TestResourceSpec>();
     for (const rule of rules) {
         for (const resource of rule.resources || []) {
-            const name = identity(resource.path), previous = mounted.get(name);
+            if (root) { validateResourceLocation(root, resource); }
+            else if (resource.scope) { throw invalid(); }
+            const name = resourceSpecKey(resource), previous = mounted.get(name);
             if (previous && JSON.stringify({ ...previous, path: name }) !== JSON.stringify({ ...resource, path: name })) { throw invalid(); }
-            if (rules.some(source => identity(source.file) === name
-                || resource.kind === 'directory' && identity(source.file).startsWith(name + '/'))) { throw invalid(); }
+            if (!resource.scope && rules.some(source => identity(source.file) === identity(resource.path)
+                || resource.kind === 'directory' && identity(source.file).startsWith(identity(resource.path) + '/'))) { throw invalid(); }
             mounted.set(name, resource);
         }
     }

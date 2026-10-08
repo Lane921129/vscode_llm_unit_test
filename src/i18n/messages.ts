@@ -1,5 +1,10 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "模組預檢工具未完成（{0}）；未取得可確認的模組載入診斷。": "Module preflight did not complete ({0}); no confirmed module-loading diagnostic was obtained.",
+    "本次未取得完整模組診斷；請依原因碼檢查 Python 預檢程序後重新檢查。前次障礙只保留為歷史證據。": "Complete module diagnostics were not obtained. Check the Python preflight process using the reason code, then recheck. Previous blockers remain historical evidence only.",
+    "仍有載入障礙，但診斷不完整或無法確認障礙是否改變；請對照各輪報告，前次原因不代表本次已確認的原因。": "Loading is still blocked, but diagnostics are incomplete or do not establish whether the blocker changed. Compare the reports from each check; a previous cause is not a confirmed cause for this check.",
+    "    影響：專案父層邏輯路徑 {0} 將導向全新暫存目錄；不讀取或寫入原位置，每次執行後清理。": "    Effect: Redirect logical path {0} under the project's parent to a fresh temporary directory; the original location is neither read nor written, and resources are cleaned after each execution.",
+    "專案父層資源：{0}。這些邏輯路徑將導向全新暫存資源；不讀取或寫入原位置。": "Resources under the project's parent: {0}. These logical paths are redirected to fresh temporary resources; original locations are neither read nor written.",
     "隔離測試資料庫缺少資料表或欄位；請在「隔離測試資源」補齊 schema 後重新執行。": "The isolated test database is missing a table or column. Complete its schema under Isolated test resources, then run again.",
     "以下來源的舊初始化入口批准會撤銷，重新預檢後才可另行核准：{0}": "Outdated entry-point approvals for these sources will be revoked and need a new preflight preview before approval: {0}",
     "隔離 SQLite 缺少資料表或欄位。請在「隔離測試資源」提供原專案明確的 schema 與測試資料，再重新預檢；不會猜表格或把此錯誤當預期答案。": "The isolated SQLite database is missing a table or column. Supply the project's explicit schema and test data under Isolated test resources, then recheck. Tables are not guessed and this failure is not an expected-output oracle.",

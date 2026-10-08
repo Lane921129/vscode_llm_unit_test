@@ -55,3 +55,23 @@ test('import exception details omit credential-bearing and connection URL messag
         assert.equal(summary?.message.includes('private-value'), false);
     }
 });
+
+test('preflight tool diagnostics retain only known codes and safe metadata', () => {
+    for (const reasonCode of ['timeout', 'process-failed', 'invalid-result']) {
+        const diagnostic = { schemaVersion: 'module-preflight-tool-diagnostic-v1', reasonCode, exitCode: 17,
+            stderr: 'private-fixture', message: 'private-fixture', reason: 'private-fixture' };
+        const summary = summarizeImportException(diagnostic);
+        assert.equal(summary?.reasonCode, reasonCode); assert.equal(summary?.exitCode, 17);
+        assert.equal(summary?.exceptionType, 'ModulePreflightToolError');
+        assert.doesNotMatch(JSON.stringify(summary), /private-fixture|stderr/);
+        assert.equal(describeImportIssue(diagnostic, 'module-preflight').issue, reasonCode);
+        assert.equal(describeImportIssue(diagnostic, 'module-preflight').kind, 'other');
+    }
+    for (const diagnostic of [{ reasonCode: 'timeout' },
+        { schemaVersion: 'module-preflight-tool-diagnostic-v1', reasonCode: 'private-fixture' }]) {
+        assert.equal(summarizeImportException(diagnostic), undefined);
+    }
+    const invalidCode = summarizeImportException({ schemaVersion: 'module-preflight-tool-diagnostic-v1',
+        reasonCode: 'invalid-result', exitCode: 'private-fixture', detailCode: 'private-fixture' });
+    assert.equal(invalidCode?.exitCode, undefined); assert.equal(invalidCode?.detailCode, undefined);
+});

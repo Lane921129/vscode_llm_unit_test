@@ -26,6 +26,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
     let root = '', settings: Record<string, any> = {}, approve = true, confirmations = 0, updates = 0, modelCalls = 0;
     let duringConfirmation: (() => void) | undefined;
     const messages: any[] = [];
+    const confirmationMessages: string[] = [];
     const vscode = {
         ConfigurationTarget: { Global: 1 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: {
@@ -39,7 +40,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
         window: {
             showTextDocument: async () => {}, showInformationMessage: async () => {},
             showWarningMessage: async (_message: string, options?: { modal?: boolean }, action?: string) => {
-                if (options?.modal) { confirmations++; duringConfirmation?.(); return approve ? action : undefined; }
+                if (options?.modal) { confirmationMessages.push(_message); confirmations++; duringConfirmation?.(); return approve ? action : undefined; }
                 return undefined;
             }
         }
@@ -58,7 +59,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             fs.writeFileSync(path.join(parent, 'neutral_runtime.py'),
                 'from pathlib import Path\ndef launch():\n    Path("must_not_exist").mkdir()\n');
             settings = { pythonPath: python, projectPath: root, importFixtures: [] };
-            approve = true; confirmations = 0; updates = 0; messages.length = 0; duringConfirmation = undefined;
+            approve = true; confirmations = 0; updates = 0; messages.length = 0; confirmationMessages.length = 0; duringConfirmation = undefined;
             const output = path.join(parent, 'results');
             const controller = new ImportSetupController((message: unknown) => messages.push(message));
             return { file, source, output, controller };
@@ -78,6 +79,32 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             }
             return { directory, session };
         };
+        await t.test('parent data initialization is previewed once and one recheck leaves original sibling data untouched', async () => {
+            const fixture = createFixture('parent-resource', 'from pathlib import Path\n'
+                + 'DATA = Path(__file__).resolve().parent.parent / "VMS_Data"\n'
+                + 'DATA.mkdir(parents=True, exist_ok=True)\ndef target(): return DATA.is_dir()\n');
+            const original = path.join(path.dirname(root), 'VMS_Data'); fs.mkdirSync(original);
+            fs.writeFileSync(path.join(original, 'original.txt'), 'original data');
+            const result = await run(fixture);
+            assert.equal(confirmations, 1);
+            assert.ok(confirmationMessages[0].includes('專案父層資源：../VMS_Data')
+                && confirmationMessages[0].includes('不讀取或寫入原位置'));
+            assert.equal(updates, 2);
+            assert.equal(modelCalls, 0);
+            assert.equal(result.session.status, 'ready');
+            assert.equal(result.session.reason, 'recheck-ready');
+            assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[0, 1], [1, 0]]);
+            assert.deepEqual(settings.importFixtures[0].resources,
+                [{ path: 'VMS_Data', scope: 'project-parent', kind: 'directory' }]);
+            const preview = JSON.parse(fs.readFileSync(path.join(result.directory, '1', 'setup_proposal.json'), 'utf8'));
+            assert.equal(preview.evidence[0].resourceScope, 'project-parent');
+            assert.equal(preview.evidence[0].resourcePath, 'VMS_Data');
+            assert.equal(fs.readFileSync(fixture.file, 'utf8'), fixture.source);
+            assert.deepEqual(fs.readdirSync(original), ['original.txt']);
+            assert.equal(fs.readFileSync(path.join(original, 'original.txt'), 'utf8'), 'original data');
+            assert.equal(fs.existsSync(path.join(root, 'VMS_Data')), false);
+            fixture.controller.dispose();
+        });
         await t.test('a second hidden startup call needs a separate manual action, even when the blocked count is unchanged', async () => {
             const fixture = createFixture('successive', 'import neutral_runtime as rt\nrt.launch()\nrt.launch()\ndef target(): return 4\n');
             const first = await run(fixture);
@@ -125,7 +152,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             const check: ImportCheck = { root, python, directory: path.join(directory, '1'),
                 rows: [{ file: 'sample.py', status: 'loaded' }], proposedRules: [], proposedPlan: null, proposals: [] };
             const reasons: ImportSetupReason[] = ['initial-check', 'recheck-ready', 'recheck-unchanged',
-                'recheck-new-blockers', 'configuration-pending', 'proposal-declined', 'no-targets', 'interrupted', 'error'];
+                'recheck-new-blockers', 'recheck-diagnostic-incomplete', 'configuration-pending', 'proposal-declined', 'no-targets', 'interrupted', 'error'];
             try {
                 for (const language of ['en', 'zh-tw']) {
                     setLanguage(language);

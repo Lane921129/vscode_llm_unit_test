@@ -144,7 +144,7 @@ test('transient preflight runner errors are not cached as durable module failure
         const target = path.join(directory, 'sample.py');
         fs.writeFileSync(target, 'def target(): return 1\n');
         await runInExecution(new ExecutionContext({}), async () => {
-            await assert.rejects(preflightTargetModule(python, target, 'sample', [directory], directory), /temporary process timeout/);
+            await assert.rejects(preflightTargetModule(python, target, 'sample', [directory], directory), /process-failed/);
             assert.equal(preflightFailureCacheSize(), 0);
             assert.equal((await preflightTargetModule(python, target, 'sample', [directory], directory)).ok, true);
         });

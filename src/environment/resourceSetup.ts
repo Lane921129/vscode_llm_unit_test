@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createImportFixturePlan, ImportFixturePlan, ImportFixtureRule, refreshEntryPointApprovals, selectImportFixtureRules } from '../pipeline/importFixtures';
+import { resourceLogicalPath, resourceSpecKey } from '../pipeline/isolatedResources';
 
 export interface ResourceSetupDraft {
     schemaVersion: 'isolated-resource-setup-v1'; root: string; rules: ImportFixtureRule[];
@@ -73,7 +74,7 @@ export function refreshResourceSetupDraft(root: string, text: string): ResourceS
 }
 
 export function resourceSetupCounts(rules: ImportFixtureRule[]): { directories: number; files: number; databases: number; tables: number; rows: number } {
-    const resources = new Map(rules.flatMap(rule => (rule.resources || []).map(resource => [resource.path, resource] as const)));
+    const resources = new Map(rules.flatMap(rule => (rule.resources || []).map(resource => [resourceSpecKey(resource), resource] as const)));
     const counts = { directories: 0, files: 0, databases: 0, tables: 0, rows: 0 };
     for (const resource of resources.values()) {
         if (resource.kind === 'directory') { counts.directories++; }
@@ -82,4 +83,9 @@ export function resourceSetupCounts(rules: ImportFixtureRule[]): { directories: 
             counts.rows += resource.tables.reduce((total, table) => total + (table.rows?.length || 0), 0); }
     }
     return counts;
+}
+
+export function projectParentResourcePaths(rules: ImportFixtureRule[]): string[] {
+    return [...new Set(rules.flatMap(rule => (rule.resources || []).filter(resource => resource.scope === 'project-parent')
+        .map(resourceLogicalPath)))];
 }

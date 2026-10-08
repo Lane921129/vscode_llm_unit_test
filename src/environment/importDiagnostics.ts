@@ -1,4 +1,5 @@
 import { localize } from '../i18n/core';
+import type { PreflightToolDiagnostic, PreflightToolReason } from '../pipeline/modulePreflight';
 export interface ImportIssue {
     kind: 'import-side-effect' | 'missing-dependency' | 'dependency-api' | 'module-resolution' | 'other';
     issue: string;
@@ -6,7 +7,12 @@ export interface ImportIssue {
     origin?: { file: string; line: number };
 }
 
-export interface ImportExceptionSummary { exceptionType: string; message: string }
+export interface ImportExceptionSummary {
+    exceptionType: string; message: string;
+    reasonCode?: PreflightToolReason;
+    exitCode?: number | null;
+    detailCode?: PreflightToolDiagnostic['detailCode'];
+}
 const identifier = (text: unknown): text is string => typeof text === 'string' && text.length <= 240 && text.trim() === text
     && /^[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*$/u.test(text);
 
@@ -16,8 +22,25 @@ const policyOperations = new Set(['network connection', 'file read', 'file write
     'non-isolated SQLite connection', 'unguarded SQLite connection factory', 'SQLite extension loading',
     'custom SQLite connection factory']);
 
+/** Only host-owned codes are retained; stderr, stdout and arbitrary error fields are never copied. */
+function toolDiagnostic(diagnostic: unknown): PreflightToolDiagnostic | undefined {
+    if (!diagnostic || typeof diagnostic !== 'object') { return undefined; }
+    const value = diagnostic as Record<string, unknown>;
+    if (value.schemaVersion !== 'module-preflight-tool-diagnostic-v1'
+        || typeof value.reasonCode !== 'string' || !['timeout', 'process-failed', 'invalid-result'].includes(value.reasonCode)) { return undefined; }
+    return { schemaVersion: 'module-preflight-tool-diagnostic-v1', reasonCode: value.reasonCode as PreflightToolReason,
+        ...(value.exitCode === null || Number.isSafeInteger(value.exitCode) ? { exitCode: value.exitCode as number | null } : {}),
+        ...(value.detailCode === 'missing-or-invalid-source-versions' ? { detailCode: value.detailCode } : {}) };
+}
+
 /** Keep a bounded Python exception, never arbitrary subprocess output or traceback. */
 export function summarizeImportException(diagnostic: unknown): ImportExceptionSummary | undefined {
+    const tool = toolDiagnostic(diagnostic);
+    if (tool) {
+        const { schemaVersion: _schemaVersion, ...details } = tool;
+        return { exceptionType: 'ModulePreflightToolError', ...details,
+            message: localize('模組預檢工具未完成（{0}）；未取得可確認的模組載入診斷。', tool.detailCode || tool.reasonCode) };
+    }
     if (!diagnostic || typeof diagnostic !== 'object') { return undefined; }
     const value = diagnostic as Record<string, unknown>;
     if (!identifier(value.exception_type)) { return undefined; }
@@ -36,6 +59,11 @@ export function summarizeImportException(diagnostic: unknown): ImportExceptionSu
 
 /** Project-neutral, bounded summaries. Never include raw tracebacks in a batch table. */
 export function describeImportIssue(diagnostic: any, stage: string): ImportIssue {
+    const tool = toolDiagnostic(diagnostic);
+    if (tool) {
+        return { kind: 'other', issue: tool.reasonCode,
+            advice: localize('本次未取得完整模組診斷；請依原因碼檢查 Python 預檢程序後重新檢查。前次障礙只保留為歷史證據。') };
+    }
     const value = diagnostic && typeof diagnostic === 'object' ? diagnostic : {};
     let api = value.dependency_api;
     // A module __getattr__ can raise without Python's name/obj slots. Accept

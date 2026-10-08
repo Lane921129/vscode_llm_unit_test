@@ -94,6 +94,29 @@ def _unsafe_raw_components(value):
         for part in tail.replace('\\', '/').split('/'))
 
 
+def logical_resource_path(root, spec):
+    """Resolve only an explicit project path or a disjoint sibling declaration.
+
+    This is a logical binding. Callers must never read/copy this path's contents.
+    In particular, a project-parent resource cannot include the selected source
+    root, even when it is a file resource rather than a directory mount.
+    """
+    root = absolute(root)
+    scope = spec.get('scope')
+    if scope is not None and scope != 'project-parent' or 'scope' in spec and scope is None:
+        raise ValueError('Invalid isolated resource scope')
+    relative = _relative_path(spec.get('path'))
+    anchor = os.path.dirname(root) if scope == 'project-parent' else root
+    logical = absolute(os.path.join(anchor, relative))
+    if logical == anchor or not inside(logical, anchor) or logical == os.path.dirname(logical):
+        raise ValueError('Isolated resource path escapes declared scope')
+    if scope == 'project-parent' and (inside(logical, root) or inside(root, logical)):
+        raise ValueError('Project-parent resource must be disjoint from source root')
+    if _has_link(logical):
+        raise ValueError('Isolated resource path uses a symlink or junction')
+    return logical
+
+
 def validate_resources(rule):
     """Validate Python-side too; the worker never trusts a host environment alone."""
     specs = rule.get('resources', [])
@@ -109,7 +132,9 @@ def validate_resources(rule):
         if type(spec) is not dict or spec.get('kind') not in ('directory', 'text', 'sqlite'):
             raise ValueError('Invalid isolated resource kind')
         _relative_path(spec.get('path'))
-        allowed = {'path', 'kind'} | ({'text'} if spec['kind'] == 'text' else {'tables'} if spec['kind'] == 'sqlite' else set())
+        if 'scope' in spec and spec['scope'] != 'project-parent':
+            raise ValueError('Invalid isolated resource scope')
+        allowed = {'path', 'kind', 'scope'} | ({'text'} if spec['kind'] == 'text' else {'tables'} if spec['kind'] == 'sqlite' else set())
         if set(spec) - allowed:
             raise ValueError('Invalid isolated resource fields')
         if spec['kind'] == 'text' and (type(spec.get('text')) is not str or len(spec['text'].encode('utf-8')) > 65536):
@@ -159,7 +184,10 @@ def validate_resources(rule):
 
 
 def _spec_key(spec):
-    return json.dumps(spec, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+    # Windows aliases may differ only in path case. Scope and seed values retain
+    # their exact identity; normalizing data here would hide conflicting inputs.
+    normalized = {**spec, 'path': os.path.normcase(spec['path'])}
+    return json.dumps(normalized, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
 
 
 class IsolatedResources:
@@ -180,9 +208,7 @@ class IsolatedResources:
         for rule in plan['rules']:
             specs = validate_resources(rule)
             for spec in specs:
-                logical = absolute(os.path.join(self.root, spec['path']))
-                if not inside(logical, self.root) or logical == self.root or _has_link(logical):
-                    raise ValueError('Isolated resource path escapes source root or uses a link')
+                logical = logical_resource_path(self.root, spec)
                 if any(logical == source or spec['kind'] == 'directory' and inside(source, logical) for source in sources):
                     raise ValueError('Isolated resources cannot contain source files')
                 previous = self.specs.get(logical)
@@ -191,10 +217,22 @@ class IsolatedResources:
                 self.specs[logical] = spec
                 aliases = [logical]
                 if rule.get('resolvedFile'):
+                    if not self.trial_root or not inside(rule['resolvedFile'], self.trial_root):
+                        raise ValueError('Isolated resource mutation source escapes trial')
                     original = absolute(os.path.join(self.root, rule['file']))
                     derived = absolute(os.path.join(os.path.dirname(rule['resolvedFile']),
                         os.path.relpath(logical, os.path.dirname(original))))
-                    if self.trial_root and inside(derived, self.trial_root):
+                    # A source-bound sibling expression can legitimately point
+                    # outside the mutation copy (e.g. trial/../VMS_Data). Treat
+                    # only this derived root as an alias; I/O is still redirected
+                    # to this worker's namespace, never performed at the alias.
+                    if inside(derived, self.trial_root) or spec.get('scope') == 'project-parent':
+                        if (derived == os.path.dirname(derived)
+                                or any(derived == source or spec['kind'] == 'directory' and inside(source, derived)
+                                       for source in sources)
+                                or spec.get('scope') == 'project-parent' and (
+                                    inside(derived, self.root) or inside(self.root, derived))):
+                            raise ValueError('Isolated resource mutation alias overlaps source')
                         aliases.append(derived)
                 for alias in aliases:
                     if _has_link(alias):
@@ -216,6 +254,8 @@ class IsolatedResources:
         if (_has_link(self.lease) or inside(self.lease, self.root) or inside(self.root, self.lease)
                 or self.trial_root and inside(self.lease, self.trial_root)):
             raise ValueError('Invalid isolated resource host lease location')
+        if any(inside(self.lease, alias) or inside(alias, self.lease) for alias, _, _ in self.mounts):
+            raise ValueError('Isolated resource logical binding overlaps host lease')
         marker_path = os.path.join(self.lease, LEASE_MARKER)
         if _has_link(marker_path):
             raise ValueError('Invalid isolated resource host lease marker link')
@@ -229,8 +269,8 @@ class IsolatedResources:
         self.data = os.path.join(self.worker, 'data')
         try:
             os.mkdir(self.data)
-            # A single logical tree makes directory mounts and nested explicit
-            # seeds share one path, without copying any existing project data.
+            # Each scope has its own tree; nested seeds still share paths with
+            # their directory mount, without copying existing project data.
             for logical, spec in sorted(self.specs.items(), key=lambda item: len(item[0])):
                 physical = self._physical(logical)
                 if spec['kind'] == 'directory':
@@ -248,7 +288,16 @@ class IsolatedResources:
         atexit.register(self.cleanup)
 
     def _physical(self, logical):
-        return absolute(os.path.join(self.data, os.path.relpath(logical, self.root)))
+        if inside(logical, self.root):
+            namespace, anchor = 'project', self.root
+        else:
+            namespace, anchor = 'project-parent', os.path.dirname(self.root)
+            if not inside(logical, anchor) or inside(self.root, logical):
+                raise ValueError('Isolated resource physical mapping escapes declared scope')
+        result = absolute(os.path.join(self.data, namespace, os.path.relpath(logical, anchor)))
+        if not inside(result, os.path.join(self.data, namespace)):
+            raise ValueError('Isolated resource physical mapping escapes worker')
+        return result
 
     @staticmethod
     def _seed_database(physical, spec):
@@ -342,7 +391,8 @@ class IsolatedResources:
                 if not inside(mapped, self.data) or _has_link(mapped):
                     self.block('isolated resource path escape or symlink')
                 try:
-                    _relative_path(os.path.relpath(mapped, self.data).replace(os.sep, '/'))
+                    relative = os.path.relpath(mapped, self.data).replace(os.sep, '/')
+                    _relative_path(relative.split('/', 1)[1])
                 except ValueError:
                     self.block('isolated resource executable or unsupported filename')
                 self.operations[operation] = min(self.operations.get(operation, 0) + 1, 1000000)

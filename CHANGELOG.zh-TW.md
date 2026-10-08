@@ -4,6 +4,16 @@
 
 ## 2026-10-09
 
+### 支援專案旁的隔離資料目錄並釐清重新預檢診斷
+
+- 依 `vehicle_manageme_2026_10_09_00_35`、`00_37` 與 `import_check_2026-10-08T16-36` 修復：`config.py` 在所選根目錄旁建立 `VMS_Data`，舊 advisor 沒有可套用的資源路徑，因而反覆在 `os.mkdir` 受阻。新增明確 `scope: "project-parent"`，從實際受阻的 `Path.mkdir(exist_ok=True)` receiver 提出同父層且不與來源樹相交的資源；確認清單後只重新預檢一次。
+- 省略 scope 保留原有專案內語意；父層與專案內同名路徑使用不同身分及暫存子樹。文字、SQLite schema／seed、角色語境、Trace、runner 與 builtin／Mutatest 沿用同一資源計畫；突變 alias 僅由已核對的來源布局推導。原位置不讀取內容、不複製或寫回，不修改受測原檔，不放寬來源／根目錄／祖先、跨層、symlink／junction、可執行檔與未宣告 I/O 防護。
+- 新增 `recheck-diagnostic-incomplete`；診斷遺失、僅文字變化或無法確認原因是否改變，不再冒充新載入障礙。逐輪報告保留獨立證據與比較連結；工具失敗只保存 `timeout`／`process-failed`／`invalid-result`、安全 exit code 與固定 detail code，不把任意 stdout／stderr 放入報告。取消、目標總時限及真正匯入失敗分類保持不變。
+- 同版 `config.py` 僅複製至 owned 暫存目錄重播：修復前受阻，套用一筆父層目錄設定後可載入；來源雜湊、原位置 sentinel 與檔案清單不變，worker 暫存區已回收。原始 16:36 報告唯讀核對後，第二輪正確分類為診斷不完整。
+- 中英文清單／確認訊息、設定 schema、操作文件與架構規則同步更新。Windows 同 scope 的路徑大小寫統一比對；相同資源可共用，schema／seed 不同仍拒絕。
+- 驗證：Node 全套 663／663 通過；Python 全套 425 項，424 通過、1 項因 Windows 符號連結權限略過。最後的路徑大小寫修正及新增回歸另跑完整資源／advisor／import fixture 組 55／55 通過；不將補驗冒充單次全套結果。核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／Git 歷史密鑰掃描、差異檢查通過。原工作區 32 個未提交檔案獨立備份並保留，不混入修復提交。
+- 以上驗證限工具與隔離副本；實驗室整批及真實模型尚未重跑。後續 GUI 啟動、缺少 schema 或原應用重複函式定義仍依實際證據分流，不宣稱整個應用已就緒。
+
 ### 匯入前準備隔離資源，執行後由工具回收
 
 - 依使用者確認，新增來源／根目錄綁定的空白目錄、文字 fixture、SQLite schema／seed 清單。原模組實際使用暫存資源，保留 `__file__`、來源與 coverage 身分；不複製正式資源、不猜表、不代呼叫初始化函式、不修改原始碼。

@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## 專案父層資料目錄（2026-10-09）
+
+`Path.mkdir(exist_ok=True)` 的實測 receiver 若位於所選根目錄同父層的不相交子樹，advisor 產生 `resourceScope=project-parent`；TypeScript 核對後建立含 `scope` 的資源規則，預覽明示原邏輯路徑與暫存映射。省略 scope 保留原本專案內語義。Python 以獨立實體命名空間處理內外同名資源，突變副本沿核對過的來源位移產生精確別名，不讀取原資源內容。
+
+初始化比較分開處理真實新障礙、未解舊障礙與診斷不完整。工具失敗保留有限的結構化原因，取消／目標預算維持原分類；前次原因只保留於歷史，不補成當次觀測。
+
 ## 隔離資源生命週期（2026-10-08）
 
 `importFixtures` 規則增加 `resources`／`resourceSourceHash`；宣告、來源與 seed 都納入同一計畫 ID。`isolatedResources.ts` 驗證純資料規格，`processRunner` 擁有外層 lease，等待子樹關閉後核對並清理；清理結果記入 `ExecutionContext` 事件與分析 journal。

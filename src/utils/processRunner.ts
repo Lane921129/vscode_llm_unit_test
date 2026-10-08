@@ -5,6 +5,14 @@ import { currentTargetBudget } from '../pipeline/targetBudget';
 import { currentImportFixtures, importFixtureEnvironment } from '../pipeline/importFixtures';
 import { closeResourceLease, createResourceLease, resourceLeaseEnvironment, ResourceLifecycle } from '../pipeline/isolatedResources';
 
+/** A runner-owned timeout, distinguishable without parsing localized error text. */
+export class ProcessTimeoutError extends Error {
+    constructor(readonly timeoutMs: number) {
+        super(localize("執行超時 (超過 {0} 秒)", timeoutMs / 1000));
+        this.name = 'ProcessTimeoutError';
+    }
+}
+
 /** Kill only the child tree owned by this runner. */
 export function killProcessTree(proc: ChildProcess): Promise<void> {
     if (!proc.pid || proc.exitCode !== null || proc.signalCode !== null) { return Promise.resolve(); }
@@ -74,7 +82,7 @@ export async function runSpawn(
             release = context?.onCancel(() => terminate(new Error(localize("使用者強制中止"))));
             if (!terminationReason && Number.isFinite(timeout)) {
                 timer = setTimeout(() => terminate(limitedByTarget ? budget!.deadlineError()
-                    : new Error(localize("執行超時 (超過 {0} 秒)", timeout / 1000))), Math.max(1, timeout));
+                    : new ProcessTimeoutError(timeout)), Math.max(1, timeout));
             }
             proc.stdout.on('data', data => { stdout += data.toString(); });
             proc.stderr.on('data', data => { stderr += data.toString(); });

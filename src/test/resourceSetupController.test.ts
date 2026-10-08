@@ -121,6 +121,20 @@ test('resource setup UI preserves drafts, explicit consent and source-bound appr
             assert.equal(fs.readFileSync(file, 'utf8'), source);
             assert.deepEqual(fs.readdirSync(root), ['sample.py']);
         });
+        await t.test('a parent-scoped manual seed is explicitly previewed and saved without creating the original path', async () => {
+            const f = await fixture('parent-scope'); f.saveResources();
+            f.draft.rules[0].resources = [{ path: 'SiblingData', scope: 'project-parent', kind: 'directory' },
+                { path: 'SiblingData/test.sqlite', scope: 'project-parent', kind: 'sqlite', tables: [] }];
+            fs.writeFileSync(f.draftPath, JSON.stringify(f.draft, null, 2));
+            approve = true;
+            assert.equal(await f.apply(), true);
+            assert.equal(confirmations, 1); assert.equal(updates, 2);
+            assert.ok(warnings.some(message => message.includes('專案父層資源：../SiblingData')
+                && message.includes('不讀取或寫入原位置')));
+            assert.deepEqual(settings.importFixtures[0].resources, f.draft.rules[0].resources);
+            assert.equal(fs.existsSync(path.join(path.dirname(root), 'SiblingData')), false);
+            assert.equal(fs.readFileSync(file, 'utf8'), source);
+        });
         for (const changed of ['source', 'settings', 'saved draft'] as const) {
             await t.test(`a ${changed} change during the preview cannot be applied`, async () => {
                 const f = await fixture(changed.replace(' ', '-')); f.saveResources(); approve = true;

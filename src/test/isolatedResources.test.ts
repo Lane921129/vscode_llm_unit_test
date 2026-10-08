@@ -83,6 +83,37 @@ test('shared identical seeds are valid, while conflicting mounts and source-cont
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('parent-scoped resources are source-bound siblings, distinct from project paths and reject aliases', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-parent-'));
+    const root = path.join(parent, 'app'); fs.mkdirSync(root);
+    const source = 'def target(): return 1\n'; fs.writeFileSync(path.join(root, 'sample.py'), source);
+    const make = (resources: TestResourceSpec[]) => createImportFixturePlan(root,
+        [{ file: 'sample.py', resources, resourceSourceHash: digest(source) }])!;
+    try {
+        const outside: TestResourceSpec = { path: 'SharedData', scope: 'project-parent', kind: 'directory' };
+        const inside: TestResourceSpec = { path: 'SharedData', kind: 'directory' };
+        assert.notEqual(make([outside]).id, make([inside]).id, 'scope participates in evidence identity');
+        assert.doesNotThrow(() => make([inside, outside,
+            { path: 'SharedData/item.txt', kind: 'text', text: 'inside' },
+            { path: 'SharedData/item.txt', scope: 'project-parent', kind: 'text', text: 'outside' }]));
+        assert.throws(() => make([outside,
+            { path: 'SharedData', scope: 'project-parent', kind: 'text', text: 'conflict' }]));
+        for (const resourcePath of ['app', 'app/data', '.', '..', '../outside', '/outside', 'C:/outside', 'app/source.py']) {
+            assert.throws(() => make([{ ...outside, path: resourcePath }]), /Invalid/, resourcePath);
+        }
+        assert.throws(() => validateTestResources([{ ...outside, scope: 'project' }]));
+        const original = path.join(parent, 'OriginalData'); fs.mkdirSync(original);
+        fs.writeFileSync(path.join(original, 'marker.txt'), 'original data');
+        const linked = path.join(parent, 'AliasData'); fs.symlinkSync(original, linked, 'junction');
+        assert.throws(() => make([{ ...outside, path: 'AliasData' }]));
+        assert.throws(() => make([{ ...outside, path: 'AliasData/new-child' }]));
+        assert.equal(fs.readFileSync(path.join(original, 'marker.txt'), 'utf8'), 'original data');
+        assert.equal(fs.existsSync(path.join(parent, 'SharedData')), false);
+        assert.equal(fs.existsSync(path.join(root, 'SharedData')), false);
+        assert.equal(fs.readFileSync(path.join(root, 'sample.py'), 'utf8'), source);
+    } finally { fs.rmSync(parent, { recursive: true, force: true }); }
+});
+
 test('resource leases are distinct, host-owned and cleaned after successful or failed workers', async () => {
     const plan = { id: 'a'.repeat(64), rules: [{ file: 'sample.py', resources }] };
     const one = createResourceLease(plan)!, two = createResourceLease(plan)!;
