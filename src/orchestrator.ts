@@ -466,6 +466,7 @@ export function activate(context: vscode.ExtensionContext) {
                 mutationEngine: params.mutationEngine ?? vscode.workspace.getConfiguration('llmUnitTest').get<MutationEngineSelection>('mutationEngine', 'builtin'),
                 mutationWorkers: params.mutationWorkers ?? vscode.workspace.getConfiguration('llmUnitTest').get<number>('mutationWorkers', 2) };
             let prepareImports = false;
+            let importSetupTargets: ImportCheckTarget[] | undefined;
             let batchExecution: ReturnType<typeof currentExecution>;
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
                 batchExecution = currentExecution();
@@ -540,6 +541,7 @@ export function activate(context: vscode.ExtensionContext) {
                             { modal: true }, localize("處理初始化設定"), localize("繼續測試並記錄失敗"));
                         throwIfExecutionCancelled();
                         prepareImports = choice === localize("處理初始化設定");
+                        if (prepareImports) { importSetupTargets = importTargets.map(target => ({ ...target })); }
                         if (choice !== localize("繼續測試並記錄失敗")) { outcome = 'cancelled'; log(localize("[系統] 已在模型請求前停止；修復環境後請重新開始。")); return; }
                     }
                     log(localize("[系統] 批次掃描完成：{0} 個函式，將逐一分析與測試。", tasks.length));
@@ -555,7 +557,9 @@ export function activate(context: vscode.ExtensionContext) {
                 }
             });
             // Initialization needs the exclusive environment setup lock after analysis releases its use lock.
-            if (prepareImports && !batchExecution?.cancelled) { await importSetup.prepare(params.batchPath, params.outputPath); }
+            if (prepareImports && !batchExecution?.cancelled) {
+                await importSetup.prepare(params.batchPath, params.outputPath, importSetupTargets);
+            }
         }
     );
 

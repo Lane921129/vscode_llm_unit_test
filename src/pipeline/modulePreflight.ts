@@ -60,6 +60,18 @@ export function clearPreflightFailureCache(): void {
     preflightCaches = new WeakMap();
 }
 
+/** An explicit recheck must observe repaired dependencies in this execution.
+ * Other executions and in-flight workers retain their own lifecycle and cache.
+ * Ordinary per-target checks still share failures until the next explicit scan.
+ */
+export function invalidateCurrentPreflightFailures(): number {
+    const execution = currentExecution();
+    const failures = execution ? preflightCaches.get(execution)?.failures : undefined;
+    const removed = failures?.size || 0;
+    failures?.clear();
+    return removed;
+}
+
 export function preflightFailureCacheSize(): number {
     return currentCache()?.failures.size || 0;
 }

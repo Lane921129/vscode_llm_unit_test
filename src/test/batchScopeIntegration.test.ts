@@ -13,7 +13,7 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
     const handlers = new Map<string, (...args: any[]) => any>();
     const state = new Map<string, unknown>();
     let choices: string[] | undefined = ['selected.py', 'ambiguous.py'];
-    let preflightChoice = '繼續測試並記錄失敗';
+    let preflightChoice: string | undefined = '繼續測試並記錄失敗';
     let modelCalls = 0;
     let abortOnSummary = false;
     const vscode = {
@@ -93,7 +93,8 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
         };
         choices = ['selected.py']; preflightChoice = '處理初始化設定';
         await run(params);
-        assert.deepEqual(prepared, [[root, params.outputPath]]);
+        assert.deepEqual(prepared, [[root, params.outputPath, [{ file: path.join(root, 'selected.py'), target: 'first' }]]],
+            'deferred initialization must receive only this batch\'s confirmed source targets, not rescan excluded files');
         const initialized = manifests().find(item => ![first.batchId, cancelled.batchId].includes(item.batchId))!;
         assert.equal(initialized.status, 'cancelled');
         assert.equal(initialized.expectedTargets, 2);
@@ -101,7 +102,12 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
         assert.ok(initialized.targets.every((target: any) => target.state === 'pending'));
         assert.equal(modelCalls, 0);
 
-        prepared.length = 0; abortOnSummary = true;
+        prepared.length = 0; preflightChoice = undefined;
+        await run(params);
+        assert.deepEqual(prepared, [], 'dismissing the blocked-preflight dialog must not open initialization or replay a prior scope');
+        assert.equal(modelCalls, 0);
+
+        preflightChoice = '處理初始化設定'; abortOnSummary = true;
         await run(params);
         assert.deepEqual(prepared, [], 'cancellation during the final summary cancels deferred initialization too');
         assert.equal(modelCalls, 0);

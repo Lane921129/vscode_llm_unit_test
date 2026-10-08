@@ -45,6 +45,7 @@
 - 生成、Mock Scaffold、Reviewer 與救援程式必須使用同一個可匯入的目標模組路徑；不得以檔名匯入而建立與 package 模組不同的第二個模組實例。
 - 一般函式在任何模型角色請求前必須以相同 Python／匯入環境預檢正規目標模組與 coverage；核對來源實體，載入副作用仍受阻擋。環境不成立時保存具體原因並停止，不以 Tier 降階或模型修復處理。
 - 模組預檢位於所選目標 AST 之後、相依／呼叫點探索與深度 Trace 之前。失敗快取限定同一分析／批次；新分析必須重新檢查已修復的相依，暫時工具失敗與取消不得當作可重用環境診斷。
+- 初始化設定每次操作最多確認、套用一份清單並實際重新預檢一次，之後保存明確終態；新障礙不得自動引發下一個初始化確認視窗。每次明確掃描刷新本 execution 的既有失敗快取，不干擾其他執行。比較逐項障礙及來源位置，不能只以受阻數量或設定 ID 判斷改善；批次轉入設定須沿用本批確認的來源範圍，零目標／未重檢不等同就緒。
 - 呼叫站搜尋必須以目標模組／匯入關係確認，不得只依同名函式全域比對。
 - 直接匯入的函式別名也必須在該呼叫行仍解析到目標 binding；函式參數、local／closure／`nonlocal` binding、同 scope import 與模組層後續重綁定都必須排除，不得把同名 callable 的參數注入 Trace。
 - 對 `import package.module` 的呼叫站，只有與該 import 完整 binding path 相同的 `package.module.target(...)` 或 `package.module.Class(...).method(...)` 可補充 Trace 事實；相同 root 下的其他 attribute chain、動態 import 與不明 re-export 一律不可視為目標。

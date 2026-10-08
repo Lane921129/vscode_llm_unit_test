@@ -7,6 +7,7 @@ import { inspectProjectImports, verifyImportProposal } from '../environment/proj
 import { createImportFixturePlan } from '../pipeline/importFixtures';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
+import { preflightFailureCacheSize, preflightTargetModule } from '../pipeline/modulePreflight';
 
 test('after mkdir setup the next import exception is persisted with its type, message and source position', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-detail-'));
@@ -89,4 +90,63 @@ test('shared import initialization is diagnosed, previewed and rechecked without
         assert.equal(missing.rows[0].issue?.kind, 'missing-dependency');
         assert.equal(missing.proposedPlan, null);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an explicit recheck observes repaired dependency code in the same execution without clearing another execution', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-recheck-cache-'));
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const runner = require('../utils/processRunner');
+    const originalRun = runner.runSpawn;
+    let preflights = 0;
+    runner.runSpawn = (...args: any[]) => {
+        if (args[1]?.some((argument: string) => path.basename(argument) === 'module_preflight.py')) { preflights++; }
+        return originalRun(...args);
+    };
+    try {
+        const file = path.join(root, 'sample.py');
+        const dependency = path.join(root, 'helper.py');
+        const targetSource = 'from helper import VALUE\ndef target():\n    return VALUE\n';
+        fs.writeFileSync(file, targetSource);
+        fs.writeFileSync(dependency, 'raise ValueError("initial dependency failure")\nVALUE = 1\n');
+        const targets = [{ file, target: 'target' }];
+        const current = new ExecutionContext({}), other = new ExecutionContext({});
+        const direct = (directory: string) => preflightTargetModule(python, file, 'sample',
+            [root, path.dirname(root), path.dirname(path.dirname(root)), root, directory], directory, [], root);
+        await runInExecution(current, async () => {
+            const directory = path.join(root, 'first');
+            const check = await inspectProjectImports(root, python, [...targets, ...targets], directory, []);
+            assert.equal(check.rows.length, 1, 'one explicit scan does not duplicate source loads');
+            assert.equal(check.rows[0].status, 'blocked');
+            assert.equal(preflightFailureCacheSize(), 1);
+            const count = preflights;
+            await assert.rejects(direct(directory), /initial dependency failure/);
+            await assert.rejects(direct(directory), /initial dependency failure/);
+            assert.equal(preflights, count, 'ordinary checks still reuse the current scan failure');
+        });
+        await runInExecution(other, async () => {
+            const check = await inspectProjectImports(root, python, targets, path.join(root, 'other'), []);
+            assert.equal(check.rows[0].status, 'blocked');
+            assert.equal(preflightFailureCacheSize(), 1);
+        });
+        assert.equal(preflights, 2);
+        fs.writeFileSync(dependency, 'VALUE = 1\n');
+        await runInExecution(current, async () => {
+            const check = await inspectProjectImports(root, python, targets, path.join(root, 'rechecked'), []);
+            assert.equal(check.rows[0].status, 'loaded', 'same-execution explicit scan must reread repaired dependency code');
+            assert.equal(preflightFailureCacheSize(), 0);
+        });
+        assert.equal(preflights, 3);
+        await runInExecution(other, async () => {
+            assert.equal(preflightFailureCacheSize(), 1, 'another execution retains its snapshot');
+            await assert.rejects(direct(path.join(root, 'other')), /initial dependency failure/);
+            assert.equal(preflights, 3, 'invalidating current execution does not clear another execution');
+            const check = await inspectProjectImports(root, python, targets, path.join(root, 'other-rechecked'), []);
+            assert.equal(check.rows[0].status, 'loaded', 'each explicit recheck refreshes its own snapshot');
+        });
+        assert.equal(preflights, 4);
+        assert.equal(fs.readFileSync(file, 'utf8'), targetSource);
+    } finally {
+        runner.runSpawn = originalRun;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });

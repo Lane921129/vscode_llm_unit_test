@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { runSpawn } from '../utils/processRunner';
 import { inferTargetImportModule } from '../utils/dependencyResolver';
 import { pythonToolPath } from '../pipeline/pythonTools';
-import { preflightTargetModule } from '../pipeline/modulePreflight';
+import { invalidateCurrentPreflightFailures, preflightTargetModule } from '../pipeline/modulePreflight';
 import { createImportFixturePlan, ImportFixturePlan, ImportFixtureRule, selectImportFixtureRules, withImportFixtures } from '../pipeline/importFixtures';
 import { throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
@@ -33,6 +33,10 @@ export async function inspectProjectImports(root: string, python: string, target
     if (rules.length && !selectedRules.length) { log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。")); }
     rules = selectedRules;
     const plan = createImportFixturePlan(root, rules, boundRoot);
+    throwIfExecutionCancelled();
+    // One explicit scan owns a fresh environment view. A dependency/package may
+    // have been repaired without changing the target source or fixture plan.
+    invalidateCurrentPreflightFailures();
     const result: ImportCheck = { root, python, directory, rows: [], proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
     const proposedHashes = new Map<string, string>();
     fs.mkdirSync(directory, { recursive: true });
