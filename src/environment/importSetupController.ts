@@ -3,10 +3,11 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { pythonEnvironmentActivity } from './pythonEnvironmentSetup';
 import { configuredPythonForResource } from './pythonEnvironmentController';
 import { extractFunctionsWithAst, findPythonFilesInDir } from '../utils/utils';
-import { ExecutionContext, runInExecution, throwIfExecutionCancelled } from '../pipeline/executionContext';
+import { currentExecution, ExecutionContext, runInExecution, throwIfExecutionCancelled } from '../pipeline/executionContext';
 import { createBatchDirectory } from '../pipeline/analysisOutput';
 import { createImportFixturePlan, ImportFixtureRule, refreshEntryPointApprovals } from '../pipeline/importFixtures';
 import { inspectProjectImports, ImportCheck, ImportCheckTarget, verifyImportProposal } from './projectImportCheck';
@@ -14,38 +15,66 @@ import { hasDummyFunctionNameMarker } from '../tier/stubClassifier';
 import { importSetupMessage, ImportSetupReason, recheckReason, saveImportSetupSession } from './importSetupSession';
 import { externalExactResourcePaths, projectParentResourcePaths, uncVirtualResourcePaths } from './resourceSetup';
 
+export type ImportSetupStatus = 'ready' | 'blocked' | 'cancelled' | 'declined' | 'failed'
+    | 'busy' | 'no-targets' | 'untrusted' | 'invalid-root';
+
+/** Terminal evidence for a caller continuing the same selected scope. */
+export interface ImportSetupResult {
+    status: ImportSetupStatus;
+    /** The last completed scan's actual fixture plan, never its proposed plan. */
+    fixtureId: string | null;
+    directory?: string;
+    root?: string;
+    python?: string;
+    targets: ImportCheckTarget[];
+    rows: Array<{ file: string; status: 'loaded' | 'blocked' }>;
+    applied: boolean;
+    reason?: ImportSetupReason;
+}
+
 /** Explicit setup preview. No package installation or target source edits. */
 export class ImportSetupController {
     private execution?: ExecutionContext;
     constructor(private readonly publish: (message: unknown) => void) {}
     dispose(): void { this.execution?.cancel(); }
 
-    async prepare(projectRoot?: string, outputPath?: string, selectedTargets?: readonly ImportCheckTarget[]): Promise<void> {
-        if (vscode.workspace.isTrusted === false) { await vscode.window.showWarningMessage(localize("請先信任此工作區，再執行隔離匯入預檢。")); return; }
+    async prepare(projectRoot?: string, outputPath?: string, selectedTargets?: readonly ImportCheckTarget[]): Promise<ImportSetupResult> {
+        const emptyResult = (status: ImportSetupStatus): ImportSetupResult => ({
+            status, fixtureId: null, targets: [], rows: [], applied: false
+        });
+        if (vscode.workspace.isTrusted === false) { await vscode.window.showWarningMessage(localize("請先信任此工作區，再執行隔離匯入預檢。")); return emptyResult('untrusted'); }
         const root = projectRoot || vscode.workspace.getConfiguration('llmUnitTest').get<string>('projectPath', '');
         if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
-            await vscode.window.showWarningMessage(localize("請先選擇受測專案資料夾。")); return;
+            await vscode.window.showWarningMessage(localize("請先選擇受測專案資料夾。")); return emptyResult('invalid-root');
         }
         const release = pythonEnvironmentActivity.acquire('setup');
-        if (!release) { await vscode.window.showInformationMessage(localize("請等待目前分析或環境準備完成。")); return; }
+        if (!release) { await vscode.window.showInformationMessage(localize("請等待目前分析或環境準備完成。")); return emptyResult('busy'); }
         const execution = this.execution = new ExecutionContext({});
+        const detachParentCancellation = currentExecution()?.onCancel(() => execution.cancel());
         let message = localize("模組載入預檢未完成。");
         let directory: string | undefined;
         let reason: ImportSetupReason = 'error';
         let applied = false;
+        let fixtureId: string | null = null;
+        let python: string | undefined;
+        let validateFinalCheck: (() => void) | undefined;
         const checks: ImportCheck[] = [];
+        const targets: ImportCheckTarget[] = [];
         const requestedTargets = selectedTargets?.map(target => ({ ...target }));
+        const readyCandidate = () => reason !== 'interrupted' && reason !== 'error' && reason !== 'proposal-declined'
+            && !!checks.at(-1)?.rows.length && !checks.at(-1)?.proposedPlan
+            && checks.at(-1)!.rows.every(row => row.status === 'loaded');
         this.publish({ command: 'environmentPreparation', busy: true, text: localize("正在檢查模組載入；不會呼叫模型。") });
         try {
             await runInExecution(execution, async () => {
                 const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(root));
-                const python = configuredPythonForResource(root, root);
+                python = configuredPythonForResource(root, root);
+                const scanPython = python;
                 directory = createBatchDirectory(outputPath || config.get<string>('outputPath', '') || os.tmpdir(),
                     new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16), 'import_check');
                 const rules = config.get<ImportFixtureRule[]>('importFixtures', []);
                 refreshEntryPointApprovals(root, rules, config.get<string>('importFixtureRoot', ''));
                 const excluded = [directory, ...(outputPath && path.resolve(outputPath) !== path.resolve(root) ? [outputPath] : [])];
-                const targets: ImportCheckTarget[] = [];
                 if (requestedTargets) {
                     const canonicalRoot = fs.realpathSync(root);
                     for (const target of requestedTargets) {
@@ -54,13 +83,13 @@ export class ImportSetupController {
                             || !target.file.endsWith('.py') || !target.target) {
                             throw new Error(localize('預檢來源超出受測根目錄。'));
                         }
-                        targets.push(target);
+                        targets.push({ file: fs.realpathSync(target.file), target: target.target });
                     }
                 } else {
                     const files = await findPythonFilesInDir(root, true, excluded, true);
                     for (const file of files) {
                         throwIfExecutionCancelled();
-                        const functions = await extractFunctionsWithAst(file, python, true);
+                        const functions = await extractFunctionsWithAst(file, scanPython, true);
                         const target = functions.find(func => !hasDummyFunctionNameMarker(func.fullName));
                         if (target) { targets.push({ file, target: target.fullName }); }
                     }
@@ -68,13 +97,37 @@ export class ImportSetupController {
                 const readConfig = () => vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(root));
                 const scan = async () => {
                     throwIfExecutionCancelled();
-                    const savedRules = readConfig().get<ImportFixtureRule[]>('importFixtures', []);
+                    const savedRules = structuredClone(readConfig().get<ImportFixtureRule[]>('importFixtures', []));
                     const boundRoot = readConfig().get<string>('importFixtureRoot', '');
                     const refreshed = refreshEntryPointApprovals(root, savedRules, boundRoot);
                     const activeRules = refreshed.rules;
-                    const check = await inspectProjectImports(root, python, targets,
+                    const scannedPlan = createImportFixturePlan(root, activeRules, boundRoot);
+                    const canonicalRoot = fs.realpathSync(root);
+                    const sourceHashes = new Map(targets.map(target => [fs.realpathSync(target.file),
+                        createHash('sha256').update(fs.readFileSync(target.file)).digest('hex')]));
+                    const expectedFiles = new Set([...sourceHashes.keys()].map(file => path.relative(canonicalRoot, file).replace(/\\/g, '/')));
+                    const check = await inspectProjectImports(root, scanPython, targets,
                         path.join(directory!, String(checks.length + 1)), activeRules, text => this.publish({ command: 'appendLog', text }), boundRoot);
                     checks.push(check);
+                    fixtureId = check.fixtureId !== undefined ? check.fixtureId : scannedPlan?.id || null;
+                    validateFinalCheck = () => {
+                        execution.throwIfCancelled();
+                        if (check.root !== canonicalRoot || check.python !== scanPython
+                            || check.rows.length !== expectedFiles.size || new Set(check.rows.map(row => row.file)).size !== expectedFiles.size
+                            || check.rows.some(row => !expectedFiles.has(row.file))) {
+                            throw new Error(localize('預檢來源超出受測根目錄。'));
+                        }
+                        if ([...sourceHashes].some(([file, hash]) => fs.realpathSync(file) !== file
+                            || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== hash)) {
+                            throw new Error(localize('來源在預檢期間改變；請重新檢查後再建立初始化設定。'));
+                        }
+                        if (JSON.stringify(readConfig().get('importFixtures', [])) !== JSON.stringify(savedRules)
+                            || readConfig().get('importFixtureRoot', '') !== boundRoot
+                            || configuredPythonForResource(root, root) !== scanPython
+                            || (createImportFixturePlan(root, readConfig().get('importFixtures', []), boundRoot)?.id || null) !== fixtureId) {
+                            throw new Error(localize('設定在預覽期間改變；請重新檢查。'));
+                        }
+                    };
                     throwIfExecutionCancelled();
                     if (refreshed.expired.length && !check.proposedPlan) {
                         check.proposedPlan = createImportFixturePlan(root, check.proposedRules);
@@ -129,6 +182,8 @@ export class ImportSetupController {
                     message = importSetupMessage(reason, after);
                 }
             });
+            execution.throwIfCancelled();
+            if (readyCandidate()) { validateFinalCheck!(); }
         } catch (error) {
             reason = execution.cancelled ? 'interrupted' : 'error';
             message = execution.cancelled ? localize("已中止模組預檢。") : localize("模組預檢未完成：{0}", error instanceof Error ? error.message : String(error));
@@ -144,9 +199,31 @@ export class ImportSetupController {
                     this.publish({ command: 'appendLog', text: localize('無法開啟模組預檢總結；請查看輸出資料夾內的逐次診斷。') });
                 }
             }
+            // Opening the report yields to the UI: cancellation or changes there
+            // must also stop a caller from continuing with stale ready evidence.
+            try {
+                execution.throwIfCancelled();
+                if (readyCandidate()) { validateFinalCheck!(); }
+            } catch {
+                reason = execution.cancelled ? 'interrupted' : 'error';
+                message = importSetupMessage(reason);
+                if (directory) {
+                    try { saveImportSetupSession(directory, checks, applied, reason, message); }
+                    catch { /* Existing per-scan diagnostics remain available. */ }
+                }
+            }
+            detachParentCancellation?.();
             this.execution = undefined; release();
             this.publish({ command: 'environmentPreparation', busy: false, text: message });
             this.publish({ command: 'environmentPreparationFinished' });
         }
+        const latest = checks.at(-1);
+        const resultStatus = (terminalReason: ImportSetupReason): ImportSetupStatus => terminalReason === 'interrupted' ? 'cancelled'
+            : terminalReason === 'error' ? 'failed' : terminalReason === 'proposal-declined' ? 'declined'
+            : terminalReason === 'no-targets' || !latest?.rows.length ? 'no-targets'
+            : readyCandidate() ? 'ready' : 'blocked';
+        return { status: resultStatus(reason), fixtureId, directory, root: latest?.root || root, python,
+            targets: targets.map(target => ({ ...target })),
+            rows: latest?.rows.map(row => ({ file: row.file, status: row.status })) || [], applied, reason };
     }
 }

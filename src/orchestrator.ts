@@ -45,7 +45,7 @@ import { prepareQualityExperiments, buildQualityExperimentEvidencePrompt, assess
 import { QualityImprovementSession, PendingQualityFocus } from './pipeline/qualityImprovementSession';
 import { containsCredential } from './pipeline/artifactSafety';
 import { AI_WORKFLOW_VERSION, requireReviewApproval, ReviewApproval } from './pipeline/aiWorkflow';
-import { preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
+import { invalidateCurrentPreflightFailures, preflightTargetModule, PreflightResult, ResolvedDependency } from './pipeline/modulePreflight';
 import { createImportFixturePlan, currentImportFixtures, withImportFixtures } from './pipeline/importFixtures';
 import {
     BehaviorObservation,
@@ -87,6 +87,8 @@ import { ImportFixtureRule } from './pipeline/importFixtures';
 import { buildIsolatedResourceContext } from './prompts/isolatedResourceContext';
 import { readResourceSetupFailure } from './pipeline/resourceSetupFailure';
 import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
+import { AnalysisEnvironmentLease } from './environment/analysisEnvironmentLease';
+import { captureBatchSetupScope } from './pipeline/batchSetupContinuity';
 import { MutationEngineSelection } from './mutation/mutationExecution';
 import { SelectedMutationEngine, selectMutationEngine, mutationArguments } from './mutation/mutationSelection';
 import { mutationProcessFailure } from './mutation/mutationProcessFailure';
@@ -235,17 +237,18 @@ interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
 async function runAnalysisSession<T extends object>(
     params: T,
     sidebar: MutationViewProvider,
-    operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView) => Promise<void>
+    operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView,
+        withEnvironmentSetup: <R>(setup: () => Promise<R>) => Promise<R>) => Promise<void>
 ): Promise<void> {
-    const releasePython = pythonEnvironmentActivity.acquire('use');
-    if (!releasePython) {
+    const environmentLease = AnalysisEnvironmentLease.acquire(pythonEnvironmentActivity);
+    if (!environmentLease) {
         await vscode.window.showInformationMessage(localize("Python 環境準備中，請等待完成後再開始測試。"));
         void sidebar.webview?.postMessage({ command: 'analysisFinished' });
         return;
     }
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles });
     if (!execution) {
-        releasePython();
+        environmentLease.release();
         await vscode.window.showInformationMessage(localize("已有分析執行中，請等待完成或先中止。"));
         return;
     }
@@ -258,11 +261,11 @@ async function runAnalysisSession<T extends object>(
     // Group this run's results under its local date and minute.
     const runParams = { ...params, sessionDate: formatSessionDate() };
     await withLanguage(() => runInExecution(execution, async () => {
-        try { await operation(runParams, log, view); }
+        try { await operation(runParams, log, view, setup => environmentLease.withSetup(execution, setup)); }
         catch (error: any) {
             if (!execution.cancelled) { log(localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error)); }
         } finally {
-            releasePython();
+            environmentLease.release();
             if (analysisRuns.finish(execution)) {
                 void sidebar.webview?.postMessage({ command: 'analysisFinished' });
             }
@@ -474,11 +477,7 @@ export function activate(context: vscode.ExtensionContext) {
                 validationMode: verificationMode(params.validationMode ?? vscode.workspace.getConfiguration('llmUnitTest').get('validationMode', 'full')),
                 mutationEngine: params.mutationEngine ?? vscode.workspace.getConfiguration('llmUnitTest').get<MutationEngineSelection>('mutationEngine', 'builtin'),
                 mutationWorkers: params.mutationWorkers ?? vscode.workspace.getConfiguration('llmUnitTest').get<number>('mutationWorkers', 2) };
-            let prepareImports = false;
-            let importSetupTargets: ImportCheckTarget[] | undefined;
-            let batchExecution: ReturnType<typeof currentExecution>;
-            await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view) => {
-                batchExecution = currentExecution();
+            await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view, withEnvironmentSetup) => {
                 const projectName = path.basename(runParams.batchPath);
                 const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,
                     runParams.sessionDate || formatSessionDate(), projectName);
@@ -486,7 +485,7 @@ export function activate(context: vscode.ExtensionContext) {
                     model: runParams.modelName, buildTimestamp: extensionBuildIdentity.buildTimestamp,
                     python: runParams.pythonExecutable, validationMode: runParams.validationMode
                 });
-                let outcome: 'completed' | 'cancelled' | 'failed' = 'failed';
+                let outcome: 'completed' | 'cancelled' | 'failed' | 'environment-blocked' = 'failed';
                 try {
                     const output = path.resolve(runParams.outputPath || batchDirectory);
                     const excluded = path.relative(runParams.batchPath, output) === '' ? [batchDirectory] : [output];
@@ -502,6 +501,7 @@ export function activate(context: vscode.ExtensionContext) {
                     throwIfExecutionCancelled();
                     if (!scope) { outcome = 'cancelled'; return; }
                     batch.selectScope(scope);
+                    const continuity = captureBatchSetupScope(scope, runParams.pythonExecutable);
                     files = scope.selectedFiles.map(file => path.join(scope.root, file));
                     const tasks: Array<() => Promise<void>> = [];
                     const importTargets: ImportCheckTarget[] = [];
@@ -536,22 +536,77 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
                     batch.start();
-                    const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(runParams.batchPath));
-                    const importCheck = await inspectProjectImports(runParams.batchPath, runParams.pythonExecutable, importTargets,
-                        path.join(batchDirectory, 'preflight'), config.get<ImportFixtureRule[]>('importFixtures', []), log,
-                        config.get<string>('importFixtureRoot', ''));
+                    const readPlan = () => {
+                        const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(runParams.batchPath));
+                        const rules = config.get<ImportFixtureRule[]>('importFixtures', []);
+                        const root = config.get<string>('importFixtureRoot', '');
+                        return { rules, root, plan: createImportFixturePlan(runParams.batchPath, rules, root) };
+                    };
+                    const inspect = async () => {
+                        const saved = readPlan();
+                        const check = await inspectProjectImports(runParams.batchPath, runParams.pythonExecutable, importTargets,
+                            path.join(batchDirectory, 'preflight'), saved.rules, log, saved.root);
+                        batch.preflightEvidence({ phase: 'initial', status: 'checked', fixtureId: saved.plan?.id || null,
+                            resourceCount: saved.plan?.rules.reduce((count, rule) => count + (rule.resources?.length || 0), 0) || 0,
+                            blockedModules: check.rows.filter(row => row.status === 'blocked').length,
+                            report: path.join(check.directory, 'import_check.md') });
+                        if ((readPlan().plan?.id || null) !== (saved.plan?.id || null)) {
+                            throw new Error(localize('初始化設定在預檢期間改變，批次已停止；請重新開始。'));
+                        }
+                        return check;
+                    };
+                    const importCheck = await inspect();
                     const blockedModules = importCheck.rows.filter(row => row.status === 'blocked').length;
                     batch.preflight(blockedModules);
                     if (blockedModules) {
                         const report = path.join(importCheck.directory, 'import_check.md');
                         await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(report), { preview: true });
                         const choice = await vscode.window.showWarningMessage(
-                            localize("{0} 個模組載入受阻；尚未呼叫模型。可先用「檢查模組載入／初始化設定」處理，或繼續並保留受阻目標的失敗。", blockedModules),
+                            localize("{0} 個模組載入受阻；尚未呼叫模型。處理初始化設定後，重檢就緒會接續本批次；仍受阻則停止。也可明確選擇僅繼續記錄失敗。", blockedModules),
                             { modal: true }, localize("處理初始化設定"), localize("繼續測試並記錄失敗"));
                         throwIfExecutionCancelled();
-                        prepareImports = choice === localize("處理初始化設定");
-                        if (prepareImports) { importSetupTargets = importTargets.map(target => ({ ...target })); }
-                        if (choice !== localize("繼續測試並記錄失敗")) { outcome = 'cancelled'; log(localize("[系統] 已在模型請求前停止；修復環境後請重新開始。")); return; }
+                        const decision = choice === localize('處理初始化設定') ? 'prepare'
+                            : choice === localize('繼續測試並記錄失敗') ? 'continue-diagnostics' : 'cancelled';
+                        batch.preflightEvidence({ phase: 'decision', status: decision, fixtureId: readPlan().plan?.id || null });
+                        if (decision === 'cancelled') { outcome = 'cancelled'; return; }
+                        if (decision === 'prepare') {
+                            outcome = 'environment-blocked';
+                            log(localize('[系統] 批次暫停等待初始化設定；確認清單並重檢就緒後接續原選取目標。'));
+                            batch.preflightEvidence({ phase: 'setup', status: 'requested' });
+                            let setup;
+                            try { setup = await withEnvironmentSetup(() => importSetup.prepare(runParams.batchPath, path.dirname(batchDirectory), importTargets)); }
+                            catch (error) {
+                                batch.preflightEvidence({ phase: 'setup', status: isExecutionCancelled() ? 'cancelled' : 'failed' });
+                                throw error;
+                            }
+                            throwIfExecutionCancelled();
+                            batch.preflightEvidence({ phase: 'setup', status: setup.status, fixtureId: setup.fixtureId,
+                                blockedModules: setup.rows.filter(row => row.status === 'blocked').length,
+                                ...(setup.status === 'ready' ? { resourceCount: readPlan().plan?.rules.reduce((count, rule) => count + (rule.resources?.length || 0), 0) || 0 } : {}),
+                                ...(setup.directory ? { report: path.join(setup.directory, 'import_setup.md') } : {}) });
+                            if (setup.status !== 'ready') {
+                                outcome = ['cancelled', 'declined'].includes(setup.status) ? 'cancelled' : 'environment-blocked';
+                                log(localize('[系統] 初始化未就緒（{0}）；本批次停止，未開始的目標保持未完成。請查看初始化報告。', setup.status));
+                                return;
+                            }
+                            try {
+                                continuity.verify(setup, importTargets, configuredPythonForResource(runParams.batchPath, runParams.batchPath));
+                                if ((readPlan().plan?.id || null) !== setup.fixtureId) {
+                                    throw new Error(localize('初始化設定在預檢期間改變，批次已停止；請重新開始。'));
+                                }
+                            } catch (error) {
+                                batch.preflightEvidence({ phase: 'decision', status: 'continuation-invalidated' });
+                                throw error;
+                            }
+                            // The setup result already includes the one confirmed rescan. Recheck its
+                            // identity synchronously; do not start another approval/preflight loop.
+                            // Setup uses its own execution cache. Refresh this original analysis too,
+                            // including repairs that leave the fixture ID unchanged (e.g. imports).
+                            invalidateCurrentPreflightFailures();
+                            batch.preflight(0);
+                            batch.preflightEvidence({ phase: 'decision', status: 'resumed', fixtureId: setup.fixtureId });
+                            log(localize('[系統] 初始化重檢已就緒，繼續同一批次的 {0} 個目標。', tasks.length));
+                        }
                     }
                     log(localize("[系統] 批次掃描完成：{0} 個函式，將逐一分析與測試。", tasks.length));
                     await runSequentially(tasks, log);
@@ -565,10 +620,6 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 }
             });
-            // Initialization needs the exclusive environment setup lock after analysis releases its use lock.
-            if (prepareImports && !batchExecution?.cancelled) {
-                await importSetup.prepare(params.batchPath, params.outputPath, importSetupTargets);
-            }
         }
     );
 

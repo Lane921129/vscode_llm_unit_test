@@ -21,6 +21,8 @@ export interface ImportCheckRow {
 }
 export interface ImportCheck {
     root: string; python: string; directory: string; rows: ImportCheckRow[];
+    /** Actual plan used by this scan; older callers may omit it. */
+    fixtureId?: string | null;
     proposedRules: ImportFixtureRule[]; proposedPlan: ImportFixturePlan | null;
     proposals: ImportInitializationCandidate[];
 }
@@ -38,7 +40,8 @@ export async function inspectProjectImports(root: string, python: string, target
     // One explicit scan owns a fresh environment view. A dependency/package may
     // have been repaired without changing the target source or fixture plan.
     invalidateCurrentPreflightFailures();
-    const result: ImportCheck = { root, python, directory, rows: [], proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
+    const result: ImportCheck = { root, python, directory, fixtureId: plan?.id || null,
+        rows: [], proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
     const proposedHashes = new Map<string, string>();
     fs.mkdirSync(directory, { recursive: true });
     const save = () => {

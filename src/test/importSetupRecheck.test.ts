@@ -9,6 +9,7 @@ import { createImportFixturePlan } from '../pipeline/importFixtures';
 import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
 import type { ImportCheck, ImportCheckTarget } from '../environment/projectImportCheck';
 import type { ImportSetupReason } from '../environment/importSetupSession';
+import type { ImportSetupResult } from '../environment/importSetupController';
 import { getLanguage, setLanguage } from '../i18n/core';
 import { withoutUncFileSystem } from './uncPathGuard';
 
@@ -68,10 +69,13 @@ test('initialization setup stops after one confirmed recheck and preserves the r
         };
         const run = async (fixture: ReturnType<typeof createFixture>, targets?: ImportCheckTarget[]) => {
             const before = fs.existsSync(fixture.output) ? fs.readdirSync(fixture.output) : [];
-            await fixture.controller.prepare(root, fixture.output, targets);
+            const outcome: ImportSetupResult = await fixture.controller.prepare(root, fixture.output, targets);
             const added = fs.readdirSync(fixture.output).filter(file => !before.includes(file));
             assert.equal(added.length, 1, 'one user action owns one terminal session report');
             const directory = path.join(fixture.output, added[0]);
+            assert.equal(outcome.directory, directory);
+            assert.equal(outcome.root, fs.realpathSync(root));
+            assert.equal(outcome.python, python);
             const session: SetupSession = JSON.parse(fs.readFileSync(path.join(directory, 'import_setup.json'), 'utf8'));
             assert.equal(session.schemaVersion, 'import-setup-session-v1');
             assert.ok(fs.existsSync(path.join(directory, 'import_setup.md')));
@@ -79,7 +83,12 @@ test('initialization setup stops after one confirmed recheck and preserves the r
                 assert.ok(fs.existsSync(path.join(directory, check.directory, 'import_check.json')));
                 assert.ok(fs.existsSync(path.join(directory, check.directory, 'import_check.md')));
             }
-            return { directory, session };
+            assert.equal(outcome.reason, session.reason);
+            assert.equal(outcome.applied, session.applied);
+            const finalCheck = JSON.parse(fs.readFileSync(path.join(directory, session.checks.at(-1)!.directory, 'import_check.json'), 'utf8'));
+            assert.equal(outcome.fixtureId, finalCheck.fixtureId, 'handoff uses the actual final scan plan, never its proposal');
+            assert.deepEqual(outcome.rows, finalCheck.rows.map((row: { file: string; status: string }) => ({ file: row.file, status: row.status })));
+            return { directory, session, outcome };
         };
         await t.test('parent data initialization is previewed once and one recheck leaves original sibling data untouched', async () => {
             const fixture = createFixture('parent-resource', 'from pathlib import Path\n'
@@ -94,6 +103,8 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(updates, 2);
             assert.equal(modelCalls, 0);
             assert.equal(result.session.status, 'ready');
+            assert.equal(result.outcome.status, 'ready');
+            assert.equal(result.outcome.fixtureId, createImportFixturePlan(root, settings.importFixtures, settings.importFixtureRoot)!.id);
             assert.equal(result.session.reason, 'recheck-ready');
             assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[0, 1], [1, 0]]);
             assert.deepEqual(settings.importFixtures[0].resources,
@@ -125,6 +136,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
                     assert.equal(confirmations, 1); assert.equal(updates, outcome === 'confirm' ? 2 : 0);
                     assert.equal(result.session.applied, outcome === 'confirm');
                     assert.equal(result.session.status, { confirm: 'ready', decline: 'blocked', 'source-changed': 'incomplete', cancel: 'cancelled' }[outcome]);
+                    assert.equal(result.outcome.status, { confirm: 'ready', decline: 'declined', 'source-changed': 'failed', cancel: 'cancelled' }[outcome]);
                     assert.equal(result.session.reason, { confirm: 'recheck-ready', decline: 'proposal-declined', 'source-changed': 'error', cancel: 'interrupted' }[outcome]);
                     assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]),
                         outcome === 'confirm' ? [[0, 1], [1, 0]] : [[0, 1]]);
@@ -150,6 +162,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(confirmations, 1, 'a discovered next blocker must not reopen the approval dialog');
             assert.equal(updates, 2);
             assert.equal(first.session.status, 'blocked');
+            assert.equal(first.outcome.status, 'blocked');
             assert.equal(first.session.reason, 'recheck-new-blockers');
             assert.equal(first.session.applied, true);
             assert.equal(first.session.nextSetupAvailable, true);
@@ -161,6 +174,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(confirmations, 2, 'the second manual action can confirm the remaining initialization');
             assert.equal(updates, 4);
             assert.equal(second.session.status, 'ready');
+            assert.equal(second.outcome.status, 'ready');
             assert.equal(second.session.reason, 'recheck-ready');
             assert.equal(second.session.nextSetupAvailable, false);
             assert.deepEqual(second.session.checks.map(check => [check.loaded, check.blocked]), [[0, 1], [1, 0]]);
@@ -217,6 +231,9 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(confirmations, 0);
             assert.equal(updates, 0);
             assert.equal(result.session.status, 'ready');
+            assert.equal(result.outcome.status, 'ready');
+            assert.equal(result.outcome.fixtureId, null);
+            assert.deepEqual(result.outcome.targets, [{ file: fs.realpathSync(fixture.file), target: 'target' }]);
             assert.equal(result.session.reason, 'initial-check');
             assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[1, 0]]);
             const check = JSON.parse(fs.readFileSync(path.join(result.directory, '1', 'import_check.json'), 'utf8'));
@@ -231,6 +248,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(updates, 0);
             assert.equal(result.session.status, 'blocked');
             assert.equal(result.session.reason, 'proposal-declined');
+            assert.equal(result.outcome.status, 'declined');
             assert.equal(result.session.applied, false);
             assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[0, 1]]);
             assert.equal(messages.filter(message => message.command === 'environmentPreparationFinished').length, 1);
@@ -253,6 +271,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(result.session.status, 'incomplete',
                 'loading with temporary refreshed rules does not make stale persisted rules ready for a real test');
             assert.equal(result.session.reason, 'proposal-declined');
+            assert.equal(result.outcome.status, 'declined', 'a loaded stale-approval preview cannot authorize the caller to continue');
             assert.equal(result.session.applied, false);
             assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[1, 0]]);
             const proposal = JSON.parse(fs.readFileSync(path.join(result.directory, '1', 'setup_proposal.json'), 'utf8'));
@@ -269,6 +288,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(confirmations, 1);
             assert.equal(updates, 0);
             assert.equal(result.session.status, 'cancelled');
+            assert.equal(result.outcome.status, 'cancelled');
             assert.equal(result.session.reason, 'interrupted');
             assert.equal(result.session.applied, false);
             assert.equal(result.session.nextSetupAvailable, false);
@@ -286,6 +306,8 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(updates, 0);
             assert.equal(result.session.status, 'incomplete');
             assert.equal(result.session.reason, 'no-targets');
+            assert.equal(result.outcome.status, 'no-targets');
+            assert.deepEqual(result.outcome.targets, []);
             assert.equal(result.session.applied, false);
             assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[0, 0]]);
             fixture.controller.dispose();

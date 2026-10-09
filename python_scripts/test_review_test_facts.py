@@ -66,6 +66,56 @@ class ReviewFactsTests(unittest.TestCase):
         code = suite('self.assertEqual(score(1), 2)', 'raise RuntimeError("must not run")\n')
         self.assertTrue(self.facts('', code=code)['methods'])
 
+    def interaction_suite(self, body, decorator='@patch("sample.channel")', parameters='self, channel'):
+        return ('import unittest\nfrom unittest.mock import patch\nfrom sample import score\n'
+                'class Cases(unittest.TestCase):\n    ' + decorator + '\n'
+                '    def test_value(' + parameters + '):\n'
+                + ''.join('        ' + line + '\n' for line in body.splitlines()))
+
+    def test_patch_decorator_tracks_default_mock_return_chains_after_target_call(self):
+        code = self.interaction_suite('connection = channel.return_value\nworker = connection.worker.return_value\nscore("value", 2)\nchannel.assert_called_once()\nworker.send.assert_called_once_with("value")\nconnection.finish.assert_called_once()')
+        result = self.facts('', code=code)['methods'][0]
+        self.assertEqual([item['kind'] for item in result['mockAssertions']],
+                         ['assert_called_once', 'assert_called_once_with', 'assert_called_once'])
+        self.assertEqual([item['patchTarget'] for item in result['mockAssertions']], ['sample.channel'] * 3)
+        self.assertEqual(result['mockAssertions'][1]['mockPath'], '.return_value.worker.return_value.send')
+        self.assertTrue(all(item['targetCallLine'] == 9 for item in result['mockAssertions']))
+        self.assertEqual(result['assertions'], [], 'mock facts do not manufacture return observations')
+
+    def test_patch_context_alias_and_module_target_call(self):
+        code = ('import unittest as ut\nimport sample as mod\nfrom unittest.mock import patch as replace\n'
+                'class Cases(ut.TestCase):\n    def test_value(self):\n'
+                '        with replace("sample.channel") as dependency:\n'
+                '            mod.score(2)\n            dependency.assert_called_once()\n')
+        self.assertEqual(self.facts('', code=code)['methods'][0]['mockAssertions'][0]['patchTarget'], 'sample.channel')
+
+    def test_unknown_or_mutated_mock_and_target_bindings_never_become_interaction_facts(self):
+        cases = [
+            self.interaction_suite('score(2)\nchannel.assert_called_once()', decorator='@other("sample.channel")'),
+            self.interaction_suite('score(2)\nchannel.assert_called_once()', decorator='@patch("sample.score")'),
+            self.interaction_suite('score(2)\nchannel.assert_called_once()', decorator='@patch("sample.channel", new=object())'),
+            self.interaction_suite('channel.assert_called_once()\nscore(2)'),
+            self.interaction_suite('other(2)\nchannel.assert_called_once()'),
+            self.interaction_suite('score = other\nscore(2)\nchannel.assert_called_once()'),
+            self.interaction_suite('score(2)\nchannel.assert_called_once = lambda: None\nchannel.assert_called_once()'),
+            self.interaction_suite('score(2)\nchannel.reset_mock()\nchannel.assert_called_once()'),
+            self.interaction_suite('score(2)\nhelper()\nchannel.assert_called_once()'),
+            self.interaction_suite('if True:\n    score(2)\nchannel.assert_called_once()'),
+            self.interaction_suite('score(helper())\nchannel.assert_called_once()'),
+            self.interaction_suite('score(2)\nchannel.assert_called_once_with(helper())'),
+            self.interaction_suite('channel = 2\nscore(2)\nchannel.assert_called_once()'),
+            self.interaction_suite('score(2)\nchannel.assert_called_once()').replace('    @patch', '    def setUp(self):\n        self.skipTest("unavailable")\n    @patch'),
+            self.interaction_suite('score(2)\nchannel.assert_called_once()') + 'def load_tests(*args):\n    return unittest.TestSuite()\n',
+        ]
+        for code in cases:
+            with self.subTest(code=code):
+                self.assertFalse(any(item['mockAssertions'] for item in self.facts('', code=code)['methods']))
+
+    def test_rebound_module_imports_do_not_supply_import_facts(self):
+        for prefix in ('score = other\n', 'del score\n', 'if flag:\n    from other import score\n', 'from other import *\n'):
+            code = suite('self.assertEqual(score(1), 2)', prefix)
+            self.assertFalse(any(item['origin'] == 'sample.score' for item in self.facts('', code=code)['imports']))
+
 
 if __name__ == '__main__':
     unittest.main()

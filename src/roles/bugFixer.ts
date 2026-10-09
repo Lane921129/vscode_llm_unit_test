@@ -7,6 +7,7 @@ import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } from '../pipeline/repairDiagnostics';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, missingNameRepairGuidance, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 
 interface TestMethodFragment {
     name: string;
@@ -29,6 +30,8 @@ CONTRACT:${isolatedResourceSystemRule()}
 - Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V5.
 - Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
+- ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
+- ${TEST_IMPORT_GUIDANCE}
 - For async with client.method(...), use MagicMock for the unawaited method returning a context manager, and AsyncMock for __aenter__/__aexit__ or awaited resource methods. Configuring __aenter__ on an AsyncMock return_value does not fix calling that AsyncMock: the call still returns a coroutine.
 - Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. For a failed assertion, check the concrete inputs, units, arithmetic, rounding and returned fields against that evidence. Correct unsupported expectations; actual output alone is not proof of correctness. Never call the target to compute the expected value or duplicate its implementation as an oracle.
 - Make a substantive change to the failing method. Do not return it unchanged or weaken/remove assertions, use skip/expectedFailure, swallow exceptions, or mock the target to make it pass. If evidence does not justify a change, do not invent one.
@@ -92,8 +95,7 @@ export function canRepairTestMethod(code: string, output: string): boolean {
 
 function importLines(code: string): string[] {
     return code.replace(/\r\n/g, '\n').split('\n')
-        .map(line => line.trim())
-        .filter(line => /^(?:from\s+\S+\s+import\s+|import\s+)/.test(line));
+        .filter(line => /^(?:from\s+\S+\s+import\s+|import\s+)/.test(line.trim()));
 }
 
 function focusedSource(sourceCode?: string): string {
@@ -125,8 +127,9 @@ ${formatTargetContract(moduleName, funcName, funcArgs, astContext)}
 
 === LATEST FAILURE ===
 ${summarizeRepairOutput(errorOutput)}
+${missingNameRepairGuidance(errorOutput)}
 
-=== CURRENT IMPORTS ===
+=== CURRENT TEST IMPORT LINES (indentation retained; local imports stay in their original scope) ===
 ${imports.length ? imports.join('\n') : 'none'}
 
 === FAILING TEST METHOD ===

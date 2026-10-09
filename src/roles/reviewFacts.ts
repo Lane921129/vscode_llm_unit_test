@@ -18,6 +18,7 @@ export interface ReviewMethodFacts {
     calls: Array<{ line: number; call: TraceValueSnapshot }>;
     exceptionGuards: Array<{ line: number; exception: string; callLines: number[] }>;
     scalarBindings: Array<{ line: number; name: string; type: string }>;
+    mockAssertions?: Array<{ line: number; kind: string; patchTarget: string; mockPath: string; targetCallLine: number }>;
 }
 export interface ReviewFacts extends ReviewFactIdentity {
     schemaVersion: 'review-test-facts-v1'; module: string; testHash: string; executionVerified: boolean;

@@ -3,6 +3,7 @@ import { formatTargetContract } from '../pipeline/targetContract';
 import { estimatePromptTokens } from './promptBudget';
 import { matchingWriterExamples } from './verifiedWriterExamples';
 import { callerForPrompt } from '../pipeline/probeInputs';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, TEST_IMPORT_GUIDANCE } from './dependencyMockContract';
 
 export const COMPACT_WRITER_VERSION = 'compact-writer-v1';
 
@@ -28,9 +29,9 @@ export function buildCompactWriterContext(input: {
             imports: context.file_imports || [], globals: context.referenced_globals || [],
             callers: (context.callerContexts || []).map(callerForPrompt), conditions: context.condition_facts || []
         }),
-        'FIXTURE CHECK: Arrange constructor inputs and per-case state; declare all imports. '
-            + 'Keep the target real; patch dependencies at use points. Configure concrete values at each consumed Mock layer. '
-            + 'Match actual receivers: cursor.fetchall() differs from execute().fetchall(). Dependency returns are not target returns. '
+        'FIXTURE CHECK: Arrange constructor inputs and per-case state. ' + TEST_IMPORT_GUIDANCE + ' '
+            + 'Keep the target real; patch dependencies at use points. ' + DEPENDENCY_MOCK_SHAPE_GUIDANCE + ' '
+            + 'Dependency returns are not target returns. '
             + 'Exceptions require evidence; preserve passing tests.',
         // The caller-partitioned AST trace is authoritative here. Using the
         // bundle's merged trace would leak another caller's assertion oracle.

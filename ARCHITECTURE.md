@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## 批次初始化後接續原流程（2026-10-09）
+
+批次先保存所選來源、目標與初始預檢。使用者選擇「處理初始化設定」後，`AnalysisEnvironmentLease` 只暫時釋放 Python 使用鎖，原 `ExecutionManager` 的批次預約、模型快照、取消與輸出目錄仍保留。`ImportSetupController.prepare` 在獨占設定鎖下回傳明確結果、實際 fixture ID、Python、所選 targets／rows 與報告；來源或設定在顯示報告期間改變，也不得回傳 ready。父批次取消會中止子預檢。
+
+ready 後 `batchSetupContinuity` 同步核對原選取來源雜湊、根目錄、targets、完整 loaded rows 及 Python，主流程另核對實際設定 ID。接續前清除父 execution 的已完成預檢失敗，涵蓋相依已修好但 fixture ID 沒改變的情況。直接沿用已完成的一次確認後重檢，不再發起額外初始化循環；各目標仍走正常預檢及完整 AI／驗證／Reviewer／突變流程。拒絕、取消、仍受阻或身分變動都不接續；「繼續測試並記錄失敗」保留為明確診斷選項。
+
+`batch_manifest.preflightEvents` 與完整流程報告記錄初始計畫、隔離資源數、處理決定、setup 結果、接續／取消／失效及相對報告連結。`environment-blocked` 保留未開始的 pending targets、`complete=false`，不能將空結果清單誤判為成功；初始化就緒也不算品質通過。
+
+角色提示以來源呈現的接收者／呼叫鏈區分 dependency mock 的回傳物件與末端值，並保留 import 作用域。NameError 只提供有界名稱診斷，不猜套件或改受測來源。Reviewer facts 增加受限的標準 `patch` mock 呼叫斷言：只支援明確來源綁定、直線呼叫順序及依賴使用點。已執行候選的 import 綁定錯誤或僅因使用呼叫斷言而要求改回傳斷言，會進既有一次契約修正；其他需求、品質或更強斷言仍可審查，矛盾回覆仍不能批准。
+
 ## UNC 名稱的本機虛擬資源（2026-10-09）
 
 Windows 新增獨立的 `scope=unc-virtual`。`canonicalUncResourcePath` 將支援的網路樣式名稱正規化為 `//server/share[/tail]`，接受共享根目錄並核對裝置名稱、`IPC$`、跨層與來源交集；整個核對不查詢原 UNC metadata、不解析或連線原共享位置。`external-exact` 維持只接受本機絕對路徑，不將 UNC 混入原 scope。

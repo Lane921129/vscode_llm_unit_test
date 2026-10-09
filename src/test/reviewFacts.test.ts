@@ -141,3 +141,95 @@ test('only completed same-identity assertable Trace outcomes protect an expected
     }
     await assert.rejects(buildReviewFacts({ ...options, observations: { ...identity, sourceHash: 'f'.repeat(64), value: trace } }), /bound to this candidate/);
 });
+
+const mechanicalCode = 'import unittest\nfrom unittest.mock import patch\nfrom sample import score\n'
+    + 'class Cases(unittest.TestCase):\n    @patch("sample.channel")\n    def test_value(self, channel):\n'
+    + '        worker = channel.return_value\n        score("item", 2)\n'
+    + '        channel.assert_called_once()\n        worker.send.assert_called_once_with("item")\n';
+const mechanicalFacts = (tests = mechanicalCode, executionVerified = true) => buildReviewFacts({ ...identity,
+    code: tests, module: 'sample', executionVerified, env: process.env,
+    python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') });
+
+test('passed exact imports reject only unsupported mechanical import and binding claims', async () => {
+    const current = await mechanicalFacts();
+    const examples = [
+        [1, 'setup-error', 'The test harness is not imported correctly.', 'Import unittest correctly.', 'existing-import-contradiction'],
+        [1, 'setup-error', 'unittest is imported incorrectly.', 'Correct the unittest import.', 'existing-import-contradiction'],
+        [1, 'setup-error', 'unittest is not imported correctly.', 'Correct the unittest import.', 'existing-import-contradiction'],
+        [3, 'target-binding', 'The target is not bound correctly.', 'Bind the target correctly.', 'target-binding-contradiction']
+    ] as const;
+    for (const [line, category, reason, action, diagnostic] of examples) {
+        const parsed = parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true, constraints(current));
+        assert.equal(parsed.review, undefined);
+        assert.deepEqual(parsed.diagnostics, [diagnostic]);
+        assert.ok(parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true,
+            constraints({ ...current, executionVerified: false })).review, 'unverified execution remains actionable');
+    }
+    for (const [line, category, reason, action] of [
+        [1, 'setup-error', 'The test harness is not imported correctly because the project shadows the standard library.', 'Resolve the documented shadowing before executing.'],
+        [1, 'setup-error', 'unittest is not imported correctly because the project shadows the standard library.', 'Resolve the documented shadowing before executing.'],
+        [1, 'setup-error', 'The dependency helper is not imported correctly.', 'Use the helper import specified by the source.'],
+        [3, 'target-binding', 'The target is not bound correctly because this alias is reassigned by the fixture.', 'Remove the fixture reassignment.'],
+        [3, 'target-binding', 'The separate callback calls another function.', 'Call the selected target from the callback.']
+    ] as const) {
+        assert.ok(parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true, constraints(current)).review);
+    }
+    const unrelated = mechanicalCode.replace('from sample import score', 'from other_sample import score');
+    assert.ok(parseTestReviewDetailed(response(3, 'target-binding', 'The target is not bound correctly.',
+        'Bind the target correctly.'), unrelated, true, constraints(await mechanicalFacts(unrelated))).review);
+    const rebound = mechanicalCode.replace('class Cases', 'score = other\nclass Cases');
+    assert.ok(parseTestReviewDetailed(response(3, 'target-binding', 'The target is not bound correctly.',
+        'Bind the target correctly.'), rebound, true, constraints(await mechanicalFacts(rebound))).review);
+    const aliased = mechanicalCode.replace('import unittest', 'import unittest as ut').replace('unittest.TestCase', 'ut.TestCase')
+        .replace('from sample import score', 'import sample as subject').replace('        score(', '        subject.score(');
+    const aliasedFacts = await mechanicalFacts(aliased);
+    assert.deepEqual(parseTestReviewDetailed(response(1, 'setup-error', 'ut is not imported correctly.', 'Import the harness correctly.'),
+        aliased, true, constraints(aliasedFacts)).diagnostics, ['existing-import-contradiction']);
+    assert.deepEqual(parseTestReviewDetailed(response(3, 'target-binding', 'The target is not bound correctly.', 'Bind the target correctly.'),
+        aliased, true, constraints(aliasedFacts)).diagnostics, ['target-binding-contradiction']);
+});
+
+test('proven dependency call assertions reject replacement-only return judgments, preserving unknown quality findings', async () => {
+    const current = await mechanicalFacts();
+    const bound = { ...constraints(current), dependencyUsePoints: ['sample.channel'] };
+    const bad = response(9, 'assertion-quality', 'Assertion for function call, not return value', 'Change assertion to check return value');
+    assert.deepEqual(parseTestReviewDetailed(bad, mechanicalCode, true, bound).diagnostics, ['assertion-weakening']);
+    const child = response(10, 'assertion-quality', 'The assertion checks a call rather than the return value.',
+        'Replace the assertion with an assertion for the return value.');
+    assert.deepEqual(parseTestReviewDetailed(child, mechanicalCode, true, bound).diagnostics, ['assertion-weakening']);
+    assert.ok(parseTestReviewDetailed(bad, mechanicalCode, true, constraints(current)).review, 'unknown dependency remains actionable');
+    assert.ok(parseTestReviewDetailed(bad, mechanicalCode, true, { ...bound, dependencyUsePoints: ['sample.other'] }).review);
+    assert.ok(parseTestReviewDetailed(bad, mechanicalCode, true, { ...bound, facts: { ...current, executionVerified: false } }).review);
+    for (const [reason, action] of [
+        ['The documented contract requires a return status as well as the interaction.', 'Add an assertion for the documented return status.'],
+        ['Assertion for function call, not return value', 'Add an assertion for the observed return value.'],
+        ['The call assertion does not verify the dependency arguments.', 'Strengthen it with assert_called_once_with for the supplied arguments.'],
+        ['The current call assertion uses the wrong arguments.', 'Correct the arguments to match the supplied requirement.'],
+        ['Another branch has no interaction assertion.', 'Add a separate scenario for the uncovered branch.']
+    ]) {
+        assert.ok(parseTestReviewDetailed(response(9, 'assertion-quality', reason, action), mechanicalCode, true, bound).review, reason);
+    }
+    const fake = mechanicalCode.replace('@patch("sample.channel")', '@unknown("sample.channel")');
+    assert.ok(parseTestReviewDetailed(bad, fake, true, { ...constraints(await mechanicalFacts(fake)), dependencyUsePoints: ['sample.channel'] }).review);
+});
+
+test('new mechanical contradictions use the existing bounded reassessment and never erase valid findings', async () => {
+    const current = await mechanicalFacts();
+    const bad = JSON.stringify({ findings: [
+        { category: 'setup-error', test_line: 'L1', reason: 'The test harness is not imported correctly.', action: 'Import unittest correctly.' },
+        { category: 'missing-scenario', test_line: 'L8', reason: 'A measured branch has no scenario.', action: 'Add a case for the measured branch.' }
+    ] });
+    let requests = 0;
+    const result = await reviewWithContractRepair({ tests: mechanicalCode, prompt: 'complete same-candidate evidence',
+        constraints: constraints(current), deadlineAt: 1000, now: () => 1, checkCancelled: () => {}, event: () => {},
+        request: async prompt => { requests++; if (requests === 2) { assert.match(prompt, /existing-import-contradiction/); } return bad; } });
+    assert.equal(result, undefined);
+    assert.equal(requests, 2, 'repeated contradiction cannot become approval or extend the budget');
+    requests = 0;
+    const valid = response(8, 'missing-scenario', 'A measured branch has no scenario.', 'Add a case for the measured branch.');
+    const reassessed = await reviewWithContractRepair({ tests: mechanicalCode, prompt: 'complete same-candidate evidence',
+        constraints: constraints(current), deadlineAt: 1000, now: () => 1, checkCancelled: () => {}, event: () => {},
+        request: async () => ++requests === 1 ? bad : valid });
+    assert.equal(reassessed?.issues.length, 1, 'only the Reviewer can revise its findings');
+    assert.equal(reassessed?.issues[0].category, 'missing-scenario');
+});

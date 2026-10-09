@@ -4,16 +4,19 @@ import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 
 export function getExecutionWriterSystemPrompt(): string {
     return `You are the test Writer for EXECUTION_VERIFICATION_V1. Return one complete Python unittest file in one python code fence, without prose.
-The goal is meaningful, isolated execution of the real selected target. No exploratory Trace, coverage or mutation measurements are available for this run.
-Use the supplied read-only source, imports, signatures, constructor and dependency context to design a small relevant test. Preserve the exact target import and binding. Never copy, redefine or mock the target or its class.
-Use explicit unittest.mock patches at dependency use points for external operations${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}. Configure dependency return values or side effects within each test. Assert the real target's result, a source-declared exception, or an observable dependency call made by the real target.
-For a calculation with no identified external operations, use the real target without mocks. Check units, arithmetic, rounding and every returned field before choosing expected constants; a branch threshold is not automatically the result for the chosen inputs.
-Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. Treat these as test hypotheses until executed. Do not invent requirements, APIs, constructors, fixed ambient values or exception types. Never derive the expected value by calling the target or repeat the same implementation as an oracle.
-Do not replace failing assertions with tautologies, skip/expectedFailure, exception swallowing, or unrelated checks. No external filesystem, network or process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}
-The host validates Python AST, real target binding, signatures and meaningful assertions, then executes the file with its guarded runner. Passing here proves only the executed cases under this setup, not complete application or requirement correctness.`;
+Test the real selected target in isolation. Trace, coverage and mutation are unavailable.
+Use read-only source, imports, signatures, constructors and dependencies for setup. Preserve the exact target import/binding. Never copy, redefine or mock the target/class.
+Patch external operations${isolatedResourceSystemRule() ? ' without host-declared resources' : ''} at dependency use points with unittest.mock. Set returns/side effects within each test. Assert the real target's result, a source-declared exception, or its observable dependency call.
+${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
+${TEST_IMPORT_GUIDANCE}
+For calculations without external operations, use the real target without mocks. Check inputs, units, arithmetic, rounding and every returned field; thresholds are not automatically expected results.
+Expected values require reachable literals, simple source-supported deterministic relationships or test-controlled dependencies; they remain hypotheses until executed. Invent no requirements, APIs, constructors, ambient values or exceptions. Never call the target or copy its implementation to compute expected.
+No tautologies, weakened/removed assertions, skip/expectedFailure, swallowed exceptions or unrelated checks. No direct file, network or process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}
+The host checks Python AST, target binding, signatures and meaningful assertions, then uses its guarded runner. Passing verifies only those cases/setup, not complete application or requirement correctness.`;
 }
 
 export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {
@@ -55,6 +58,8 @@ Your task: use the scaffold as setup guidance and return a COMPLETE runnable uni
 - Call the target function.
 - Write assertions using real return values provided.
 - Check scaffold mock setup against the supplied target source and complete evidence; correct placeholders and mock shapes when needed.
+- ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
+- ${TEST_IMPORT_GUIDANCE}
 ${isolatedResourceSystemRule() ? '- Use isolated mocks, in-memory resources, or host-declared resources accessed by the real target. Never perform direct test I/O.' : '- Use only isolated mock or in-memory resources. Never perform real external I/O.'}${isolatedResourceSystemRule()}
 - Preserve the exact target import, class binding, constructor requirements and verified assertions.
 Output format:
@@ -253,7 +258,8 @@ export function getUserPrompt(
             focus: focusContexts, budgetTokens });
     }
 
-    let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n${formatTargetContract(moduleName, funcName, astContext?.args || [], astContext)}\n`;
+    let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n${formatTargetContract(moduleName, funcName, astContext?.args || [], astContext)}\n`
+        + `${DEPENDENCY_MOCK_SHAPE_GUIDANCE}\n${TEST_IMPORT_GUIDANCE}\n`;
 
     const comparisonOperators: Record<string, string> = {
         Eq: '==', NotEq: '!=', Lt: '<', LtE: '<=', Gt: '>', GtE: '>=',

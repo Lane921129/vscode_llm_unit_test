@@ -96,6 +96,8 @@ export class BatchJournal {
     private status = 'discovering';
     private finishedAt?: string;
     private blockedModules = 0;
+    private readonly preflightEvents: Array<{ at: string; phase: 'initial' | 'setup' | 'decision'; status: string;
+        fixtureId?: string | null; resourceCount?: number; blockedModules?: number; report?: string }> = [];
     private readonly targets: BatchTarget[] = [];
     private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
     private readonly files: string[] = [];
@@ -136,6 +138,11 @@ export class BatchJournal {
     }
     start(): void { this.status = 'running'; this.save(); }
     preflight(blockedModules: number): void { this.blockedModules = blockedModules; this.save(); }
+    preflightEvidence(event: Omit<(typeof this.preflightEvents)[number], 'at'>): void {
+        const report = event.report && path.relative(this.directory, event.report).replace(/\\/g, '/');
+        this.preflightEvents.push({ ...event, ...(report ? { report } : {}), at: new Date().toISOString() });
+        this.save();
+    }
     begin(id: number): void { this.targets[id].state = 'running'; this.save(); }
     attach(id: number, directory: string): void {
         const relative = path.relative(this.directory, directory);
@@ -221,7 +228,7 @@ export class BatchJournal {
         }
         this.save();
     }
-    finish(status: 'completed' | 'cancelled' | 'failed'): void {
+    finish(status: 'completed' | 'cancelled' | 'failed' | 'environment-blocked'): void {
         // Earlier targets may have changed while later targets were running.
         for (const target of this.targets) {
             if (['passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
@@ -265,6 +272,7 @@ export class BatchJournal {
             allTargetsExecutionVerified: complete && this.targets.length > 0 && executed === this.targets.length,
             status: this.status, complete, allTargetsPassed: complete && this.targets.length > 0 && passed === this.targets.length,
             preflightBlockedModules: this.blockedModules,
+            preflightEvents: this.preflightEvents,
             model: this.identity.model, buildTimestamp: this.identity.buildTimestamp,
             pythonExecutable: this.identity.python, roleContracts: ROLE_CONTRACT_VERSIONS,
             ...(this.scope ? { scope: this.scope } : {}),
@@ -285,6 +293,10 @@ export class BatchJournal {
             localize("- 模型：{0}；建置：{1}", safe(this.identity.model), safe(this.identity.buildTimestamp)),
             `- Python：${safe(this.identity.python)}`, '', localize("| 目標狀態 | 數量 |"), '| --- | ---: |',
             ...Object.entries(counts).map(([status, count]) => `| ${status} | ${count} |`), '',
+            ...(this.preflightEvents.length ? [localize('## 初始化處理紀錄'), '',
+                localize('| 階段 | 決定／結果 | 設定 ID | 隔離資源數 | 受阻模組 | 報告 |'), '| --- | --- | --- | ---: | ---: | --- |',
+                ...this.preflightEvents.map(event => `| ${event.phase} | ${event.status} | ${event.fixtureId === undefined ? '—' : event.fixtureId || 'none'} | ${event.resourceCount ?? '—'} | ${event.blockedModules ?? '—'} | ${event.report ? `[${localize('查看結果')}](${reportLink(event.report)})` : '—'} |`), '',
+                localize('初始化就緒僅代表所選模組可載入；未開始的函式、審查與突變均不計為通過。'), ''] : []),
             localize("## 環境障礙"), '', localize("| 分類 | 共同原因 | 受影響目標 | 處理方式 |"), '| --- | --- | ---: | --- |',
             ...environmentIssues.map(issue => `| ${issue.kind} | ${safe(issue.issue)} | ${issue.affectedTargets} | ${safe(issue.advice || '')} |`), '',
             localize("缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。"),
@@ -297,7 +309,7 @@ export class BatchJournal {
         fs.writeFileSync(path.join(this.directory, 'batch_workflow.md'), report, 'utf8');
         const visible = this.targets.filter(t => t.state !== 'pending' && !isReportExcluded(t.terminalStatus));
         const failureTargets = visible.filter(t => t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'failure_report.md')));
-        const failures = this.discoveryFailures.length > 0 || ['cancelled', 'failed', 'incomplete'].includes(this.status)
+        const failures = this.discoveryFailures.length > 0 || ['cancelled', 'failed', 'incomplete', 'environment-blocked'].includes(this.status)
             || visible.some(t => t.terminalStatus && !['passed', 'execution-passed'].includes(t.terminalStatus)) || failureTargets.length > 0;
         const concise = [localize('# 批次測試結果'), '', localize('- **模型識別**: {0}', reportCell(this.identity.model)),
             localize('- 狀態：{0}（執行完成不代表測試通過）', this.status), '',

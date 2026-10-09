@@ -15,7 +15,7 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
     let choices: string[] | undefined = ['selected.py', 'ambiguous.py'];
     let preflightChoice: string | undefined = '繼續測試並記錄失敗';
     let modelCalls = 0;
-    let abortOnSummary = false;
+    let abortOnPreflight = false;
     const vscode = {
         CancellationTokenSource: class {
             token = { isCancellationRequested: false };
@@ -28,7 +28,7 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
                 provider.webview = { postMessage: async () => true }; return { dispose() {} };
             },
             showInformationMessage: async () => {}, showTextDocument: async (document: { file?: string }) => {
-                if (abortOnSummary && document.file?.endsWith('batch_summary.md')) {
+                if (abortOnPreflight && document.file?.endsWith('import_check.md')) {
                     handlers.get('llm-unit-test.abortTest')!();
                 }
             },
@@ -90,13 +90,14 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
             const release = pythonEnvironmentActivity.acquire('setup');
             assert.ok(release, 'analysis must release its use lock before opening initialization setup');
             release(); prepared.push(args);
+            return { status: 'blocked', fixtureId: null, targets: [], rows: [], applied: false };
         };
         choices = ['selected.py']; preflightChoice = '處理初始化設定';
         await run(params);
         assert.deepEqual(prepared, [[root, params.outputPath, [{ file: path.join(root, 'selected.py'), target: 'first' }]]],
             'deferred initialization must receive only this batch\'s confirmed source targets, not rescan excluded files');
         const initialized = manifests().find(item => ![first.batchId, cancelled.batchId].includes(item.batchId))!;
-        assert.equal(initialized.status, 'cancelled');
+        assert.equal(initialized.status, 'environment-blocked');
         assert.equal(initialized.expectedTargets, 2);
         assert.equal(initialized.finishedTargets, 0);
         assert.ok(initialized.targets.every((target: any) => target.state === 'pending'));
@@ -107,9 +108,9 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
         assert.deepEqual(prepared, [], 'dismissing the blocked-preflight dialog must not open initialization or replay a prior scope');
         assert.equal(modelCalls, 0);
 
-        preflightChoice = '處理初始化設定'; abortOnSummary = true;
+        preflightChoice = '處理初始化設定'; abortOnPreflight = true;
         await run(params);
-        assert.deepEqual(prepared, [], 'cancellation during the final summary cancels deferred initialization too');
+        assert.deepEqual(prepared, [], 'cancellation while opening preflight prevents initialization');
         assert.equal(modelCalls, 0);
     } finally {
         restorePrepare(); globalThis.fetch = originalFetch; Module._load = originalLoad;

@@ -68,6 +68,7 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
                 + 'Fact contradictions mean the cited host AST/observation facts already establish that binding, assertion or exact-input outcome. '
                 + 'Do not repeat the contradicted claim: a unittest harness is not the target class; an expected exception is not a failing test; '
                 + 'verified observed values must not be replaced by guessed calculations; exact string equality must not become string ordering or loose membership. '
+                + 'Verified canonical imports are legitimate bindings; dependency mock call assertions must not be replaced solely for checking calls rather than return values. '
                 + 'Reassess the same TEST_FILE and evidence. Cite only VALID_TEST_LINE_IDS that demonstrate the claimed defect. '
                 + 'Do not invent import/runtime failures after successful isolated execution, request target implementation edits, or mock the selected target. '
                 + 'Return the existing findings JSON contract only. Omit unsupported claims; use {"findings":[]} only when no concrete defect is demonstrated. '

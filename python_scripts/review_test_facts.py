@@ -42,6 +42,118 @@ def same_call(left, right):
         return False
 
 
+def mock_call_assertions(method, aliases, target):
+    """Recognize only default patch-created mocks on a straight-line target path.
+
+    These are assertion-presence facts, not proof of requirements or coverage.
+    Never derive a return-value oracle from a mock or enter unknown control flow.
+    """
+    params = method.args.posonlyargs + method.args.args
+    if not params or method.args.vararg or method.args.kwarg or method.args.kwonlyargs:
+        return []
+    local_names = {node.id for node in ast.walk(method) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+    local_names.update(item.arg for item in params)
+    if any(isinstance(node, (ast.Global, ast.Nonlocal, ast.Import, ast.ImportFrom)) for node in ast.walk(method)):
+        return []
+
+    def resolved(node):
+        root, _, tail = dotted(node).partition('.')
+        if root in local_names or root not in aliases:
+            return ''
+        return aliases[root] + ('.' + tail if tail else '')
+
+    def patch_target(node):
+        if not isinstance(node, ast.Call) or resolved(node.func) != 'unittest.mock.patch' or len(node.args) != 1:
+            return None
+        if not isinstance(node.args[0], ast.Constant) or type(node.args[0].value) is not str:
+            return None
+        # new/new_callable/spec/custom configuration may replace assertion methods.
+        if node.keywords:
+            return None
+        path = node.args[0].value
+        if not path or any(not part.isidentifier() for part in path.split('.')):
+            return None
+        if path == target or target.startswith(path + '.'):
+            return None
+        return path
+
+    mocks = {}
+    if len(params) != 1 + len(method.decorator_list):
+        return []
+    for parameter, decorator in zip(params[1:], reversed(method.decorator_list)):
+        path = patch_target(decorator)
+        if not path:
+            return []
+        mocks[parameter.arg] = (path, '')
+
+    def mock_path(node, bindings):
+        if isinstance(node, ast.Name):
+            return bindings.get(node.id)
+        if isinstance(node, ast.Attribute):
+            base = mock_path(node.value, bindings)
+            if not base or node.attr.startswith('_') or node.attr.startswith('assert') or node.attr in (
+                    'called', 'call_count', 'call_args', 'call_args_list', 'mock_calls', 'method_calls',
+                    'side_effect', 'reset_mock', 'configure_mock', 'attach_mock'):
+                return None
+            return (base[0], base[1] + '.' + node.attr)
+        return None
+
+    facts = []
+
+    def walk(statements, bindings, target_line=None):
+        for stmt in statements:
+            if isinstance(stmt, ast.Assign) and all(isinstance(item, ast.Name) for item in stmt.targets):
+                value = mock_path(stmt.value, bindings)
+                if value:
+                    for item in stmt.targets:
+                        bindings[item.id] = value
+                    continue
+                try:
+                    ast.literal_eval(stmt.value)
+                except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                    return
+                for item in stmt.targets:
+                    bindings.pop(item.id, None)
+                continue
+            if isinstance(stmt, ast.With):
+                nested = dict(bindings)
+                for item in stmt.items:
+                    path = patch_target(item.context_expr)
+                    if not path or not isinstance(item.optional_vars, ast.Name):
+                        return
+                    nested[item.optional_vars.id] = (path, '')
+                walk(stmt.body, nested)
+                # Context exit can mutate state; do not carry facts across it.
+                return
+            if not isinstance(stmt, ast.Expr):
+                return
+            call = stmt.value
+            if isinstance(call, ast.Constant):
+                continue
+            if isinstance(call, ast.Call) and resolved(call.func) == target:
+                # Inputs may be local scalar literals, but never arbitrary calls.
+                if target_line is not None or any(isinstance(item, (ast.Call, ast.Await, ast.Yield, ast.NamedExpr))
+                                                  for arg in [*call.args, *(item.value for item in call.keywords)] for item in ast.walk(arg)):
+                    return
+                target_line = stmt.lineno
+                continue
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+                base = mock_path(call.func.value, bindings)
+                kind = call.func.attr
+                if base and target_line and kind in ('assert_called', 'assert_called_once', 'assert_called_with', 'assert_called_once_with', 'assert_any_call', 'assert_not_called'):
+                    if any(isinstance(item, (ast.Call, ast.Await, ast.Yield, ast.NamedExpr))
+                           for arg in [*call.args, *(item.value for item in call.keywords)] for item in ast.walk(arg)):
+                        return
+                    facts.append({'line': call.lineno, 'kind': kind, 'patchTarget': base[0],
+                                  'mockPath': base[1], 'targetCallLine': target_line})
+                    continue
+            # Custom calls, mock reconfiguration and unknown assertions stop proof.
+            return
+
+    walk(method.body, mocks)
+    return facts
+
+
 def build_review_facts(payload):
     code = payload['code']
     if len(code) > 120000:
@@ -52,6 +164,7 @@ def build_review_facts(payload):
     aliases = {}
     imports = []
     rebound = set()
+    wildcard_import = False
     for node in tree.body:
         if isinstance(node, ast.Import):
             for item in node.names:
@@ -60,14 +173,25 @@ def build_review_facts(payload):
                 imports.append({'line': node.lineno, 'binding': binding, 'origin': item.name})
         elif isinstance(node, ast.ImportFrom) and not node.level:
             for item in node.names:
-                if item.name != '*':
+                if item.name == '*':
+                    wildcard_import = True
+                else:
                     binding = item.asname or item.name
                     aliases[binding] = (node.module or '') + '.' + item.name
                     imports.append({'line': node.lineno, 'binding': binding, 'origin': aliases[binding]})
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             rebound.add(node.name)
         else:
-            rebound.update(item.id for item in ast.walk(node) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store))
+            rebound.update(item.id for item in ast.walk(node) if isinstance(item, ast.Name) and isinstance(item.ctx, (ast.Store, ast.Del)))
+            for item in ast.walk(node):
+                if isinstance(item, (ast.Import, ast.ImportFrom)):
+                    for entry in item.names:
+                        if entry.name == '*':
+                            wildcard_import = True
+                        else:
+                            rebound.add(entry.asname or (entry.name.split('.')[0] if isinstance(item, ast.Import) else entry.name))
+    if wildcard_import:
+        rebound.update(aliases)
     for binding in rebound:
         aliases.pop(binding, None)
     latest_import = {item['binding']: item for item in imports}
@@ -96,14 +220,16 @@ def build_review_facts(payload):
             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 overrides.update(item.id for item in ast.walk(node) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store))
         for method in cls.body:
-            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or not method.name.startswith('test_') or method.decorator_list:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or not method.name.startswith('test_'):
                 continue
             params = method.args.posonlyargs + method.args.args
-            if len(params) != 1 or method.args.vararg or method.args.kwarg or method.args.kwonlyargs:
+            if not params or method.args.vararg or method.args.kwarg or method.args.kwonlyargs:
                 continue
             receiver = params[0].arg
             facts = {'line': method.lineno, 'endLine': method.end_lineno, 'name': cls.name + '.' + method.name,
-                     'assertions': [], 'calls': [], 'exceptionGuards': [], 'scalarBindings': []}
+                     'assertions': [], 'calls': [], 'exceptionGuards': [], 'scalarBindings': [], 'mockAssertions': []}
+            if not custom_loader and not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'}):
+                facts['mockAssertions'] = mock_call_assertions(method, aliases, target)
             # All assigned local names shadow module aliases, including assignments later in the method.
             local = {node.id: None for node in ast.walk(method) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
             local[receiver] = None
@@ -241,13 +367,13 @@ def build_review_facts(payload):
                             break
                     except Unknown:
                         break
-            if not custom_loader:
+            if not custom_loader and not method.decorator_list and len(params) == 1:
                 walk(method.body)
             methods.append(facts)
     return {'schemaVersion': 'review-test-facts-v1', 'runId': payload['runId'], 'sourceHash': payload['sourceHash'],
             'target': payload['target'], 'module': payload['module'], 'testHash': hashlib.sha256(code.encode()).hexdigest(),
             'executionVerified': payload.get('executionVerified') is True, 'imports': imports, 'classes': classes, 'methods': methods,
-            'limitations': 'Static facts cover only directly resolved unittest constructs and straight-line literal target calls. Unknown or unexecuted paths are not observations.'}
+            'limitations': 'Static facts cover directly resolved unittest constructs, straight-line literal target calls and default patch-created mock call assertions. Mock assertions prove presence only, not return requirements or coverage. Unknown or unexecuted paths are not observations.'}
 
 
 if __name__ == '__main__':

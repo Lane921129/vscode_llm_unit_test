@@ -1,5 +1,15 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '環境設定尚未釋放，批次已停止；請等待完成後重新開始。': 'Environment setup is still active. The batch stopped; wait for setup to finish before starting again.',
+    '初始化前後的來源、選取範圍或 Python 已改變，批次停止；請重新開始。': 'Sources, selected scope or Python changed during initialization. The batch stopped; start again.',
+    '初始化設定在預檢期間改變，批次已停止；請重新開始。': 'Initialization settings changed during preflight. The batch stopped; start again.',
+    '{0} 個模組載入受阻；尚未呼叫模型。處理初始化設定後，重檢就緒會接續本批次；仍受阻則停止。也可明確選擇僅繼續記錄失敗。': '{0} modules cannot load; no model requests have started. After initialization setup, a ready recheck resumes this batch; remaining blockers stop it. You may explicitly continue to record failures instead.',
+    '[系統] 批次暫停等待初始化設定；確認清單並重檢就緒後接續原選取目標。': '[System] Batch paused for initialization setup. Confirm the list; a ready recheck resumes the original selected targets.',
+    '[系統] 初始化未就緒（{0}）；本批次停止，未開始的目標保持未完成。請查看初始化報告。': '[System] Initialization is not ready ({0}). This batch stopped; targets that have not started remain incomplete. See the initialization report.',
+    '[系統] 初始化重檢已就緒，繼續同一批次的 {0} 個目標。': '[System] Initialization recheck is ready. Resuming {0} targets in the same batch.',
+    '## 初始化處理紀錄': '## Initialization history',
+    '| 階段 | 決定／結果 | 設定 ID | 隔離資源數 | 受阻模組 | 報告 |': '| Phase | Decision / result | Fixture ID | Isolated resources | Blocked modules | Report |',
+    '初始化就緒僅代表所選模組可載入；未開始的函式、審查與突變均不計為通過。': 'Initialization readiness only confirms that the selected modules can load. Unstarted function tests, review and mutation are not passes.',
     "網路樣式路徑：{0}。只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此確認不授予網路存取權限。": "Network-style path: {0}. Test resources are created only in local temporary storage, without connecting to, reading or writing the original share. This confirmation does not grant network access.",
     "    影響：網路樣式路徑 {0} 只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此設定不授予網路存取權限，每次執行後清理。": "    Effect: Network-style path {0} uses only local temporary test resources, without connecting to, reading or writing the original share. This setup does not grant network access; resources are cleaned after each execution.",
     "外部絕對路徑：{0}。只映射至全新暫存資源；不讀取或寫入原位置。": "External absolute path: {0}. Mapped only to fresh temporary resources; the original location is neither read nor written.",
