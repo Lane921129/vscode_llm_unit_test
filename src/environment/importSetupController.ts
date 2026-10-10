@@ -14,6 +14,7 @@ import { inspectProjectImports, ImportCheck, ImportCheckTarget, verifyImportProp
 import { hasDummyFunctionNameMarker } from '../tier/stubClassifier';
 import { importSetupMessage, ImportSetupReason, recheckReason, saveImportSetupSession } from './importSetupSession';
 import { externalExactResourcePaths, projectParentResourcePaths, uncVirtualResourcePaths } from './resourceSetup';
+import { verifyInitializationSources } from './initializationPlanning';
 
 export type ImportSetupStatus = 'ready' | 'blocked' | 'cancelled' | 'declined' | 'failed'
     | 'busy' | 'no-targets' | 'untrusted' | 'invalid-root';
@@ -107,11 +108,12 @@ export class ImportSetupController {
                         createHash('sha256').update(fs.readFileSync(target.file)).digest('hex')]));
                     const expectedFiles = new Set([...sourceHashes.keys()].map(file => path.relative(canonicalRoot, file).replace(/\\/g, '/')));
                     const check = await inspectProjectImports(root, scanPython, targets,
-                        path.join(directory!, String(checks.length + 1)), activeRules, text => this.publish({ command: 'appendLog', text }), boundRoot);
+                        path.join(directory!, String(checks.length + 1)), activeRules, text => this.publish({ command: 'appendLog', text }), boundRoot, true);
                     checks.push(check);
                     fixtureId = check.fixtureId !== undefined ? check.fixtureId : scannedPlan?.id || null;
                     validateFinalCheck = () => {
                         execution.throwIfCancelled();
+                        if (check.initializationSources) { verifyInitializationSources(canonicalRoot, check.initializationSources); }
                         if (check.root !== canonicalRoot || check.python !== scanPython
                             || check.rows.length !== expectedFiles.size || new Set(check.rows.map(row => row.file)).size !== expectedFiles.size
                             || check.rows.some(row => !expectedFiles.has(row.file))) {
@@ -135,6 +137,7 @@ export class ImportSetupController {
                     if (check.proposedPlan) { fs.writeFileSync(path.join(check.directory, 'setup_proposal.json'), JSON.stringify({
                         note: localize("清單中的 resources 會建立獨立暫存資源；mkdir/configFiles 舊設定與啟動入口仍是明確替身，不執行其副作用或 callback。受測原檔不變，不會複製正式資料。套用後重新預檢。"),
                         evidence: check.proposals,
+                        planningSources: check.planningSources,
                         expiredEntryPointSources: refreshed.expired,
                         'llmUnitTest.importFixtureRoot': check.root,
                         'llmUnitTest.importFixtures': check.proposedRules,

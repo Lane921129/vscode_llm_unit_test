@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import types
 from unittest.mock import patch
 from isolated_resources import validate_resources
 
@@ -132,10 +133,14 @@ class ImportFixtures:
                         or self.plan.get('trialRoot') and _inside(origin, self.plan['trialRoot'])):
                     raise ValueError('Startup fixture must target an external dependency')
                 original = vars(module).get(attribute)
-                if not callable(original) or isinstance(original, type):
-                    raise ValueError('Startup fixture requires a concrete callable, not a class')
-                code = getattr(original, '__code__', None)
-                if code and (_inside(code.co_filename, self.plan['root'])
+                # A callable instance/partial has no own __code__ and can hide
+                # application __call__ code behind an external module export.
+                # Static proposals need the same concrete function identity as
+                # observed proposals, before signature or code inspection.
+                if type(original) is not types.FunctionType:
+                    raise ValueError('Startup fixture requires a plain external Python function')
+                code = original.__code__
+                if (_inside(code.co_filename, self.plan['root'])
                              or self.plan.get('trialRoot') and _inside(code.co_filename, self.plan['trialRoot'])):
                     raise ValueError('Startup fixture cannot replace application code')
 

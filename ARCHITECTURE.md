@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## 載入前初始化規劃（2026-10-10）
+
+`plan_import_initialization.py` 在不 import 應用或依賴的情況下，掃描選取來源與有界本機匯入閉包，提供來源摘要綁定的目錄及外部 callback 入口候選。只接受可明確解析的路徑與直接模組呼叫；符合支援參數形式但無法靜態解析 receiver 的 mkdir 只記為 `dynamic-directory`，不求值配置或 helper，也不據此認定 receiver 必然是 pathlib。planner 本身不執行 fallback import，不推導資料庫 schema；規劃完整性只代表掃描完成，不證明所有初始化或函式需求皆已滿足。
+
+`inspectProjectImports(..., planBeforeImport=true)` 先經 `initializationPlanning.ts` 核對規劃輸出。只有可確定候選時，直接回傳 `stage=initialization-plan`，保存 `importsExecuted=false` 與 `planningSources`。若 diagnostics 含 `dynamic-directory`，Host 先呼叫一次既有 `inspectProjectImports` 受控匯入掃描，使用當時已批准的 fixtures，完全不暫套新的靜態或實測提案；再核對來源閉包，將實測目錄建議與靜態入口候選合併。此路徑保存 `guardedObservation=true`、`importsExecuted=true`，原始實測另存 `observed_import_check.json`／`.md`；規劃列仍不冒充實測失敗。沒有新提案時沿用已完成的診斷，或在尚未診斷時執行既有預檢。
+
+`ImportSetupController` 將合併清單呈現為一次預覽與一次批准，確認時再核對完整來源閉包及設定；批准後建立隔離資源、安裝入口替身並做一次實際重檢，真正的外部 callable 身分仍由 runtime 驗證。靜態待確認路徑取消時未曾 import；動態目錄路徑可能已完成初次受控診斷，取消不套用新設定也不再重檢。未知副作用、不支援的動態呼叫與缺 schema 仍可能受阻，不能宣稱所有情況零 import 或一次清單能解決所有初始化。
+
+批次對待確認的規劃清單直接進入設定預覽，避免額外詢問一次「處理初始化」。確認後只有一次重檢；就緒接續原批次，取消、來源漂移或新的動態障礙均停止。初始計畫、可能的受控診斷與最後載入結果分開記錄，批次受阻總數更新為最後設定結果。
+
 ## 批次初始化後接續原流程（2026-10-09）
 
 批次先保存所選來源、目標與初始預檢。使用者選擇「處理初始化設定」後，`AnalysisEnvironmentLease` 只暫時釋放 Python 使用鎖，原 `ExecutionManager` 的批次預約、模型快照、取消與輸出目錄仍保留。`ImportSetupController.prepare` 在獨占設定鎖下回傳明確結果、實際 fixture ID、Python、所選 targets／rows 與報告；來源或設定在顯示報告期間改變，也不得回傳 ready。父批次取消會中止子預檢。

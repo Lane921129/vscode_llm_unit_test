@@ -50,7 +50,9 @@ test('real batch command records grouped failures and cancellation, then passes 
     try {
         fs.writeFileSync(path.join(root, 'a_missing.py'), 'import fixture_dependency_not_installed\ndef first(x): return x + 1\ndef second(x): return x - 1\n');
         fs.writeFileSync(path.join(root, 'b_boundary.py'), 'import setup_state\ndef first(x): return x + 1\ndef second(x): return x - 1\n');
-        fs.writeFileSync(path.join(root, 'setup_state.py'), 'from pathlib import Path\nPath("must_not_exist").mkdir()\n');
+        // This case covers explicit diagnostic continuation after an observed
+        // dynamic failure, independently of the pre-import planning/approval flow.
+        fs.writeFileSync(path.join(root, 'setup_state.py'), 'from pathlib import Path\ngetattr(Path("must_not_exist"), "mkdir")()\n');
         fs.writeFileSync(path.join(root, 'c_skipped.py'), 'def dummy_noise(): return 1\ndef placeholder(): pass\n');
         const broken = path.join(root, 'broken.py');
         fs.writeFileSync(broken, 'def invalid(\n');

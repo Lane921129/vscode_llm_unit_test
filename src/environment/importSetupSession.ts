@@ -24,6 +24,7 @@ function compareBlocker(previous: ImportCheckRow | undefined, row: ImportCheckRo
     beforeDirectory: string, afterDirectory: string): BlockerChange {
     if (row.status === 'loaded') { return 'loaded'; }
     if (!hasObservedBlocker(row)) { return 'diagnostic-incomplete'; }
+    if (previous?.stage === 'initialization-plan') { return 'new-blocker'; }
     if (!previous || previous.status !== 'blocked') { return 'new-blocker'; }
     if (!hasObservedBlocker(previous)) { return 'diagnostic-changed'; }
     // A different observed operation/type or a different known source location
@@ -62,7 +63,9 @@ export function recheckReason(before: ImportCheck, after: ImportCheck): ImportSe
 export function importSetupMessage(reason: ImportSetupReason, check?: ImportCheck): string {
     const count = check?.rows.length || 0;
     const blocked = check?.rows.filter(row => row.status === 'blocked').length || 0;
-    const summary = localize('模組預檢：{0} 個模組，{1} 個受阻；尚未執行函式測試。', count, blocked);
+    const summary = check?.planningSources
+        ? localize('初始化規劃：{0} 個模組等待確認；尚未核准新設定或執行函式測試。', count)
+        : localize('模組預檢：{0} 個模組，{1} 個受阻；尚未執行函式測試。', count, blocked);
     switch (reason) {
         case 'no-targets': return localize('此範圍沒有可預檢的受測函式；未執行模組載入或函式測試。');
         case 'recheck-ready': return summary + ' ' + localize('重新預檢完成，模組已可載入。請按「開始測試」執行函式測試。');
@@ -88,7 +91,8 @@ export function saveImportSetupSession(directory: string, checks: ImportCheck[],
     const nextSetupAvailable = (status === 'blocked' || reason === 'configuration-pending' || reason === 'proposal-declined')
         && !!latest?.proposedPlan && reason !== 'recheck-unchanged';
     const rounds = checks.map(check => ({ directory: path.relative(directory, check.directory).replace(/\\/g, '/'),
-        blocked: check.rows.filter(row => row.status === 'blocked').length,
+        ...(check.planningSources ? { phase: 'planning', planned: check.rows.length } : {}),
+        blocked: check.planningSources ? 0 : check.rows.filter(row => row.status === 'blocked').length,
         loaded: check.rows.filter(row => row.status === 'loaded').length }));
     const comparisons = checks.slice(1).map((check, index) => ({
         before: `${rounds[index].directory}/import_check.json`,
@@ -99,7 +103,9 @@ export function saveImportSetupSession(directory: string, checks: ImportCheck[],
         status, reason, applied, nextSetupAvailable, checks: rounds, comparisons }, null, 2));
     const report = path.join(directory, 'import_setup.md');
     fs.writeFileSync(report, [localize('# 模組預檢結果'), '', message, '',
-        ...rounds.map((round, index) => localize('- 第 {0} 次檢查：{1} 個可載入、{2} 個受阻。', index + 1, round.loaded, round.blocked)
+        ...rounds.map((round, index) => (round.phase === 'planning'
+            ? localize('- 第 {0} 次規劃：{1} 個模組等待初始化清單確認；實際診斷另列。', index + 1, round.planned)
+            : localize('- 第 {0} 次檢查：{1} 個可載入、{2} 個受阻。', index + 1, round.loaded, round.blocked))
             + ` [${localize('逐模組診斷')}](${round.directory}/import_check.md)`), '',
         ...(nextSetupAvailable ? [localize('報告包含新的初始化建議。確認原因後，可再次按「檢查模組載入／初始化設定」預覽並決定是否套用。'), ''] : []),
         localize('每次操作最多套用一份已確認清單並重新預檢一次；不會自動重啟生成或反覆要求初始化。'),

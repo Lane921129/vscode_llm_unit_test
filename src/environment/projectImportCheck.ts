@@ -12,6 +12,7 @@ import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { describeImportIssue, ImportExceptionSummary, ImportIssue, summarizeImportException } from './importDiagnostics';
 import { ImportInitializationCandidate, readInitializationCandidate } from './importSetupProposal';
 import { resourceLogicalPath, resourceSpecKey } from '../pipeline/isolatedResources';
+import { inspectPreparedProjectImports, verifyInitializationSources } from './initializationPlanning';
 
 export interface ImportCheckTarget { file: string; target: string }
 export interface ImportCheckRow {
@@ -23,6 +24,10 @@ export interface ImportCheck {
     root: string; python: string; directory: string; rows: ImportCheckRow[];
     /** Actual plan used by this scan; older callers may omit it. */
     fixtureId?: string | null;
+    /** Static discovery closure bound to the preview, including imported sources without targets. */
+    planningSources?: Array<{ file: string; sourceHash: string }>;
+    /** Discovery closure retained after an actual scan, for final readiness validation. */
+    initializationSources?: Array<{ file: string; sourceHash: string }>;
     proposedRules: ImportFixtureRule[]; proposedPlan: ImportFixturePlan | null;
     proposals: ImportInitializationCandidate[];
 }
@@ -30,7 +35,8 @@ const sourceHash = (file: string) => createHash('sha256').update(fs.readFileSync
 
 /** One guarded load per source file, before any model work; successful loads are not test passes. */
 export async function inspectProjectImports(root: string, python: string, targets: ImportCheckTarget[], directory: string,
-    rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = ''): Promise<ImportCheck> {
+    rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = '', planBeforeImport = false): Promise<ImportCheck> {
+    if (planBeforeImport) { return inspectPreparedProjectImports(root, python, targets, directory, rules, log, boundRoot); }
     root = fs.realpathSync(root);
     const selectedRules = selectImportFixtureRules(root, rules, boundRoot);
     if (rules.length && !selectedRules.length) { log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。")); }
@@ -155,6 +161,8 @@ export async function inspectProjectImports(root: string, python: string, target
 }
 
 export function verifyImportProposal(check: ImportCheck): void {
+    const sources = check.planningSources || check.initializationSources;
+    if (sources) { verifyInitializationSources(check.root, sources); }
     if (!check.proposedPlan || createImportFixturePlan(check.root, check.proposedRules)?.id !== check.proposedPlan.id) {
         throw new Error(localize("初始化建議已過期或來源已變更；請重新預檢。"));
     }

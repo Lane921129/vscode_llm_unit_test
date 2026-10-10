@@ -6,18 +6,27 @@ import { validateResourceLocation, validateTestResources } from '../pipeline/iso
 export interface ImportInitializationCandidate {
     schemaVersion: 'import-initialization-candidate-v1';
     kind: 'mkdir' | 'entry-point'; file: string; line: number; sourceHash: string; operation: string;
-    evidence: 'blocked-direct-module-call'; returnValue: 'discarded';
+    evidence: 'blocked-direct-module-call' | 'static-direct-module-call'; returnValue: 'discarded';
     resourcePath?: string;
     resourceScope?: 'project-parent' | 'external-exact' | 'unc-virtual';
 }
 
 /** Recheck the Python observation against the selected root and current bytes. */
 export function readInitializationCandidate(root: string, diagnostic: any): ImportInitializationCandidate | undefined {
-    const value = diagnostic?.initialization_candidate;
-    if (diagnostic?.exception_type !== 'TraceSafetyError' || !value || typeof value !== 'object'
+    if (diagnostic?.exception_type !== 'TraceSafetyError') { return undefined; }
+    return readCandidate(root, diagnostic.initialization_candidate, 'blocked-direct-module-call');
+}
+
+/** Static proposals are not runtime observations and never imply readiness. */
+export function readPlannedInitializationCandidate(root: string, value: unknown): ImportInitializationCandidate | undefined {
+    return readCandidate(root, value, 'static-direct-module-call');
+}
+
+function readCandidate(root: string, value: any, evidence: ImportInitializationCandidate['evidence']): ImportInitializationCandidate | undefined {
+    if (!value || typeof value !== 'object'
         || value.schemaVersion !== 'import-initialization-candidate-v1'
         || !['mkdir', 'entry-point'].includes(value.kind)
-        || value.evidence !== 'blocked-direct-module-call' || value.returnValue !== 'discarded'
+        || value.evidence !== evidence || value.returnValue !== 'discarded'
         || typeof value.file !== 'string' || !value.file.endsWith('.py') || value.file.length > 1000
         || /[:\u0000-\u001f\u007f]/.test(value.file) || path.isAbsolute(value.file)
         || value.file.split(/[\\/]/).some((part: string) => !part || part === '.' || part === '..')

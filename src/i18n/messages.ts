@@ -1,5 +1,14 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '初始化規劃：{0} 個模組等待確認；尚未核准新設定或執行函式測試。': 'Initialization planning: {0} modules await confirmation; new settings have not been approved and function tests have not run.',
+    '- 第 {0} 次規劃：{1} 個模組等待初始化清單確認；實際診斷另列。': '- Planning {0}: {1} modules await initialization approval; observed diagnostics are recorded separately.',
+    '初始化清單待確認；已完成一次隔離診斷，尚未套用新設定。': 'Initialization settings await confirmation. One guarded diagnostic has completed; new settings have not been applied.',
+    '初始化靜態規劃未完成；尚未載入受測模組，請查看規劃診斷。': 'Static initialization planning is incomplete. No application module has been loaded; see the planning diagnostics.',
+    '[初始化規劃] 載入前彙整目錄與啟動入口；不執行受測程式。': '[Initialization planning] Collecting directories and startup entry points before loading; application code is not executed.',
+    '初始化清單待確認；尚未執行模組載入。': 'Initialization settings await confirmation; module loading has not started.',
+    '# 載入前初始化清單': '# Initialization plan before module loading',
+    '已彙整 {0} 個初始化項目；確認後先建立暫存資源與入口替身，再檢查模組載入。': 'Collected {0} initialization items. After confirmation, temporary resources and startup substitutes are prepared before checking module loading.',
+    '靜態候選不是已觀測錯誤；動態路徑、未知呼叫與資料庫 schema 仍須明確證據。': 'Static candidates are not observed failures. Dynamic paths, unknown calls and database schemas still require explicit evidence.',
     '環境設定尚未釋放，批次已停止；請等待完成後重新開始。': 'Environment setup is still active. The batch stopped; wait for setup to finish before starting again.',
     '初始化前後的來源、選取範圍或 Python 已改變，批次停止；請重新開始。': 'Sources, selected scope or Python changed during initialization. The batch stopped; start again.',
     '初始化設定在預檢期間改變，批次已停止；請重新開始。': 'Initialization settings changed during preflight. The batch stopped; start again.',

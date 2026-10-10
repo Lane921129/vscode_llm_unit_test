@@ -209,6 +209,55 @@ class ImportFixtureTests(unittest.TestCase):
                 payload={'file': str(file), 'module': 'neutral', 'importPaths': [str(root)]}).stdout)
             self.assertTrue(loaded['ok'], loaded)
 
+    def test_static_entry_approval_requires_a_plain_external_python_function(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, dependency = base / 'app', base / 'external'
+            root.mkdir(); dependency.mkdir()
+            (root / 'application_callbacks.py').write_text(
+                'def local(callback):\n    raise RuntimeError("application function must not run")\n'
+                'class Handler:\n'
+                '    def __call__(self, callback):\n        raise RuntimeError("application callable must not run")\n'
+                '    def start(self, callback):\n        raise RuntimeError("application method must not run")\n', encoding='utf-8')
+            file = root / 'neutral.py'
+            source = ('import neutral_runtime\ndef callback():\n    return 3\n'
+                      'neutral_runtime.launch(callback)\ndef target(): return 4\n')
+            file.write_text(source, encoding='utf-8')
+            static = json.loads(self.run_tool('plan_import_initialization.py', root,
+                payload={'root': str(root), 'files': [str(file)]}).stdout)
+            self.assertTrue(static['complete'], static)
+            self.assertEqual(len(static['candidates']), 1, static)
+            candidate = static['candidates'][0]
+            self.assertEqual(candidate['operation'], 'neutral_runtime.launch')
+            self.assertEqual(candidate['evidence'], 'static-direct-module-call')
+            plan = self.plan(root, [{'file': candidate['file'], 'entryPoints': [candidate['operation']],
+                                    'entryPointLines': {candidate['operation']: [candidate['line']]},
+                                    'entryPointSourceHash': candidate['sourceHash']}])
+            cases = {
+                'local-callable': 'from application_callbacks import Handler\nlaunch = Handler()\n',
+                'local-partial': 'from functools import partial\nfrom application_callbacks import local\nlaunch = partial(local)\n',
+                'local-bound-method': 'from application_callbacks import Handler\nlaunch = Handler().start\n',
+                'bound-builtin': 'launch = [].append\n',
+                'builtin-function': 'launch = len\n',
+                'external-callable': 'class Handler:\n    def __call__(self, callback): pass\nlaunch = Handler()\n',
+                'local-function': 'from application_callbacks import local as launch\n',
+                'external-function': 'def launch(callback):\n    raise RuntimeError("external startup must not run")\n',
+            }
+            for name, backend in cases.items():
+                with self.subTest(name=name):
+                    (dependency / 'neutral_runtime.py').write_text(backend, encoding='utf-8')
+                    loaded = json.loads(self.run_tool('module_preflight.py', root, plan, extra_paths=[dependency],
+                        payload={'file': str(file), 'module': 'neutral', 'sourceRoot': str(root),
+                                 'importPaths': [str(root), str(dependency)]}).stdout)
+                    self.assertEqual(loaded['ok'], name == 'external-function', loaded)
+                    if name != 'external-function':
+                        self.assertIn('Startup fixture', loaded['diagnostic']['message'])
+                        self.assertEqual(loaded.get('importFixtures', {}).get('operations', []), [])
+                    else:
+                        self.assertEqual(loaded['importFixtures']['operations'], [
+                            {'file': 'neutral.py', 'operation': 'neutral_runtime.launch', 'line': 4}])
+                    self.assertEqual(file.read_text(encoding='utf-8'), source)
+
     def test_changed_source_rejects_stale_fixture_and_restores_strict_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

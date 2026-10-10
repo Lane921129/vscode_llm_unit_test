@@ -64,7 +64,9 @@ test('real batch applies the confirmed isolated resource once and resumes the sa
             settings.importFixtures = []; settings.importFixtureRoot = '';
             const source = (scenario === 'dependency-fixed' ? 'import neutral_missing_dependency\n'
                 : 'from pathlib import Path\nPath("owned_first").mkdir(exist_ok=True)\n')
-                + (scenario === 'new-blocker' ? 'Path("owned_second").mkdir(exist_ok=True)\n' : '') + 'def target():\n    return 1\n';
+                // A second direct mkdir belongs in the initial static list. Keep this
+                // case dynamic so the confirmed load can reveal a genuinely new blocker.
+                + (scenario === 'new-blocker' ? 'getattr(Path("owned_second"), "mkdir")(exist_ok=True)\n' : '') + 'def target():\n    return 1\n';
             fs.writeFileSync(file, source);
             const outputRoot = scenario === 'default-output' ? root : output;
             const before = fs.existsSync(outputRoot) ? fs.readdirSync(outputRoot) : [];

@@ -19,7 +19,7 @@ interface SetupSession {
     reason: string;
     applied: boolean;
     nextSetupAvailable: boolean;
-    checks: Array<{ directory: string; blocked: number; loaded: number }>;
+    checks: Array<{ directory: string; blocked: number; loaded: number; phase?: string; planned?: number }>;
 }
 
 test('initialization setup stops after one confirmed recheck and preserves the remaining evidence', async t => {
@@ -97,8 +97,9 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             const original = path.join(path.dirname(root), 'VMS_Data'); fs.mkdirSync(original);
             fs.writeFileSync(path.join(original, 'original.txt'), 'original data');
             const result = await run(fixture);
+            const plannedDataName = process.platform === 'win32' ? 'vms_data' : 'VMS_Data';
             assert.equal(confirmations, 1);
-            assert.ok(confirmationMessages[0].includes('專案父層資源：../VMS_Data')
+            assert.ok(confirmationMessages[0].includes('專案父層資源：../' + plannedDataName)
                 && confirmationMessages[0].includes('不讀取或寫入原位置'));
             assert.equal(updates, 2);
             assert.equal(modelCalls, 0);
@@ -106,12 +107,14 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(result.outcome.status, 'ready');
             assert.equal(result.outcome.fixtureId, createImportFixturePlan(root, settings.importFixtures, settings.importFixtureRoot)!.id);
             assert.equal(result.session.reason, 'recheck-ready');
-            assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[0, 1], [1, 0]]);
+            assert.equal(result.session.checks[0].phase, 'planning');
+            assert.equal(result.session.checks[0].planned, 1);
+            assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[0, 0], [1, 0]]);
             assert.deepEqual(settings.importFixtures[0].resources,
-                [{ path: 'VMS_Data', scope: 'project-parent', kind: 'directory' }]);
+                [{ path: plannedDataName, scope: 'project-parent', kind: 'directory' }]);
             const preview = JSON.parse(fs.readFileSync(path.join(result.directory, '1', 'setup_proposal.json'), 'utf8'));
             assert.equal(preview.evidence[0].resourceScope, 'project-parent');
-            assert.equal(preview.evidence[0].resourcePath, 'VMS_Data');
+            assert.equal(preview.evidence[0].resourcePath, plannedDataName);
             assert.equal(fs.readFileSync(fixture.file, 'utf8'), fixture.source);
             assert.deepEqual(fs.readdirSync(original), ['original.txt']);
             assert.equal(fs.readFileSync(path.join(original, 'original.txt'), 'utf8'), 'original data');
@@ -138,8 +141,10 @@ test('initialization setup stops after one confirmed recheck and preserves the r
                     assert.equal(result.session.status, { confirm: 'ready', decline: 'blocked', 'source-changed': 'incomplete', cancel: 'cancelled' }[outcome]);
                     assert.equal(result.outcome.status, { confirm: 'ready', decline: 'declined', 'source-changed': 'failed', cancel: 'cancelled' }[outcome]);
                     assert.equal(result.session.reason, { confirm: 'recheck-ready', decline: 'proposal-declined', 'source-changed': 'error', cancel: 'interrupted' }[outcome]);
+                    assert.equal(result.session.checks[0].phase, 'planning');
+                    assert.equal(result.session.checks[0].planned, 1);
                     assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]),
-                        outcome === 'confirm' ? [[0, 1], [1, 0]] : [[0, 1]]);
+                        outcome === 'confirm' ? [[0, 0], [1, 0]] : [[0, 0]]);
                     assert.ok(confirmationMessages[0].includes(external));
                     assert.ok(confirmationMessages[0].includes(scope === 'unc-virtual'
                         ? outcome === 'decline' ? 'does not grant network access' : '不授予網路存取權限'

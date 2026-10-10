@@ -8,6 +8,7 @@ export const PYTHON_TOOLS = {
     callers: 'ast_caller_finder.py',
     trace: 'dynamic_tracer.py',
     preflight: 'module_preflight.py',
+    initializationPlan: 'plan_import_initialization.py',
     environment: 'environment_probe.py',
     installer: 'package_installer.py',
     scaffold: 'mock_scaffold_generator.py',

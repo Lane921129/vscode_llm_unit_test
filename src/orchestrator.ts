@@ -545,8 +545,8 @@ export function activate(context: vscode.ExtensionContext) {
                     const inspect = async () => {
                         const saved = readPlan();
                         const check = await inspectProjectImports(runParams.batchPath, runParams.pythonExecutable, importTargets,
-                            path.join(batchDirectory, 'preflight'), saved.rules, log, saved.root);
-                        batch.preflightEvidence({ phase: 'initial', status: 'checked', fixtureId: saved.plan?.id || null,
+                            path.join(batchDirectory, 'preflight'), saved.rules, log, saved.root, true);
+                        batch.preflightEvidence({ phase: 'initial', status: check.planningSources ? 'planned-awaiting-confirmation' : 'checked', fixtureId: saved.plan?.id || null,
                             resourceCount: saved.plan?.rules.reduce((count, rule) => count + (rule.resources?.length || 0), 0) || 0,
                             blockedModules: check.rows.filter(row => row.status === 'blocked').length,
                             report: path.join(check.directory, 'import_check.md') });
@@ -561,7 +561,7 @@ export function activate(context: vscode.ExtensionContext) {
                     if (blockedModules) {
                         const report = path.join(importCheck.directory, 'import_check.md');
                         await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(report), { preview: true });
-                        const choice = await vscode.window.showWarningMessage(
+                        const choice = importCheck.planningSources ? localize('處理初始化設定') : await vscode.window.showWarningMessage(
                             localize("{0} 個模組載入受阻；尚未呼叫模型。處理初始化設定後，重檢就緒會接續本批次；仍受阻則停止。也可明確選擇僅繼續記錄失敗。", blockedModules),
                             { modal: true }, localize("處理初始化設定"), localize("繼續測試並記錄失敗"));
                         throwIfExecutionCancelled();
@@ -580,6 +580,7 @@ export function activate(context: vscode.ExtensionContext) {
                                 throw error;
                             }
                             throwIfExecutionCancelled();
+                            if (setup.rows.length) { batch.preflight(setup.rows.filter(row => row.status === 'blocked').length); }
                             batch.preflightEvidence({ phase: 'setup', status: setup.status, fixtureId: setup.fixtureId,
                                 blockedModules: setup.rows.filter(row => row.status === 'blocked').length,
                                 ...(setup.status === 'ready' ? { resourceCount: readPlan().plan?.rules.reduce((count, rule) => count + (rule.resources?.length || 0), 0) || 0 } : {}),
