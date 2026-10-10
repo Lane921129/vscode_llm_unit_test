@@ -21,6 +21,16 @@ export class AnalysisStageError extends Error {
     }
 }
 
+/** Preserve only a transport-owned numeric status, never provider text or a
+ * status guessed from a traceback, target name or arbitrary exception. */
+export function modelRequestHttpStatus(error: unknown): number | undefined {
+    if (!(error instanceof AnalysisStageError) || error.category !== 'model-api'
+        || error.stage !== 'model-request' || !error.diagnostic || typeof error.diagnostic !== 'object') { return undefined; }
+    const status = (error.diagnostic as { httpStatus?: unknown }).httpStatus;
+    return typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599
+        ? status : undefined;
+}
+
 /**
  * Classify an already-safe, user-visible error message. This is diagnostic
  * metadata only: it never changes routing, retries, or the quality gates.

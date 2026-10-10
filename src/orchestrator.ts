@@ -86,7 +86,7 @@ import { ImportSetupController } from './environment/importSetupController';
 import { configureTestResources } from './environment/resourceSetupController';
 import { inspectProjectImports, ImportCheckTarget } from './environment/projectImportCheck';
 import { ImportFixtureRule } from './pipeline/importFixtures';
-import { buildIsolatedResourceContext } from './prompts/isolatedResourceContext';
+import { buildTargetIsolatedResourceContext, type IsolatedResourceSourceEvidence } from './prompts/isolatedResourceContext';
 import { readResourceSetupFailure } from './pipeline/resourceSetupFailure';
 import { pythonEnvironmentActivity } from './environment/pythonEnvironmentSetup';
 import { AnalysisEnvironmentLease } from './environment/analysisEnvironmentLease';
@@ -101,7 +101,7 @@ import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow } from './prompts/promptBudget';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
-import { AnalysisStageError, classifyExecutionFailure } from './utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
@@ -1509,11 +1509,29 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += diagnosticReport + (stage === 'repair-routing' ? formatRepairRouting(detail) : '');
         writeReport();
     };
+    let resourceProjectionEvidence: IsolatedResourceSourceEvidence | undefined;
+    const importResourcePrompt = (): string => {
+        if (!importFixtures) { return ''; }
+        const resourceContext = buildTargetIsolatedResourceContext(importFixtures,
+            resourceProjectionEvidence, 6000, knownSecrets);
+        if (!resourceContext.complete) {
+            const sourceChanged = resourceContext.status === 'source-drift';
+            throw new AnalysisStageError('validation', sourceChanged ? 'source-changed' : 'resource-context',
+                sourceChanged ? localize('來源版本已改變，停止使用舊證據。')
+                    : localize('隔離資源語境無法完整核對，未送出模型請求。'),
+                { status: resourceContext.status, resourceCount: resourceContext.resourceCount });
+        }
+        return '\n\n[Import test setup] The original module runs under the saved import-fixtures-v1 contract. '
+            + 'Declared entry-point initialization is mocked. Legacy mkdir/configFiles fixtures remain import-only mocks. '
+            + 'Only explicitly declared isolated resources are materialized by the host. Observations apply to this test setup; '
+            + 'do not claim production data, network or GUI startup behavior was tested.'
+            + '\n\n' + resourceContext.context;
+    };
     const requestBudgeted = async (
         requestParams: AnalysisParams, system: string, prompt: string,
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
-        sharedDeadlineAt?: number
+        sharedDeadlineAt?: number, reservedInputTokens = 0
     ): Promise<string> => {
         if (role === 'writer' && mode === 'full') {
             prompt = seedPending ? buildWriterSeedPrompt(prompt)
@@ -1524,20 +1542,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const observations = numericEvidencePrompt();
             if (!prompt.includes(observations)) { prompt += '\n\n' + observations; }
         }
-        if (importFixtures) {
-            prompt += '\n\n[Import test setup] The original module runs under the saved import-fixtures-v1 contract. '
-                + 'Declared entry-point initialization is mocked. Legacy mkdir/configFiles fixtures remain import-only mocks. '
-                + 'Only explicitly declared isolated resources are materialized by the host. Observations apply to this test setup; '
-                + 'do not claim production data, network or GUI startup behavior was tested.';
-            prompt += '\n\n' + buildIsolatedResourceContext(importFixtures, 6000, knownSecrets);
-        }
+        prompt += importResourcePrompt();
         const contractedSystem = addOutputContract(system, format);
         const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
-            inputBudget: activeModelProfile.budgetTokens,
+            inputBudget: activeModelProfile.budgetTokens, reservedInputTokens,
             contextWindow,
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
-        if (!promptFits(contractedSystem, prompt, activeModelProfile.budgetTokens)) {
+        if (!promptFits(contractedSystem, prompt, activeModelProfile.budgetTokens, reservedInputTokens)) {
             recordRole('model-request', 'budget-exceeded', metrics);
             throw new AnalysisStageError('validation', 'prompt-budget',
                 localize("完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。"), metrics);
@@ -1558,6 +1570,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         } catch (error) {
             recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
                 category: error instanceof AnalysisStageError ? error.category : 'unknown',
+                ...(modelRequestHttpStatus(error) !== undefined ? { httpStatus: modelRequestHttpStatus(error) } : {}),
                 reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
             throw error;
         }
@@ -1584,6 +1597,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         preflight = await preflightTargetModule(pythonExecutable, params.filePath, module,
             [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir,
             context?.dependencies || [], projectRoot);
+        resourceProjectionEvidence = preflight.resourceScope?.eligible ? {
+            version: SOURCE_VERSIONS_VERSION,
+            target: { file: params.filePath, hash: journal.sourceHash },
+            sources: preflight.sourceVersions
+        } : undefined;
         recordRole('environment', 'passed', { module: preflight.module, importFixtures: preflight.importFixtures });
         return preflight;
     };
@@ -1903,9 +1921,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 }
             );
             const parsedSemResult = await semanticWithContractRepair({ prompt: semUsr,
+                targetParameters: Array.isArray(astContext.args) ? astContext.args : undefined,
                 deadlineAt: Math.min(deadlineAtFromTimeoutSeconds(params.timeoutSeconds), currentTargetBudget()?.deadlineAt ?? Infinity),
-                request: (prompt, deadline) => requestBudgeted(params, semSys, prompt, log,
-                    analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning', deadline),
+                request: (prompt, deadline, reserve) => requestBudgeted(params, semSys, prompt, log,
+                    analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning', deadline, reserve),
                 checkCurrent: () => {
                     throwIfExecutionCancelled();
                     if (!evidenceStillCurrent()) {
@@ -2096,7 +2115,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const generationBudget = Math.max(1, activeModelProfile.budgetTokens
             - estimateTokens(addOutputContract(systemPrompt, testGenerationResponseFormat))
             - estimateTokens(phasePrompt) - estimateTokens(qualityObservationEvidence)
-            - estimateTokens(numericEvidencePrompt()));
+            - estimateTokens(numericEvidencePrompt()) - estimateTokens(importResourcePrompt()));
         const userPrompt = getUserPrompt(
             params.filePath,
             targetFuncName,
@@ -2500,7 +2519,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     throwIfExecutionCancelled();
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true, facts },
                         Number.MAX_SAFE_INTEGER);
-                    if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt, activeModelProfile.budgetTokens)) {
+                    if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt + importResourcePrompt(), activeModelProfile.budgetTokens)) {
                         recordRole('reviewer', 'budget-exceeded', { reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
                         return undefined;
                     }

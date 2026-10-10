@@ -14,6 +14,31 @@ export interface ResolvedDependency {
     module: string; name: string; level?: number; file?: string; resolvedModule?: string; reason?: string;
 }
 
+export const RESOURCE_SCOPE_VERSION = 'loaded-resource-scope-v1';
+const resourceScopeReasons = ['invalid-source-snapshot', 'source-budget', 'source-unavailable', 'source-changed',
+    'source-parse', 'nested-import', 'dynamic-import', 'unknown-dispatch'] as const;
+export interface PreflightResourceScope {
+    version: typeof RESOURCE_SCOPE_VERSION;
+    eligible: boolean;
+    sourceSetHash: string;
+    reason?: typeof resourceScopeReasons[number];
+}
+
+/** This only binds the worker's conservative syntax check to this exact loaded
+ * snapshot. It does not claim a complete arbitrary-runtime import closure. */
+export function parsePreflightResourceScope(value: unknown, sourceVersions: unknown): PreflightResourceScope | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !validSourceVersions(sourceVersions)) { return undefined; }
+    const scope = value as Record<string, unknown>;
+    if (scope.version !== RESOURCE_SCOPE_VERSION || typeof scope.eligible !== 'boolean'
+        || typeof scope.sourceSetHash !== 'string' || !/^[a-f0-9]{64}$/.test(scope.sourceSetHash)
+        || (scope.reason !== undefined && !resourceScopeReasons.includes(scope.reason as typeof resourceScopeReasons[number]))
+        || (scope.eligible && scope.reason !== undefined)) { return undefined; }
+    const sourceSetHash = createHash('sha256').update(JSON.stringify(sourceVersions.map(item => [item.file, item.hash]))).digest('hex');
+    if (scope.sourceSetHash !== sourceSetHash) { return undefined; }
+    return { version: RESOURCE_SCOPE_VERSION, eligible: scope.eligible, sourceSetHash,
+        ...(scope.reason !== undefined ? { reason: scope.reason as typeof resourceScopeReasons[number] } : {}) };
+}
+
 export type PreflightToolReason = 'timeout' | 'process-failed' | 'invalid-result';
 export interface PreflightToolDiagnostic {
     schemaVersion: 'module-preflight-tool-diagnostic-v1';
@@ -34,6 +59,7 @@ export interface PreflightResult {
     importPaths: string[];
     sourceVersionsVersion: typeof SOURCE_VERSIONS_VERSION;
     sourceVersions: SourceVersion[];
+    resourceScope?: PreflightResourceScope;
     dependencies?: ResolvedDependency[];
     importFixtures?: { id: string; operations: Array<{ file: string; operation: string; line: number }> };
 }
@@ -146,7 +172,11 @@ async function executePreflight(python: string, file: string, module: string, im
         if (value.sourceVersionsVersion !== SOURCE_VERSIONS_VERSION || !validSourceVersions(value.sourceVersions)) {
             throw toolFailure('invalid-result', { detailCode: 'missing-or-invalid-source-versions' });
         }
-        return value as PreflightResult;
+        // Missing/old/malformed optional evidence never authorizes filtering.
+        // Keep the successful import; the caller must retain all resources.
+        const resourceScope = parsePreflightResourceScope(value.resourceScope, value.sourceVersions);
+        const { resourceScope: _untrustedResourceScope, ...preflight } = value;
+        return { ...preflight, ...(resourceScope ? { resourceScope } : {}) } as PreflightResult;
     } catch (error) {
         throwIfExecutionCancelled();
         const stageError = error instanceof AnalysisStageError ? error

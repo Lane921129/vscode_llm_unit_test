@@ -25,6 +25,7 @@ export function estimatePromptTokens(text: string): number {
     return Math.ceil((text.length - nonAscii) / 3.5 + nonAscii);
 }
 
-export function promptFits(system: string, prompt: string, budget: number): boolean {
-    return estimatePromptTokens(system + '\n' + prompt) <= budget;
+export function promptFits(system: string, prompt: string, budget: number, reservedInputTokens = 0): boolean {
+    return Number.isSafeInteger(reservedInputTokens) && reservedInputTokens >= 0
+        && estimatePromptTokens(system + '\n' + prompt) + reservedInputTokens <= budget;
 }

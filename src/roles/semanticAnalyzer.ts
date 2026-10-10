@@ -10,8 +10,9 @@
  * The deterministic dispatcher owns test-rule selection after this role returns.
  */
 
-import { BehaviorObservations } from '../pipeline/evidenceContracts';
+import { BehaviorObservations, observationsForPrompt } from '../pipeline/evidenceContracts';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
+import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 
 // === Type Definitions ===
 
@@ -80,9 +81,11 @@ export interface SemanticAstSetupContext {
     referenced_globals?: Array<{ name?: string; code?: string }>;
     class_name?: string | null;
     method_kind?: 'module' | 'instance' | 'static' | 'class' | 'property';
+    property_context?: unknown;
     class_context?: {
         name?: string;
         bases?: string[];
+        class_attrs?: Array<{ name?: string; code?: string }>;
         init?: {
             signature?: Array<{ name?: string; kind?: string; annotation?: string | null; default?: string | null; required?: boolean }>;
             assigns?: Array<{ name?: string; code?: string }>;
@@ -103,76 +106,38 @@ export interface SemanticAstSetupContext {
     } | null;
 }
 
-function oneLine(value: unknown, limit = 240): string {
-    return String(value ?? '').replace(/[\r\n]+/g, ' ').slice(0, limit);
-}
-
-function formatCall(args: string[] | undefined, kwargs: Record<string, string> | undefined): string {
-    const keywords = Object.entries(kwargs || {}).map(([name, value]) => `${name}=${oneLine(value)}`);
-    return [...(args || []).map(value => oneLine(value)), ...keywords].join(', ');
-}
-
 export function formatVerifiedTargetObservations(
-    targetName: string,
+    _targetName: string,
     observations?: BehaviorObservations
 ): string {
     if (!observations) {return '';}
-    let out = '=== VERIFIED TARGET EXECUTION OBSERVATIONS ===\n';
-    out += 'Python executed these exact calls under the controlled probe. They are evidence for the same call conditions, but are not exhaustive.\n';
-    if (observations.load_error) {
-        out += `  - Observation unavailable: ${oneLine(observations.load_error)}\n`;
-    } else {
-        for (const example of observations.examples.filter(example =>
-            example.call_assertable !== false && example.result_assertable !== false
-        ).slice(0, 4)) {
-            out += `  - ${targetName}(${formatCall(example.args, example.kwargs)}) => ${oneLine(example.result)}${example.result_type ? ` [${oneLine(example.result_type, 60)}]` : ''}\n`;
-        }
-        for (const error of observations.errors.filter(error => error.call_assertable !== false).slice(0, 4)) {
-            out += `  - ${targetName}(${formatCall(error.args, error.kwargs)}) raises ${oneLine(error.exception, 80)}${error.message ? `: ${oneLine(error.message)}` : ''}\n`;
-        }
-    }
-    for (const blocked of (observations.blocked_operations || []).slice(0, 2)) {
-        out += `  - Diagnostic only, blocked by safety policy: ${oneLine(blocked)}\n`;
-    }
-    out += 'Blocked operations and load errors are diagnostics only. Never turn them into target exceptions or assertions.\n\n';
-    return out;
+    return '=== VERIFIED TARGET EXECUTION OBSERVATIONS ===\n'
+        + JSON.stringify(observationsForPrompt(observations))
+        + '\nExact call/setup only. Blocked, load-error, truncated or unassertable records are diagnostics, never target exceptions or assertions.\n\n';
 }
 
 function formatVerifiedDependencyFacts(dependencies: DependencyEvidenceForPrompt[]): string {
-    const traced = dependencies.filter(dependency => {
-        const trace = dependency.observations;
-        return trace && !trace.load_error && ((trace.examples?.length || 0) > 0 || (trace.errors?.length || 0) > 0);
-    });
+    const traced = dependencies.filter(dependency => dependency.observations);
     if (traced.length === 0) {
         return '';
     }
 
-    let out = '=== VERIFIED DEPENDENCY EXECUTION FACTS ===\n';
-    out += 'These observations were executed by Python. They take precedence over model inference and are not exhaustive.\n';
-    for (const dependency of traced.slice(0, 4)) {
-        const trace = dependency.observations!;
-        for (const example of (trace.examples || []).filter(example =>
-            example.call_assertable !== false && example.result_assertable !== false
-        ).slice(0, 3)) {
-            out += `  - ${dependency.name}(${formatCall(example.args, example.kwargs)}) => ${oneLine(example.result)}\n`;
-        }
-        for (const error of (trace.errors || []).filter(error => error.call_assertable !== false).slice(0, 3)) {
-            out += `  - ${dependency.name}(${formatCall(error.args, error.kwargs)}) raises ${oneLine(error.exception, 80)}${error.message ? `: ${oneLine(error.message)}` : ''}\n`;
-        }
-    }
-    return out + '\n';
+    return '=== VERIFIED DEPENDENCY EXECUTION FACTS ===\n'
+        + JSON.stringify(traced.map(dependency => ({ name: dependency.name, sourceHash: dependency.sourceHash,
+            observations: observationsForPrompt(dependency.observations) })))
+        + '\nExact call/setup only; diagnostics and unassertable records are not oracles. Dependency results are not target results.\n\n';
 }
 
 function formatAstSetupContext(context?: SemanticAstSetupContext): string {
     if (!context) {return '';}
     const lines: string[] = [];
-    const targetParameters = (context.args || []).filter(name => typeof name === 'string' && /^[A-Za-z_]\w*$/.test(name));
+    const targetParameters = (context.args || []).filter(name => typeof name === 'string');
     if (targetParameters.length > 0) {
         lines.push(`Target function parameters: ${targetParameters.join(', ')}.`);
     } else if (Array.isArray(context.args)) {
         lines.push('Target function parameters: none.');
     }
-    const imports = (context.file_imports || []).slice(0, 12);
+    const imports = context.file_imports || [];
     if (imports.length > 0) {
         lines.push('Imports available in the target module:');
         for (const item of imports) {
@@ -184,7 +149,7 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
             }
         }
     }
-    const globals = (context.referenced_globals || []).filter(item => item.name && item.code).slice(0, 8);
+    const globals = (context.referenced_globals || []).filter(item => item.name && item.code);
     if (globals.length > 0) {
         lines.push('Referenced module globals (source definitions):');
         for (const item of globals) {
@@ -197,13 +162,16 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
         if (classInfo.bases?.length) {
             lines.push(`Class bases: ${classInfo.bases.join(', ')}`);
         }
-        const signature = (classInfo.init?.signature || []).slice(0, 12);
+        if (classInfo.class_attrs?.length) {
+            lines.push('Class attributes (source setup): ' + JSON.stringify(classInfo.class_attrs));
+        }
+        const signature = classInfo.init?.signature || [];
         if (signature.length > 0) {
             lines.push('Constructor parameters: ' + signature.map(param =>
-                `${param.name || '?'}${param.annotation ? `: ${param.annotation}` : ''} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})`
+                `${param.name || '?'}${param.annotation ? `: ${param.annotation}` : ''} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})${param.kind ? ` [${param.kind}]` : ''}`
             ).join(', '));
         }
-        const assigns = (classInfo.init?.assigns || []).filter(item => item.code).slice(0, 8);
+        const assigns = (classInfo.init?.assigns || []).filter(item => item.code);
         if (assigns.length > 0) {
             lines.push('Constructor assignments (source setup):');
             for (const item of assigns) {
@@ -212,14 +180,14 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
         }
         const effectiveInit = classInfo.effective_init;
         if (effectiveInit?.defined_on && effectiveInit.defined_on !== (context.class_name || classInfo.name)) {
-            const inheritedSignature = (effectiveInit.signature || []).slice(0, 12);
+            const inheritedSignature = effectiveInit.signature || [];
             lines.push(`Inherited constructor source: ${effectiveInit.defined_on}.`);
             if (inheritedSignature.length > 0) {
                 lines.push('Inherited constructor parameters: ' + inheritedSignature.map(param =>
-                    `${param.name || '?'}${param.annotation ? `: ${param.annotation}` : ''} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})`
+                    `${param.name || '?'}${param.annotation ? `: ${param.annotation}` : ''} (${param.required ? 'required' : `default ${param.default ?? 'unknown'}`})${param.kind ? ` [${param.kind}]` : ''}`
                 ).join(', '));
             }
-            const inheritedAssigns = (effectiveInit.assigns || []).filter(item => item.code).slice(0, 8);
+            const inheritedAssigns = (effectiveInit.assigns || []).filter(item => item.code);
             if (inheritedAssigns.length > 0) {
                 lines.push('Inherited constructor assignments (source setup):');
                 for (const item of inheritedAssigns) {
@@ -227,6 +195,12 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
                 }
             }
         }
+        if (classInfo.inherited_context?.length) {
+            lines.push('Inherited setup (source only): ' + JSON.stringify(classInfo.inherited_context));
+        }
+    }
+    if (context.property_context) {
+        lines.push('Property setup (source only): ' + JSON.stringify(context.property_context));
     }
     return lines.length > 0
         ? `=== MODULE AND CLASS SETUP CONTEXT ===\n${lines.join('\n')}\nThis is source/setup context only. It does not prove a return value, exception, or external side effect.\n\n`
@@ -236,66 +210,22 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
 // === System Prompt ===
 
 export function getSemanticAnalyzerSystemPrompt(_legacyRuleSummary?: string): string {
-    return `You are a Python code analyst with two responsibilities:
-1. Analyze cross-function dependency behavior in a specific calling context
-2. Propose evidence-bound input scenarios for the Unittest Writer; test-rule selection is handled by the runner
-
-Your output must be a single valid JSON object with this exact schema:
-{
-  "dependency_behaviors": [
-    {
-      "name": "<dependency function name>",
-      "when_caller_passes": "<description of fixed args the target passes>",
-      "always_returns": "<exact return value or structure>",
-      "can_raise": ["<ExceptionType> when <condition>"]
-    }
-  ],
-  "unreachable_paths": [
-    {
-      "condition": "<branch condition that is always True/False>",
-      "reason": "<why it cannot be False/True in normal calls>"
-    }
-  ],
-  "mock_required_for": [
-    {
-      "path": "<description of unreachable path>",
-      "mock_target": "<module.function patch path>",
-      "example": "<one-line mock example>"
-    }
-  ],
-  "test_strategy": {
-    "approach": "<overall test strategy for this specific function>",
-    "input_hints": [
-      {
-        "param_name": "<parameter name>",
-        "strategy": "<how to choose inputs for this param>",
-        "boundary_inputs": ["<repr value1>", "<repr value2>"],
-        "invalid_inputs": ["<repr value that raises exception>"],
-        "notes": "<any critical notes, e.g. 'value[-N:] takes the last N characters'>"
-      }
-    ],
-    "assertion_style": "assertEqual | assertRaises | mixed",
-    "mock_needed": false,
-    "key_rules": [
-      "<concise source-specific testing observation>"
-    ]
-  }
-}
-
-ANALYSIS RULES:
-- MODULE AND CLASS SETUP CONTEXT is useful for choosing imports, constructor setup and possible dependency injection. It is not execution evidence: never infer an exact return value, exception, or external result from it.${isolatedResourceSystemRule()}
-- When TARGET FUNCTION PARAMETERS are supplied, every test_strategy.input_hints[].param_name must be exactly one of those target parameters. Dependency parameters and dependency return keys are never target inputs.
-- TARGET CALL SITES show how other project code invokes the selected target. They are input candidates only: they do not prove target output, dependency behavior, or an exception.
-- VERIFIED TARGET EXECUTION OBSERVATIONS are exact input/output samples produced by controlled Python execution. Use them to correct target-behavior hypotheses, but do not generalize them to unobserved inputs.
-- When VERIFIED DEPENDENCY EXECUTION FACTS are provided, reproduce their Python repr values exactly. Never replace a Python dict/list/tuple with a JavaScript-style description such as "[object Object]".
-- Without verified dependency execution facts, do not claim a dependency "always returns" a concrete value; leave dependency_behaviors empty and let the Writer rely on source code or mock.patch.
-- For unreachable_paths: if dependency always returns X, which if-conditions are always True/False?
-- For test_strategy.input_hints: derive boundary values from actual source code logic (thresholds, len checks, etc.)
-- For test_strategy.input_hints: emit only scalar Python literals: None, True, False, a finite number, or a plain quoted string. Do not emit expressions, calls, collections, comprehensions, attributes, or variable names. Safe scalar candidates may be executed by the controlled behavior probe; they are never an output oracle by themselves.
-- For test_strategy.key_rules: include only concise observations tied to this target; do not repeat generic unittest advice
-- If no dependencies, return empty arrays for dependency_behaviors, unreachable_paths, and mock_required_for
-- Do not predict, classify, or mention equivalent mutants. Equivalence is evaluated only after mutation execution from measured survivor evidence.
-- Return ONLY the JSON object, no explanation text`;
+    return `You are a Python code analyst. Propose source-specific unittest scenarios; the runner selects rules and executes probes. Do not write tests or classify equivalent mutants.
+Return one JSON object with this shape; replace placeholders, keep unsupported arrays empty:
+{"dependency_behaviors":[],"unreachable_paths":[],"mock_required_for":[],"test_strategy":{"approach":"<concrete plan for this target>","input_hints":[],"assertion_style":"mixed","mock_needed":false,"key_rules":[]}}
+Array item shapes:
+dependency_behaviors: {"name":"...","when_caller_passes":"...","always_returns":"<verified Python repr>","can_raise":[]}
+unreachable_paths: {"condition":"...","reason":"..."}
+mock_required_for: {"path":"...","mock_target":"<use-point>","example":"..."}
+input_hints: {"param_name":"<target parameter>","strategy":"...","boundary_inputs":[],"invalid_inputs":[],"notes":"..."}
+assertion_style is assertEqual, assertRaises or mixed. key_rules are source-specific strings. A meaningful test_strategy is required, including for zero-parameter functions.
+Evidence rules:
+- Source, annotations, setup and caller sites guide bindings and inputs, not output/exception proof. Input hints use only selected target parameters; never name dependency parameters or dependency return keys.
+- Controlled observations support only their exact call and constructor/setup. Preserve Python repr. Blocked/load-error, mutated, truncated, incomplete or unassertable records are diagnostics, not target exceptions or expected values; snapshots stay artifact-only.
+- Without verified dependency observations, leave dependency_behaviors empty. Dependency results are not target results. Unreachable paths and mock suggestions remain hypotheses; never omit tests on that basis or patch the target/class. With no dependencies, keep all three dependency/path arrays empty.
+- Derive boundaries from source conditions; emit only scalar Python literals (None, bool, finite number, quoted string), never calls, expressions or collections. They are never an output oracle by themselves; invalid_inputs does not prove an exception.
+- No direct network, file I/O, shell, dynamic execution or shared SQLite. External behavior needs explicit use-point mocks or host-declared isolated resources.${isolatedResourceSystemRule()}
+Return JSON only, no Markdown or explanations.`;
 }
 
 // === User Prompt ===
@@ -308,7 +238,7 @@ export function getSemanticAnalyzerUserPrompt(
     let prompt = '=== ANALYSIS EVIDENCE V2 ===\n';
     prompt += `Target: ${evidence.target.moduleName}.${evidence.target.functionName}\n`;
     prompt += `Source hash: ${evidence.target.sourceHash}\n\n`;
-    prompt += '=== TARGET FUNCTION SOURCE CODE ===\n```python\n' + evidence.target.source.trim() + '\n```\n\n';
+    prompt += '=== TARGET FUNCTION SOURCE CODE ===\n```python\n' + evidence.target.source + '\n```\n\n';
 
     prompt += formatAstSetupContext(evidence.astFacts);
     prompt += formatVerifiedTargetObservations(
@@ -318,8 +248,9 @@ export function getSemanticAnalyzerUserPrompt(
 
     if (dependencies.length > 0) {
         prompt += '=== DEPENDENCY SOURCE CODE ===\n';
-        for (const dep of dependencies.slice(0, 4)) {
-            prompt += '```python\n# Dependency: ' + dep.name + '\n' + dep.code.trim() + '\n```\n';
+        for (const dep of dependencies) {
+            prompt += '```python\n# Dependency: ' + dep.name + (dep.sourceHash ? '\n# Source hash: ' + dep.sourceHash : '')
+                + '\n' + dep.code + '\n```\n';
         }
         prompt += '\n';
     }
@@ -328,20 +259,13 @@ export function getSemanticAnalyzerUserPrompt(
 
     if (callSites.length > 0) {
         prompt += '=== TARGET CALL SITES (INPUT CANDIDATES ONLY) ===\n';
-        for (const cs of callSites.slice(0, 6)) {
+        for (const cs of callSites) {
             prompt += '  In ' + cs.caller_func + ': ' + cs.call_expr + '\n';
         }
         prompt += '\n';
     }
 
-    prompt += 'TASK:\n';
-    prompt += '1. Analyze target dependency usage (if any) to identify fixed behaviors and candidate unreachable paths.\n';
-    prompt += '2. Study the target function source code and derive a test_strategy:\n';
-    prompt += '   - Use only selected target parameter names in input_hints; never name dependency parameters or dependency return keys.\n';
-    prompt += '   - What are the valid/invalid input ranges for each parameter?\n';
-    prompt += '   - What boundary values would cover all if/elif branches?\n';
-    prompt += '   - What non-obvious behaviors might a test writer get wrong?\n';
-    prompt += 'Return ONLY the JSON object.';
+    prompt += 'Analyze this evidence using the role contract.';
 
     return prompt;
 }
@@ -361,8 +285,8 @@ const semanticTopLevelFields = new Set([
 
 /**
  * A syntactically valid but unrelated JSON object is not an Analyzer result.
- * Reject it so orchestration retains its syntax-derived rule baseline instead
- * of treating a provider error envelope or chat metadata as empty guidance.
+ * Reject it instead of treating a provider error envelope or chat metadata
+ * as a completed analysis plan.
  */
 function hasSemanticAnalysisShape(value: unknown): value is Record<string, unknown> {
     return isRecord(value) && Object.keys(value).some(key => semanticTopLevelFields.has(key));
@@ -373,6 +297,14 @@ function meaningfulText(value: unknown): string | undefined {
     const text = value.trim();
     if (!text || text === '...' || /^<[^>]+>$/.test(text)) {return undefined;}
     return text;
+}
+
+function meaningfulStrategyText(value: unknown): string | undefined {
+    const text = meaningfulText(value);
+    // A strategy may discuss a quoted XML/HTML input. Check scaffolding outside
+    // literals, keeping the original plan text and scalar spellings unchanged.
+    const unquoted = text?.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '[literal]');
+    return text && unquoted !== undefined && !hasTemplatePlaceholder(unquoted) && !hasRoleTemplateEcho(text) ? text : undefined;
 }
 
 function meaningfulTextList(value: unknown): string[] {
@@ -410,7 +342,7 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
         .map(item => {
             if (!isRecord(item)) {return undefined;}
             const param_name = meaningfulText(item.param_name);
-            const strategy = meaningfulText(item.strategy);
+            const strategy = meaningfulStrategyText(item.strategy);
             if (!param_name || !strategy) {return undefined;}
             return {
                 param_name,
@@ -423,17 +355,22 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
     const assertion_style = rawStrategy.assertion_style === 'assertEqual' || rawStrategy.assertion_style === 'assertRaises' || rawStrategy.assertion_style === 'mixed'
         ? rawStrategy.assertion_style
         : 'mixed';
+    const approach = meaningfulStrategyText(rawStrategy.approach) || '';
+    const key_rules = meaningfulTextList(rawStrategy.key_rules).filter(rule => Boolean(meaningfulStrategyText(rule)));
+    // An HTTP-successful object or empty dependency list is not a plan. Keep
+    // compatibility normalization only when some actual strategy survives it.
+    if (!approach && input_hints.length === 0 && key_rules.length === 0) { return null; }
 
     return {
         dependency_behaviors,
         unreachable_paths,
         mock_required_for,
         test_strategy: {
-            approach: meaningfulText(rawStrategy.approach) || '',
+            approach,
             input_hints,
             assertion_style,
             mock_needed: rawStrategy.mock_needed === true,
-            key_rules: meaningfulTextList(rawStrategy.key_rules)
+            key_rules
         }
     };
 }
@@ -487,6 +424,14 @@ export function restrictSemanticInputHintsToTargetParameters(
             input_hints: analysis.test_strategy.input_hints.filter(hint => allowed.has(hint.param_name))
         }
     };
+}
+
+/** Check again after source-bound filtering, which may remove every model hint. */
+export function hasMeaningfulSemanticStrategy(analysis: SemanticAnalysis): boolean {
+    const strategy = analysis.test_strategy;
+    return Boolean(meaningfulStrategyText(strategy.approach)
+        || strategy.input_hints.some(hint => meaningfulText(hint.param_name) && meaningfulStrategyText(hint.strategy))
+        || strategy.key_rules.some(rule => meaningfulStrategyText(rule)));
 }
 
 export function formatSemanticContextForPrompt(

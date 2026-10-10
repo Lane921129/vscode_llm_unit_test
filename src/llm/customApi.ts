@@ -102,10 +102,66 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
         return {
             type: 'object',
             properties: {
-                dependency_behaviors: { type: 'array' },
-                unreachable_paths: { type: 'array' },
-                mock_required_for: { type: 'array' },
-                test_strategy: { type: 'object' }
+                dependency_behaviors: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            name: { type: 'string' },
+                            when_caller_passes: { type: 'string' },
+                            always_returns: { type: 'string' },
+                            can_raise: { type: 'array', items: { type: 'string' } }
+                        },
+                        required: ['name', 'when_caller_passes', 'always_returns', 'can_raise']
+                    }
+                },
+                unreachable_paths: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            condition: { type: 'string' },
+                            reason: { type: 'string' }
+                        },
+                        required: ['condition', 'reason']
+                    }
+                },
+                mock_required_for: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            path: { type: 'string' },
+                            mock_target: { type: 'string' },
+                            example: { type: 'string' }
+                        },
+                        required: ['path', 'mock_target', 'example']
+                    }
+                },
+                test_strategy: {
+                    type: 'object',
+                    properties: {
+                        approach: { type: 'string' },
+                        input_hints: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    param_name: { type: 'string' },
+                                    strategy: { type: 'string' },
+                                    boundary_inputs: { type: 'array', items: { type: 'string' } },
+                                    invalid_inputs: { type: 'array', items: { type: 'string' } },
+                                    notes: { type: 'string' }
+                                },
+                                required: ['param_name', 'strategy', 'boundary_inputs', 'invalid_inputs', 'notes']
+                            }
+                        },
+                        assertion_style: { type: 'string', enum: ['assertEqual', 'assertRaises', 'mixed'] },
+                        mock_needed: { type: 'boolean' },
+                        key_rules: { type: 'array', items: { type: 'string' } }
+                    },
+                    required: ['approach', 'input_hints', 'assertion_style', 'mock_needed', 'key_rules']
+                }
             },
             required: [
                 'dependency_behaviors', 'unreachable_paths',

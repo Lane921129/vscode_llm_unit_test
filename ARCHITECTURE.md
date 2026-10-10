@@ -330,6 +330,12 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 
 同模組 helper 檢索由 `ast_extractor.py` 執行，與既有跨檔相依合併供分析角色和 Writer 使用。來源碼是 setup/path 語境，無執行時不得成為 oracle。`src/prompts/compactWriterContext.ts` 負責小模型完整證據與可省略 context 的排序，`verifiedWriterExamples.ts` 提供經回歸執行的中性範例；`promptBudget.ts` 統一 M/B 參數量、輸入預算與 Ollama context 設定。所有正式角色請求均先檢查完整提示預算，並記錄估計 tokens 與 logical request 耗時。Reviewer 拒絕帶穩定 diagnostics，完成 gate 維持不變。實作範圍與實驗室驗收見 [Writer 檢索與模型相容性](docs/Writer檢索與模型相容性_2026_09_17.md)。
 
+Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀測不再按舊筆數／字串長度裁切；只移除明確留在產物中的狀態快照。解析後與目標參數過濾後都必須仍有具體策略。第一次請求預留一次格式補正的完整固定文字，最終 provider envelope 仍檢查實際總量；傳輸失敗不啟動格式補正。Cloud 的 `semantic-json` schema 完整描述各陣列元素及巢狀策略，但 schema 或 HTTP 成功本身不代表策略有效。
+
+`module_preflight.py` 的 `loaded-resource-scope-v1` 是提示投影資格，綁定實際載入來源集合摘要，不是執行成功或任意 Python 呼叫閉包的證明。未知 dispatch、動態／局部匯入、裝飾與未證明的來源關係保留全部資源；複雜 DB／UI 因而仍可能超過小模型預算。`buildTargetIsolatedResourceContext` 只在有資格且来源重新核對後，選取來源 owner 與共享資源身分，保留完整 schema／約束；runtime 批准計畫與 worker 初始化不縮小。必要 schema 因隱私無法呈現或來源漂移時停止請求，不能當成空 schema。
+
+Writer 在選擇 optional 材料前，先預扣相同的初始化與資源語境；Reviewer 初步預算也包含它，最終傳輸 gate 再核對全部文字。角色事件保存估計 input、格式修正預留量、實際 context 設定、耗時與安全失敗分類；HTTP 狀態只採 transport 階段持有的數值，不由訊息文字猜測，也不保存 provider 本文。這些估量和基本資格探針不能證明完整小模型批次通過。
+
 ## 尚未實作與尚待驗收的界線
 
 本次流程重構不宣稱完成型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗只提供普通同步實例的同一目標最多兩次呼叫觀測，不自動寫入正式測試；實驗去重不等同突變量測快取。Writer 仍使用完整 Python fence，seed 與補強提示不等同已完成增量格式生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。

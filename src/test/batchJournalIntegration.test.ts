@@ -127,7 +127,7 @@ class Cases(unittest.TestCase):
             } else if (request.roleInstructions.includes('Analyst after successful')) {
                 roles.push('analyst-quality'); response = '{"tasks":[]}';
             } else if (request.roleInstructions.includes('dependency_behaviors')) {
-                roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
+                roles.push('analyst-planning'); response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
             } else {
                 roles.push('writer');
                 assert.match(request.prompt, /uncontrolled-ambient-read/);

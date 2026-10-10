@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { addOutputContract, buildCustomChatCompletionBody, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from '../llm/customApi';
+import { buildGoogleGenerateContentRequest } from '../llm/cloudApi';
+import { parseSemanticAnalysis, SemanticAnalysis } from '../roles/semanticAnalyzer';
 
 test('custom API requests JSON mode only when the caller needs a structured result', () => {
     const textRequest = buildCustomChatCompletionBody('model-a', 'system', 'user', 'text');
@@ -20,7 +22,7 @@ test('structured output contracts are generic and describe the expected envelope
     assert.strictEqual(addOutputContract('base', 'text'), 'base');
 });
 
-test('provides minimal schema contracts for semantic analysis, review, and mutant triage', () => {
+test('provides schema contracts for semantic analysis, review, and mutant triage', () => {
     const semantic = responseSchemaForOutputFormat('semantic-json');
     const review = responseSchemaForOutputFormat('review-json');
     const repair = responseSchemaForOutputFormat('test-method-json');
@@ -52,6 +54,88 @@ test('provides minimal schema contracts for semantic analysis, review, and mutan
         '```json\n{"method":"test_x","replacement":"def test_x(self): pass","imports":[]}\n```',
         'test-method-json'
     ));
+});
+
+test('semantic response schema defines every nested object and array element before transport', () => {
+    const schema = responseSchemaForOutputFormat('semantic-json');
+    const leaves: Record<string, unknown> = {};
+    const inspect = (candidate: unknown, path: string): void => {
+        assert.ok(candidate && typeof candidate === 'object' && !Array.isArray(candidate), path);
+        const node = candidate as Record<string, unknown>;
+        if (node.type === 'array') {
+            // Gemini rejects an array without items even when the prompt describes them.
+            assert.ok(node.items, `${path} requires items`);
+            assert.strictEqual(node.minItems, undefined, `${path} may be empty when no facts exist`);
+            inspect(node.items, `${path}[]`);
+        } else if (node.type === 'object') {
+            assert.ok(node.properties && typeof node.properties === 'object', `${path} requires properties`);
+            const properties = node.properties as Record<string, unknown>;
+            assert.ok(Object.keys(properties).length > 0, `${path} must not be an untyped object`);
+            assert.deepStrictEqual([...(node.required as string[])].sort(), Object.keys(properties).sort(), path);
+            for (const [name, property] of Object.entries(properties)) {
+                inspect(property, path ? `${path}.${name}` : name);
+            }
+        } else {
+            assert.ok(node.type === 'string' || node.type === 'boolean', `${path} has a scalar type`);
+            leaves[path] = node.type;
+        }
+    };
+    inspect(schema, '');
+    assert.deepStrictEqual(leaves, {
+        'dependency_behaviors[].name': 'string',
+        'dependency_behaviors[].when_caller_passes': 'string',
+        'dependency_behaviors[].always_returns': 'string',
+        'dependency_behaviors[].can_raise[]': 'string',
+        'unreachable_paths[].condition': 'string',
+        'unreachable_paths[].reason': 'string',
+        'mock_required_for[].path': 'string',
+        'mock_required_for[].mock_target': 'string',
+        'mock_required_for[].example': 'string',
+        'test_strategy.approach': 'string',
+        'test_strategy.input_hints[].param_name': 'string',
+        'test_strategy.input_hints[].strategy': 'string',
+        'test_strategy.input_hints[].boundary_inputs[]': 'string',
+        'test_strategy.input_hints[].invalid_inputs[]': 'string',
+        'test_strategy.input_hints[].notes': 'string',
+        'test_strategy.assertion_style': 'string',
+        'test_strategy.mock_needed': 'boolean',
+        'test_strategy.key_rules[]': 'string'
+    });
+    const strategy = (schema!.properties as Record<string, Record<string, unknown>>).test_strategy;
+    const assertionStyle = (strategy.properties as Record<string, Record<string, unknown>>).assertion_style;
+    assert.deepStrictEqual(assertionStyle.enum, ['assertEqual', 'assertRaises', 'mixed']);
+});
+
+test('Cloud semantic requests retain the complete schema and keep server failures outside format fallback', () => {
+    const schema = responseSchemaForOutputFormat('semantic-json');
+    const request = buildGoogleGenerateContentRequest('neutral-model', 'test-key', 'Analyse the selected target.', {
+        responseMimeType: 'application/json', responseSchema: schema
+    });
+    const wire = JSON.parse(JSON.stringify(request.body));
+    assert.deepStrictEqual(wire.generationConfig.responseSchema, schema);
+    assert.strictEqual(wire.generationConfig.responseMimeType, 'application/json');
+    assert.strictEqual(wire.generationConfig.responseSchema.properties.test_strategy
+        .properties.input_hints.items.properties.boundary_inputs.items.type, 'string');
+    assert.strictEqual(shouldRetryStructuredOutputAsText(500, 'semantic-json'), false);
+});
+
+test('a complete semantic envelope preserves candidate reprs without accepting an empty strategy', () => {
+    const analysis: SemanticAnalysis = {
+        dependency_behaviors: [], unreachable_paths: [], mock_required_for: [],
+        test_strategy: {
+            approach: 'Exercise the selected target with controlled inputs and verify the observed behavior.',
+            input_hints: [{
+                param_name: 'value', strategy: 'Exercise empty, quoted, and absent scalar inputs.',
+                boundary_inputs: ["''", "'<record>'"], invalid_inputs: ['None'], notes: ''
+            }],
+            assertion_style: 'mixed', mock_needed: false, key_rules: []
+        }
+    };
+    assert.deepStrictEqual(parseSemanticAnalysis(JSON.stringify(analysis)), analysis);
+    const zeroParameter = { ...analysis, test_strategy: { ...analysis.test_strategy, input_hints: [] } };
+    assert.deepStrictEqual(parseSemanticAnalysis(JSON.stringify(zeroParameter)), zeroParameter);
+    const emptyPlan = { ...zeroParameter, test_strategy: { ...zeroParameter.test_strategy, approach: '' } };
+    assert.strictEqual(parseSemanticAnalysis(JSON.stringify(emptyPlan)), null);
 });
 
 test('detects malformed successful structured responses before they reach a Tier', () => {

@@ -36,6 +36,12 @@ function analysisEvidence(
     };
 }
 
+function promptJson(prompt: string, heading: string): any {
+    const body = prompt.split(heading + '\n')[1];
+    assert.ok(body, heading);
+    return JSON.parse(body.split('\n')[0]);
+}
+
 test('shared prompts and active base examples contain no project-domain vocabulary', () => {
     const sharedPromptText = [
         getBugFixerSystemPrompt(),
@@ -157,7 +163,8 @@ test('semantic prompt distinguishes target caller inputs from dependency calls',
 
     assert.match(prompt, /TARGET CALL SITES \(INPUT CANDIDATES ONLY\)/);
     assert.match(prompt, /render\('draft'\)/);
-    assert.match(prompt, /never name dependency parameters or dependency return keys/);
+    assert.match(buildSemanticAnalyzerSystemPrompt(), /never name dependency parameters or dependency return keys/);
+    assert.doesNotMatch(prompt, /TASK:|never name dependency parameters/);
     assert.doesNotMatch(prompt, /HOW TARGET CALLS DEPENDENCIES/);
 });
 
@@ -174,10 +181,11 @@ test('semantic prompt receives exact initial observations and keeps blocked oper
     ));
 
     assert.match(prompt, /VERIFIED TARGET EXECUTION OBSERVATIONS/);
-    assert.match(prompt, /target\('ok'\) => 'OK' \[str\]/);
-    assert.match(prompt, /target\(None\) raises AttributeError: no upper/);
-    assert.match(prompt, /Diagnostic only, blocked by safety policy/);
-    assert.match(prompt, /Never turn them into target exceptions or assertions/);
+    const observations = promptJson(prompt, '=== VERIFIED TARGET EXECUTION OBSERVATIONS ===');
+    assert.deepStrictEqual(observations.examples[0], { args: ["'ok'"], result: "'OK'", result_type: 'str', case_ids: [] });
+    assert.deepStrictEqual(observations.errors[0], { args: ['None'], exception: 'AttributeError', message: 'no upper', case_ids: [] });
+    assert.deepStrictEqual(observations.blocked_operations, ['network access to example.invalid']);
+    assert.match(prompt, /records are diagnostics, never target exceptions or assertions/);
 });
 
 test('Writer evidence bundle records rule selection and both observation phases', () => {
@@ -327,7 +335,9 @@ test('semantic prompt supplies verified dependency repr facts instead of JavaScr
     ));
 
     assert.match(prompt, /VERIFIED DEPENDENCY EXECUTION FACTS/);
-    assert.match(prompt, /normalize\('x'\) => \{'value': 'x'\}/);
+    const facts = promptJson(prompt, '=== VERIFIED DEPENDENCY EXECUTION FACTS ===');
+    assert.equal(facts[0].name, 'normalize');
+    assert.deepStrictEqual(facts[0].observations.examples[0], { args: ["'x'"], result: "{'value': 'x'}", case_ids: [] });
     assert.ok(!prompt.includes('[object Object]'));
 });
 
@@ -389,7 +399,9 @@ test('semantic context omits unverified dependency return claims while retaining
         }
     }]);
 
-    assert.match(context, /normalize\('x'\) => \{'value': 'x'\}/);
+    const facts = promptJson(context, '=== VERIFIED DEPENDENCY EXECUTION FACTS ===');
+    assert.equal(facts[0].name, 'normalize');
+    assert.deepStrictEqual(facts[0].observations.examples[0], { args: ["'x'"], result: "{'value': 'x'}", case_ids: [] });
     assert.ok(!context.includes('Always returns: [object Object]'));
     assert.match(context, /Unverified dependency-return claims were omitted/);
 });

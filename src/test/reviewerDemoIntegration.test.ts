@@ -62,7 +62,7 @@ class Cases(unittest.TestCase):
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+        if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
         else if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviews++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);

@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { classifyExecutionFailure } from '../utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from '../utils/executionFailureCategory';
 
 test('classifies Tier generation failures without naming a provider or model', () => {
     assert.strictEqual(classifyExecutionFailure('HTTP 503 - service unavailable'), 'model-api');
@@ -17,4 +17,17 @@ test('classifies Tier generation failures without naming a provider or model', (
 test('classifies execution validation separately from unknown diagnostics', () => {
     assert.strictEqual(classifyExecutionFailure('測試檔預先驗證失敗'), 'validation');
     assert.strictEqual(classifyExecutionFailure('unexpected diagnostic value'), 'unknown');
+});
+
+test('model request diagnostics retain only numeric HTTP error statuses from the transport stage', () => {
+    assert.strictEqual(modelRequestHttpStatus(new AnalysisStageError('model-api', 'model-request', 'safe',
+        { httpStatus: 500, body: 'not-for-logs', headers: { authorization: 'not-for-logs' } })), 500);
+    for (const status of [undefined, null, '500', 200, 399, 600, 500.5, NaN, Infinity]) {
+        assert.strictEqual(modelRequestHttpStatus(new AnalysisStageError('model-api', 'model-request', 'HTTP 500',
+            { httpStatus: status })), undefined);
+    }
+    assert.strictEqual(modelRequestHttpStatus(new Error('HTTP 500')), undefined);
+    assert.strictEqual(modelRequestHttpStatus({ category: 'model-api', stage: 'model-request', diagnostic: { httpStatus: 500 } }), undefined);
+    assert.strictEqual(modelRequestHttpStatus(new AnalysisStageError('validation', 'model-request', 'HTTP 500', { httpStatus: 500 })), undefined);
+    assert.strictEqual(modelRequestHttpStatus(new AnalysisStageError('model-api', 'other-stage', 'HTTP 500', { httpStatus: 500 })), undefined);
 });

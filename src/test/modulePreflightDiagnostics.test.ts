@@ -4,12 +4,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { preflightFailureCacheSize, preflightTargetModule } from '../pipeline/modulePreflight';
+import { parsePreflightResourceScope, preflightFailureCacheSize, preflightTargetModule, RESOURCE_SCOPE_VERSION } from '../pipeline/modulePreflight';
 import { ExecutionContext, runInExecution } from '../pipeline/executionContext';
 import { TargetBudget } from '../pipeline/targetBudget';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { ProcessTimeoutError, runSpawn } from '../utils/processRunner';
 import { inspectProjectImports } from '../environment/projectImportCheck';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 test('tool failures retain only structured reason codes and never become cached import failures', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-tool-'));
@@ -119,4 +120,61 @@ test('project preflight reports retain tool failure codes without raw process ou
             assert.doesNotMatch(report, /private-fixture|private\.invalid|password/);
         }
     } finally { runner.runSpawn = originalRun; fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('optional resource scope must bind the exact nonempty source snapshot before filtering is eligible', () => {
+    const sourceVersions = [{ file: path.resolve('資料/sample.py'), hash: 'a'.repeat(64) },
+        { file: path.resolve('資料/helper.py'), hash: 'b'.repeat(64) }];
+    const sourceSetHash = createHash('sha256').update(JSON.stringify(sourceVersions.map(item => [item.file, item.hash]))).digest('hex');
+    const scope = { version: RESOURCE_SCOPE_VERSION, eligible: true, sourceSetHash };
+    assert.deepEqual(parsePreflightResourceScope(scope, sourceVersions), scope);
+    const unknown = { ...scope, eligible: false, reason: 'nested-import' };
+    assert.deepEqual(parsePreflightResourceScope(unknown, sourceVersions), unknown);
+    for (const value of [undefined, null, [], {}, { ...scope, version: 'old' }, { ...scope, eligible: 'true' },
+        { ...scope, sourceSetHash: 'c'.repeat(64) }, { ...scope, sourceSetHash: undefined },
+        { ...scope, eligible: false, reason: 'private arbitrary diagnostic' }, { ...scope, reason: 'nested-import' }]) {
+        assert.equal(parsePreflightResourceScope(value, sourceVersions), undefined);
+    }
+    assert.equal(parsePreflightResourceScope(scope, []), undefined);
+    assert.equal(parsePreflightResourceScope(scope, sourceVersions.slice().reverse()), undefined);
+    assert.equal(parsePreflightResourceScope(scope, sourceVersions.slice(0, 1)), undefined);
+    assert.equal(parsePreflightResourceScope(scope, [{ ...sourceVersions[0], hash: 'd'.repeat(64) }, sourceVersions[1]]), undefined);
+});
+
+test('malformed optional resource scope is stripped without changing a successful legacy preflight', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-scope-wire-'));
+    const file = path.join(directory, 'sample.py'), source = 'def target(): return 1\n';
+    fs.writeFileSync(file, source);
+    const sourceVersions = [{ file, hash: createHash('sha256').update(source).digest('hex') }];
+    const runner = require('../utils/processRunner'), originalRun = runner.runSpawn;
+    try {
+        for (const resourceScope of [undefined, { version: RESOURCE_SCOPE_VERSION, eligible: true, sourceSetHash: 'invalid' }]) {
+            runner.runSpawn = async () => ({ code: 0, stderr: '', stdout: JSON.stringify({ ok: true, module: 'sample',
+                importPaths: [directory], sourceVersionsVersion: 'loaded-project-sources-v1', sourceVersions, resourceScope }) });
+            const result = await preflightTargetModule('python', file, 'sample', [directory], directory);
+            assert.equal(result.ok, true);
+            assert.equal(result.resourceScope, undefined);
+            assert.equal(Object.hasOwn(result, 'resourceScope'), false);
+        }
+    } finally { runner.runSpawn = originalRun; fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('real Python scope hashes agree for Unicode paths while lazy imports remain conservative', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-scope-'));
+    const root = path.join(directory, '資料'); fs.mkdirSync(root);
+    const file = path.join(root, 'sample.py');
+    fs.writeFileSync(path.join(root, 'helper.py'), 'VALUE = 3\n');
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    try {
+        fs.writeFileSync(file, 'from helper import VALUE\ndef target(): return VALUE\n');
+        const direct = await preflightTargetModule(python, file, 'sample', [root], root, [], root);
+        assert.equal(direct.sourceVersions.length, 2);
+        assert.equal(direct.resourceScope?.eligible, true);
+        assert.equal(direct.resourceScope?.version, RESOURCE_SCOPE_VERSION);
+        fs.writeFileSync(file, 'from helper import VALUE\ndef target():\n    import not_yet_loaded\n    return VALUE\n');
+        const lazy = await preflightTargetModule(python, file, 'sample', [root], root, [], root);
+        assert.equal(lazy.ok, true);
+        assert.equal(lazy.resourceScope?.eligible, false);
+        assert.equal(lazy.resourceScope?.reason, 'nested-import');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

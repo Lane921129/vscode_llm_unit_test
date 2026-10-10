@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -6,7 +7,9 @@ import sys
 import tempfile
 import unittest
 import textwrap
+from unittest.mock import patch
 from validate_test_bindings import validate_bindings
+import module_preflight
 
 TOOLS = Path(__file__).resolve().parent
 
@@ -217,6 +220,118 @@ class PipelineReliabilityTests(unittest.TestCase):
             traced = self.invoke('dynamic_tracer.py', args=[str(target), 'target'])
             self.assertFalse(traced.get('load_error'), traced)
             self.assertTrue(traced['examples'], traced)
+
+    def test_resource_scope_binds_all_loaded_sources_with_unicode_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / '資料.py').write_text('VALUE = 3\n', encoding='utf-8')
+            target = root / 'sample.py'
+            target.write_text('from 資料 import VALUE\ndef target(): return VALUE\n', encoding='utf-8')
+            result = self.invoke('module_preflight.py', {'file': str(target), 'module': 'sample',
+                'importPaths': [folder], 'sourceRoot': folder})
+            self.assertTrue(result['ok'])
+            self.assertEqual({Path(item['file']).name for item in result['sourceVersions']}, {'sample.py', '資料.py'})
+            identities = [[item['file'], item['hash']] for item in result['sourceVersions']]
+            digest = hashlib.sha256(json.dumps(identities, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
+            self.assertEqual(result['resourceScope'], {'version': 'loaded-resource-scope-v1',
+                'eligible': True, 'sourceSetHash': digest})
+
+    def test_local_conditional_or_transitive_lazy_imports_keep_full_resource_scope(self):
+        for source, helper in [
+            ('def target():\n    import never_loaded\n', None),
+            ('if False:\n    import never_loaded\ndef target(): return 1\n', None),
+            ('try:\n    import math\nexcept ImportError:\n    pass\n', None),
+            ('class Example:\n    import math\n', None),
+            ('from helper import VALUE\ndef target(): return VALUE\n', 'VALUE = 3\ndef lazy():\n    import never_loaded\n')
+        ]:
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as folder:
+                target = Path(folder) / 'sample.py'
+                target.write_text(source, encoding='utf-8')
+                if helper is not None:
+                    Path(folder, 'helper.py').write_text(helper, encoding='utf-8')
+                result = self.invoke('module_preflight.py', {'file': str(target), 'module': 'sample',
+                    'importPaths': [folder], 'sourceRoot': folder})
+                self.assertTrue(result['ok'])
+                self.assertFalse(result['resourceScope']['eligible'])
+                self.assertEqual(result['resourceScope']['reason'], 'nested-import')
+                self.assertNotIn('never_loaded.py', [Path(item['file']).name for item in result['sourceVersions']])
+
+    def test_resource_scope_dynamic_bindings_are_unknown_without_executing_them(self):
+        sources = [
+            'import importlib as loader\ndef target(name): return loader.import_module(name)\n',
+            'from external import import_module as loader\n',
+            'from external import __import__ as loader\n',
+            'from external import *\n',
+            'def target(name): return __import__(name)\n',
+            'alias = eval\n', 'alias = exec\n', 'def target(): return loader.exec_module(value)\n',
+            'import sys as runtime\nregistry = runtime.modules\n',
+            'from sys import meta_path as hooks\n',
+            'def target(obj, key): return getattr(obj, key)\n',
+            'def target(key): return globals()[key]\n',
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'sample.py'
+            for source in sources:
+                with self.subTest(source=source):
+                    target.write_text(source, encoding='utf-8')
+                    versions = [{'file': str(target), 'hash': hashlib.sha256(target.read_bytes()).hexdigest()}]
+                    result = module_preflight.resource_scope_evidence(versions)
+                    self.assertFalse(result['eligible'])
+                    self.assertEqual(result['reason'], 'dynamic-import')
+                    self.assertNotIn(source, json.dumps(result))
+            target.write_text('# import importlib; eval(payload)\nTEXT = "__import__ exec_module"\n'
+                              'def target(): return TEXT\n', encoding='utf-8')
+            versions = [{'file': str(target), 'hash': hashlib.sha256(target.read_bytes()).hexdigest()}]
+            self.assertTrue(module_preflight.resource_scope_evidence(versions)['eligible'])
+
+    def test_resource_scope_snapshot_drift_parse_and_bounds_never_authorize_filtering(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'sample.py'
+            target.write_bytes(b'# coding: latin-1\nTEXT = "caf\xe9"\n')
+            versions = [{'file': str(target), 'hash': hashlib.sha256(target.read_bytes()).hexdigest()}]
+            self.assertTrue(module_preflight.resource_scope_evidence(versions)['eligible'])
+            for setting in ['RESOURCE_SCOPE_MAX_SOURCES', 'RESOURCE_SCOPE_MAX_FILE_BYTES',
+                            'RESOURCE_SCOPE_MAX_TOTAL_BYTES', 'RESOURCE_SCOPE_MAX_AST_NODES']:
+                with self.subTest(setting=setting), patch.object(module_preflight, setting, 0):
+                    result = module_preflight.resource_scope_evidence(versions)
+                    self.assertFalse(result['eligible'])
+                    self.assertEqual(result['reason'], 'source-budget')
+            target.write_bytes(b'TEXT = "changed"\n')
+            self.assertEqual(module_preflight.resource_scope_evidence(versions)['reason'], 'source-changed')
+            target.write_bytes(b'def broken(:\n')
+            versions[0]['hash'] = hashlib.sha256(target.read_bytes()).hexdigest()
+            self.assertEqual(module_preflight.resource_scope_evidence(versions)['reason'], 'source-parse')
+            target.unlink()
+            self.assertEqual(module_preflight.resource_scope_evidence(versions)['reason'], 'source-unavailable')
+            for invalid in [[], None, [{}], versions + versions,
+                            [{'file': str(target), 'hash': 'invalid'}],
+                            [{'file': str(Path(folder) / '\ud800.py'), 'hash': 'a' * 64}]]:
+                self.assertFalse(module_preflight.resource_scope_evidence(invalid)['eligible'])
+
+    def test_resource_scope_does_not_guess_callback_receiver_or_rebound_callee_dispatch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'sample.py'
+            for source in [
+                'def target(loader):\n    return loader()\n',
+                'def target(connection):\n    return connection.cursor()\n',
+                'import sqlite3\ndef target():\n    return sqlite3.connect(":memory:")\n',
+                'def helper(): return 1\nhelper = callback\ndef target(): return helper()\n',
+                'def helper(): return 1\ndef target(helper): return helper()\n',
+                '@decorator\ndef helper(): return 1\ndef target(): return helper()\n',
+                'def target(decorator):\n    @decorator\n    def inner(): return 1\n    return 1\n',
+                'def target(factory):\n    class Inner(metaclass=factory): pass\n    return 1\n',
+                'def target(base):\n    class Inner(base): pass\n    return 1\n',
+                'def helper(): return 1\ndef helper(): return 2\ndef target(): return helper()\n'
+            ]:
+                with self.subTest(source=source):
+                    target.write_text(source, encoding='utf-8')
+                    versions = [{'file': str(target), 'hash': hashlib.sha256(target.read_bytes()).hexdigest()}]
+                    result = module_preflight.resource_scope_evidence(versions)
+                    self.assertFalse(result['eligible'])
+                    self.assertEqual(result['reason'], 'unknown-dispatch')
+            target.write_text('import sqlite3\ndef helper(): return 1\ndef target(): return helper()\n', encoding='utf-8')
+            versions = [{'file': str(target), 'hash': hashlib.sha256(target.read_bytes()).hexdigest()}]
+            self.assertTrue(module_preflight.resource_scope_evidence(versions)['eligible'])
 
     def test_missing_dependency_preserves_actual_diagnostic_in_preflight_and_trace(self):
         with tempfile.TemporaryDirectory() as folder:

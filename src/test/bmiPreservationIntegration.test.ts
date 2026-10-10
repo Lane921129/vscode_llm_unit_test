@@ -73,7 +73,7 @@ class Cases(unittest.TestCase):
                 reason: 'This case uses a positive height; a separate zero-height input is not tested.',
                 action: 'Add a separate zero-height exception case while preserving this passing normal-input case and its exact assertions.' }] : [] });
         } else if (request.roleInstructions?.includes('dependency_behaviors')) {
-            response = '{"dependency_behaviors":[]}';
+            response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
         } else if (request.roleInstructions?.includes('Python unittest Bug Fixer')) {
             assert.equal(scenario, 'dropped');
             fixes++;

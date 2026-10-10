@@ -58,7 +58,7 @@ test('full orchestrator uses real Mutatest and retains rejected source/test iden
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
-        const response = request.roleInstructions.includes('dependency_behaviors') ? '{"dependency_behaviors":[]}'
+        const response = request.roleInstructions.includes('dependency_behaviors') ? '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'
             : request.roleInstructions.includes('You are the test Reviewer') ? '{"findings":[]}' : '```python\n' + candidate + '\n```';
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
     };

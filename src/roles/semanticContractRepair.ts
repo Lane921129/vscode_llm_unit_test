@@ -1,13 +1,23 @@
 import { createHash } from 'node:crypto';
 import { currentTargetBudget } from '../pipeline/targetBudget';
+import { estimatePromptTokens } from '../prompts/promptBudget';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
-import { parseSemanticAnalysis, SemanticAnalysis } from './semanticAnalyzer';
+import { hasMeaningfulSemanticStrategy, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, SemanticAnalysis } from './semanticAnalyzer';
+
+export const SEMANTIC_CONTRACT_REPAIR_SUFFIX = '\n\nSEMANTIC_CONTRACT_REPAIR_V1\n'
+    + 'The previous reply was not a valid analysis plan. Reassess the same complete evidence; return the role-contract JSON with a concrete test_strategy. '
+    + 'Unsupported claims use empty arrays. No tests, Markdown or explanations. This is the only format correction; all hypotheses still require verification.';
+
+/** Reserve the complete fixed correction before the first request. The final
+ * transport gate must also count its own system/output/resource envelopes. */
+export const SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE = estimatePromptTokens(SEMANTIC_CONTRACT_REPAIR_SUFFIX);
 
 interface SemanticContractOptions {
     prompt: string;
     deadlineAt: number;
-    request(prompt: string, deadlineAt: number): Promise<string>;
+    targetParameters?: readonly string[];
+    request(prompt: string, deadlineAt: number, reservedInputTokens: number): Promise<string>;
     checkCurrent(): void;
     event(status: 'parsed' | 'invalid-response' | 'repair-requested', detail: unknown): void;
     now?: () => number;
@@ -29,9 +39,11 @@ export async function semanticWithContractRepair(options: SemanticContractOption
     for (let attempt = 0; attempt < 2; attempt++) {
         check();
         // Transport, cancellation and prompt-budget errors propagate; no repair request follows them.
-        const raw = await options.request(prompt, deadlineAt);
+        const raw = await options.request(prompt, deadlineAt, attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0);
         check();
-        const parsed = parseSemanticAnalysis(raw);
+        const normalized = parseSemanticAnalysis(raw);
+        const scoped = normalized && restrictSemanticInputHintsToTargetParameters(normalized, options.targetParameters);
+        const parsed = scoped && hasMeaningfulSemanticStrategy(scoped) ? scoped : null;
         options.event(parsed ? 'parsed' : 'invalid-response', {
             contractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan, attempt,
             responseHash: createHash('sha256').update(raw).digest('hex'), responseCharacters: raw.length
@@ -39,12 +51,7 @@ export async function semanticWithContractRepair(options: SemanticContractOption
         if (parsed) { return parsed; }
         if (attempt === 0) {
             options.event('repair-requested', { contractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan, attempt: 1 });
-            prompt = options.prompt + '\n\nSEMANTIC_CONTRACT_REPAIR_V1\n'
-                + 'The previous reply did not satisfy the analysis JSON contract. Reassess the same complete evidence. '
-                + 'Return one JSON object containing dependency_behaviors, unreachable_paths, mock_required_for, and test_strategy. '
-                + 'Use empty arrays for unsupported claims. test_strategy contains approach, input_hints, assertion_style, mock_needed, key_rules. '
-                + 'Use selected target parameter names only. Do not output Python tests, Markdown or explanations. '
-                + 'This is the only format correction attempt; hypotheses still require tool verification.';
+            prompt = options.prompt + SEMANTIC_CONTRACT_REPAIR_SUFFIX;
         }
     }
     return undefined;

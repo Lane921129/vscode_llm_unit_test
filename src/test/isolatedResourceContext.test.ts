@@ -1,8 +1,13 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { withImportFixtures, type ImportFixturePlan } from '../pipeline/importFixtures';
-import { buildIsolatedResourceContext, ISOLATED_RESOURCE_ROLE_RULE, isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createImportFixturePlan, withImportFixtures, type ImportFixturePlan } from '../pipeline/importFixtures';
+import { buildIsolatedResourceContext, buildTargetIsolatedResourceContext, ISOLATED_RESOURCE_ROLE_RULE, isolatedResourceSystemRule,
+    type IsolatedResourceSourceEvidence } from '../prompts/isolatedResourceContext';
+import { SOURCE_VERSIONS_VERSION } from '../pipeline/sourceVersions';
 import { getExecutionWriterSystemPrompt, getSystemPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt } from '../roles/unittestWriter';
 import { getSemanticAnalyzerSystemPrompt } from '../roles/semanticAnalyzer';
 import { getTestReviewerSystemPrompt } from '../roles/testReviewer';
@@ -193,3 +198,126 @@ test('host resource support does not allow generated tests to perform direct fil
     const code = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(target(), 1)\n';
     assert.equal(validateUnittestStructure(code, 'target', 'sample').valid, true);
 });
+
+function projectedFixture(operation: (value: { root: string; plan: ImportFixturePlan; evidence: IsolatedResourceSourceEvidence }) => void) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-projection-'));
+    try {
+        const names = ['selected.py', 'settings.py', 'bridge.py', 'other/settings.py'];
+        for (const name of names) {
+            const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, '# neutral source identity: ' + name + '\r\n');
+        }
+        const version = (file: string) => ({ file: path.join(root, file),
+            hash: createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex') });
+        const selected = version('selected.py'), settings = version('settings.py');
+        const fixturePlan = createImportFixturePlan(root, [
+            { file: 'settings.py', resourceSourceHash: settings.hash, resources: [{ kind: 'sqlite', path: 'owned.sqlite', tables: [{ name: 'items',
+                columns: [{ name: 'id', type: 'INTEGER', primaryKey: true, autoIncrement: true },
+                    { name: 'label', type: 'TEXT', default: 'neutral default', notNull: true, unique: true }], unique: [['id', 'label']] }] }] },
+            { file: 'other/settings.py', resourceSourceHash: version('other/settings.py').hash,
+                resources: [{ kind: 'sqlite', path: 'unrelated.sqlite', tables: [{ name: 'unrelated', columns: [{ name: 'extra', type: 'TEXT' }] }] }] }
+        ])!;
+        operation({ root, plan: fixturePlan, evidence: { version: SOURCE_VERSIONS_VERSION, target: selected, sources: [selected, settings] } });
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+const resourceRecords = (context: string) => context.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+
+test('verified loaded origins project whole related schema without changing the approved runtime plan', () => projectedFixture(({ plan, evidence }) => {
+    const before = JSON.stringify(plan);
+    const result = withImportFixtures(plan, () => buildTargetIsolatedResourceContext(plan, evidence));
+    assert.equal(result.status, 'projected'); assert.equal(result.resourceCount, 1); assert.equal(result.complete, true);
+    assert.equal(result.exceedsBudget, false);
+    const records = resourceRecords(result.context);
+    assert.equal(records[0].declaredBy, 'settings.py');
+    assert.equal(records[0].sourceHash, plan.rules[0].sourceHash);
+    assert.deepEqual(records[0].tables[0].columns, (plan.rules[0].resources![0] as any).tables[0].columns);
+    assert.deepEqual(records[0].tables[0].unique, [['id', 'label']]);
+    assert.ok(result.context.includes(plan.id));
+    assert.doesNotMatch(result.context, /unrelated\.sqlite|other\/settings\.py/);
+    assert.match(result.context, /future local or dynamic imports are outside this snapshot/);
+    assert.equal(buildTargetIsolatedResourceContext(plan, evidence, result.context.length).exceedsBudget, false);
+    assert.equal(buildTargetIsolatedResourceContext(plan, undefined, result.context.length).exceedsBudget, true,
+        'excluding only proven unrelated resources leaves the complete required schema within a smaller budget');
+    assert.equal(JSON.stringify(plan), before);
+}));
+
+test('projection retains exact shared resource declarations but does not conflate project and sibling scopes', () => projectedFixture(({ root, plan, evidence }) => {
+    const bridge = { file: 'bridge.py', sourceHash: createHash('sha256').update(fs.readFileSync(path.join(root, 'bridge.py'))).digest('hex') };
+    plan.rules.push({ ...bridge, resourceSourceHash: bridge.sourceHash, resources: [structuredClone(plan.rules[0].resources![0]),
+        { kind: 'sqlite', path: 'owned.sqlite', scope: 'project-parent', tables: [] }] });
+    const result = buildTargetIsolatedResourceContext(plan, evidence);
+    assert.equal(result.status, 'projected'); assert.equal(result.resourceCount, 2);
+    const records = resourceRecords(result.context);
+    assert.deepEqual(records.map(record => record.declaredBy), ['settings.py', 'bridge.py']);
+    assert.ok(records.every(record => record.scope === undefined));
+    assert.deepEqual(records[0].tables, records[1].tables);
+}));
+
+test('resource source, target, dependency and loaded snapshot drift cannot authorize a projected prompt', () => projectedFixture(({ root, plan, evidence }) => {
+    for (const name of ['selected.py', 'settings.py']) {
+        const file = path.join(root, name), before = fs.readFileSync(file);
+        fs.appendFileSync(file, '# drift\n');
+        assert.equal(buildTargetIsolatedResourceContext(plan, evidence).status, 'source-drift');
+        fs.writeFileSync(file, before);
+    }
+    const dependency = path.join(root, 'bridge.py');
+    plan.rules[0].sourceDependencies = [{ file: 'bridge.py', sourceHash: createHash('sha256').update(fs.readFileSync(dependency)).digest('hex') }];
+    fs.appendFileSync(dependency, '# drift\n');
+    const result = buildTargetIsolatedResourceContext(plan, evidence);
+    assert.equal(result.status, 'source-drift'); assert.equal(result.context, '');
+    assert.equal(result.complete, false);
+}));
+
+test('a refreshed loaded snapshot cannot silently refresh the approved resource source version', () => projectedFixture(({ root, plan, evidence }) => {
+    const file = path.join(root, 'settings.py'); fs.appendFileSync(file, '# newer than approval\n');
+    const current = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const result = buildTargetIsolatedResourceContext(plan, { ...evidence,
+        sources: evidence.sources.map(source => source.file === file ? { ...source, hash: current } : source) });
+    assert.equal(result.status, 'source-drift'); assert.equal(result.context, '');
+}));
+
+test('missing closure stays explicitly unscoped while malformed or unbound target evidence is rejected', () => projectedFixture(({ root, plan, evidence }) => {
+    const fallback = buildTargetIsolatedResourceContext(plan, undefined);
+    assert.equal(fallback.status, 'unscoped'); assert.equal(fallback.resourceCount, 2);
+    assert.match(fallback.context, /Resource relevance is unknown/);
+    assert.equal(resourceRecords(fallback.context).length, 2);
+    for (const changed of [
+        { ...evidence, version: 'invented-version' },
+        { ...evidence, target: { ...evidence.target, hash: 'f'.repeat(64) } },
+        { ...evidence, sources: evidence.sources.slice(1) },
+        { ...evidence, sources: [...evidence.sources, evidence.sources[0]] },
+        { ...evidence, target: { ...evidence.target, file: path.join(root, '../outside.py') } }
+    ]) {
+        const invalid = buildTargetIsolatedResourceContext(plan, changed as IsolatedResourceSourceEvidence);
+        assert.equal(invalid.status, 'invalid-evidence'); assert.equal(invalid.context, '');
+    }
+    assert.equal(buildTargetIsolatedResourceContext(undefined, evidence).context, '');
+}));
+
+test('required projected schemas survive a tiny budget intact and report overflow instead of truncating', () => projectedFixture(({ plan, evidence }) => {
+    const result = buildTargetIsolatedResourceContext(plan, evidence, 100);
+    assert.equal(result.exceedsBudget, true); assert.equal(result.complete, true);
+    const records = resourceRecords(result.context);
+    assert.equal(records.length, 1);
+    assert.deepEqual(records[0].tables[0].columns, (plan.rules[0].resources![0] as any).tables[0].columns);
+    assert.equal(records[0].tables[0].rowsStatus, 'withheld');
+    assert.doesNotMatch(result.context, /Whole resource declarations omitted/);
+    const full = buildTargetIsolatedResourceContext(plan, undefined, 100);
+    assert.equal(full.exceedsBudget, true); assert.equal(resourceRecords(full.context).length, 2);
+}));
+
+test('projection privacy still covers unselected external paths and credential-bearing schemas', () => projectedFixture(({ plan, evidence }) => {
+    const privatePath = process.platform === 'win32' ? 'C:\\NeutralPrivate\\Resource' : '/neutral-private/resource';
+    plan.rules[1].resources!.push({ path: privatePath, scope: 'external-exact', kind: 'directory' });
+    const db = plan.rules[0].resources![0]; if (db.kind !== 'sqlite') { return; }
+    db.tables[0].rows = [{ id: 1, label: privatePath }];
+    const result = buildTargetIsolatedResourceContext(plan, evidence);
+    assert.equal(result.status, 'projected'); assert.equal(result.complete, true);
+    assert.doesNotMatch(result.context, /NeutralPrivate|neutral-private/);
+    assert.equal(resourceRecords(result.context)[0].tables[0].rowsStatus, 'withheld');
+    db.tables[0].columns[1].default = 'neutral-secret-test';
+    const withheld = buildTargetIsolatedResourceContext(plan, evidence, 6000, ['neutral-secret-test']);
+    assert.equal(withheld.complete, false); assert.doesNotMatch(withheld.context, /neutral-secret-test/);
+    assert.match(withheld.context, /Whole resource declarations omitted: 1; details are unknown/);
+}));

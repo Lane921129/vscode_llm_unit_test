@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { estimatePromptTokens } from '../prompts/promptBudget';
 
 test('orchestrator carries measured quality into Writer and verifies improvement with real Python mutation', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'role-orchestrator-'));
@@ -25,6 +26,9 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     policies.createDefaultQualityPolicy = policies.createStrictQualityPolicy;
     const traceBuilder = require('../tier/tier1TestFileBuilder');
     const originalTraceBuilder = traceBuilder.buildTier1TestFile;
+    const writerPrompts = require('../roles/unittestWriter');
+    const originalWriterPrompt = writerPrompts.getUserPrompt;
+    let configuredImportFixtures: unknown[] = [];
     const mutationRuns: Array<{ args: string[]; timeout: number }> = [];
     let expectedMutationSeconds = 60;
     let externalEngine: 'mutatest' | 'mutmut' | undefined;
@@ -108,7 +112,9 @@ class Cases(unittest.TestCase):
             showInformationMessage: async () => {}, showTextDocument: async () => {}
         },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
-            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }), openTextDocument: async () => ({}) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'importFixtures' ? configuredImportFixtures
+                    : key === 'importFixtureRoot' && configuredImportFixtures.length ? directory : fallback }), openTextDocument: async () => ({}) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } },
@@ -137,7 +143,7 @@ class Cases(unittest.TestCase):
                 fs.appendFileSync(path.join(directory, 'sample.py'), '\n# source changed between rounds\n');
             }
         } else if (request.roleInstructions.includes('dependency_behaviors')) {
-            roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
+            roles.push('analyst-planning'); response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
         } else {
             roles.push('writer'); writers++;
             assert.match(request.prompt, scaffoldMode ? /Complete Writer evidence/ : /^compact-writer-v1/);
@@ -236,11 +242,19 @@ class Cases(unittest.TestCase):
         const incompleteRoot = path.join(directory, 'incomplete-results');
         const incompleteOutput = outputFor(incompleteRoot);
         const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
+        const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        const incompleteDiagnostic = JSON.stringify({ terminalStatus: incomplete.terminalStatus,
+            failureStage: incomplete.failureStage, failureCategory: incomplete.failureCategory,
+            failureKeys: incomplete.failure && typeof incomplete.failure === 'object' ? Object.keys(incomplete.failure) : [],
+            events: incompleteEvents.map(event => ({ stage: event.stage, status: event.status,
+                role: event.detail?.role, category: event.detail?.category, httpStatus: event.detail?.httpStatus,
+                elapsedMs: event.detail?.elapsedMs, reasonLength: typeof event.detail?.reason === 'string' ? event.detail.reason.length : undefined,
+                diagnostics: Array.isArray(event.detail?.diagnostics) ? event.detail.diagnostics.filter((value: unknown) =>
+                    typeof value === 'string' && /^[a-z][a-z0-9-]*$/.test(value)) : undefined })) });
         assert.equal(incomplete.mutationScore, null, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
         assert.equal(incomplete.reviewStatus, 'incomplete');
-        assert.equal(incomplete.terminalStatus, 'review-blocked');
+        assert.equal(incomplete.terminalStatus, 'review-blocked', incompleteDiagnostic);
         assert.equal(roles.filter(role => role === 'reviewer').length, 2, 'the first candidate gets one contract correction then stops before mutation');
-        const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
             && event.detail.diagnostics.includes('invalid-json')));
 
@@ -342,7 +356,7 @@ class Cases(unittest.TestCase):
             let response: string;
             if (request.roleInstructions.includes('dependency_behaviors')) {
                 planningAttempts++;
-                response = planningAttempts === 1 ? 'INVALID_ANALYST_PRIVATE_REPLY' : '{"dependency_behaviors":[]}';
+                response = planningAttempts === 1 ? 'INVALID_ANALYST_PRIVATE_REPLY' : '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
                 if (planningAttempts === 2) { assert.match(request.prompt, /SEMANTIC_CONTRACT_REPAIR_V1/); }
             } else {
                 generatedAttempts++;
@@ -398,6 +412,61 @@ class Cases(unittest.TestCase):
         assert.equal(serviceCalls, 3, 'planning transport retries are bounded; an incomplete Analyst does not start the Writer');
         assert.equal(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer').length, 0);
         assert.ok(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error').every(event => event.detail.category === 'model-api'));
+        const serviceErrors = serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error');
+        assert.ok(serviceErrors.length > 0, 'a real failed transport request must produce a journal event');
+        assert.ok(serviceErrors.every(event => event.detail.httpStatus === 500),
+            'journals preserve the transport numeric status without exposing or parsing its response body');
+
+        // A prompt builder may use its entire advertised optional-material budget.
+        // The host must reserve the complete setup/resource envelope before it
+        // gives that allowance to the builder, not reject the finished request.
+        const resourceSource = path.join(directory, 'sample.py');
+        configuredImportFixtures = [{ file: 'sample.py', resourceSourceHash: require('node:crypto')
+            .createHash('sha256').update(fs.readFileSync(resourceSource)).digest('hex'),
+        resources: [{ kind: 'sqlite', path: 'neutral-budget.sqlite', tables: [{ name: 'neutral_items',
+            columns: [{ name: 'id', type: 'INTEGER', primaryKey: true }] }] }] }];
+        let resourceWriterRequests = 0, optionalBudgetUsed = false;
+        writerPrompts.getUserPrompt = (...args: any[]) => {
+            const allowance = args[6] as number;
+            let prompt = originalWriterPrompt(...args);
+            const example = '\nOPTIONAL SETUP PATTERN: neutral arrangement only; never an assertion oracle.';
+            assert.ok(estimatePromptTokens(prompt) < allowance - 64, 'neutral fixture leaves optional prompt space');
+            while (estimatePromptTokens(prompt + example) <= allowance - 32) { prompt += example; }
+            optionalBudgetUsed = estimatePromptTokens(prompt) >= allowance - 64;
+            return prompt;
+        };
+        globalThis.fetch = async (_url, options) => {
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+            if (request.roleInstructions.includes('dependency_behaviors')) {
+                return new Response(JSON.stringify({ response: '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the selected target with controlled inputs and use verified observations for assertions."}}' }), { status: 200 });
+            }
+            resourceWriterRequests++;
+            assert.match(request.prompt, /OPTIONAL SETUP PATTERN/);
+            assert.match(request.prompt, /\[Import test setup\]/);
+            assert.match(request.prompt, /HOST_ISOLATED_RESOURCE_CONTEXT/);
+            assert.match(request.prompt, /neutral_items/);
+            assert.match(request.prompt, /def target\(\)/, 'complete target source survives optional packing');
+            assert.match(request.prompt, /VERIFIED OBSERVATIONS/, 'execution evidence survives optional packing');
+            assert.ok(estimatePromptTokens(request.transmittedPrompt) <= 6000,
+                'the actual role, evidence, setup and resource payload must fit the selected profile');
+            return new Response('NEUTRAL_STOP_AFTER_WIRE_VALIDATION', { status: 400 });
+        };
+        const resourceBudgetRoot = path.join(directory, 'resource-envelope-budget');
+        try {
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: resourceSource, funcName: 'target', validationMode: 'full', promptStrategy: 'tier2',
+                maxLoops: 1, timeoutSeconds: 60, outputPath: resourceBudgetRoot });
+        } finally {
+            configuredImportFixtures = [];
+            writerPrompts.getUserPrompt = originalWriterPrompt;
+        }
+        assert.equal(optionalBudgetUsed, true, 'the fixture exercises a nearly full advertised Writer allowance');
+        assert.equal(resourceWriterRequests, 1, 'a fitting Writer request reaches transport, then stops on the deliberate non-retryable HTTP response');
+        const resourceEvents = fs.readFileSync(path.join(outputFor(resourceBudgetRoot), 'role_events.jsonl'), 'utf8')
+            .trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(!resourceEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
+        assert.ok(resourceEvents.some(event => event.stage === 'model-request' && event.status === 'error'
+            && event.detail.role === 'writer' && event.detail.httpStatus === 400));
 
         globalThis.fetch = fixtureFetcher;
         rejectAllModelRequests = false;
@@ -461,7 +530,7 @@ class Cases(unittest.TestCase):
                     assert.doesNotMatch(request.prompt, /INVALID_PRIVATE_RESPONSE/);
                 }
             } else if (request.roleInstructions.includes('dependency_behaviors')) {
-                response = '{"dependency_behaviors":[]}';
+                response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
             } else {
                 partialWriters++;
                 if (partialWriters === 2) { assert.match(request.prompt, /Mock read with mode b/); }
@@ -520,7 +589,7 @@ class Cases(unittest.TestCase):
             globalThis.fetch = async (_url, options) => {
                 const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
                 let response: string;
-                if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+                if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
                 else if (request.roleInstructions.includes('Python unittest Bug Fixer')) {
                     fixerCalls++;
                     assert.equal(request.format, undefined);
@@ -573,6 +642,7 @@ class Cases(unittest.TestCase):
         processRunner.runSpawn = originalSpawn;
         policies.createDefaultQualityPolicy = originalPolicy;
         traceBuilder.buildTier1TestFile = originalTraceBuilder;
+        writerPrompts.getUserPrompt = originalWriterPrompt;
         fs.rmSync(directory, { recursive: true, force: true });
     }
 });

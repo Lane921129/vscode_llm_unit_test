@@ -557,6 +557,7 @@ export const englishMessages: Record<string, string> = {
     "\n- **匯入測試設定**: {0}（import_fixtures.json）。初始化外部操作使用明確 mock；未驗證真實目錄建立、設定檔或介面啟動。\n": "\n- **Import test setup**: {0} (import_fixtures.json). External initialization uses explicit mocks; real directory creation, configuration files or UI startup are not verified.\n",
     "- **角色事件**: {0} / {1}：{2}（完整證據：role_events.jsonl）\n": "- **Role event**: {0} / {1}: {2} (full evidence: role_events.jsonl)\n",
     "完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。": "The full role prompt exceeds the model input budget. Source and execution evidence retained; prompt neither sent nor truncated.",
+    "隔離資源語境無法完整核對，未送出模型請求。": "The isolated resource context could not be fully verified. No model request was sent.",
     "- **執行識別**: {0}\n- **來源版本**: {1}\n\n": "- **Run identity**: {0}\n- **Source version**: {1}\n\n",
     "無法解析選取的目標函式；未退回其他目標。": "Cannot resolve the selected target function; no fallback to another target.",
     "執行驗證需要明確的函式目標。": "Execution verification requires an explicit function target.",

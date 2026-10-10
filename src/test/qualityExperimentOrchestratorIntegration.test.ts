@@ -65,7 +65,7 @@ class ModelCases(unittest.TestCase):
                 scenario: "Construct Ledger(), then increase('entry', 3) twice and assert the observed entries after each call.",
                 verification: 'Run the preserved original test and new state test, obtain Reviewer approval, then rerun the same mutant set.' }] });
         } else if (request.roleInstructions?.includes('dependency_behaviors')) {
-            roles.push('planning'); response = '{"dependency_behaviors":[]}';
+            roles.push('planning'); response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
         } else {
             roles.push('writer'); response = '```python\n' + (roles.filter(role => role === 'writer').length === 1 ? weak : strong) + '\n```';
         }
