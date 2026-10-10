@@ -142,6 +142,12 @@
           "default": "http://127.0.0.1:11434",
           "description": "Base URL for Ollama API"
         },
+        "llmUnitTest.runtimeContextTokens": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "description": "%contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description%"
+        },
         "llmUnitTest.cloudThinkingMode": {
           "type": "string",
           "enum": [

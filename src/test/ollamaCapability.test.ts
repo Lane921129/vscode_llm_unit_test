@@ -1,19 +1,45 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe } from '../llm/ollamaCapability';
+import { buildOllamaPlainTestGenerationProbe, buildOllamaStructuredProbe, buildOllamaTestGenerationProbe, buildOllamaRoleQualificationProbe } from '../llm/ollamaCapability';
 import { assessStructuredOutputProbe, assessTestGenerationProbe } from '../llm/testGenerationQualification';
 import { assessIsolatedProbeCode, isIsolatedProbeCode, runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 
 test('Ollama structured probe is small, deterministic, and domain neutral', () => {
-    const request = buildOllamaStructuredProbe('local-model');
+    const request = buildOllamaStructuredProbe('local-model', 8192);
 
     assert.deepStrictEqual(request, {
         model: 'local-model',
-        prompt: 'Return exactly one JSON object with a boolean field named "ok" set to true. Do not include any other text.',
+        system: ' ',
+        prompt: '\nReturn exactly one JSON object with a boolean field named "ok" set to true. Do not include any other text.',
         stream: false,
         format: 'json',
-        options: { temperature: 0 }
+        options: { temperature: 0, num_ctx: 8192 }
     });
+});
+
+test('every local probe carries the same explicit context and complete prompt envelope', () => {
+    for (const numCtx of [5000, 8192]) {
+        const probes = [buildOllamaStructuredProbe('neutral-model', numCtx),
+            buildOllamaTestGenerationProbe('neutral-model', numCtx), buildOllamaPlainTestGenerationProbe('neutral-model', numCtx),
+            buildOllamaRoleQualificationProbe('neutral-model', 'Complete reviewer role instructions.', 'json', numCtx),
+            buildOllamaRoleQualificationProbe('neutral-model', 'Complete repair role instructions.', 'text', numCtx)];
+        for (const request of probes) {
+            assert.deepStrictEqual(request.options, { temperature: 0, num_ctx: numCtx });
+            assert.equal(request.system, ' ');
+            assert.ok(request.prompt.startsWith('\n'));
+            assert.equal('raw' in request, false);
+            assert.equal('template' in request, false);
+        }
+        assert.equal(probes[3].prompt, '\nComplete reviewer role instructions.');
+        assert.equal(probes[4].prompt, '\nComplete repair role instructions.');
+    }
+});
+
+test('probe builders reject invalid context instead of falling back to the server default', () => {
+    for (const numCtx of [0, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.throws(() => buildOllamaPlainTestGenerationProbe('neutral-model', numCtx), /invalid-runtime-context/);
+        assert.throws(() => buildOllamaRoleQualificationProbe('neutral-model', 'role', 'text', numCtx), /invalid-runtime-context/);
+    }
 });
 
 test('shared structured qualification accepts the expected JSON object only', () => {
@@ -27,7 +53,7 @@ test('shared structured qualification accepts the expected JSON object only', ()
 });
 
 test('shared test-generation qualification requires a complete unittest structure, not merely JSON', () => {
-    const request = buildOllamaTestGenerationProbe('local-model');
+    const request = buildOllamaTestGenerationProbe('local-model', 8192);
     assert.strictEqual(request.format, 'json');
     assert.ok(request.prompt.includes('safe runtime already provides increment(value)'));
     assert.ok(request.prompt.includes('do not define or import increment'));
@@ -116,9 +142,9 @@ test('shared test-generation qualification requires a complete unittest structur
 });
 
 test('plain Ollama probe does not require JSON mode and shared qualification accepts fenced Python', () => {
-    const request = buildOllamaPlainTestGenerationProbe('local-model');
+    const request = buildOllamaPlainTestGenerationProbe('local-model', 8192);
     assert.strictEqual('format' in request, false);
-    assert.ok(request.prompt.startsWith('Return only one complete runnable Python unittest file.'));
+    assert.ok(request.prompt.startsWith('\nReturn only one complete runnable Python unittest file.'));
     assert.ok(request.prompt.includes('safe runtime already provides increment(value)'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(1), 2)'));
     assert.ok(request.prompt.includes('self.assertEqual(increment(-1), 0)'));

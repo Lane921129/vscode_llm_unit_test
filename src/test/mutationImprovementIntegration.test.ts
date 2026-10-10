@@ -113,6 +113,7 @@ class Cases(unittest.TestCase):
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture',
             paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 8572 },
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture',
             filePath: path.join(directory, 'sample.py'), funcName: 'categorize', promptStrategy: 'tier2',

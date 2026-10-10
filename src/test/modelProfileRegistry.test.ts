@@ -1,4 +1,4 @@
-import { QUALIFICATION_VERSION } from '../llm/modelQualification';
+import { LOCAL_RUNTIME_QUALIFICATION_VERSION, QUALIFICATION_VERSION } from '../llm/modelQualification';
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { findModelProfile, modelProfileKey, qualificationForSelectedProfile, restoreModelProfiles, upsertModelProfile } from '../llm/modelProfileRegistry';
@@ -9,6 +9,8 @@ const localProfile = {
     modelName: 'reliable-instruct',
     paramSize: '8B',
     contextLength: 8192,
+    contextLengthKnown: true,
+    qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8192 } as const,
     qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true,
     testGenerationReason: '模型已通過行為 assertion 驗證。',
     testGenerationMode: '結構化 JSON unittest'
@@ -60,7 +62,40 @@ test('expires pre-provenance qualification results while retaining the saved mod
     assert.strictEqual(restored[0].contextLength, localProfile.contextLength);
     assert.strictEqual(findModelProfile([old], old)?.testGenerationReady, false);
     assert.strictEqual(qualificationForSelectedProfile([old], old, false), false);
-    assert.strictEqual(qualificationForSelectedProfile([localProfile], localProfile, false), true);
+    assert.strictEqual(qualificationForSelectedProfile([localProfile], { ...localProfile, runtimeContextTokens: 8192 }, false), true);
+});
+
+test('persists a local runtime binding without changing model metadata identity', () => {
+    const restored = restoreModelProfiles(JSON.parse(JSON.stringify(upsertModelProfile([], localProfile))));
+    assert.deepStrictEqual(restored, [localProfile]);
+    const request = { ...localProfile, runtimeContextTokens: 8192 };
+    assert.strictEqual(qualificationForSelectedProfile(restored, request, false), true);
+    assert.strictEqual(qualificationForSelectedProfile(restored, { ...request, runtimeContextTokens: 5000 }, false), false);
+    assert.strictEqual(findModelProfile(restored, { ...request, runtimeContextTokens: 5000 })?.contextLength, 8192);
+    assert.strictEqual(modelProfileKey(request), modelProfileKey({ ...request, runtimeContextTokens: 5000 }));
+});
+
+test('restoring unbound local roles preserves metadata and expires every claimed role', () => {
+    const role = { state: 'verified' as const, reason: 'fixed probe passed' };
+    for (const qualificationRuntime of [undefined, { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: '8192' }]) {
+        const [restored] = restoreModelProfiles([{ ...localProfile, qualificationRuntime,
+            roleQualification: { writer: role, reviewer: role, bugFixer: role } }]);
+        assert.strictEqual(restored.contextLength, localProfile.contextLength);
+        assert.strictEqual(restored.contextLengthKnown, true);
+        assert.strictEqual(restored.modelName, localProfile.modelName);
+        assert.strictEqual(restored.testGenerationReady, false);
+        assert.strictEqual(restored.qualificationRuntime, undefined);
+        assert.deepStrictEqual(Object.values(restored.roleQualification!).map(value => value.state), ['unverified', 'unverified', 'unverified']);
+    }
+});
+
+test('runtime migration leaves unprobed local and existing remote profiles neutral or unchanged', () => {
+    const unprobed = { envType: 'local' as const, modelName: 'neutral-model', paramSize: '3B', contextLength: 4096 };
+    const remotes = ['cloud', 'custom'].map(envType => ({ ...localProfile, envType, qualificationRuntime: undefined }));
+    const restored = restoreModelProfiles([unprobed, ...remotes]);
+    assert.deepStrictEqual(restored, [unprobed, ...remotes]);
+    assert.strictEqual(restored[0].contextLengthKnown, undefined, 'legacy fallback is not advertised metadata');
+    assert.strictEqual(qualificationForSelectedProfile([restored[0]], { ...unprobed, runtimeContextTokens: 4096 }, false), undefined);
 });
 
 test('does not let an unprobed model inherit another model\'s qualification', () => {

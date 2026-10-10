@@ -161,7 +161,8 @@ class Cases(unittest.TestCase):
         activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
-            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
+            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 8572 }, testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
             maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
@@ -385,6 +386,7 @@ class Cases(unittest.TestCase):
         rejectAllModelRequests = true;
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '1B', contextLength: 128, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 128 },
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
@@ -398,6 +400,7 @@ class Cases(unittest.TestCase):
         // Service failures retain their category and never launch lower-Tier Writer retries.
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 8572 },
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
         let serviceCalls = 0;
         globalThis.fetch = async () => { serviceCalls++; return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 }); };

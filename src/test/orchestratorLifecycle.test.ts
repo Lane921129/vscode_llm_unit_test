@@ -17,6 +17,7 @@ test('abort and immediate restart suppress stale completion and freeze model fac
     const warnings: string[] = [];
     const scans: Array<{ resume: () => void; context: ExecutionContext<any> }> = [];
     let scopePreviews = 0;
+    let runtimeContextTokens = 8192;
     const utilities = require('../utils/utils');
     const originalScan = utilities.findPythonFilesInDir;
     const originalExtract = utilities.extractFunctionsWithAst;
@@ -32,7 +33,8 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         },
         ExtensionMode: { Development: 2, Test: 3 },
         Uri: { file: (fsPath: string) => ({ fsPath }) },
-        workspace: { workspaceFolders: [], getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }),
+        workspace: { workspaceFolders: [], getConfiguration: () => ({ get: (key: string, fallback: unknown) =>
+            key === 'runtimeContextTokens' ? runtimeContextTokens : fallback }),
             openTextDocument: async () => ({}) },
         window: {
             registerWebviewViewProvider: (_: string, provider: any) => {
@@ -69,9 +71,12 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         handlers.get('llm-unit-test.abortTest')!();
         assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 1);
         update({ envType: 'local', modelName: 'second', paramSize: '8B', contextLength: 8192 });
+        runtimeContextTokens = 16384;
         const newBatch = batch(params);
         assert.strictEqual(scans.length, 2);
         assert.strictEqual(scans[0].context.snapshot.current.modelName, 'first');
+        assert.strictEqual(scans[0].context.snapshot.runtimeContextTokens, 8192);
+        assert.strictEqual(scans[1].context.snapshot.runtimeContextTokens, 16384);
         assert.strictEqual(scans[1].context.snapshot.current.modelName, 'second');
         assert.strictEqual(scans[0].context.snapshot.stored.length, 1);
         await batch(params);

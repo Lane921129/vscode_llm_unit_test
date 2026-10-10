@@ -4,6 +4,16 @@
 
 ## 2026-10-11
 
+### 本機 Context 設定與角色資格一致性
+
+- 新增 `llmUnitTest.runtimeContextTokens`，預設 `0` 保留自動容量；明確正整數須有有效模型 metadata 上限且不得超額。提示輸入預算與實際 Ollama `num_ctx` 使用同一解析結果，約 30% 保留輸出空間；Cloud／Custom 不受此設定影響，沒有模型品牌特例。
+- Writer、Reviewer、Bug Fixer 資格增加 `ollama-context-v1`／`numCtx` 綁定。舊本機 profile metadata 保留，但缺少綁定或容量不符不能沿用資格。Auto 只使用當次相符且 verified 的角色；手動 Tier 保留既有試跑與全部驗證門檻。
+- 測試連線三角色共用設定快照；設定中途變動會提示重驗。正式單檔、全檔與批次也固定啟動時容量。非法設定在發送前保存 `model-runtime/rejected` 原因碼，metadata 缺失不能冒認明確容量可用。新增中英文設定說明及通知。
+- README 同步更正早期殘留的 execution 預設、Auto 確定性備援及自動改換突變引擎描述；現行 full／角色資格與指定引擎規則不變。
+- 真實 Qwen 3B 中性探針分別確認 8,192 與 16,384 的實際 Ollama allocation；兩種容量皆為 Writer 真實隔離執行通過、Reviewer 契約通過，Bug Fixer 仍未通過。16K 有部分 CPU offload；較大容量不是免費效能提升，也不等於長上下文品質或整批通過。
+- 對前一批 205 個 prompt-budget 失敗的容量估算：8K 可容納 161 個，16K 可容納 205 個；這只是原提示容量比較，尚非新模型生成結果。原必要來源與 schema 完整保留，未用截斷或降低 gate 換取容量。
+- 驗證：完整 Node 841／841 通過，包含正式多目標執行快照、失效資格、側欄三角色與原 Reviewer 整合；TypeScript、lint、生產建置、Webview 語法、tracked／可達 Git 歷史密鑰掃描與差異檢查通過。Python 正式工具未修改，沿用本輪已完成的 540 項回歸（538 通過、2 略過），不將中性探針當作車輛驗收。
+
 ### 精簡 Analyst 契約與保守的資源語境投影
 
 - Analyst 固定指令由約 1,092 降為 658 估算 token，移除使用者提示內重複的任務；完整目標、必要 setup、相依來源與可斷言觀測保留。狀態快照仍只存證據檔，來源與模型假說不成為斷言答案。

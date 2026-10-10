@@ -67,8 +67,8 @@ import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, g
 import { SerialRequestQueue } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
-import { findModelProfile, qualificationForSelectedProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
-import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, QUALIFICATION_VERSION } from './llm/modelQualification';
+import { findModelProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
+import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, qualificationAppliesToRequest, qualificationForRequest, type ModelQualificationProfile } from './llm/modelQualification';
 import { RoleQualificationProfile, qualifiedRole } from './llm/roleQualification';
 import { ReviewSession, ReviewStatus } from './roles/reviewSession';
 import { canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
@@ -99,7 +99,7 @@ import { MutationRun, MutationContext, parseIsolatedMutationRun,
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
-import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow } from './prompts/promptBudget';
+import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
@@ -205,9 +205,10 @@ async function runMockScaffold(
     }
 }
 
-interface ModelProfile {
+interface ModelProfile extends ModelQualificationProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
     contextLength: number;  // max context tokens from model
+    contextLengthKnown?: boolean;
     budgetTokens: number;   // calculated usable budget
     envType?: 'local' | 'cloud' | 'custom';
     modelName?: string;
@@ -232,6 +233,7 @@ let storedModelProfiles: StoredModelProfile[] = [];
 interface ModelSnapshot {
     current: ModelProfile;
     stored: StoredModelProfile[];
+    runtimeContextTokens: unknown;
 }
 const analysisRuns = new ExecutionManager<ModelSnapshot>();
 interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
@@ -248,7 +250,8 @@ async function runAnalysisSession<T extends object>(
         void sidebar.webview?.postMessage({ command: 'analysisFinished' });
         return;
     }
-    const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles });
+    const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
+        runtimeContextTokens: vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('runtimeContextTokens', 0) });
     if (!execution) {
         environmentLease.release();
         await vscode.window.showInformationMessage(localize("已有分析執行中，請等待完成或先中止。"));
@@ -321,7 +324,7 @@ interface AnalysisParams {
     sessionDate?: string;
     /** Optional venv or laboratory interpreter; empty values fall back to PATH python. */
     pythonExecutable?: string;
-    /** Runner-owned context setting; not a new user/provider configuration. */
+    /** Effective runner-owned context resolved from the immutable run snapshot. */
     requestContextTokens?: number;
     /** Internal batch inventory; never serialized with provider credentials. */
     batchJournal?: BatchJournal;
@@ -638,6 +641,8 @@ export function activate(context: vscode.ExtensionContext) {
     const updateModelProfileCmd = vscode.commands.registerCommand('llm-unit-test.updateModelProfile', (profile: {
         paramSize: string;
         contextLength: number;
+        contextLengthKnown?: boolean;
+        qualificationRuntime?: ModelQualificationProfile['qualificationRuntime'];
         envType?: 'local' | 'cloud' | 'custom';
         modelName?: string;
         testGenerationReady?: boolean;
@@ -650,6 +655,8 @@ export function activate(context: vscode.ExtensionContext) {
         const updatedProfile: ModelProfile = {
             paramSize: profile.paramSize,
             contextLength: profile.contextLength,
+            contextLengthKnown: profile.contextLengthKnown === true,
+            qualificationRuntime: profile.qualificationRuntime,
             budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 }),
             envType: profile.envType,
             modelName: profile.modelName,
@@ -667,6 +674,8 @@ export function activate(context: vscode.ExtensionContext) {
                 modelName: updatedProfile.modelName,
                 paramSize: updatedProfile.paramSize,
                 contextLength: updatedProfile.contextLength,
+                contextLengthKnown: updatedProfile.contextLengthKnown,
+                qualificationRuntime: updatedProfile.qualificationRuntime,
                 testGenerationReady: updatedProfile.testGenerationReady,
                 testGenerationReason: updatedProfile.testGenerationReason,
                 qualificationVersion: updatedProfile.qualificationVersion,
@@ -1296,7 +1305,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const gateDescription = mode === 'full' ? localize("結構、執行、覆蓋率與突變驗證") : localize("結構、真實目標呼叫與隔離執行驗證");
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
-        ?? { current: currentModelProfile, stored: storedModelProfiles };
+        ?? { current: currentModelProfile, stored: storedModelProfiles, runtimeContextTokens: 0 };
     let currentLoop = 1;
     let mutationScore = 0;
     let qualityToolsSatisfied = false;
@@ -1344,24 +1353,36 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         envType: params.envType,
         modelName: params.modelName, endpointKey: selectedEndpointKey
     });
-    const activeModelProfile = selectedStoredProfile
+    const selectedModelProfile = selectedStoredProfile
         ? withBudget(selectedStoredProfile)
         : (modelSnapshot.current.envType === params.envType && modelSnapshot.current.modelName === params.modelName
             && (modelSnapshot.current.endpointKey || qualificationEndpointKey(params.envType)) === selectedEndpointKey
             ? modelSnapshot.current
             : defaultModelProfile());
+    const localRuntime = params.envType === 'local' ? resolveLocalRuntimeContext({
+        paramSize: selectedModelProfile.paramSize, contextLength: selectedModelProfile.contextLength,
+        contextLengthKnown: selectedModelProfile.contextLengthKnown,
+        runtimeContextTokens: modelSnapshot.runtimeContextTokens
+    }) : undefined;
+    const requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
+        : runtimeContextWindow(selectedModelProfile.paramSize, selectedModelProfile.contextLength);
+    const activeModelProfile = { ...selectedModelProfile,
+        budgetTokens: localRuntime?.ok && localRuntime.mode === 'explicit'
+            ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
+    const qualificationRequest = { envType: params.envType, modelName: params.modelName,
+        endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow };
     const modelParamBillion = parseFloat(activeModelProfile.paramSize);
     // When another model has already been probed in this session but the
     // selected one has no saved entry, retain the conservative Tier-1 gate.
     // A fresh extension with no probe data stays neutral for compatibility.
-    const qualifiedForSelectedModel = qualificationForSelectedProfile(
-        modelSnapshot.stored,
-        { envType: params.envType, modelName: params.modelName, endpointKey: selectedEndpointKey },
-        modelSnapshot.current.testGenerationReady !== undefined
-    );
-    const roleQualification = activeModelProfile.roleQualification;
-    const currentQualification = activeModelProfile.qualificationVersion === QUALIFICATION_VERSION;
-    const writerReady = qualifiedRole('writer', roleQualification, currentQualification, qualifiedForSelectedModel);
+    const qualifiedForSelectedModel = activeModelProfile.envType && activeModelProfile.modelName
+        ? qualificationForRequest(activeModelProfile, qualificationRequest)
+        : modelSnapshot.current.testGenerationReady !== undefined ? false : undefined;
+    const currentQualification = !(localRuntime && !localRuntime.ok)
+        && qualificationAppliesToRequest(activeModelProfile, qualificationRequest);
+    const roleQualification = currentQualification ? activeModelProfile.roleQualification : undefined;
+    const writerReady = qualifiedForSelectedModel === true
+        ? qualifiedRole('writer', roleQualification, currentQualification, true) : qualifiedForSelectedModel;
     const reviewerReady = qualifiedRole('reviewer', roleQualification, currentQualification);
     const fixerReady = qualifiedRole('bugFixer', roleQualification, currentQualification);
     const tier1GenerationMode = resolveTier1GenerationMode(writerReady, userTierSetting);
@@ -1544,10 +1565,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         prompt += importResourcePrompt();
         const contractedSystem = addOutputContract(system, format);
-        const contextWindow = runtimeContextWindow(activeModelProfile.paramSize, activeModelProfile.contextLength);
+        const contextWindow = requestContextWindow;
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
             inputBudget: activeModelProfile.budgetTokens, reservedInputTokens,
             contextWindow,
+            ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
         if (!promptFits(contractedSystem, prompt, activeModelProfile.budgetTokens, reservedInputTokens)) {
             recordRole('model-request', 'budget-exceeded', metrics);
@@ -1587,6 +1609,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         journal.knowledge({ resourceLifecycle: event });
     });
     try {
+    if (localRuntime && !localRuntime.ok) {
+        recordRole('model-runtime', 'rejected', { reasonCode: localRuntime.reasonCode });
+        throw new AnalysisStageError('validation', 'model-runtime',
+            localize('本機 Context 設定無法使用；請檢查 llmUnitTest.runtimeContextTokens，並重新執行模型測試連線。'),
+            { reasonCode: localRuntime.reasonCode });
+    }
+    if (localRuntime?.ok) {
+        recordRole('model-runtime', 'selected', { contextWindow: requestContextWindow,
+            inputBudget: activeModelProfile.budgetTokens, configuredContextTokens: localRuntime.configuredTokens,
+            contextPolicy: localRuntime.mode, metadataContextKnown: activeModelProfile.contextLengthKnown === true,
+            qualificationApplicable: currentQualification });
+    }
     let astContext: AstContext | null = null;
     const targetDir = path.dirname(params.filePath);
     let preflight: Awaited<ReturnType<typeof preflightTargetModule>> | undefined;

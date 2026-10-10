@@ -9,8 +9,10 @@ import { BatchScopeController } from './BatchScopeController';
 import { BatchScopeSelection } from '../pipeline/batchScope';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, googleThinkingSession, normalizeGoogleModelName } from '../llm/cloudApi';
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
-import { formatModelQualificationLog, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
-import { buildOllamaPlainTestGenerationProbe } from '../llm/ollamaCapability';
+import { formatModelQualificationLog, LOCAL_RUNTIME_QUALIFICATION_VERSION, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
+import { buildOllamaPlainTestGenerationProbe, buildOllamaRoleQualificationProbe } from '../llm/ollamaCapability';
+import { getOllamaModelConnectionMetadata } from '../llm/ollamaRuntime';
+import { resolveLocalRuntimeContext } from '../prompts/promptBudget';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
@@ -439,6 +441,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'testConnection': {
+                    // One connection action owns one immutable runtime setting,
+                    // including when the user edits configuration during a probe.
+                    const requestedRuntimeContext = message.envType === 'local'
+                        ? config.get<unknown>('runtimeContextTokens', 0) : undefined;
                     const releasePython = pythonEnvironmentActivity.acquire('use');
                     if (!releasePython) {
                         vscode.window.showInformationMessage(localize("Python 環境準備中，請等待完成後再測試模型連線。"));
@@ -473,108 +479,89 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 );
                                 if (!response.ok) {throw new Error(`HTTP ${response.status}`);}
 
-                                // 🔍 Model Probe: 查詢模型詳細資訊
                                 if (message.modelName) {
+                                    let metadata = getOllamaModelConnectionMetadata(undefined);
                                     try {
                                         const showResponse = await timedFetch(`${baseUrl}/api/show`, {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json' },
+                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({ model: message.modelName })
                                         }, CONNECTION_DISCOVERY_TIMEOUT_MS);
-
-                                        if (showResponse.ok) {
-                                            const modelData = await showResponse.json() as any;
-                                            const paramSize: string = modelData?.details?.parameter_size ?? 'unknown';
-                                            
-                                            // 嘗試從 model_info 取得 context_length（key 不固定，需搜尋）
-                                            let contextLength = 4096; // 預設值
-                                            if (modelData?.model_info) {
-                                                const infoKeys = Object.keys(modelData.model_info);
-                                                const ctxKey = infoKeys.find(k => k.endsWith('.context_length'));
-                                                if (ctxKey) {
-                                                    contextLength = modelData.model_info[ctxKey];
-                                                }
-                                            }
-
-                                            const profile = {
-                                                paramSize,
-                                                contextLength,
-                                                envType: 'local' as const,
-                                                endpointKey: qualificationEndpointKey('local', baseUrl),
-                                                modelName: message.modelName
-                                            };
-                                            // 傳送探針結果給 webview 顯示
-                                            this.webview?.postMessage({ command: 'modelProbeResult', profile });
-                                            // 同時傳給 extension 主程式
-                                            vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                            try {
-                                                const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
-                                                    method: 'POST',
-                                                    headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName))
+                                        if (showResponse.ok) { metadata = getOllamaModelConnectionMetadata(await showResponse.json()); }
+                                    } catch { /* Automatic mode may still qualify the measured fallback runtime. */ }
+                                    const profile = {
+                                        paramSize: metadata.paramSize, contextLength: metadata.contextLength,
+                                        contextLengthKnown: metadata.contextLengthKnown,
+                                        envType: 'local' as const,
+                                        endpointKey: qualificationEndpointKey('local', baseUrl),
+                                        modelName: message.modelName
+                                    };
+                                    const runtime = resolveLocalRuntimeContext({ ...metadata, runtimeContextTokens: requestedRuntimeContext });
+                                    if (!runtime.ok) {
+                                        const reason = runtime.reasonCode === 'invalid-runtime-context'
+                                            ? localize("Context 必須為 0（自動）或正整數。")
+                                            : runtime.reasonCode === 'runtime-context-metadata-required'
+                                                ? localize("無法確認模型的 Context 上限，不能使用明確指定的 Context。")
+                                                : localize("指定的 Context 超過模型回報的上限。");
+                                        const blocked = { ...profile, qualificationVersion: QUALIFICATION_VERSION,
+                                            testGenerationReady: false, testGenerationReason: reason,
+                                            roleQualification: buildRoleQualificationProfile({ state: 'unverified', reason }) };
+                                        this.webview?.postMessage({ command: 'modelProbeResult', profile: blocked });
+                                        vscode.commands.executeCommand('llm-unit-test.updateModelProfile', blocked);
+                                        this.appendRoleQualificationLog(blocked);
+                                        vscode.window.showWarningMessage(localize("⚠️ Local Ollama 服務可連線，但本機 Context 設定不可用（{0}）。未執行角色探針，請修正設定後重新測試連線。", reason));
+                                        return;
+                                    }
+                                    const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: runtime.contextWindow } as const;
+                                    if (!metadata.contextLengthKnown) {
+                                        this.webview?.postMessage({ command: 'appendLog', text: localize("模型未提供可驗證的 Context 上限，本次使用自動保守值 {0} tokens；資格僅綁定此值。", runtime.contextWindow.toLocaleString()) });
+                                    }
+                                    this.webview?.postMessage({ command: 'modelProbeResult', profile });
+                                    vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
+                                    try {
+                                        const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
+                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName, runtime.contextWindow))
+                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                        const capability = await verifyRunnableTestGenerationProbe(
+                                            plainResponse.ok ? await plainResponse.json() : undefined, isolatedProbeExecutor
+                                        );
+                                        const roleQualification = await runRoleQualificationProbes(
+                                            { state: capability.capability, reason: capability.reason },
+                                            async (prompt, format) => {
+                                                const roleResponse = await timedFetch(`${baseUrl}/api/generate`, {
+                                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify(buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow))
                                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                                const capability = await verifyRunnableTestGenerationProbe(
-                                                    plainResponse.ok ? await plainResponse.json() : undefined,
-                                                    isolatedProbeExecutor
-                                                );
-                                                const roleQualification = await runRoleQualificationProbes(
-                                                    { state: capability.capability, reason: capability.reason },
-                                                    async (prompt, format) => {
-                                                        const roleResponse = await timedFetch(`${baseUrl}/api/generate`, {
-                                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify({ model: message.modelName, prompt, stream: false,
-                                                                ...(format === 'json' ? { format: 'json' } : {}), options: { temperature: 0 } })
-                                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                                        if (!roleResponse.ok) { return undefined; }
-                                                        return (await roleResponse.json() as { response?: string }).response;
-                                                    }, isolatedProbeExecutor
-                                                );
-                                                const qualificationProfile = {
-                                                    ...profile,
-                                                    testGenerationReady: capability.capability === 'verified',
-                                                    testGenerationReason: capability.reason,
-                                                    qualificationVersion: QUALIFICATION_VERSION,
-                                                    testGenerationMode: 'plain-python',
-                                                    roleQualification
-                                                };
-                                                this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
-                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
-                                                this.appendModelQualificationLog(qualificationProfile, capability.responsePreview);
-                                                this.appendRoleQualificationLog(qualificationProfile);
-                                                if (capability.capability === 'verified') {
-                                                    vscode.window.showInformationMessage(
-                                                        localize("✅ Local Ollama 連線成功！模型：{0}，最大 Context：{1} tokens；已通過純 Python unittest 驗證。", paramSize, contextLength.toLocaleString())
-                                                    );
-                                                } else {
-                                                    vscode.window.showWarningMessage(
-                                                        localize("⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（{0}）。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。", capability.reason)
-                                                    );
-                                                }
-                                            } catch {
-                                                const qualificationProfile = {
-                                                    ...profile,
-                                                    qualificationVersion: QUALIFICATION_VERSION,
-                                                    testGenerationReady: false,
-                                                    testGenerationReason: localize("測試連線逾時或無法完成 unittest 生成探針。"),
-                                                    testGenerationMode: localize("未完成"),
-                                                    roleQualification: buildRoleQualificationProfile(
-                                                        { state: 'unverified', reason: localize("Writer 探針未完成，角色探針未執行。") }
-                                                    )
-                                                };
-                                                this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
-                                                vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
-                                                this.appendModelQualificationLog(qualificationProfile);
-                                                this.appendRoleQualificationLog(qualificationProfile);
-                                                vscode.window.showWarningMessage(
-                                                    localize("⚠️ Local Ollama 連線成功，但結構化輸出驗證逾時或失敗。Tier 1 的確定性測試仍可使用；Tier 2–4 建議改用 Instruct 模型。")
-                                                );
-                                            }
+                                                if (!roleResponse.ok) { return undefined; }
+                                                return (await roleResponse.json() as { response?: string }).response;
+                                            }, isolatedProbeExecutor
+                                        );
+                                        const qualificationProfile = { ...profile, qualificationRuntime,
+                                            testGenerationReady: capability.capability === 'verified',
+                                            testGenerationReason: capability.reason, qualificationVersion: QUALIFICATION_VERSION,
+                                            testGenerationMode: 'plain-python', roleQualification };
+                                        this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
+                                        vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
+                                        this.appendModelQualificationLog(qualificationProfile);
+                                        this.appendRoleQualificationLog(qualificationProfile);
+                                        if (vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('runtimeContextTokens', 0) !== requestedRuntimeContext) {
+                                            vscode.window.showWarningMessage(localize("本次角色探針使用 Runtime Context {0} tokens；設定已變更，請重新測試連線以驗證目前設定。", runtime.contextWindow.toLocaleString()));
+                                        } else if (capability.capability === 'verified') {
+                                            vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！模型：{0}，本次 Runtime Context：{1} tokens；已通過純 Python unittest 驗證。", metadata.paramSize, runtime.contextWindow.toLocaleString()));
                                         } else {
-                                            vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));
+                                            vscode.window.showWarningMessage(localize("⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（{0}）；本次 Runtime Context：{1} tokens。", capability.reason, runtime.contextWindow.toLocaleString()));
                                         }
-                                    } catch (probeError) {
-                                        console.warn('[SidebarProvider] Local probe failed:', probeError);
-                                        vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));
+                                    } catch {
+                                        const reason = localize("測試連線逾時或無法完成 unittest 生成探針。");
+                                        const qualificationProfile = { ...profile, qualificationRuntime,
+                                            qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: false,
+                                            testGenerationReason: reason, testGenerationMode: localize("未完成"),
+                                            roleQualification: buildRoleQualificationProfile({ state: 'unverified', reason }) };
+                                        this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
+                                        vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
+                                        this.appendModelQualificationLog(qualificationProfile);
+                                        this.appendRoleQualificationLog(qualificationProfile);
+                                        vscode.window.showWarningMessage(localize("⚠️ Local Ollama 服務可連線，但本次角色探針未完成；Runtime Context：{0} tokens。請重新測試連線。", runtime.contextWindow.toLocaleString()));
                                     }
                                 } else {
                                     vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));

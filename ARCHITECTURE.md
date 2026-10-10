@@ -336,6 +336,10 @@ Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀
 
 Writer 在選擇 optional 材料前，先預扣相同的初始化與資源語境；Reviewer 初步預算也包含它，最終傳輸 gate 再核對全部文字。角色事件保存估計 input、格式修正預留量、實際 context 設定、耗時與安全失敗分類；HTTP 狀態只採 transport 階段持有的數值，不由訊息文字猜測，也不保存 provider 本文。這些估量和基本資格探針不能證明完整小模型批次通過。
 
+`llmUnitTest.runtimeContextTokens` 預設 `0`，保留本機既有尺寸估算；明確容量經 `resolveLocalRuntimeContext` 核對正安全整數與 Ollama 模型上限，並統一輸入預算及實際 `num_ctx`。`ollamaRuntime.ts` 只將有效模型 metadata 當上限證據，Modelfile 的配置值或 `/api/ps` 的目前 allocation 都不能替代上限。未知上限可使用自動模式，但不得據 fallback 值批准明確容量。
+
+本機角色資格另外綁定 `ollama-context-v1` 與實際請求的 `numCtx`；provider、端點、模型及探針版本仍須一致。舊 profile 保留 metadata，但撤回缺少容量綁定的資格；測試連線中的三角色採同一設定快照，中途修改則提示重驗。正式執行的單檔／全檔／批次在 `ExecutionContext` 固定設定，Auto 不借用其他容量的角色結果。手動 Tier 仍可試跑，所有後續驗證不變。非法本機設定在模型請求前保存 `model-runtime/rejected` 與原因碼；Cloud／Custom 不受本機設定影響。
+
 ## 尚未實作與尚待驗收的界線
 
 本次流程重構不宣稱完成型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗只提供普通同步實例的同一目標最多兩次呼叫觀測，不自動寫入正式測試；實驗去重不等同突變量測快取。Writer 仍使用完整 Python fence，seed 與補強提示不等同已完成增量格式生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。

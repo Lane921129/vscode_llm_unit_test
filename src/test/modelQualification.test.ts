@@ -1,4 +1,4 @@
-import { QUALIFICATION_VERSION } from '../llm/modelQualification';
+import { LOCAL_RUNTIME_QUALIFICATION_VERSION, QUALIFICATION_VERSION, qualificationAppliesToRequest, isLocalRuntimeQualification } from '../llm/modelQualification';
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { formatModelQualificationLog, qualificationForRequest } from '../llm/modelQualification';
@@ -8,21 +8,60 @@ test('uses a generation qualification only for the exact probed model', () => {
     const profile = {
         envType: 'local' as const,
         modelName: 'reliable-instruct',
+        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8192 } as const,
         qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true
     };
 
     assert.strictEqual(
-        qualificationForRequest(profile, { envType: 'local', modelName: 'reliable-instruct' }),
+        qualificationForRequest(profile, { envType: 'local', modelName: 'reliable-instruct', runtimeContextTokens: 8192 }),
         true
     );
     assert.strictEqual(
-        qualificationForRequest(profile, { envType: 'local', modelName: 'different-model' }),
+        qualificationForRequest(profile, { envType: 'local', modelName: 'different-model', runtimeContextTokens: 8192 }),
         false
     );
     assert.strictEqual(
         qualificationForRequest(profile, { envType: 'cloud', modelName: 'reliable-instruct' }),
         false
     );
+});
+
+test('local qualification matches the effective context independently of Writer outcome', () => {
+    const profile = {
+        envType: 'local' as const, modelName: 'neutral-model', qualificationVersion: QUALIFICATION_VERSION,
+        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8192 } as const, testGenerationReady: false
+    };
+    const request = { envType: 'local' as const, modelName: 'neutral-model', runtimeContextTokens: 8192 };
+    assert.strictEqual(qualificationAppliesToRequest(profile, request), true, 'identity does not certify Writer');
+    assert.strictEqual(qualificationForRequest(profile, request), false, 'a failed Writer stays unqualified');
+    for (const runtimeContextTokens of [undefined, 0, 5000, NaN, Infinity, 8192.5]) {
+        assert.strictEqual(qualificationAppliesToRequest(profile, { ...request, runtimeContextTokens }), false);
+        assert.strictEqual(qualificationForRequest({ ...profile, testGenerationReady: true }, { ...request, runtimeContextTokens }), false);
+    }
+    assert.strictEqual(qualificationForRequest({ ...profile, testGenerationReady: true }, request), true);
+});
+
+test('legacy and malformed local runtime bindings never certify a current request', () => {
+    const request = { envType: 'local' as const, modelName: 'neutral-model', runtimeContextTokens: 8192 };
+    const base = { envType: 'local' as const, modelName: 'neutral-model', qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true };
+    for (const qualificationRuntime of [undefined, null, {}, [], '8192',
+        { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: '8192' },
+        { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 0 },
+        { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: Infinity },
+        { version: 'old', numCtx: 8192 }]) {
+        assert.strictEqual(isLocalRuntimeQualification(qualificationRuntime), false);
+        assert.strictEqual(qualificationForRequest({ ...base, qualificationRuntime } as any, request), false);
+    }
+    assert.strictEqual(qualificationForRequest({ qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true }, request), false);
+});
+
+test('local runtime settings do not expire Cloud or Custom qualification', () => {
+    for (const envType of ['cloud', 'custom'] as const) {
+        const profile = { envType, modelName: 'neutral-model', qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: true };
+        assert.strictEqual(qualificationForRequest(profile, { ...profile, runtimeContextTokens: 8192 }), true);
+        assert.strictEqual(qualificationForRequest(profile, { ...profile, runtimeContextTokens: 0 }), true);
+        assert.strictEqual(qualificationForRequest({ ...profile, testGenerationReady: false }, profile), false);
+    }
 });
 
 test('keeps unprobed profiles neutral until a probe result exists', () => {

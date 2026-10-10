@@ -1,4 +1,5 @@
 {
+  "contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description": "Local Ollama context per request. 0 preserves the automatic size-based limit. A positive value requires verified model metadata and must not exceed its supported context; 30% is reserved for output. Run Test Connection again after changing the effective context. Cloud and Custom API are unchanged. Larger contexts require more memory; an active batch keeps its original setting.",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description": "Source files and SHA-256 hashes that justify this fixture. Any change invalidates the approval.",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description": "This approved fixture requires a regular Python source process. Frozen executables are rejected before application loading.",
   "contributes.commands.5.title": "LLM Unit Test: Configure isolated test resources",

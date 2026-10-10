@@ -1,4 +1,5 @@
 {
+  "contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description": "本機 Ollama 每次請求的 Context；0 保留依模型規模的自動上限。正整數須有模型 metadata 證明且不可超過支援容量，保留 30% 給輸出。有效容量變更後請重新測試連線；Cloud 與 Custom API 不受影響。較大容量需要更多記憶體，執行中的批次保留啟動時設定。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description": "支持此設定的來源檔案與 SHA-256；任一來源變動即撤銷批准。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description": "此批准設定限一般 Python 原始碼程序；封裝執行檔會在載入應用前被拒絕。",
   "contributes.commands.5.title": "LLM Unit Test：設定隔離測試資源",

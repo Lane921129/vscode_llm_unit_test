@@ -1,11 +1,13 @@
 import { localize } from '../i18n/core';
-import { ModelQualificationProfile, ModelQualificationRequest, qualificationForRequest, qualificationEndpointKey, QUALIFICATION_VERSION } from './modelQualification';
+import { ModelQualificationProfile, ModelQualificationRequest, qualificationForRequest, qualificationEndpointKey, QUALIFICATION_VERSION, isLocalRuntimeQualification } from './modelQualification';
 
 export interface StoredModelProfile extends ModelQualificationProfile {
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
     paramSize: string;
     contextLength: number;
+    /** True only when the provider supplied a validated model context upper bound. */
+    contextLengthKnown?: boolean;
 }
 
 const MAX_STORED_PROFILES = 50;
@@ -19,9 +21,23 @@ export function modelProfileKey(request: ModelQualificationRequest): string {
 }
 
 function invalidateOldQualification(profile: StoredModelProfile): StoredModelProfile {
-    if (profile.testGenerationReady === undefined || profile.qualificationVersion === QUALIFICATION_VERSION) { return profile; }
+    const versionExpired = profile.testGenerationReady !== undefined && profile.qualificationVersion !== QUALIFICATION_VERSION;
+    const expirationReason = versionExpired
+        ? localize("舊探針結果已過期（原格式：{0}）；請重新執行測試連線。", profile.testGenerationMode || localize("未知"))
+        : undefined;
+    if (profile.envType === 'local' && !isLocalRuntimeQualification(profile.qualificationRuntime)) {
+        const { qualificationRuntime: _invalidRuntime, ...metadata } = profile;
+        if (profile.testGenerationReady === undefined && profile.roleQualification === undefined) { return metadata; }
+        const reason = expirationReason || localize("本機 Context 資格尚未驗證；請重新執行測試連線。");
+        return { ...metadata, testGenerationReady: profile.testGenerationReady === undefined ? undefined : false,
+            testGenerationReason: reason,
+            ...(profile.roleQualification ? { roleQualification: {
+                writer: { state: 'unverified', reason }, reviewer: { state: 'unverified', reason }, bugFixer: { state: 'unverified', reason }
+            } } : {}) };
+    }
+    if (!versionExpired) { return profile; }
     return { ...profile, testGenerationReady: false,
-        testGenerationReason: localize("舊探針結果已過期（原格式：{0}）；請重新執行測試連線。", profile.testGenerationMode || localize("未知")) };
+        testGenerationReason: expirationReason };
 }
 
 export function isStoredModelProfile(value: unknown): value is StoredModelProfile {
@@ -53,7 +69,7 @@ export function upsertModelProfile(
     const key = modelProfileKey(profile);
     return [
         ...profiles.filter(existing => modelProfileKey(existing) !== key),
-        profile
+        invalidateOldQualification(profile)
     ].slice(-MAX_STORED_PROFILES);
 }
 

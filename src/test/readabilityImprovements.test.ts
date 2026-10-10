@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { dispatchTestRules } from '../pipeline/testRuleDispatcher';
 import { PYTHON_TOOLS, pythonToolPath } from '../pipeline/pythonTools';
 import { buildSemanticAnalyzerSystemPrompt } from '../roles/semanticAnalyzer';
-import { QUALIFICATION_VERSION, qualificationEndpointKey, qualificationForRequest } from '../llm/modelQualification';
+import { LOCAL_RUNTIME_QUALIFICATION_VERSION, QUALIFICATION_VERSION, qualificationEndpointKey, qualificationForRequest } from '../llm/modelQualification';
 import { findModelProfile, restoreModelProfiles, upsertModelProfile } from '../llm/modelProfileRegistry';
 import { validateTraceEvidence } from '../validation/traceAssertionEvidence';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -44,7 +44,11 @@ test('old probe metadata expires without converting historical JSON success into
     assert.match(restored.testGenerationReason!, /過期/);
     assert.equal(restored.testGenerationMode, old.testGenerationMode);
     assert.equal(qualificationForRequest(old, old), false);
-    assert.equal(qualificationForRequest({ ...old, qualificationVersion: QUALIFICATION_VERSION }, old), true);
+    const request = { ...old, runtimeContextTokens: 8192 };
+    const current = { ...old, qualificationVersion: QUALIFICATION_VERSION };
+    assert.equal(qualificationForRequest(current, request), false, 'current contract alone cannot certify a legacy local context');
+    assert.equal(qualificationForRequest({ ...current,
+        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8192 } }, request), true);
 });
 
 test('same model on different endpoints has separate qualification and keys omit credentials', () => {
@@ -53,11 +57,12 @@ test('same model on different endpoints has separate qualification and keys omit
     assert.notEqual(firstKey, secondKey);
     assert.equal(firstKey, qualificationEndpointKey('local', 'http://user:pass@127.0.0.1:11434/?key=private'));
     const first = { envType: 'local' as const, modelName: 'fixture', paramSize: '8B', contextLength: 8192,
+        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8192 } as const,
         testGenerationReady: true, qualificationVersion: QUALIFICATION_VERSION, endpointKey: firstKey };
     const profiles = upsertModelProfile(upsertModelProfile([], first), { ...first, endpointKey: secondKey, testGenerationReady: false });
     assert.equal(profiles.length, 2);
     assert.equal(findModelProfile(profiles, first)?.testGenerationReady, true);
-    assert.equal(qualificationForRequest(first, { ...first, endpointKey: secondKey }), false);
+    assert.equal(qualificationForRequest(first, { ...first, endpointKey: secondKey, runtimeContextTokens: 8192 }), false);
 });
 
 const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));

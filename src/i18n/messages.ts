@@ -1,5 +1,16 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    'Context 必須為 0（自動）或正整數。': 'Context must be 0 (automatic) or a positive integer.',
+    '無法確認模型的 Context 上限，不能使用明確指定的 Context。': 'The model context limit could not be verified, so an explicit context cannot be used.',
+    '指定的 Context 超過模型回報的上限。': 'The requested context exceeds the limit reported by the model.',
+    '⚠️ Local Ollama 服務可連線，但本機 Context 設定不可用（{0}）。未執行角色探針，請修正設定後重新測試連線。': '⚠️ Local Ollama is reachable, but the local context setting is unavailable ({0}). Role probes were not run. Correct the setting and test the connection again.',
+    '模型未提供可驗證的 Context 上限，本次使用自動保守值 {0} tokens；資格僅綁定此值。': 'The model did not provide a verifiable context limit. This probe uses the conservative automatic value of {0} tokens; qualification applies only to this value.',
+    '本次角色探針使用 Runtime Context {0} tokens；設定已變更，請重新測試連線以驗證目前設定。': 'These role probes used a runtime context of {0} tokens. The setting has changed; test the connection again to verify the current setting.',
+    '✅ Local Ollama 連線成功！模型：{0}，本次 Runtime Context：{1} tokens；已通過純 Python unittest 驗證。': '✅ Connected to Local Ollama. Model: {0}; runtime context: {1} tokens. Plain Python unittest verification passed.',
+    '⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（{0}）；本次 Runtime Context：{1} tokens。': '⚠️ Connected to Local Ollama, but unittest generation verification failed ({0}); runtime context: {1} tokens.',
+    '⚠️ Local Ollama 服務可連線，但本次角色探針未完成；Runtime Context：{0} tokens。請重新測試連線。': '⚠️ Local Ollama is reachable, but these role probes did not complete; runtime context: {0} tokens. Test the connection again.',
+    '本機 Context 資格尚未驗證；請重新執行測試連線。': 'Local context qualification is not verified; run Test Connection again.',
+    '本機 Context 設定無法使用；請檢查 llmUnitTest.runtimeContextTokens，並重新執行模型測試連線。': 'The local context setting is unavailable. Check llmUnitTest.runtimeContextTokens and run the model connection test again.',
     '空白測試設定：僅使用來源明示的 fallback；不讀取或修改原設定檔。': 'Empty test configuration: use only the source-declared fallback; the original configuration is neither read nor changed.',
     '單筆突變上限：設定 {0} 秒；依基線耗時校準為 {1} 秒。每次實際分配仍受本輪剩餘預算限制。\n\n': 'Per-mutant limit: configured {0} seconds; calibrated from the baseline to {1} seconds. Each allocation remains bounded by the remaining stage budget.\n\n',
     'SQLite schema 提案只採用可保真表示的明確 DDL；批准後每個 worker 建立全新資料庫，不執行應用程式初始化或複製正式資料。': 'SQLite schema proposals use only explicit DDL that can be represented faithfully. After approval, each worker creates a fresh database without running application initialization or copying production data.',

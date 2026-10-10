@@ -9,12 +9,12 @@
 
 ## What it does
 
-- Defaults to **execution verification**: static context → guarded module import → Writer / bounded repair → meaningful unittest validation → real target invocation and isolated execution evidence. Reports **執行驗證通過**, with full quality still unverified. Exploratory Trace, coverage, mutation and quality review are deferred. Original application files remain unchanged.
-- Select **完整品質驗證** (setting `llmUnitTest.validationMode: "full"`) to run the original complete workflow described below. The default is `"execution"`. Each run records its mode; changing the setting does not upgrade older results. See [執行驗證操作說明](docs/執行驗證模式.md).
+- Defaults to **full quality verification**: guarded setup → AI analysis → Writer → real execution and AI review of the same candidate → coverage and mutation → bounded AI revisions. Original application files remain unchanged.
+- `llmUnitTest.validationMode` defaults to `"full"`. The optional `"execution"` mode diagnoses whether generated tests execute and invoke the real target; it does not measure mutation or certify full quality. Existing explicit settings remain in effect, and changing modes does not upgrade older results. See [執行驗證操作說明](docs/執行驗證模式.md).
 
 - Supports local Ollama, Google AI Studio, and OpenAI-compatible Chat Completions APIs.
 - Extracts module imports, referenced constants, class setup, constructor facts, dependency calls, and safe call-site literals using Python AST.
-- Uses Dynamic Trace as the assertion oracle for Tier 1. A qualified or manually selected model uses source, AST, Trace, and scoped Skill Cards to organize evidence-bound tests; unprobed Auto mode uses an explicitly labelled deterministic fallback.
+- Uses controlled Dynamic Trace observations for assertions about the same inputs and setup. Models organize evidence-bound tests from source, AST, observations and scoped Skill Cards; full mode requires model-authored tests and review approval.
 - Uses AST/Trace evidence-bound Skill Cards for async code, generators, mappings, floating-point values, database isolation, and mocking. No domain-specific vocabulary is hard-coded.
 - Validates generated tests before scoring: target invocation, assertions, Python structure, safe mocking, isolated I/O, runtime execution, coverage, and mutation baseline.
 - Writes `final_report.md` so failures identify the responsible stage: model, AST, trace, validation, coverage, or mutation tool.
@@ -25,12 +25,12 @@
 
 | Tier | Best for | Core approach |
 |---|---|---|
-| 1 | Traceable code; qualified or manually selected models | LLM selects evidence-bound test organization from source/AST/Trace/Skill Cards; Auto with an unprobed model uses a labelled deterministic Trace fallback. |
+| 1 | Traceable code; qualified or manually selected models | LLM organizes tests from source/AST/controlled observations/Skill Cards, followed by execution and AI review. |
 | 2 | Several clear call sites | Groups identical replayable inputs and splits only 2–4 distinct groups. Unknown inputs or larger groups use the standard full-context generation path. |
 | 3 | External dependencies | Supplies a Mock Scaffold and verified constructor setup. |
 | 4 | Complex code and survived mutants | Uses full context, reviewer validation, and bounded self-repair. |
 
-`Auto` is conservative: an unprobed provider/model uses deterministic Tier 1 first. If you explicitly select Tier 1–4, your choice is retained, but every generated file must still pass the same structure, execution, coverage, and mutation gates.
+`Auto` requires the selected model's applicable role qualifications; run **Test Connection** first. Explicit Tier 1–4 selections retain best-effort generation, with the same structure, execution, review, coverage and mutation gates. Legacy deterministic Trace builders remain available for internal tools and historical compatibility; they do not replace Writer in the full AI workflow.
 
 In execution verification, all enabled Writers use the same source/setup prompt and execution gates. Auto requires the selected model's Writer qualification; use **測試連線** first or explicitly select a manual Tier for best-effort generation. This mode does not use the Trace fallback or the full workflow's Tier-specific generation branches. A failed assertion, blocked operation, skipped-only suite, source change, or absent real target invocation never becomes an execution pass.
 
@@ -42,7 +42,7 @@ In execution verification, all enabled Writers use the same source/setup prompt 
 - Node.js `20+` for extension development.
 - Python `3.9+` for the analysis scripts. Python `3.12` is used in CI.
 - Optional: Ollama for local models.
-- Recommended for native mutation tools on Windows + Python 3.12+: WSL. The extension falls back to its built-in AST mutation runner when no compatible native tool is available.
+- Builtin mutation is available through the guarded executor. Mutatest 3.1.0 supplies optional external operators; an unavailable selected engine stops with a diagnostic instead of silently changing engines.
 - With no `llmUnitTest.pythonPath` setting, a standard workspace `.venv` is selected automatically (`.venv/Scripts/python.exe` on Windows, `.venv/bin/python` elsewhere). Set `llmUnitTest.pythonPath` only for a custom virtual environment or laboratory interpreter; that explicit setting takes priority for AST, trace, validation, coverage, and mutation commands.
 
 ### Develop locally
@@ -81,6 +81,8 @@ For a traceable function such as `increment(value)`, Tier 1 executes safe inputs
 - Start the Ollama server and use its base URL, normally `http://127.0.0.1:11434`.
 - Select an installed model and run **Test Connection**.
 - If the model cannot enforce JSON output but can write Python, the extension retries with a plain-Python contract.
+- `llmUnitTest.runtimeContextTokens` controls the local Ollama context. The default `0` preserves automatic sizing; an explicit positive integer (for example `8192` or `16384`) requires a verified model context limit from Ollama and must not exceed it. About 30% remains available for output. Larger values need more memory and can be slower.
+- After changing the effective context, run **Test Connection** again. Writer, Reviewer and Bug Fixer qualifications belong to that context; old local profiles without this binding require a fresh probe. Auto uses matching verified roles. Manual Tiers retain best-effort generation and all validation gates. A running batch keeps its starting setting. This setting does not affect Cloud or Custom API.
 
 ### Google AI Studio
 
@@ -157,7 +159,7 @@ The public-release work is tracked in [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md). 
 
 - 支援 Local Ollama、Google AI Studio、OpenAI 相容 Chat Completions API。
 - 以 Python AST 擷取 imports、引用常數、class 初始化、建構子事實、依賴呼叫與安全的呼叫端 literal。
-- Dynamic Trace 會執行安全探針，作為 Tier 1 assertion 的事實來源。合格模型或手動選擇 Tier 時，LLM 會根據來源碼、AST、Trace 與範圍限定的技能卡組織證據導向測試；Auto 未探測模型則使用清楚標示的確定性 Trace 備援。
+- Dynamic Trace 的受控觀測可支持相同輸入及 setup 的 assertion。模型根據來源碼、AST、觀測與範圍限定的技能卡組織測試；完整模式要求模型撰寫測試與同一候選的 AI 審查批准。
 - 以 AST／Trace 證據挑選技能卡，涵蓋 async、generator、mapping、浮點、資料庫隔離與 mock；不硬編碼業務領域詞彙。
 - 生成碼必須通過目標呼叫、assertion、Python 結構、安全 mock、隔離 I/O、實際執行、coverage 與 mutation baseline 驗證。
 - 每次執行會產生 `final_report.md`，清楚區分模型、AST、Trace、驗證、coverage 或 mutation 工具造成的問題。
@@ -166,12 +168,12 @@ The public-release work is tracked in [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md). 
 
 | Tier | 適用情境 | 核心做法 |
 |---|---|---|
-| 1 | 可追蹤程式；合格模型或手動選擇 | LLM 依來源碼／AST／Trace／技能卡組織證據導向測試；Auto 未探測模型使用有標示的確定性 Trace 備援。 |
+| 1 | 可追蹤程式；合格模型或手動選擇 | LLM 依來源碼／AST／受控觀測／技能卡組織測試，再執行及交 AI 審查。 |
 | 2 | 多個清楚呼叫端 | 必要時以受限的分治 LLM 生成。 |
 | 3 | 外部相依 | 提供 Mock Scaffold 與已驗證建構子設定。 |
 | 4 | 高複雜度或存活 mutant | 使用完整語境、Reviewer 與有上限的自我修復。 |
 
-Auto 模式會保守處理未探測模型，優先走可重現的 Tier 1。若你明確選擇 Tier 1–4，系統會保留選擇；但所有生成檔仍必須通過相同的結構、執行、coverage 與 mutation Gate。
+Auto 要求所選模型具有當次適用的角色資格，請先按 **測試連線**。明確選擇 Tier 1–4 保留試跑，但所有候選仍須通過結構、執行、審查、coverage 與 mutation gate。歷史確定性 Trace builder 保留供內部工具與相容用途，不取代完整 AI 流程的 Writer。
 
 ## 15 分鐘快速開始
 
@@ -218,6 +220,8 @@ npm run compile
 - 啟動 Ollama server，通常使用 `http://127.0.0.1:11434`。
 - 選取已安裝模型後按 **Test Connection**。
 - 若模型無法強制 JSON、但可生成 Python，系統會改用純 Python 輸出契約重試。
+- `llmUnitTest.runtimeContextTokens` 控制本機 Ollama 的 context。預設 `0` 保留自動估算；明確正整數（例如 `8192` 或 `16384`）須有 Ollama 提供的有效模型上限，且不得超過上限。約 30% 保留給輸出；較大設定需要更多記憶體，也可能更慢。
+- 有效 context 改變後請重新按 **Test Connection**。Writer、Reviewer、Bug Fixer 資格各自綁定該容量；缺少綁定的舊本機 profile 須重驗。Auto 只使用相符且通過的角色，手動 Tier 保留試跑與全部驗證門檻。執行中的批次固定使用啟動時設定；Cloud／Custom API 不受此設定影響。
 
 ### Google AI Studio
 

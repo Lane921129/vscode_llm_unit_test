@@ -19,6 +19,53 @@ export function runtimeContextWindow(size: string, contextLength: number): numbe
     return Math.min(advertised, Math.ceil(contextInputBudget(size, advertised) / 0.7));
 }
 
+export type LocalRuntimeContextReasonCode =
+    'invalid-runtime-context'
+    | 'runtime-context-metadata-required'
+    | 'runtime-context-exceeds-model-limit';
+
+export type LocalRuntimeContextResolution = {
+    ok: true;
+    configuredTokens: number;
+    contextWindow: number;
+    inputBudget: number;
+    mode: 'automatic' | 'explicit';
+} | {
+    ok: false;
+    reasonCode: LocalRuntimeContextReasonCode;
+};
+
+/** Resolve one local request configuration without inferring model capabilities. */
+export function resolveLocalRuntimeContext(profile: {
+    paramSize: string;
+    contextLength: number;
+    contextLengthKnown?: boolean;
+    runtimeContextTokens?: unknown;
+}): LocalRuntimeContextResolution {
+    const configured = profile.runtimeContextTokens === undefined ? 0 : profile.runtimeContextTokens;
+    if (typeof configured !== 'number' || !Number.isSafeInteger(configured) || configured < 0) {
+        return { ok: false, reasonCode: 'invalid-runtime-context' };
+    }
+    if (configured === 0) {
+        return {
+            ok: true, configuredTokens: 0, mode: 'automatic',
+            contextWindow: runtimeContextWindow(profile.paramSize, profile.contextLength),
+            inputBudget: contextInputBudget(profile.paramSize, profile.contextLength)
+        };
+    }
+    if (profile.contextLengthKnown !== true
+        || !Number.isSafeInteger(profile.contextLength) || profile.contextLength <= 0) {
+        return { ok: false, reasonCode: 'runtime-context-metadata-required' };
+    }
+    if (configured > profile.contextLength) {
+        return { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' };
+    }
+    return {
+        ok: true, configuredTokens: configured, mode: 'explicit',
+        contextWindow: configured, inputBudget: Math.floor(configured * 0.7)
+    };
+}
+
 /** Conservative estimate, not provider tokenizer usage. */
 export function estimatePromptTokens(text: string): number {
     const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;

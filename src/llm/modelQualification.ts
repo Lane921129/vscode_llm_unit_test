@@ -5,6 +5,20 @@ import { RoleQualificationProfile } from './roleQualification';
 /** Bump only when the executable probe contract changes, not for unrelated UI releases. */
 export const QUALIFICATION_VERSION = 'python-unittest-v7';
 
+export const LOCAL_RUNTIME_QUALIFICATION_VERSION = 'ollama-context-v1';
+
+export interface LocalRuntimeQualification {
+    version: typeof LOCAL_RUNTIME_QUALIFICATION_VERSION;
+    numCtx: number;
+}
+
+export function isLocalRuntimeQualification(value: unknown): value is LocalRuntimeQualification {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return false; }
+    const runtime = value as Partial<LocalRuntimeQualification>;
+    return runtime.version === LOCAL_RUNTIME_QUALIFICATION_VERSION
+        && typeof runtime.numCtx === 'number' && Number.isSafeInteger(runtime.numCtx) && runtime.numCtx > 0;
+}
+
 export function qualificationEndpointKey(envType: string, endpoint?: string): string {
     const fallback = envType === 'local' ? 'http://127.0.0.1:11434' : envType === 'cloud'
         ? 'https://generativelanguage.googleapis.com' : 'https://api.openai.com/v1/chat/completions';
@@ -26,12 +40,16 @@ export interface ModelQualificationProfile {
     qualificationVersion?: string;
     endpointKey?: string;
     roleQualification?: RoleQualificationProfile;
+    /** Local role probes ran with this explicit /generate num_ctx. */
+    qualificationRuntime?: LocalRuntimeQualification;
 }
 
 export interface ModelQualificationRequest {
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
     endpointKey?: string;
+    /** Effective local num_ctx, after resolving the configured value and metadata. */
+    runtimeContextTokens?: number;
 }
 
 export type TestGenerationResponseFormat = 'test-code-json' | 'text';
@@ -115,19 +133,36 @@ export function formatModelQualificationLog(profile: ModelQualificationProfile, 
  * it. A different selected model must be treated as unqualified until it has
  * completed its own probe, rather than inheriting a previous model's result.
  */
-export function qualificationForRequest(
+export function qualificationAppliesToRequest(
     profile: ModelQualificationProfile,
     request: ModelQualificationRequest
-): boolean | undefined {
-    if (profile.testGenerationReady === undefined) {
-        return undefined;
-    }
+): boolean {
     if (profile.qualificationVersion !== QUALIFICATION_VERSION) { return false; }
     const profileEndpoint = profile.endpointKey || qualificationEndpointKey(profile.envType || request.envType);
     const requestEndpoint = request.endpointKey || qualificationEndpointKey(request.envType);
     if (profileEndpoint !== requestEndpoint) { return false; }
+    if (profile.envType && profile.envType !== request.envType) { return false; }
+    if (profile.modelName && normalizedModelName(profile.modelName) !== normalizedModelName(request.modelName)) { return false; }
+    if (request.envType === 'local') {
+        // Check independently of Writer success: Reviewer and Bug Fixer must
+        // never inherit another runtime's qualification through that boolean.
+        return profile.envType === 'local' && Boolean(profile.modelName?.trim())
+            && isLocalRuntimeQualification(profile.qualificationRuntime)
+            && Number.isSafeInteger(request.runtimeContextTokens) && request.runtimeContextTokens! > 0
+            && profile.qualificationRuntime.numCtx === request.runtimeContextTokens;
+    }
+    return true;
+}
+
+export function qualificationForRequest(
+    profile: ModelQualificationProfile,
+    request: ModelQualificationRequest
+): boolean | undefined {
+    if (profile.testGenerationReady === undefined) { return undefined; }
+    if (!qualificationAppliesToRequest(profile, request)) { return false; }
     if (!profile.envType || !profile.modelName) {
-        // Preserve compatibility with pre-qualification profiles.
+        // Preserve non-local compatibility; local legacy profiles failed the
+        // complete model/endpoint/runtime identity check above.
         return profile.testGenerationReady;
     }
     return profile.envType === request.envType
