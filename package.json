@@ -224,6 +224,24 @@
                 "pattern": "^[a-f0-9]{64}$",
                 "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resourceSourceHash.description%"
               },
+              "sourceDependencies": {
+                "type": "array",
+                "maxItems": 64,
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description%",
+                "items": {
+                  "type": "object",
+                  "required": ["file", "sourceHash"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "file": { "type": "string" },
+                    "sourceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                  }
+                }
+              },
+              "pythonSourceMode": {
+                "type": "boolean",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description%"
+              },
               "resources": {
                 "type": "array",
                 "maxItems": 16,

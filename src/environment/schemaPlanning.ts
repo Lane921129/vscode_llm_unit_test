@@ -12,6 +12,10 @@ type SqliteResource = Extract<TestResourceSpec, { kind: 'sqlite' }>;
 export interface SchemaProposal {
     file: string; sourceHash: string; line: number; connectionLine: number;
     resource: Omit<SqliteResource, 'tables'>; table: ResourceTable;
+    sourceDependencies?: Source[];
+    configFixtures?: Array<Source & { name: string; text: string }>;
+    pythonSourceMode?: true;
+    migrationLines?: number[];
 }
 export interface SchemaDiagnostic { file: string; line?: number; reason: string }
 interface Source { file: string; sourceHash: string }
@@ -42,22 +46,36 @@ function verifySources(root: string, sources: Source[]): void {
 }
 
 function readCandidate(raw: any, sources: Source[]): SchemaProposal {
-    if (!keys(raw, ['file', 'sourceHash', 'line', 'connectionLine', 'resource', 'table'])
+    if (!keys(raw, ['file', 'sourceHash', 'line', 'connectionLine', 'resource', 'table', 'sourceDependencies', 'configFixtures', 'pythonSourceMode', 'migrationLines'])
         || !sourceName(raw.file) || !line(raw.line) || !line(raw.connectionLine)
         || !keys(raw.resource, ['kind', 'path', 'scope']) || raw.resource.kind !== 'sqlite'
         || !keys(raw.table, ['name', 'columns', 'unique'])) { throw invalid(); }
     const source = sources.find(item => identity(item.file) === identity(raw.file) && item.sourceHash === raw.sourceHash);
     if (!source) { throw invalid(); }
+    const dependencies: Source[] = raw.sourceDependencies || [];
+    if (!Array.isArray(dependencies) || dependencies.length > 64 || dependencies.some(item => !keys(item, ['file', 'sourceHash'])
+        || !sourceName(item.file) || typeof item.sourceHash !== 'string'
+        || !sources.some(source => identity(source.file) === identity(item.file) && source.sourceHash === item.sourceHash))) { throw invalid(); }
+    const configs: Array<Source & { name: string; text: string }> = raw.configFixtures || [];
+    if (!Array.isArray(configs) || configs.length > 8 || configs.some(item => !keys(item, ['file', 'sourceHash', 'name', 'text'])
+        || !sourceName(item.file) || typeof item.sourceHash !== 'string'
+        || !sources.some(source => identity(source.file) === identity(item.file) && source.sourceHash === item.sourceHash)
+        || typeof item.name !== 'string' || !/^[\w.-]+\.ini$/i.test(item.name) || item.text !== '')
+        || raw.pythonSourceMode !== undefined && raw.pythonSourceMode !== true
+        || raw.migrationLines !== undefined && (!Array.isArray(raw.migrationLines) || raw.migrationLines.length > 32 || raw.migrationLines.some((value: unknown) => !line(value)))) { throw invalid(); }
     const resource = validateTestResources([{ ...raw.resource, tables: [raw.table] }])[0];
     if (resource.kind !== 'sqlite') { throw invalid(); }
     const { tables, ...location } = resource;
     return { file: source.file, sourceHash: source.sourceHash, line: raw.line,
-        connectionLine: raw.connectionLine, resource: location, table: tables[0] };
+        connectionLine: raw.connectionLine, resource: location, table: tables[0],
+        ...(dependencies.length ? { sourceDependencies: dependencies } : {}),
+        ...(configs.length ? { configFixtures: configs } : {}),
+        ...(raw.pythonSourceMode ? { pythonSourceMode: true } : {}),
+        ...(raw.migrationLines ? { migrationLines: raw.migrationLines } : {}) };
 }
 
-/** Only an exact, already declared database in the DDL's own source may be extended.
- * Shared aliases require identical DDL evidence in every owning source, so each
- * runtime resource approval remains independently bound to its schema source. */
+/** Exact source-backed DB locations may be proposed as NEW resources. Nothing is
+ * applied until the common setup preview is approved; existing inputs win on conflict. */
 export function mergeSchemaProposals(rules: ImportFixtureRule[], candidates: SchemaProposal[]): SchemaPlan {
     const proposedRules = structuredClone(rules), proposals: SchemaProposal[] = [], diagnostics: SchemaDiagnostic[] = [];
     const diagnostic = (items: SchemaProposal[], reason: string) => {
@@ -79,17 +97,61 @@ export function mergeSchemaProposals(rules: ImportFixtureRule[], candidates: Sch
         if (new Set(items.map(item => definition(item.table))).size !== 1) {
             diagnostic(items, 'conflicting-literal-schema'); continue;
         }
-        const owners = proposedRules.flatMap(rule => (rule.resources || []).filter(resource =>
+        const pending = structuredClone(proposedRules);
+        let conflict = '';
+        const ensureRule = (file: string) => {
+            let rule = pending.find(rule => identity(rule.file.replace(/\\/g, '/')) === identity(file));
+            if (!rule) { rule = { file }; pending.push(rule); }
+            return rule;
+        };
+        for (const item of items) {
+            const rule = ensureRule(item.file);
+            if (rule.resourceSourceHash && rule.resourceSourceHash !== item.sourceHash) { conflict = 'source-approval-expired'; break; }
+            for (const config of item.configFixtures || []) {
+                const owner = ensureRule(config.file);
+                if (owner.sourceDependencies?.some(d => identity(d.file) === identity(config.file) && d.sourceHash !== config.sourceHash)
+                    || owner.resourceSourceHash && owner.resourceSourceHash !== config.sourceHash) {
+                    conflict = 'source-approval-expired'; break;
+                }
+                if (Object.hasOwn(owner.configFiles || {}, config.name) && owner.configFiles![config.name] !== config.text) {
+                    conflict = 'config-fixture-conflict'; break;
+                }
+                owner.configFiles = { ...owner.configFiles, [config.name]: config.text };
+                owner.sourceDependencies = [...(owner.sourceDependencies || []).filter(d => identity(d.file) !== identity(config.file)),
+                    { file: config.file, sourceHash: config.sourceHash }];
+                if (item.pythonSourceMode) { owner.pythonSourceMode = true; }
+            }
+            const dependencies = [...(rule.sourceDependencies || [])];
+            for (const dependency of item.sourceDependencies || []) {
+                const existing = dependencies.find(d => identity(d.file) === identity(dependency.file));
+                if (existing && existing.sourceHash !== dependency.sourceHash) { conflict = 'source-approval-expired'; break; }
+                if (!existing) { dependencies.push(dependency); }
+            }
+            if (dependencies.length) { rule.sourceDependencies = dependencies; }
+            if (item.pythonSourceMode) { rule.pythonSourceMode = true; }
+            if (!rule.resources?.some(resource => resourceSpecKey(resource) === key)) {
+                rule.resources = [...(rule.resources || []), { ...item.resource, tables: [] }];
+            }
+            rule.resourceSourceHash = item.sourceHash;
+        }
+        if (conflict) { diagnostic(items, conflict); continue; }
+        const owners = pending.flatMap(rule => (rule.resources || []).filter(resource =>
             resource.kind === 'sqlite' && resourceSpecKey(resource) === key).map(resource => ({ rule, resource: resource as SqliteResource })));
         const bound = items.filter(item => owners.some(({ rule }) => identity(rule.file.replace(/\\/g, '/')) === identity(item.file)
             && rule.resourceSourceHash === item.sourceHash));
-        diagnostic(items.filter(item => !bound.includes(item)), 'undeclared-source-database');
+        diagnostic(items.filter(item => !bound.includes(item)), 'source-approval-expired');
         if (!bound.length) { continue; }
         const existing = owners.flatMap(({ resource }) => resource.tables.filter(table => table.name.toLowerCase() === first.table.name.toLowerCase()));
         if (existing.some(table => definition(table) !== definition(first.table))) {
             diagnostic(items, 'existing-schema-conflict'); continue;
         }
-        if (existing.length === owners.length) { continue; }
+        if (existing.length === owners.length) {
+            if (JSON.stringify(pending) !== JSON.stringify(proposedRules)) {
+                proposals.push(...bound.filter((item, index) => bound.findIndex(other => other.file === item.file) === index));
+                proposedRules.splice(0, proposedRules.length, ...pending);
+            }
+            continue;
+        }
         if (owners.some(({ rule }) => !bound.some(item => identity(item.file) === identity(rule.file.replace(/\\/g, '/'))
             && item.sourceHash === rule.resourceSourceHash))) {
             diagnostic(bound, 'shared-resource-requires-explicit-schema'); continue;
@@ -103,6 +165,7 @@ export function mergeSchemaProposals(rules: ImportFixtureRule[], candidates: Sch
             resource.tables.push(structuredClone(evidence.table));
             proposals.push(evidence);
         }
+        proposedRules.splice(0, proposedRules.length, ...pending);
     }
     return { proposedRules, proposals, candidates, diagnostics };
 }

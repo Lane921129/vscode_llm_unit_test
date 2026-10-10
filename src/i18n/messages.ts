@@ -1,5 +1,7 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '空白測試設定：僅使用來源明示的 fallback；不讀取或修改原設定檔。': 'Empty test configuration: use only the source-declared fallback; the original configuration is neither read nor changed.',
+    '單筆突變上限：設定 {0} 秒；依基線耗時校準為 {1} 秒。每次實際分配仍受本輪剩餘預算限制。\n\n': 'Per-mutant limit: configured {0} seconds; calibrated from the baseline to {1} seconds. Each allocation remains bounded by the remaining stage budget.\n\n',
     'SQLite schema 提案只採用可保真表示的明確 DDL；批准後每個 worker 建立全新資料庫，不執行應用程式初始化或複製正式資料。': 'SQLite schema proposals use only explicit DDL that can be represented faithfully. After approval, each worker creates a fresh database without running application initialization or copying production data.',
     'SQLite schema 診斷：{0}；請在同一來源宣告精確資料庫資源，或提供可保真表示的結構化 schema。': 'SQLite schema diagnostic: {0}. Declare the exact database resource for the same source or provide a structured schema that preserves its constraints.',
     '### 突變基線執行\n\n': '### Mutation baseline execution\n\n',
@@ -922,6 +924,7 @@ export const englishMessages: Record<string, string> = {
     "{0}B（依模型名稱推定）": "{0}B (inferred from model name)",
     "Cloud API 未提供": "Not provided by Cloud API",
     "模型探測碼含 {0} 行最小安全 fixture 不允許的語句。": "Model probe code contains {0} lines disallowed by the minimal safe fixture.",
+    "模型探測碼必須使用模組頂層 TestCase 與直接 test_ 方法；不接受巢狀、重複或未執行範圍內的測試斷言。": "Model probe code must use module-level TestCase classes with direct test_ methods; nested, duplicate, or unexecuted test assertions are not accepted.",
     "模型沒有可執行的測試程式碼。": "Model returned no executable test code.",
     "模型探測碼未符合可安全隔離執行的最小 unittest fixture。": "Model probe code does not satisfy the minimal unittest fixture for safe isolated execution.",
     "模型已通過 unittest 結構、雙案例行為 assertion 與隔離執行驗證。": "Model passed unittest structure, two-case behavior assertions and isolated execution.",

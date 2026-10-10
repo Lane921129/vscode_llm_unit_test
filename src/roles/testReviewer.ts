@@ -299,6 +299,12 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
                 // unknown; successful execution is not a blanket veto of import findings.
                 for (const item of facts.imports.filter(value => value.line === line)) {
                     const namedImport = `(?:${escape(item.binding)}|${escape(item.origin)})`;
+                    const unbound = new RegExp(`^Unbound\\s+(?:import|name)\\s+${namedImport}[.!\\s]*$`, 'i');
+                    if (unbound.test(mechanicalReason) && (issue.category === 'setup-error'
+                        || issue.category === 'target-binding' && (item.targetUseLines?.length
+                            || item.origin === `${context.module}.${context.target}`))) {
+                        codes.add(issue.category === 'target-binding' ? 'target-binding-contradiction' : 'existing-import-contradiction');
+                    }
                     const subject = item.origin === 'unittest' || item.origin === 'unittest.TestCase'
                         ? `(?:${namedImport}|(?:test |unittest )?harness)` : namedImport;
                     const invalidImport = new RegExp(`^(?:The\\s+)?${subject}\\s+(?:is\\s+(?:not\\s+imported\\s+(?:correctly|properly)|imported\\s+(?:incorrectly|improperly))|(?:cannot|can't)\\s+be\\s+imported)[.!\\s]*$`, 'i');
@@ -321,6 +327,24 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
             }
         }
         const mockAssertion = method?.mockAssertions?.find(item => item.line === line);
+        const citedMockSpelling = mockAssertion && new RegExp(`^([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)\\.${escape(mockAssertion.kind)}\\s*\\(`).exec(issue.evidence.trim())?.[1];
+        if (facts?.executionVerified && mockAssertion && citedMockSpelling
+            && context.dependencyUsePoints?.includes(mockAssertion.patchTarget)
+            && new RegExp(`^(?:The\\s+)?(?:missing|no)\\s+assertion\\s+(?:on|for)\\s+(?:the\\s+)?mock\\s+['"\x60]?${escape(citedMockSpelling)}['"\x60]?[.!\\s]*$`, 'i').test(issue.reason)) {
+            codes.add('existing-assertion-contradiction');
+        }
+        // A replacement identical to the cited, AST-confirmed assertion cannot
+        // fix it. Keep additions for other scenarios and unknown semantic claims.
+        if (facts?.executionVerified && assertion && issue.category === 'assertion-quality') {
+            const replacement = /^Replace(?:\s+(?:the\s+)?assertion)?\s+with\s+([\s\S]+)$/i.exec(issue.action.trim());
+            if (replacement) {
+                const statement = issue.evidence.trim();
+                const forms = [statement, `'${statement}'`, `"${statement}"`, `\x60${statement}\x60`];
+                if (forms.some(form => replacement[1] === form || replacement[1] === form + '.')) {
+                    codes.add('non-actionable-action');
+                }
+            }
+        }
         if (facts?.executionVerified && mockAssertion && context.dependencyUsePoints?.includes(mockAssertion.patchTarget)
             && issue.category === 'assertion-quality'
             && /^(?:The\s+)?assertion\s+(?:is\s+)?(?:for|checks?)\s+(?:a\s+)?(?:function\s+)?call[,]?\s+(?:rather than|not|instead of)\s+(?:the\s+|a\s+)?return\s+value[.!\s]*$/i.test(issue.reason)

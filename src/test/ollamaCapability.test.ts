@@ -245,3 +245,106 @@ test('runnable qualification accepts safe conventional unittest aliases and resu
     );
     assert.strictEqual(isIsolatedProbeCode(code + '\nopen("unsafe", "w")'), false);
 });
+
+function probeWithBody(lines: string[]): string {
+    return ['import unittest as unit', '', 'class TestIncrement(unit.TestCase):',
+        '    def test_observed(self):', ...lines.map(line => `        ${line}`)].join('\n');
+}
+
+test('qualification links each result to a fixed expected scalar in either assertion order', async () => {
+    for (const body of [
+        ['self.assertEqual(increment(1), 2)', 'self.assertEqual(0, increment(-1))'],
+        ['self.assertEqual(2, increment(1))', 'self.assertEqual(increment(-1), 0)'],
+        ['actual = increment(1)', 'expected = 2', 'self.assertEqual(expected, actual)',
+            'actual = increment(-1)', 'expected = 0', 'self.assertEqual(actual, expected)'],
+        ['actual = 2', 'actual = increment(1)', 'self.assertEqual(actual, 2)',
+            'actual = 0', 'actual = increment(-1)', 'self.assertEqual(0, actual)'],
+    ]) {
+        const code = probeWithBody(body);
+        assert.strictEqual((await verifyRunnableTestGenerationProbe({ response: code })).capability, 'verified', code);
+    }
+    const trailingWhitespace = probeWithBody(['self.assertEqual(increment(1), 2)',
+        'self.assertEqual(increment(-1), 0)']).replace('def test_observed(self):', 'def test_observed(self):  ');
+    assert.strictEqual((await verifyRunnableTestGenerationProbe({ response: trailingWhitespace })).capability, 'verified');
+});
+
+test('qualification rejects unused target calls and constant-only assertions before execution', async () => {
+    const code = probeWithBody(['unused = increment(1)', 'unused_negative = increment(-1)',
+        'self.assertEqual(2, 2)', 'self.assertEqual(0, 0)']);
+    let executed = false;
+    const result = await verifyRunnableTestGenerationProbe({ response: code }, async () => {
+        executed = true;
+        return true;
+    });
+    assert.strictEqual(result.capability, 'unverified');
+    assert.strictEqual(executed, false);
+});
+
+test('qualification rejects target-self comparisons and result variables reused as expected values', () => {
+    for (const body of [
+        ['self.assertEqual(increment(1), increment(1))', 'self.assertEqual(increment(-1), increment(-1))'],
+        ['actual = increment(1)', 'self.assertEqual(actual, actual)',
+            'actual = increment(-1)', 'self.assertEqual(actual, actual)'],
+        ['actual = increment(1)', 'expected = increment(1)', 'self.assertEqual(actual, expected)',
+            'actual = increment(-1)', 'expected = increment(-1)', 'self.assertEqual(expected, actual)'],
+    ]) {
+        assert.strictEqual(assessTestGenerationProbe({ response: probeWithBody(body) }).capability, 'unverified');
+    }
+});
+
+test('qualification invalidates result provenance when a variable is rebound to a constant', () => {
+    for (const assertion of ['self.assertEqual(actual, 2)', 'self.assertEqual(2, actual)']) {
+        const code = probeWithBody(['actual = increment(1)', 'actual = 2', assertion,
+            'self.assertEqual(increment(-1), 0)']);
+        assert.strictEqual(assessTestGenerationProbe({ response: code }).capability, 'unverified');
+    }
+    const code = probeWithBody(['actual = increment(1)', 'expected = 2', 'expected = increment(1)',
+        'self.assertEqual(actual, expected)', 'self.assertEqual(increment(-1), 0)']);
+    assert.strictEqual(assessTestGenerationProbe({ response: code }).capability, 'unverified');
+});
+
+test('qualification does not carry local result provenance across test methods', () => {
+    const code = ['import unittest', 'class TestIncrement(unittest.TestCase):',
+        '    def test_positive(self):', '        actual = increment(1)',
+        '    def test_negative(self):', '        self.assertEqual(actual, 2)',
+        '        self.assertEqual(increment(-1), 0)'].join('\n');
+    assert.strictEqual(assessTestGenerationProbe({ response: code }).capability, 'unverified');
+});
+
+test('qualification rejects assertions in a nested TestCase that unittest never discovers', async () => {
+    const code = ['import unittest', 'class TestOuter(unittest.TestCase):',
+        '    def test_outer(self):', '        class TestInner(unittest.TestCase):',
+        '            def test_inner(self):', '                self.assertEqual(increment(1), 2)',
+        '                self.assertEqual(increment(-1), 0)'].join('\n');
+    // Python really runs the empty outer test successfully; that is not evidence
+    // that either assertion inside the merely defined inner class was executed.
+    assert.strictEqual(await runIsolatedProbe(code), true);
+    assert.strictEqual(assessIsolatedProbeCode(code).valid, false);
+    assert.strictEqual((await verifyRunnableTestGenerationProbe({ response: code })).capability, 'unverified');
+});
+
+test('qualification rejects overwritten classes and methods instead of counting their dead assertions', async () => {
+    const original = probeWithBody(['self.assertEqual(increment(1), 2)', 'self.assertEqual(increment(-1), 0)']);
+    const overwritten = [
+        original + '\n    def test_observed(self):\n        self.assertEqual(2, 2)\n',
+        original + '\nclass TestIncrement(unit.TestCase):\n    def test_replacement(self):\n        self.assertEqual(2, 2)\n',
+    ];
+    for (const code of overwritten) {
+        assert.strictEqual(await runIsolatedProbe(code), true, 'the replacement alone passes Python unittest');
+        assert.strictEqual(assessIsolatedProbeCode(code).valid, false);
+        assert.strictEqual((await verifyRunnableTestGenerationProbe({ response: code })).capability, 'unverified');
+    }
+});
+
+test('qualification rejects nested functions and conditional assertions outside direct test execution', () => {
+    for (const body of [
+        ['def test_inner(self):', '    self.assertEqual(increment(1), 2)', '    self.assertEqual(increment(-1), 0)'],
+        ["if __name__ == '__main__':", '    self.assertEqual(increment(1), 2)', '    self.assertEqual(increment(-1), 0)'],
+    ]) {
+        assert.strictEqual(isIsolatedProbeCode(probeWithBody(body)), false);
+    }
+});
+
+test('isolated qualification runner never certifies a module containing zero discovered tests', async () => {
+    assert.strictEqual(await runIsolatedProbe('import unittest\n'), false);
+});

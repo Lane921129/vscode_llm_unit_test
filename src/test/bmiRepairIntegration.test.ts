@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { resultArtifactPath } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -53,8 +54,8 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
     let replies: string[] = [], requests: any[] = [];
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body)); requests.push(request);
-        assert.ok(!/You are the test Reviewer|SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.system));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body))); requests.push(request);
+        assert.ok(!/You are the test Reviewer|SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.roleInstructions));
         assert.ok(replies.length > 0, 'no unbounded extra request');
         return new Response(JSON.stringify({ response: fence(replies.shift()!), done: true }), { status: 200 });
     };
@@ -77,7 +78,7 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
             const knowledge = read('function_knowledge.json');
             const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
             assert.equal(requests.length, 4, name + ': ' + JSON.stringify(knowledge.lastFailure));
-            assert.match(requests[2].system, /BUG_FIX_REQUEST_V5/);
+            assert.match(requests[2].roleInstructions, /BUG_FIX_REQUEST_V5/);
             assert.match(requests[3].prompt, /FOCUSED REPAIR MADE NO EFFECTIVE CHANGE/);
             assert.match(requests[3].prompt, /19.53 != 18.5/);
             assert.equal(events.filter(e => e.detail?.action === 'writer-recovery').length, 1);

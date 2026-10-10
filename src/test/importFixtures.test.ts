@@ -3,9 +3,26 @@ import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createImportFixturePlan, currentImportFixtures, importFixtureEnvironment, withImportFixtures,
     IMPORT_FIXTURE_ENV } from '../pipeline/importFixtures';
 import { runSpawn } from '../utils/processRunner';
+
+test('cross-file schema evidence participates in plan identity and refuses drift or traversal', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-dependency-'));
+    try {
+        fs.writeFileSync(path.join(root, 'sample.py'), 'value = 1\n');
+        const dependency = path.join(root, 'settings.py'); fs.writeFileSync(dependency, 'DB = "neutral.sqlite"\n');
+        const sourceHash = createHash('sha256').update(fs.readFileSync(dependency)).digest('hex');
+        const rule = { file: 'sample.py', sourceDependencies: [{ file: 'settings.py', sourceHash }], pythonSourceMode: true as const };
+        const plan = createImportFixturePlan(root, [rule])!;
+        assert.notEqual(plan.id, createImportFixturePlan(root, [{ file: 'sample.py' }])!.id);
+        assert.equal(plan.rules[0].pythonSourceMode, true);
+        assert.throws(() => createImportFixturePlan(root, [{ ...rule, sourceDependencies: [{ file: '../outside.py', sourceHash }] }]), /dependency/);
+        fs.appendFileSync(dependency, '# changed\n');
+        assert.throws(() => createImportFixturePlan(root, [rule]), /dependency changed/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('import setup binds source content, isolates concurrent runs and reaches workers', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-fixtures-'));

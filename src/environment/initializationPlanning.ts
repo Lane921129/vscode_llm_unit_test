@@ -127,6 +127,9 @@ export async function inspectPreparedProjectImports(root: string, python: string
             localize('SQLite schema 提案只採用可保真表示的明確 DDL；批准後每個 worker 建立全新資料庫，不執行應用程式初始化或複製正式資料。'),
             '[schema_plan.json](schema_plan.json)', ''] : []),
         ...schema.proposals.map(proposal => `- ${cell(proposal.file)}:${proposal.line} — sqlite-schema / ${cell(proposal.table.name)}`),
+        ...[...new Set(schema.proposals.flatMap(proposal => (proposal.configFixtures || []).map(config =>
+            `- ${cell(config.file)} — config-fixture / ${cell(config.name)} (`
+                + localize('空白測試設定：僅使用來源明示的 fallback；不讀取或修改原設定檔。') + ')')))],
         ...schema.diagnostics.map(item => `- ${cell(item.file)}${item.line ? ':' + item.line : ''} — `
             + localize('SQLite schema 診斷：{0}；請在同一來源宣告精確資料庫資源，或提供可保真表示的結構化 schema。', item.reason)), ''
     ];

@@ -4,7 +4,9 @@
 
 ## 操作
 
-現在初始化規劃也會檢查來源中的明確 SQLite 建表語句。先在「隔離測試資源」宣告精確資料庫位置與使用它的來源；支援的 literal `CREATE TABLE IF NOT EXISTS` 可自動加入待確認 schema，與目錄／啟動入口一起預覽一次。`schema_plan.json` 保存候選與原因碼。動態資料庫路徑、不支援 SQL、一般 `CREATE TABLE`、同表定義衝突或未宣告來源不自動套用；需在資源清單提供明確 schema，不能把找到的第一個 DB 當成目標。
+初始化規劃會檢查來源中的明確 SQLite 建表語句。已有資源可補 schema；若來源能證明精確資料庫地址，也可直接提出新 DB 資源，不必先手動宣告空 DB。支援的 literal `CREATE TABLE IF NOT EXISTS`、可保真的新增欄位遷移與目錄／啟動入口一起預覽一次。`schema_plan.json` 保存候選與原因碼。未知動態路徑、不支援 SQL、一般 `CREATE TABLE` 或同表定義衝突不自動套用；需提供明確 schema，不能把找到的第一個 DB 當成目標。
+
+若原始碼透過 `ConfigParser` 的明確 fallback 決定地址，清單會同時列出所需的空白 INI 測試設定。確認後只讓測試程序使用該空白設定，不讀取或改寫原 INI；既有非空測試設定有衝突時不覆蓋。跨檔依據保存為 `sourceDependencies`，每個 worker 核對摘要；`pythonSourceMode` 要求一般 Python 原始碼程序。設定來源改變、未知 package 初始化或無法保真解析時保持診斷。若突變改動這些設定依據而無法核對，記為 ERROR／未評分，不能算 killed。
 
 欄位可使用 `default`（JSON scalar literal）、`unique: true`、`autoIncrement: true`（僅 `INTEGER` 且 `primaryKey: true`）；表可用 `unique: [["column_a", "column_b"]]` 宣告複合唯一限制。保留原有 rows，提案不新增或複製正式資料。每個 worker 都重建 seed；測試方法間仍須透過受測公開 API 安排個別狀態。來源修改使既有批准失效，必須重新預覽。
 

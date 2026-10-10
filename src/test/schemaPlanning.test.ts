@@ -27,12 +27,28 @@ test('schema merging binds the full resource identity and never chooses another 
     assert.equal((merged.proposedRules[0].resources![0] as any).tables.length, 1);
     assert.equal((merged.proposedRules[0].resources![1] as any).tables.length, 0);
     assert.equal((source.resources![0] as any).tables.length, 0, 'preview cannot mutate approved settings');
-    for (const changed of [{ ...candidate, file: 'different.py' }, { ...candidate, sourceHash: 'b'.repeat(64) },
-        { ...candidate, resource: { ...candidate.resource, scope: 'project-parent' as const } }]) {
+    for (const changed of [{ ...candidate, file: 'different.py' }, { ...candidate, sourceHash: 'b'.repeat(64) }]) {
         const rejected = mergeSchemaProposals([source], [changed]);
         assert.equal(rejected.proposals.length, 0);
-        assert.equal(rejected.diagnostics[0].reason, 'undeclared-source-database');
+        assert.match(rejected.diagnostics[0].reason, /shared-resource|source-approval/);
     }
+    const scoped = mergeSchemaProposals([source], [{ ...candidate, resource: { ...candidate.resource, scope: 'project-parent' as const } }]);
+    assert.equal(scoped.proposals.length, 1, 'a newly proved distinct resource is previewed, never substituted for the old one');
+    assert.equal(scoped.proposedRules[0].resources!.length, 3);
+});
+
+test('new databases and empty config fixtures require proposals without overwriting existing explicit config', () => {
+    const candidate = { ...proposal(), sourceDependencies: [{ file: 'settings.py', sourceHash: 'b'.repeat(64) }],
+        configFixtures: [{ file: 'settings.py', sourceHash: 'b'.repeat(64), name: 'settings.ini', text: '' }], pythonSourceMode: true as const };
+    const fresh = mergeSchemaProposals([], [candidate]);
+    assert.equal(fresh.proposals.length, 1);
+    assert.deepEqual(fresh.proposedRules.find(r => r.file === 'settings.py')!.configFiles, { 'settings.ini': '' });
+    assert.equal(fresh.proposedRules.find(r => r.file === 'sample.py')!.resources![0].kind, 'sqlite');
+    const approved = [{ file: 'settings.py', configFiles: { 'settings.ini': '[storage]\npath=explicit.sqlite' } }];
+    const conflict = mergeSchemaProposals(approved, [candidate]);
+    assert.equal(conflict.proposals.length, 0);
+    assert.equal(conflict.diagnostics[0].reason, 'config-fixture-conflict');
+    assert.deepEqual(conflict.proposedRules, approved);
 });
 
 test('schema conflicts and shared aliases without independent source proof remain diagnostics', () => {
@@ -85,6 +101,7 @@ test('controller previews literal schema once and every guarded worker starts wi
     const settings: Record<string, any> = { pythonPath: f.python, importFixtureRoot: f.root, importFixtures: f.rules };
     const Module = require('module'), originalLoad = Module._load;
     let approvals = 0, updates = 0;
+    const logs: unknown[] = [];
     const previews: any[] = [];
     const vscode = {
         ConfigurationTarget: { Global: 1 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -115,8 +132,8 @@ test('controller previews literal schema once and every guarded worker starts wi
         setLanguage('en');
         const before = fs.readFileSync(f.file), dbBefore = fs.readFileSync(f.originalDb);
         const { ImportSetupController } = require('../environment/importSetupController');
-        const ready = await new ImportSetupController(() => {}).prepare(f.root, path.join(f.base, 'reports'), f.targets);
-        assert.equal(ready.status, 'ready'); assert.equal(approvals, 1); assert.equal(updates, 2);
+        const ready = await new ImportSetupController((message: unknown) => logs.push(message)).prepare(f.root, path.join(f.base, 'reports'), f.targets);
+        assert.equal(ready.status, 'ready', JSON.stringify(logs)); assert.equal(approvals, 1); assert.equal(updates, 2);
         assert.deepEqual(ready.rows, [{ file: 'sample.py', status: 'loaded' }]);
         const planning = JSON.parse(fs.readFileSync(path.join(ready.directory, '1/import_check.json'), 'utf8'));
         assert.equal(planning.phase, 'planning'); assert.equal(planning.importsExecuted, false);
@@ -182,5 +199,77 @@ test('a schema-only change still requires approval before module loading', async
         const checked = await inspectProjectImports(f.root, f.python, f.targets, path.join(f.base, 'checked'), planned.proposedRules, undefined, f.root, true);
         assert.deepEqual(checked.rows, [{ file: 'sample.py', status: 'loaded' }]);
         assert.equal(checked.proposedPlan, null); assert.equal(checked.schemaProposals?.length, 0);
+    } finally { fs.rmSync(f.base, { recursive: true, force: true }); }
+});
+
+test('cross-file fallback creates a complete NEW schema only after approval and expires when its config source changes', async () => {
+    const f = fixture();
+    try {
+        const config = path.join(f.root, 'settings.py');
+        fs.writeFileSync(config, `from pathlib import Path
+import configparser
+BASE = Path(__file__).resolve().parent
+parser = configparser.ConfigParser()
+filename = BASE / "settings.ini"
+if filename.exists():
+    parser.read(filename, encoding="utf-8")
+    directory = parser.get("storage", "directory", fallback=str(BASE))
+else:
+    directory = str(BASE)
+DB = Path(directory) / "owned.sqlite"
+`);
+        fs.writeFileSync(path.join(f.root, 'settings.ini'), '[storage]\ndirectory=original-must-not-be-read');
+        fs.writeFileSync(f.file, `import sqlite3
+from settings import DB
+def connect():
+    return sqlite3.connect(str(DB))
+def columns(cursor, table):
+    cursor.execute(f"PRAGMA table_info({table})")
+    return [row[1] for row in cursor.fetchall()]
+def ensure_column(cursor, table, column, definition):
+    names = columns(cursor, table)
+    if column not in names:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+def initialize():
+    cursor = connect().cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS sample (id INTEGER PRIMARY KEY, code TEXT DEFAULT 'neutral')")
+    ensure_column(cursor, "sample", "created_at", "TEXT")
+def target():
+    connection = connect()
+    connection.execute("INSERT INTO sample(created_at) VALUES ('isolated')")
+    value = connection.execute("SELECT id, code, created_at FROM sample").fetchall()
+    connection.close()
+    return value
+`);
+        const planned = await inspectProjectImports(f.root, f.python, f.targets, path.join(f.base, 'new-schema'), [], undefined, f.root, true);
+        assert.equal(planned.schemaProposals?.length, 1);
+        assert.equal(planned.schemaProposals![0].table.columns.length, 3);
+        assert.equal(planned.rows[0].stage, 'initialization-plan');
+        assert.equal(planned.proposedRules.find(r => r.file === 'settings.py')!.configFiles!['settings.ini'], '');
+        const plan = createImportFixturePlan(f.root, planned.proposedRules, f.root)!;
+        const script = `import sys, json
+sys.path.insert(0, sys.argv[1])
+from runtime_policy import guarded_runtime
+sys.path.insert(0, sys.argv[2])
+with guarded_runtime():
+    import sample
+    result = sample.target()
+print(json.dumps(result))
+`;
+        const execute = () => withImportFixtures(plan, () => runSpawn(f.python, ['-B', '-c', script,
+            path.resolve(__dirname, '../../python_scripts'), f.root], { cwd: f.root, timeout: 15000 }));
+        for (let i = 0; i < 2; i++) {
+            const result = await execute();
+            assert.equal(result.code, 0, result.stderr);
+            assert.deepEqual(JSON.parse(result.stdout), [[1, 'neutral', 'isolated']]);
+            assert.equal(result.resourceLifecycle?.cleaned, true);
+        }
+        assert.equal(fs.readFileSync(f.originalDb, 'utf8'), 'original DB bytes must never be read or changed');
+        assert.equal(fs.readFileSync(path.join(f.root, 'settings.ini'), 'utf8'), '[storage]\ndirectory=original-must-not-be-read');
+        fs.appendFileSync(config, '# drift\n');
+        assert.throws(() => createImportFixturePlan(f.root, planned.proposedRules), /dependency changed/);
+        const expired = await execute();
+        assert.notEqual(expired.code, 0);
+        assert.match(expired.stderr, /dependency changed/);
     } finally { fs.rmSync(f.base, { recursive: true, force: true }); }
 });

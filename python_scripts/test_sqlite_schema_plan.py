@@ -162,6 +162,126 @@ def initialize():
         self.assertEqual(result['candidates'], [])
         self.assertEqual(result['diagnostics'][0]['reason'], 'non-idempotent-schema')
 
+    def test_imported_config_fallback_is_an_explicit_empty_fixture_and_source_bound(self):
+        config = '''from pathlib import Path
+import configparser
+import sys
+def app_directory():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+BASE = app_directory()
+parser = configparser.ConfigParser()
+filename = BASE / "settings.ini"
+if filename.exists():
+    parser.read(filename, encoding="utf-8")
+    directory = parser.get("storage", "directory", fallback=str(BASE.parent / "neutral-data"))
+else:
+    directory = str(BASE.parent / "neutral-data")
+DB = Path(directory) / "sample.sqlite"
+raise RuntimeError("never execute configuration")
+'''
+        original_config = self.root / 'settings.ini'
+        original_config.write_text('[storage]\ndirectory=do-not-read\n', encoding='utf-8')
+        original_database = self.root / 'sample.sqlite'
+        original_database.write_bytes(b'never open this DB')
+        source = '''import sqlite3
+from settings import DB
+DB_NAME = str(DB)
+def connection():
+    return sqlite3.connect(DB_NAME)
+def initialize():
+    conn = connection()
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS example (id INTEGER PRIMARY KEY, label TEXT)")
+'''
+        with patch('sqlite3.connect', side_effect=AssertionError('must not open DB')), patch('configparser.ConfigParser.read', side_effect=AssertionError('must not read original config')):
+            planned = self.plan(source, {'settings.py': config})
+        self.assertEqual(len(planned['candidates']), 1)
+        candidate = planned['candidates'][0]
+        self.assertEqual(candidate['resource'], {'kind': 'sqlite', 'path': 'neutral-data/sample.sqlite', 'scope': 'project-parent'})
+        self.assertEqual(candidate['sourceDependencies'], [{'file': 'settings.py', 'sourceHash': hashlib.sha256((self.root / 'settings.py').read_bytes()).hexdigest()}])
+        self.assertEqual(candidate['configFixtures'][0]['name'], 'settings.ini')
+        self.assertEqual(candidate['configFixtures'][0]['text'], '')
+        self.assertTrue(candidate['pythonSourceMode'])
+        self.assertEqual(original_database.read_bytes(), b'never open this DB')
+        self.assertEqual(original_config.read_text(encoding='utf-8'), '[storage]\ndirectory=do-not-read\n')
+        with patch('sys.frozen', True, create=True):
+            frozen = self.plan(source, {'settings.py': config})
+        self.assertEqual(frozen['candidates'], [], 'frozen paths are not assumed to match the source interpreter')
+
+    def test_exact_column_guard_merges_literal_migration_before_schema_proposal(self):
+        source = '''import sqlite3
+def column_names(cursor, table):
+    cursor.execute(f"PRAGMA table_info({table})")
+    return [row[1] for row in cursor.fetchall()]
+def ensure_column(cursor, table, column, definition):
+    names = column_names(cursor, table)
+    if column not in names:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+def initialize():
+    cursor = sqlite3.connect("neutral.sqlite").cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS sample (id INTEGER PRIMARY KEY, label TEXT)")
+    ensure_column(cursor, "sample", "created_at", "TEXT")
+    ensure_column(cursor, "sample", "label", "TEXT NOT NULL DEFAULT ''")
+'''
+        planned = self.plan(source)
+        self.assertEqual(planned['candidates'][0]['table']['columns'], [
+            {'name': 'id', 'type': 'INTEGER', 'primaryKey': True}, {'name': 'label', 'type': 'TEXT'}, {'name': 'created_at', 'type': 'TEXT'}])
+        self.assertEqual(planned['candidates'][0]['migrationLines'], [12])
+        altered = self.plan(source.replace('row[1]', 'row[0]'))
+        self.assertEqual(altered['candidates'], [], 'an unproven migration must not preview a knowingly incomplete schema')
+        self.assertIn('unsupported-schema-migration', [d['reason'] for d in altered['diagnostics']])
+        for changed in (source + '\ncolumn_names = replacement\n',
+                        source.replace('names = column_names(cursor, table)', 'column_names = column_names(cursor, table)').replace('column not in names', 'column not in column_names'),
+                        source.replace('def column_names(cursor, table):', 'def column_names(cursor, table, *, required):'),
+                        source.replace('row[1]', 'row[1.0]'),
+                        source.replace('"created_at", "TEXT"', '"created_at", "TEXT, hidden TEXT"')):
+            with self.subTest(source=changed[:80]):
+                self.assertEqual(self.plan(changed)['candidates'], [], 'rebound or incompatible helper cannot prove a migration')
+
+    def test_unknown_cross_file_paths_and_cycles_do_not_execute_helpers(self):
+        result = self.plan('import sqlite3\nfrom settings import DB\nc=sqlite3.connect(DB)\nc.execute("CREATE TABLE IF NOT EXISTS t (id INTEGER)")',
+            {'settings.py': 'from pathlib import Path\nDB=Path(get_runtime_value())\nraise RuntimeError("must not execute")'})
+        self.assertEqual(result['candidates'], [])
+        self.assertIn('dynamic-database-path', [d['reason'] for d in result['diagnostics']])
+        for helper in ('    if True:\n        return unknown()\n    return "neutral.sqlite"\n',
+                       '    if True:\n        external_effect()\n    return "neutral.sqlite"\n'):
+            result = self.plan('import sqlite3\nfrom settings import DB\nc=sqlite3.connect(DB)\nc.execute("CREATE TABLE IF NOT EXISTS t (id INTEGER)")',
+                {'settings.py': 'def location():\n' + helper + 'DB=location()\n'})
+            self.assertEqual(result['candidates'], [], 'an unknown taken branch must not fall through to a known return')
+
+    def test_import_binding_is_recorded_at_import_not_taken_from_later_global_rebinding(self):
+        planned = self.plan('import sqlite3\nfrom settings import DB\nc=sqlite3.connect(DB)\nDB="later.sqlite"\n'
+            'c.execute("CREATE TABLE IF NOT EXISTS sample (id INTEGER)")\n', {'settings.py': 'DB="initial.sqlite"\n'})
+        self.assertEqual(planned['candidates'][0]['resource']['path'], 'initial.sqlite')
+
+    def test_config_parser_escape_invalidates_fallback_evidence(self):
+        config = '''import configparser
+from pathlib import Path
+parser = configparser.ConfigParser()
+filename = Path(__file__).parent / "settings.ini"
+parser.read(filename)
+alias = parser
+customize(alias)
+DB = parser.get("storage", "path", fallback="neutral.sqlite")
+'''
+        for escape in ('customize(alias)', 'ignored = customize(alias)', 'if FLAG:\n    customize(alias)',
+                       'try:\n    customize(alias)\nexcept ValueError:\n    pass', 'bucket = [alias]'):
+            planned = self.plan('import sqlite3\nfrom settings import DB\nc=sqlite3.connect(DB)\n'
+                'c.execute("CREATE TABLE IF NOT EXISTS sample (id INTEGER)")\n', {'settings.py': config.replace('customize(alias)', escape)})
+            self.assertEqual(planned['candidates'], [], escape)
+
+    def test_package_initializers_are_bound_and_nontrivial_import_effects_are_not_assumed(self):
+        source = 'import sqlite3\nfrom pkg.settings import DB\nc=sqlite3.connect(DB)\n' \
+            'c.execute("CREATE TABLE IF NOT EXISTS sample (id INTEGER)")\n'
+        planned = self.plan(source, {'pkg/__init__.py': '"""inert package"""\n', 'pkg/settings.py': 'DB="neutral.sqlite"\n'})
+        self.assertEqual(planned['candidates'][0]['resource']['path'], 'neutral.sqlite')
+        self.assertEqual([item['file'] for item in planned['candidates'][0]['sourceDependencies']], ['pkg/__init__.py', 'pkg/settings.py'])
+        changed = self.plan(source, {'pkg/__init__.py': 'from . import settings\nsettings.DB="changed.sqlite"\n', 'pkg/settings.py': 'DB="neutral.sqlite"\n'})
+        self.assertEqual(changed['candidates'], [])
+        self.assertIn('package-initialization-not-static', [d['reason'] for d in changed['diagnostics']])
+
 
 if __name__ == '__main__':
     unittest.main()

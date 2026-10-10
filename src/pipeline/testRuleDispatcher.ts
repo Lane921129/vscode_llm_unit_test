@@ -2,7 +2,8 @@ import { createHash } from 'crypto';
 import {
     inferTestRuleIdsFromCode,
     getTestRuleCards,
-    formatTestRuleCardsForPrompt
+    formatTestRuleCardsForPrompt,
+    currentClockCalls
 } from '../prompts/testRuleLibrary';
 import { RuleSelectionV2 } from './evidenceContracts';
 
@@ -75,7 +76,7 @@ function triggerFactsForRule(
         case 'async_coroutine_testing': fact = firstSourceFact(/\basync\s+def\b|\bawait\b/); break;
         case 'generator_result_testing': fact = context?.is_generator ? 'ast-callable: selected target is a generator' : undefined; break;
         case 'file_io_mocking': fact = firstSourceFact(/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/); break;
-        case 'datetime_freezing': fact = firstSourceFact(/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/); break;
+        case 'datetime_freezing': fact = `source-clock-calls: ${currentClockCalls(source, context).join(', ')}`; break;
         case 'context_manager_testing': fact = firstSourceFact(/^\s*(?:async\s+)?with\s+.+:/); break;
         case 'async_context_manager_testing': fact = firstSourceFact(/^\s*async\s+with\s+.+:/); break;
         case 'http_client_mocking': fact = `http-binding: ${imports.filter(name => /requests|httpx|aiohttp|urllib/i.test(name)).join(', ') || (context?.calls || []).join(', ')}`; break;

@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, resultArtifactPath, roundDirectory } from '../pipeline/resultLayout';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import * as assert from 'node:assert/strict';
@@ -119,23 +120,23 @@ class Cases(unittest.TestCase):
     utilities.detectMutationEngine = () => null;
     globalThis.fetch = async (_url, options) => {
         assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         assert.equal(request.options.num_ctx, 8572);
         let response: string;
-        if (request.system.includes('You are the test Reviewer')) {
+        if (request.roleInstructions.includes('You are the test Reviewer')) {
             if (!rejectedReviewSchema && typeof request.format === 'object') {
                 assert.equal(request.format.properties.findings.maxItems, 5);
                 rejectedReviewSchema = true;
                 return new Response('unsupported schema', { status: 400 });
             }
             roles.push('reviewer'); response = reviewerAvailable ? '{"findings":[]}' : 'invalid review';
-        } else if (request.system.includes('Analyst after successful')) {
+        } else if (request.roleInstructions.includes('Analyst after successful')) {
             roles.push('analyst-quality'); response = '{"tasks":[]}';
             if (changeBeforeNextRound) {
                 changeBeforeNextRound = false;
                 fs.appendFileSync(path.join(directory, 'sample.py'), '\n# source changed between rounds\n');
             }
-        } else if (request.system.includes('dependency_behaviors')) {
+        } else if (request.roleInstructions.includes('dependency_behaviors')) {
             roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
         } else {
             roles.push('writer'); writers++;
@@ -337,9 +338,9 @@ class Cases(unittest.TestCase):
             'class Cases(unittest.TestCase):\n    def setUp(self):\n        self.required_fixture()')
             + '# ' + 'retained candidate context '.repeat(1200) + '\n';
         globalThis.fetch = async (_url, options) => {
-            const request = JSON.parse(String(options?.body));
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             let response: string;
-            if (request.system.includes('dependency_behaviors')) {
+            if (request.roleInstructions.includes('dependency_behaviors')) {
                 planningAttempts++;
                 response = planningAttempts === 1 ? 'INVALID_ANALYST_PRIVATE_REPLY' : '{"dependency_behaviors":[]}';
                 if (planningAttempts === 2) { assert.match(request.prompt, /SEMANTIC_CONTRACT_REPAIR_V1/); }
@@ -442,12 +443,12 @@ class Cases(unittest.TestCase):
 `;
         let partialWriters = 0, partialReviews = 0, qualityCalls = 0;
         globalThis.fetch = async (_url, options) => {
-            const request = JSON.parse(String(options?.body));
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             let response: string;
-            if (request.system.includes('You are the test Reviewer')) {
+            if (request.roleInstructions.includes('You are the test Reviewer')) {
                 partialReviews++;
                 response = '{"findings":[]}';
-            } else if (request.system.includes('Analyst after successful')) {
+            } else if (request.roleInstructions.includes('Analyst after successful')) {
                 qualityCalls++;
                 assert.equal(request.format, undefined, 'plain-unittest profiles retain text transport');
                 const focus = JSON.parse(request.prompt.split('FOCUS\n')[1].split('\n')[0]);
@@ -459,7 +460,7 @@ class Cases(unittest.TestCase):
                     assert.match(request.prompt, /FORMAT CORRECTION/);
                     assert.doesNotMatch(request.prompt, /INVALID_PRIVATE_RESPONSE/);
                 }
-            } else if (request.system.includes('dependency_behaviors')) {
+            } else if (request.roleInstructions.includes('dependency_behaviors')) {
                 response = '{"dependency_behaviors":[]}';
             } else {
                 partialWriters++;
@@ -517,16 +518,16 @@ class Cases(unittest.TestCase):
             const marker = 'PRIVATE_FIXER_REPLY_MUST_NOT_APPEAR';
             let fixerCalls = 0;
             globalThis.fetch = async (_url, options) => {
-                const request = JSON.parse(String(options?.body));
+                const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
                 let response: string;
-                if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
-                else if (request.system.includes('Python unittest Bug Fixer')) {
+                if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+                else if (request.roleInstructions.includes('Python unittest Bug Fixer')) {
                     fixerCalls++;
                     assert.equal(request.format, undefined);
                     const fragment = "def test_false(self):\n    with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):\n        self.assertFalse(target())";
                     response = mode === 'format' ? marker + '\n```python\n' + fragment + '\n```'
                         : '```python\nfrom datetime import datetime\n' + fragment + '\n```';
-                } else if (request.system.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+                } else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
                 else {
                     response = '```python\n' + (mode === 'scope' ? 'import datetime\n' : '')
                         + code.replace('self.assertFalse(target())', 'self.assertTrue(target())') + '\n```';

@@ -2,11 +2,13 @@
 
 ## Schema、角色契約與冷啟動修復（2026-10-10）
 
-`initializationPlanning.ts` 在既有規劃閉包上呼叫 `schemaPlanning.ts`／`sqlite_schema_plan.py`。後者只做有界 AST 與 literal DDL 解析，沿可證明的 SQLite connection／cursor 鏈定位 `CREATE TABLE IF NOT EXISTS`；不 import 應用、不 eval、不讀取資料庫。TypeScript 再核对同來源摘要及已宣告的精確 SQLite 資源，將可新增的表與目錄／入口提案合併為一次預覽。已有 schema／seed 保留，衝突、未知路徑與無獨立來源證據的共享資源只列診斷；來源漂移使批准失效。`isolated_resources.py` 從驗證後結構建立每程序新資料庫，支援 literal default、UNIQUE 與 AUTOINCREMENT，從不直接執行來源 SQL。
+`initializationPlanning.ts` 在既有規劃閉包上呼叫 `schemaPlanning.ts`／`sqlite_schema_plan.py`。後者只做有界 AST 與 literal DDL 解析，沿可證明的本機 connection helper／cursor 鏈定位 `CREATE TABLE IF NOT EXISTS` 與保真的新增欄位遷移；不 import 應用、不 eval、不讀取資料庫。來源宣告的 ConfigParser fallback 只有在同一預覽明列空白設定 fixture 時才可使用；既有非空設定不覆蓋。TypeScript 核對來源摘要及精確 SQLite 地址，可將新 DB 資源、資料表、設定 fixture 與目錄／入口提案合併為一次預覽。已有 schema／seed 保留，衝突、未知路徑與無獨立來源證據的共享資源只列診斷。`sourceDependencies` 將跨檔證據納入 plan 身分，Python worker 重新驗證，`pythonSourceMode` 禁止 frozen 程序沿用原始碼路徑證明。`isolated_resources.py` 從驗證後結構建立每程序新資料庫，支援 literal default、UNIQUE 與 AUTOINCREMENT，從不直接執行來源 SQL。
 
-`buildWriterRevisionContext` 將目標、setup、規則、分區觀測與相依交給修訂角色，完整相同的 source／current test 才改用引用；必要證據仍太大時由 `requestBudgeted` 保存實際估量並停止。`semanticContractRepair.ts` 對已收到但格式錯誤的 Analyst 回覆只補問一次，共用原始 deadline；日誌只有回覆摘要與長度。Reviewer 的同候選 AST facts 提供 import statement／used binding，僅對明確機械矛盾重審，不能直接刪 finding 變成同意。
+`buildCompactWriterContext` 只投影目標與必要 setup 使用的 import，保守保留未知綁定，合併相同規則文字並限制 optional examples 的佔用。`dependency_fixture_contract.py` 由 AST 抽取直線 receiver 與實際消費的 return／context-manager 路徑，讓 Writer 分清 cursor.fetchall 與 execute 回傳值；未知 alias、重綁與控制流保持診斷。此契約的 `targetSourceHash` 明示為正規化目標片段，不冒稱原始檔 hash，且只供 fixture shape，不授予 patch 或 assertion 權限。`buildWriterRevisionContext` 保留完整目標、setup、規則、觀測與相依，只有完整相同的 source／current test 才改用引用；必要證據仍太大時由 `requestBudgeted` 保存估量並停止。Reviewer 的同候選 AST facts 與 execution 身分只反證明確機械矛盾或無實際改變的替換要求，未知語意仍須處理，不能刪 finding 變成同意。
 
-Builtin／外部引擎的共用 trial runner 將 baseline 冷啟動上限與 mutant 上限分開，所有試驗仍受同一 stage deadline。`MutationRun` 保存 baseline 上限、實際分配與耗時；逐輪流程與失敗報告呈現此診斷，精簡最終報告保留原格式。歷史結果缺少新 timing 欄位仍可讀取，不補造時限或分數。
+Builtin／外部引擎共用 trial runner 在成功 baseline 後，以 `max(設定的 mutant 秒數, 2 × baseline 實測秒數 + 1)` 校準每筆時限，避免載入成本已超過原上限卻把全部 mutant 判逾時。序列／並行都受原 stage deadline 限制；時間用盡仍是未完成，不當 KILLED。`MutationRun`、Python scorecard 核對政策／設定／有效上限與分配公式；角色事件與逐輪報告呈現診斷，精簡最終報告保留原格式。歷史結果缺少新 timing 欄位仍可讀取，不補造時限或分數。
+
+本機 `/api/generate` 經 `ollamaPrompt.ts` 將完整角色契約與 user evidence 用最終預算相同的換行合成 `prompt`，避免只讀 `.Prompt` 的模型模板遺失 system 指令；單一空格 `system` 抑制 Modelfile 預設回填。原模板、輸出格式與 context 設定保留，沒有模型名稱特例。指令可見不證明模型理解或各模板品質等價；角色解析、執行及品質 gate 不變。固定資格探針使用 `python-unittest-v7`，兩案例的斷言必須連結真正目標結果與獨立固定 expected，舊資格需重新驗證。
 
 ## 載入前初始化規劃（2026-10-10）
 

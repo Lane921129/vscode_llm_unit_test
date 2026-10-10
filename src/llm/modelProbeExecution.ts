@@ -15,7 +15,7 @@ const PROBE_RUNNER = [
     'exec(compile(code, module.__file__, "exec"), module.__dict__)',
     'suite = unittest.defaultTestLoader.loadTestsFromModule(module)',
     'result = unittest.TextTestRunner(verbosity=0).run(suite)',
-    'raise SystemExit(0 if result.wasSuccessful() else 1)',
+    'raise SystemExit(0 if result.wasSuccessful() and result.testsRun > 0 else 1)',
 ].join('; ');
 
 function probeCode(payload: unknown): string | undefined {
@@ -73,6 +73,57 @@ function isSafeProbeAssignment(line: string): boolean {
         || /^[A-Za-z_]\w*\s*=\s*(?:2|0)$/.test(line);
 }
 
+/** The fixed fixture has only module classes and directly discoverable methods. */
+function hasExecutableProbeScopes(code: string, classPattern: RegExp, stringStatement: RegExp): boolean {
+    type Block = { kind: 'class' | 'method' | 'fixture' | 'main'; indent: number;
+        bodyIndent?: number; methods?: Set<string> };
+    const blocks: Block[] = [];
+    const classNames = new Set<string>();
+    let fixtureDefined = false;
+    for (const raw of code.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) { continue; }
+        const indent = raw.match(/^\s*/)?.[0].replace(/\t/g, '        ').length || 0;
+        while (blocks.length && indent <= blocks[blocks.length - 1].indent) { blocks.pop(); }
+        const parent = blocks[blocks.length - 1];
+        if (parent) {
+            parent.bodyIndent ??= indent;
+            if (parent.bodyIndent !== indent) { return false; }
+        } else if (indent !== 0) { return false; }
+
+        if (classPattern.test(line)) {
+            const name = line.match(/^class\s+(\w+)/)![1];
+            if (parent || classNames.has(name)) { return false; }
+            classNames.add(name);
+            blocks.push({ kind: 'class', indent, methods: new Set() });
+        } else if (/^def increment\(value\):(?: return value \+ 1)?$/.test(line)) {
+            if (parent || fixtureDefined) { return false; }
+            fixtureDefined = true;
+            if (line.endsWith(':')) { blocks.push({ kind: 'fixture', indent }); }
+        } else if (/^def test_[A-Za-z_]\w*\(self\)(?:\s*->\s*None)?:$/.test(line)) {
+            const name = line.match(/^def\s+(\w+)/)![1];
+            if (parent?.kind !== 'class' || parent.methods!.has(name)) { return false; }
+            parent.methods!.add(name);
+            blocks.push({ kind: 'method', indent });
+        } else if (/^if __name__ == ['"]__main__['"]:$/.test(line)) {
+            if (parent) { return false; }
+            blocks.push({ kind: 'main', indent });
+        } else if (isSafeProbeAssertion(line) || isSafeProbeAssignment(line)) {
+            if (parent?.kind !== 'method') { return false; }
+        } else if (line === 'return value + 1') {
+            if (parent?.kind !== 'fixture') { return false; }
+        } else if (/^unittest\.main\(/.test(line)) {
+            if (parent && parent.kind !== 'main') { return false; }
+        } else if (/^(?:import|from)\s/.test(line)) {
+            // Imports cannot replace an already declared TestCase binding.
+            if (parent || classNames.size > 0) { return false; }
+        } else if (!stringStatement.test(line)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 export function assessIsolatedProbeCode(code: string): IsolatedProbeCodeAssessment {
     const lines = code.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const testCaseBases = probeTestCaseBases(lines);
@@ -99,6 +150,9 @@ export function assessIsolatedProbeCode(code: string): IsolatedProbeCodeAssessme
         && !isSafeProbeAssignment(line)
         && !stringStatement.test(line)
     );
+    if (unsupportedLines.length === 0 && !hasExecutableProbeScopes(code, classPattern, stringStatement)) {
+        return { valid: false, reason: localize("模型探測碼必須使用模組頂層 TestCase 與直接 test_ 方法；不接受巢狀、重複或未執行範圍內的測試斷言。") };
+    }
     return unsupportedLines.length === 0 && lines.length > 0
         ? { valid: true }
         : {

@@ -150,6 +150,41 @@ const mechanicalFacts = (tests = mechanicalCode, executionVerified = true) => bu
     code: tests, module: 'sample', executionVerified, env: process.env,
     python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') });
 
+test('executed bindings and interactions contradict unbound and already-present claims without approving the review', async () => {
+    const current = await mechanicalFacts();
+    const bound = { ...constraints(current), dependencyUsePoints: ['sample.channel'] };
+    for (const [line, category, reason, action, diagnostic] of [
+        [1, 'setup-error', "Unbound import 'unittest'", "Add 'import unittest'", 'existing-import-contradiction'],
+        [3, 'target-binding', "Unbound name 'score'", "Add 'from sample import score'", 'target-binding-contradiction'],
+        [9, 'missing-scenario', "Missing assertion on mock 'channel'", "Add 'channel.assert_called_once()'", 'existing-assertion-contradiction'],
+        [10, 'missing-scenario', "Missing assertion on mock 'worker.send'", "Add 'worker.send.assert_called_once_with(\"item\")'", 'existing-assertion-contradiction'],
+    ] as const) {
+        const parsed = parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true, bound);
+        assert.equal(parsed.review, undefined, reason);
+        assert.deepEqual(parsed.diagnostics, [diagnostic]);
+        assert.ok(parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true,
+            { ...bound, facts: { ...current, executionVerified: false } }).review);
+    }
+    for (const reason of ["Unbound name 'score' in the new callback scope", "Unbound name 'other'", "Unbound name 'score' because the setup reassigns it"]) {
+        assert.ok(parseTestReviewDetailed(response(3, 'target-binding', reason, 'Check the binding inside that scope.'), mechanicalCode, true, bound).review);
+    }
+    const malformed = response(1, 'setup-error', "Unbound import 'unittest'", "Add 'import unittest'");
+    let calls = 0;
+    assert.equal(await reviewWithContractRepair({ tests: mechanicalCode, prompt: 'same candidate', constraints: bound,
+        deadlineAt: 1000, now: () => 1, checkCancelled: () => {}, event: () => {},
+        request: async () => { calls++; return malformed; } }), undefined);
+    assert.equal(calls, 2);
+});
+
+test('replacing a proven assertion with itself is not an actionable revision', async () => {
+    const current = await facts();
+    const excerpt = code.split('\n')[7].trim();
+    const unchanged = response(8, 'assertion-quality', 'Weak equality assertion on numbers', `Replace with '${excerpt}'`);
+    assert.deepEqual(parseTestReviewDetailed(unchanged, code, true, constraints(current)).diagnostics, ['non-actionable-action']);
+    const additional = response(8, 'missing-scenario', 'An additional boundary needs the same comparison.', `Add '${excerpt}' in a new boundary test.`);
+    assert.ok(parseTestReviewDetailed(additional, code, true, constraints(current)).review);
+});
+
 test('executed import and AST identifiers contradict complete installation claims, never unknown semantic claims', async () => {
     const current = await mechanicalFacts();
     for (const [line, category, reason, action, diagnostic] of [

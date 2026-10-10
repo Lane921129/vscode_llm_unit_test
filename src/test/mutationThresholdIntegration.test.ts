@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -55,11 +56,11 @@ class Cases(unittest.TestCase):
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
-        else if (request.system.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
-        else if (request.system.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
+        if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+        else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+        else if (request.roleInstructions.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
         else { writers++; response = '```python\n' + candidate + '\n```'; }
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
     };

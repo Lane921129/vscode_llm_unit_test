@@ -58,7 +58,7 @@ function scope(previous: string, candidate: string, failure: string): { valid: b
 test('Writer and repair contracts explain source-consumed return objects without choosing an oracle', () => {
     const compact = buildCompactWriterContext({ module: 'sample', name: 'transform', source, context,
         evidence, budgetTokens: 1800 });
-    const prompts = [compact, getExecutionWriterSystemPrompt(), getTier3SystemPrompt(), getBugFixerSystemPrompt(),
+    const prompts = [getExecutionWriterSystemPrompt(), getTier3SystemPrompt(), getBugFixerSystemPrompt(),
         getUserPrompt('sample.py', 'transform', source, 'small', context),
         getUserPrompt('sample.py', 'transform', source, 'large', context)];
     for (const prompt of prompts) {
@@ -68,6 +68,10 @@ test('Writer and repair contracts explain source-consumed return objects without
         assert.match(prompt, /Never add layers or infer expected values/);
         assert.match(prompt, /target or other-method imports do not bind them/);
     }
+    assert.match(compact, /return objects and context-manager layers actually consumed in TARGET SOURCE/);
+    assert.match(compact, /sourceCalls.*factory\(value\)\.render/);
+    assert.match(compact, /Import unittest and test helpers explicitly in test scope/);
+    assert.doesNotMatch(compact, /factory_mock\.return_value\.finish/, 'compact requests do not carry unrelated example chains');
     assert.ok(promptFits(getSystemPrompt(1, 'small'), compact, 1800), 'retain smallest existing input budget');
     assert.ok(compact.includes(source), 'preserve the complete source rather than slicing for the new rule');
 });

@@ -4,9 +4,12 @@
 
 ## 目前驗收優先順序
 
-- 靜態 SQLite schema 提案只接受可保真轉成宣告資源的 literal `CREATE TABLE IF NOT EXISTS`，綁定同來源摘要、DDL／連線位置及精確已宣告資料庫。不可執行來源 SQL、匯入應用或複製正式資料來補 schema；動態路徑、不支援約束、衝突或跨來源證據不足須列診斷。提案沿用一次合併預覽與明確批准，各 worker 再建立新資料庫。
+- 靜態 SQLite schema 提案只接受可保真轉成宣告資源的 literal `CREATE TABLE IF NOT EXISTS`，綁定來源摘要、DDL／連線位置及精確資料庫地址；已有資源可補 schema，來源可證明的新資料庫亦可列入同一批准預覽。不可執行來源 SQL、匯入應用或複製正式資料來補 schema；動態路徑、不支援約束、衝突或跨來源證據不足須列診斷。各 worker 只在批准後建立新資料庫。
+- 靜態路徑可追蹤有界的本機 connection helper 與來源宣告的 ConfigParser fallback；若需空白設定才能選用 fallback，必須把空白設定 fixture 一併列入預覽，不能假設原設定不存在或讀取原設定。已批准的非空設定不被覆蓋。跨來源依據保存 `sourceDependencies` 並納入 plan 身分，每個 worker 再核對；依賴漂移或 frozen 程序不符 `pythonSourceMode` 即拒絕。可保真的明確新增欄位遷移須保留，未知 SQL 不猜。突變若改動設定依賴而無法重綁，維持 ERROR／未評分。
 - 宣告 schema 支援 literal default、欄位／複合 UNIQUE、INTEGER PRIMARY KEY AUTOINCREMENT；禁止丟棄來源約束以求建表成功。Writer 的修訂保留完整目標、setup、觀測及候選，只去除完整且相同的重複片段；超預算記為 prompt-budget 並停止，不因此降低 Tier。Analyst 格式失敗最多補正一次，沿用原期限與證據；傳輸失敗不觸發格式重問。
-- 突變 baseline 冷啟動上限為 `max(20 秒, 每個 mutant 上限)`，實際分配仍不得超過階段剩餘時間；逐一 mutant 的原上限不擴張。保存上限、分配及耗時，baseline timeout／error 不算 killed 或有效分數。
+- 突變 baseline 冷啟動上限為 `max(20 秒, 設定的 mutant 上限)`。只有成功 baseline 才以 `max(設定值, baseline 實測秒數 × 2 + 1 秒)` 校準單 mutant 上限；序列／並行共用相同政策，實際分配仍不超過階段剩餘時間。保存設定值、校準值、每筆分配及耗時；timeout／error 不算 killed 或有效分數。
+- Writer 只接收目標與必要 setup 使用的 import，未知／wildcard 綁定保守保留；重複規則只呈現一次，optional 範例不能填滿輸入預算。完整目標、來源身分、必要 setup、觀測與修訂候選不截斷。AST `dependency-fixture-contract-v1` 只描述來源實際消費的 receiver／return value／context-manager 形狀，不授予 patch 權限、不提供 expected；重綁與未知控制流須保留診斷。初次生成可因預算省略整份形狀圖與圖例，明示仍須讀完整來源；修訂保留整份契約，不切部分路徑或隱藏 unknown。
+- Reviewer 的「Unbound import/name」、「已有 mock assertion 卻指稱缺失」及「替換成完全相同斷言」只在同候選執行與 AST 事實足以反證時標為無效契約；多餘語意主張與新情境需求不由字串規則否定。仍只允許一次契約重審，不刪 finding 冒充批准。
 
 - 依使用者 2026-10-10 確認，初始化先以純靜態 planner 彙整可證明的目錄與外部 callback 啟動入口，涵蓋選取來源的有界本機相依；planner 本身不 import 應用或求值來源。可確定候選直接進入預覽；若出現 `dynamic-directory`（例如由配置或 helper 算出的目錄），Host 先執行一次既有受控匯入掃描，只使用已批准 fixtures，不暫套任何新提案，再把實測目錄建議與後續靜態入口合併成同一清單。靜態候選與實測阻擋須分開標示，不能把規劃完成當成就緒。
 - 合併清單只有一次預覽、一次批准與套用後的一次實際重檢；確認前不得建立新提案的資源或執行其 callback。靜態待確認路徑取消時尚未 import；動態目錄路徑可能已完成前述診斷，取消僅停止套用新設定與後續重檢。來源閉包、根、設定或 Python 變動仍停止；未知副作用、缺 schema 或未解析的動態初始化保留診斷，不宣稱都能自動解決，也不循環批准。
@@ -160,6 +163,7 @@
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 - 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
 - 最小資格 probe 可接受安全的 fixture 結果暫存、固定 expected scalar、`assertEqual` 訊息與 `-> None` 註記；允許集合必須為可靜態驗證的 unittest 語句，不能為了相容性執行任意模型 Python。
+- `python-unittest-v7` 的兩個固定案例須各自將目標結果與固定 expected 連到同一斷言；純常數比較、目標與自身比較、未被斷言使用的呼叫，以及被重綁的結果不能認證。結果來源只在同一測試方法內使用；先前版本資格須重新驗證，不能因 HTTP 或 unittest exit code 成功沿用。
 - 正式 Writer、Tier 2 分治、Tier 3 Scaffold 與修復角色的完整 unittest code request 必須一律要求純 Python code fence，不得把整份測試檔包進 provider JSON／schema；本地 extractor、結構、隔離執行、coverage 與 mutation gate 是驗證依據，Reviewer 另依 findings 契約提供同意決定。初始 Semantic Analyzer 的 JSON 契約失敗會阻擋正式 full，不能以 deterministic AST 規則冒充 AI 分析；後續 mutant triage 失敗仍可保留既有實測缺口供 Writer，但不得把無效分析當成有效角色產物。
 - 尚未完成「測試連線」的 provider／model 視為尚未驗證；正式 full 的 **Auto** 必須在 Writer 與 Reviewer 各自 verified 後才進入 AI 閉環，否則明示資格受阻，不啟用 deterministic Trace fallback。使用者明確選擇 Tier 1–4 時保留其選擇，不因探測缺失強制降階；其模型輸出仍必須通過分析、結構、隔離執行、Reviewer 同意、覆蓋率與突變閘門。測試連線可讀取參數量與 Context，但不能取代角色資格與正式執行驗證。
 - 模型資格的儲存、查詢與套用必須使用同一個 provider／模型身分正規化規則；Google 的 `models/<name>` 與 `<name>` 是同一模型，不得因 resource prefix 讓已通過的 Cloud 探測在 Auto 路由中失效；不同 provider 仍必須嚴格隔離。

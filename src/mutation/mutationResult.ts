@@ -53,6 +53,8 @@ export interface MutationRecord {
     codeChange?: MutationCodeChange;
     killedBy?: string[];
     elapsedMs?: number;
+    /** Actual subprocess allowance, capped by the shared stage time remaining. */
+    allocatedSeconds?: number;
 }
 export interface MutationRun extends MutationContext {
     schemaVersion: 1;
@@ -69,6 +71,9 @@ export interface MutationRun extends MutationContext {
     baselineTimeoutSeconds?: number;
     baselineAllocatedSeconds?: number;
     baselineElapsedMs?: number;
+    mutantTimeoutPolicy?: 'baseline-calibrated-v1';
+    configuredMutantTimeoutSeconds?: number;
+    effectiveMutantTimeoutSeconds?: number;
     counts: MutationCounts;
     mutants: MutationRecord[];
     /** A sample may have a score without constituting complete measurement. */
@@ -222,6 +227,25 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
             return fail('Invalid mutation baseline timing');
         }
     }
+    const calibratedFields = ['mutantTimeoutPolicy', 'configuredMutantTimeoutSeconds', 'effectiveMutantTimeoutSeconds'] as const;
+    if (calibratedFields.some(field => value[field] !== undefined)) {
+        const configured = value.configuredMutantTimeoutSeconds, effective = value.effectiveMutantTimeoutSeconds;
+        if (value.mutantTimeoutPolicy !== 'baseline-calibrated-v1' || !value.baseline_passed
+            || !integer(value.baselineElapsedMs) || typeof configured !== 'number' || !Number.isFinite(configured) || configured <= 0
+            || typeof effective !== 'number' || !Number.isFinite(effective)
+            || effective !== Math.max(configured, (2 * Number(value.baselineElapsedMs) + 1000) / 1000)) {
+            return fail('Invalid mutation timeout calibration');
+        }
+    }
+    for (const mutant of mutants) {
+        const allocation = mutant.allocatedSeconds;
+        if ((allocation !== undefined && (typeof allocation !== 'number' || !Number.isFinite(allocation) || allocation <= 0
+            || mutant.status === 'NOT_RUN'
+            || (value.effectiveMutantTimeoutSeconds !== undefined && allocation > Number(value.effectiveMutantTimeoutSeconds))
+            || (context.stageTimeoutSeconds !== undefined && allocation > context.stageTimeoutSeconds)))
+            || (value.mutantTimeoutPolicy !== undefined && ['KILLED', 'SURVIVED', 'TIMEOUT'].includes(mutant.status)
+                && allocation === undefined)) { return fail('Invalid mutation trial allocation'); }
+    }
     return { ok: true, run: { ...context, targetScope: { ...value.targetScope } as unknown as MutationScope,
         schemaVersion: 1, engine, ...state, baselinePassed: value.baseline_passed,
         operatorSetVersion: value.operatorSetVersion, scopeVersion,
@@ -232,6 +256,9 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         baselineTimeoutSeconds: value.baselineTimeoutSeconds as number | undefined,
         baselineAllocatedSeconds: value.baselineAllocatedSeconds as number | undefined,
         baselineElapsedMs: value.baselineElapsedMs as number | undefined,
+        mutantTimeoutPolicy: value.mutantTimeoutPolicy as MutationRun['mutantTimeoutPolicy'],
+        configuredMutantTimeoutSeconds: value.configuredMutantTimeoutSeconds as number | undefined,
+        effectiveMutantTimeoutSeconds: value.effectiveMutantTimeoutSeconds as number | undefined,
         candidateSetId: value.candidateSetId as string | null, candidateIds: [...candidateIds],
         baselineStatus: value.baselineStatus as MutationRun['baselineStatus'], counts, mutants,
         excluded: { ...value.excluded } as MutationRun['excluded'],

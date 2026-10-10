@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -40,9 +41,9 @@ test('orchestrator shares the execution import environment and reports mutation 
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     // All model requests are local deterministic fixtures; no network request is forwarded.
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body));
-        const response = request.system.includes('dependency_behaviors') ? '{"dependency_behaviors":[]}'
-            : request.system.includes('You are the test Reviewer') ? '{"findings":[]}' : '```python\n' + candidate + '\n```';
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        const response = request.roleInstructions.includes('dependency_behaviors') ? '{"dependency_behaviors":[]}'
+            : request.roleInstructions.includes('You are the test Reviewer') ? '{"findings":[]}' : '```python\n' + candidate + '\n```';
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
     };
     processRunner.runSpawn = async (command: string, args: string[], options: any) => {

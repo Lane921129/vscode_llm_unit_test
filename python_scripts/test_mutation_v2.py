@@ -208,8 +208,79 @@ class MutationV2Tests(unittest.TestCase):
             self.assertEqual(result['baselineAllocatedSeconds'], 20)
             self.assertEqual(result['baselineElapsedMs'], 6000)
             self.assertEqual(allocations[0], (True, 20))
-            self.assertTrue(all(timeout == 5 for _, timeout in allocations[1:]))
+            self.assertEqual(result['mutantTimeoutPolicy'], 'baseline-calibrated-v1')
+            self.assertEqual(result['configuredMutantTimeoutSeconds'], 5)
+            self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
+            self.assertTrue(all(timeout == 13 for _, timeout in allocations[1:]))
+            self.assertTrue(all(mutant['allocatedSeconds'] == 13 for mutant in result['mutants']))
             self.assertEqual(result['counts']['killed'], 0)
+
+    def test_cold_mutants_receive_baseline_calibration_with_identical_serial_and_parallel_policy(self):
+        def provider(tree, scope, *args):
+            return {'engine': 'mutatest', 'engineVersion': '3.1.0', 'operatorSetVersion': 'test-provider-v1',
+                    'candidates': [({'id': 'a' * 64, 'kind': 'return', 'line': 2, 'column': 4, 'position': 0,
+                                     'from': 'return', 'to': 'None'}, ast.unparse(runner.apply_mutation(tree, 0, 'target')))]}
+        for workers in (1, 4):
+            clock = [0.0]
+            def fake_run(args, **kwargs):
+                duration = 5.158 if kwargs['cwd'].name == 'baseline' else 6
+                if kwargs['timeout'] < duration:
+                    clock[0] += kwargs['timeout']
+                    raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+                clock[0] += duration
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(runner.subprocess, 'run', side_effect=fake_run):
+                result = self.measure(Path(directory), workers=workers, timeout_seconds=5, stage_timeout_seconds=60,
+                                      candidate_provider=provider)
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual(result['effectiveMutantTimeoutSeconds'], 11.316)
+            self.assertEqual(result['mutants'][0]['allocatedSeconds'], 11.316)
+            self.assertEqual(result['counts']['survived'], 1)
+            self.assertEqual(result['counts']['timeout'], 0)
+
+    def test_calibration_never_extends_remaining_stage_or_counts_hanging_mutant_as_killed(self):
+        clock = [0.0]
+        def fake_run(args, **kwargs):
+            if kwargs['cwd'].name == 'baseline':
+                clock[0] += 6
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            self.assertEqual(kwargs['timeout'], 2)
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=8)
+        self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
+        self.assertEqual(result['mutants'][0]['allocatedSeconds'], 2)
+        self.assertEqual(result['counts']['timeout'], 1)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertGreater(result['counts']['notRun'], 0)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertEqual(result['elapsedMs'], 8000)
+        self.assertIn('after 2.000s', result['mutants'][0]['output'])
+        self.assertTrue(all('allocatedSeconds' not in mutant for mutant in result['mutants'][1:]))
+
+    def test_real_fresh_import_cost_no_longer_times_out_every_mutant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, tests = root / 'sample.py', root / 'test_sample.py'
+            source.write_text('import time\ntime.sleep(0.2)\ndef target(x): return x + 1\n', encoding='utf-8')
+            tests.write_text('import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
+                             '    def test_value(self): self.assertEqual(target(3), 4)\n', encoding='utf-8')
+            result = runner.run_mutation_trials(source, tests, max_mutations=0, target_function='target',
+                                               timeout_seconds=.05, stage_timeout_seconds=20, workers=2,
+                                               operator_version='builtin-ast-v1')
+        self.assertEqual(result['baselineStatus'], 'passed', result.get('baseline_output'))
+        self.assertGreaterEqual(result['baselineElapsedMs'], 200)
+        self.assertGreater(result['effectiveMutantTimeoutSeconds'], .05)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['counts']['timeout'], 0)
+        self.assertEqual(result['counts']['killed'], 3)
 
     def test_cold_baseline_uses_only_remaining_stage_time_and_timeout_never_kills(self):
         clock = [0.0]
@@ -231,6 +302,7 @@ class MutationV2Tests(unittest.TestCase):
         self.assertEqual(result['baselineElapsedMs'], 750)
         self.assertEqual(result['elapsedMs'], 3000)
         self.assertEqual(result['baselineStatus'], 'timeout')
+        self.assertNotIn('effectiveMutantTimeoutSeconds', result)
         self.assertEqual(result['counts']['executed'], 0)
         self.assertEqual(result['counts']['killed'], 0)
         self.assertEqual(result['counts']['notRun'], result['counts']['selected'])

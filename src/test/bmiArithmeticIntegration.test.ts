@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { resultArtifactPath } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -40,8 +41,8 @@ test('laboratory unpacked BMI failures hand arithmetic hypotheses to AI and exec
     globalThis.fetch = async (_url, options) => {
         requests++;
         assert.ok(requests <= 2, 'the Writer must revise once from bounded arithmetic evidence');
-        const request = JSON.parse(String(options?.body));
-        assert.doesNotMatch(request.system, /Reviewer|Python unittest Bug Fixer/,
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.doesNotMatch(request.roleInstructions, /Reviewer|Python unittest Bug Fixer/,
             'multiple failing methods use Writer revision; execution mode does not review');
         if (requests === 2) {
             assert.match(request.prompt, /SOURCE-DERIVED CALCULATION HYPOTHESES \(not independently verified\)/);

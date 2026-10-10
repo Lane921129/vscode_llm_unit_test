@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, roundDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -55,10 +56,10 @@ test('numeric observations guide an AI revision which is reviewed before real mu
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
-        else if (request.system.includes('You are the test Reviewer')) {
+        if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+        else if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviews++;
             assert.match(request.prompt, /HOST_VERIFIED_REVIEW_FACTS_V1/);
             assert.match(request.prompt, /"observationVerified":true/);
@@ -70,7 +71,7 @@ test('numeric observations guide an AI revision which is reviewed before real mu
                 action: 'Change the expected value to 23.5 in this assertion.' }] }) : '{"findings":[]}';
             if (reviews === 2) { assert.match(request.prompt, /observed-outcome-contradiction/); }
         }
-        else if (request.system.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
+        else if (request.roleInstructions.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
         else { writers++; if (writers === 2) { assert.match(request.prompt, /VERIFIED_NUMERIC_EVIDENCE_LEDGER_V1/); }
             response = '```python\n' + (writers === 1 ? candidate : corrected) + '\n```'; }
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });

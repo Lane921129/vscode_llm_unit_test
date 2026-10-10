@@ -58,51 +58,70 @@ const PROBE_STRING_LITERAL = String.raw`(?:[rRuU]{0,2})?(?:"(?:\\.|[^"\\\r\n])*"
  * qualification evidence.
  */
 function hasProbeBehaviorAssertions(code: string): boolean {
-    const values = new Map<string, number>();
+    type ProbeValue = { kind: 'result' | 'expected'; value: 0 | 2 };
+    const values = new Map<string, ProbeValue>();
     const matchedCases = new Set<string>();
+    let methodIndent: number | undefined;
     const fixtureTerm = '(?:increment\\(\\s*(?:1|-1)\\s*\\)|[A-Za-z_]\\w*|[20])';
     const assertion = new RegExp(
         '^\\s*self\\.assertEqual\\s*\\(\\s*(' + fixtureTerm + ')\\s*,\\s*(' + fixtureTerm
         + ')(?:\\s*,\\s*' + PROBE_STRING_LITERAL + ')?\\s*\\)\\s*$'
     );
-    const valueOf = (token: string): number | undefined => {
+    const valueOf = (token: string): ProbeValue | undefined => {
         const normalized = token.replace(/\s+/g, '');
         if (normalized === 'increment(1)') {
-            return 2;
+            return { kind: 'result', value: 2 };
         }
         if (normalized === 'increment(-1)') {
-            return 0;
+            return { kind: 'result', value: 0 };
         }
         if (normalized === '2') {
-            return 2;
+            return { kind: 'expected', value: 2 };
         }
         if (normalized === '0') {
-            return 0;
+            return { kind: 'expected', value: 0 };
         }
         return values.get(normalized);
     };
 
     for (const line of code.split(/\r?\n/)) {
+        if (!line.trim() || /^\s*#/.test(line)) { continue; }
+        const indentation = line.match(/^\s*/)?.[0].replace(/\t/g, '        ').length || 0;
+        if (/^\s*(?:def|class)\s/.test(line) || (methodIndent !== undefined && indentation <= methodIndent)) {
+            // Local result bindings cannot certify assertions in another method.
+            values.clear();
+            methodIndent = undefined;
+        }
+        if (/^\s+def test_[A-Za-z_]\w*\(self\)(?:\s*->\s*None)?:\s*$/.test(line)) {
+            methodIndent = indentation;
+            continue;
+        }
+        if (methodIndent === undefined) { continue; }
         const assignment = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*increment\s*\(\s*(-?1)\s*\)\s*$/);
         if (assignment) {
-            values.set(assignment[1], assignment[2] === '1' ? 2 : 0);
+            values.set(assignment[1], { kind: 'result', value: assignment[2] === '1' ? 2 : 0 });
             continue;
         }
         const expectedAssignment = line.match(/^\s*([A-Za-z_]\w*)\s*=\s*([20])\s*$/);
         if (expectedAssignment) {
-            values.set(expectedAssignment[1], Number(expectedAssignment[2]));
+            values.set(expectedAssignment[1], { kind: 'expected', value: expectedAssignment[2] === '2' ? 2 : 0 });
             continue;
         }
+        const unknownAssignment = line.match(/^\s*([A-Za-z_]\w*)\s*=(?!=)/);
+        if (unknownAssignment) { values.delete(unknownAssignment[1]); }
         const match = line.match(assertion);
         if (!match) {
             continue;
         }
         const actual = valueOf(match[1]);
         const expected = valueOf(match[2]);
-        if (actual === 2 && expected === 2) {
+        // Either assertEqual argument may hold the result, but two constants or
+        // two target results never prove the required observed behavior.
+        if (!actual || !expected || actual.kind === expected.kind || actual.value !== expected.value) { continue; }
+        if (actual.value === 2) {
             matchedCases.add('positive');
         }
-        if (actual === 0 && expected === 0) {
+        if (actual.value === 0) {
             matchedCases.add('negative');
         }
     }

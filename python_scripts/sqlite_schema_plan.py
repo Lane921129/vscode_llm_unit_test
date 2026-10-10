@@ -251,6 +251,242 @@ class SchemaPlanner:
         self.candidates = []
         self.diagnostics = []
         self.sources = []
+        self.path_cache = {}
+        self.path_hashes = {}
+        self.path_trees = {}
+        self.path_imports = {}
+        self.path_loading = set()
+        self.path_dependencies = {}
+        self.config_fixtures = {}
+        self.source_mode = set()
+
+    def path_exports(self, file):
+        """A small symbolic interpreter for source-owned path/config declarations.
+
+        It never imports modules, reads application config, or stats resources.
+        Config fallbacks are facts only under an explicit empty INI test fixture,
+        returned with the proposal for approval. Imported sources remain bound.
+        """
+        if file in self.path_loading or file not in self.files:
+            return {}
+        if file in self.path_cache:
+            return self.path_cache[file]
+        self.path_loading.add(file)
+        self.path_dependencies[file] = {file}
+        env = {'__file__': _Value('file', file)}
+        self.path_cache[file] = env
+        try:
+            if self.paths.kind(file) != 'file':
+                return {}
+            with open(file, 'rb') as stream:
+                data = stream.read(MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                return {}
+            self.path_hashes[file] = hashlib.sha256(data).hexdigest()
+            tree = ast.parse(data, filename=file)
+            if sum(1 for _ in ast.walk(tree)) > 100000:
+                return {}
+            self.path_trees[file] = tree
+            # Rebinding stdlib objects or reflective writes defeats static proof.
+            tainted = any(isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del))
+                or isinstance(n, ast.Subscript) and isinstance(n.ctx, (ast.Store, ast.Del))
+                or isinstance(n, (ast.Global, ast.Nonlocal))
+                or isinstance(n, ast.Call) and _name(n.func) in ('exec', 'eval', 'setattr', 'delattr', 'globals', 'locals')
+                for n in ast.walk(tree))
+            helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and not n.decorator_list}
+            for name in list(helpers):
+                if sum(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name == name for n in tree.body) != 1:
+                    helpers.pop(name)
+
+            def imported(node):
+                if tainted:
+                    return {}
+                if node.level:
+                    base = os.path.dirname(file)
+                    for _ in range(node.level - 1):
+                        base = os.path.dirname(base)
+                    bases = [base] if inside(base, self.root) else []
+                else:
+                    bases, anchor = [], os.path.dirname(file)
+                    for _ in range(3):
+                        if inside(anchor, self.root):
+                            bases.append(anchor)
+                        anchor = os.path.dirname(anchor)
+                    bases = list(dict.fromkeys([*bases, self.root]))
+                for base in bases:
+                    kind, paths = self.paths.local_module(base, (node.module or '').split('.'), file)
+                    if kind == 'external':
+                        continue
+                    if kind != 'local' or not paths or paths[-1] not in self.files:
+                        return {}
+                    # Importing a child executes its package initializers first.
+                    # Until their effects are proven, only inert initializers
+                    # can contribute to an exact cross-module path declaration.
+                    for initializer in paths[:-1]:
+                        self.path_exports(initializer)
+                        self.path_dependencies[file].update(self.path_dependencies.get(initializer, {initializer}))
+                        initializer_tree = self.path_trees.get(initializer)
+                        if initializer_tree is None or any(not isinstance(n, ast.Pass) and not (
+                                isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and type(n.value.value) is str)
+                                for n in initializer_tree.body):
+                            self.diagnostic(os.path.relpath(file, self.root).replace('\\', '/'), node, 'package-initialization-not-static')
+                            return {}
+                    dependency = paths[-1]
+                    exports = self.path_exports(dependency)
+                    self.path_dependencies[file].update(self.path_dependencies.get(dependency, {dependency}))
+                    if dependency in self.source_mode:
+                        self.source_mode.add(file)
+                    return exports
+                return {}
+
+            def read(node, scope, stack=()):
+                if node is None or len(stack) > 16:
+                    return None
+                if isinstance(node, ast.Name):
+                    return scope.get(node.id)
+                if isinstance(node, ast.Call):
+                    function = read(node.func, scope, stack)
+                    if function == _Value('config-constructor', None) and not node.args and not node.keywords:
+                        return _Value('config-parser', {})
+                    if isinstance(node.func, ast.Name) and node.func.id == 'str' and 'str' not in scope and len(node.args) == 1 and not node.keywords:
+                        item = read(node.args[0], scope, stack)
+                        return _Value('literal', item.value) if item and item.kind in ('path', 'literal') and type(item.value) is str else None
+                    if (isinstance(node.func, ast.Name) and node.func.id == 'getattr' and 'getattr' not in scope
+                            and len(node.args) == 3 and not node.keywords
+                            and read(node.args[0], scope, stack) == _Value('sys-module', None)
+                            and isinstance(node.args[1], ast.Constant) and node.args[1].value == 'frozen'
+                            and isinstance(node.args[2], ast.Constant) and node.args[2].value is False
+                            and not getattr(sys, 'frozen', False)):
+                        self.source_mode.add(file)
+                        return _Value('literal', False)
+                    if isinstance(node.func, ast.Attribute):
+                        receiver = read(node.func.value, scope, stack)
+                        if node.func.attr == 'exists' and receiver and receiver.kind == 'path' and not stack and not node.args and not node.keywords:
+                            raw = receiver.value
+                            if os.path.dirname(raw) == os.path.dirname(file) and re.fullmatch(r'[\w.-]+\.ini', os.path.basename(raw), re.I):
+                                self.config_fixtures.setdefault(file, {})[os.path.basename(raw)] = ''
+                                return _Value('literal', True)
+                        if node.func.attr == 'get' and receiver and receiver.kind == 'config-parser' and receiver.value.get('fixture'):
+                            if len(node.args) == 2 and all(isinstance(a, ast.Constant) and type(a.value) is str for a in node.args) and len(node.keywords) == 1 and node.keywords[0].arg == 'fallback':
+                                return read(node.keywords[0].value, scope, stack)
+                    if function and function.kind == 'path-helper' and function.value in helpers and function.value not in stack and not node.args and not node.keywords:
+                        helper = helpers[function.value]
+                        if helper.args.args or helper.args.posonlyargs or helper.args.kwonlyargs or helper.args.vararg or helper.args.kwarg:
+                            return None
+                        local = dict(env)
+                        for name in local_bindings(helper):
+                            local.pop(name, None)
+                        return walk(helper.body, local, (*stack, function.value), True)
+                if isinstance(node, ast.Attribute):
+                    base = read(node.value, scope, stack)
+                    if base == _Value('config-module', None) and node.attr == 'ConfigParser':
+                        return _Value('config-constructor', None)
+                    if base and base.kind == 'config-parser' and node.attr in ('get', 'read'):
+                        return _Value('config-method', node.attr)
+                # Replace already interpreted child paths, without evaluating any
+                # source expression. _Planner handles only a lexical allowlist.
+                basic = dict(scope)
+                if isinstance(node, ast.BinOp):
+                    left, right = read(node.left, scope, stack), read(node.right, scope, stack)
+                    if left and right:
+                        basic.update(__schema_left=left, __schema_right=right)
+                        result = self.paths.value(ast.BinOp(left=ast.Name(id='__schema_left'), op=node.op, right=ast.Name(id='__schema_right')), basic, file)
+                        if result is not None:
+                            return result
+                result = self.paths.value(node, {k: v for k, v in scope.items() if isinstance(v, _Value)}, file)
+                if result is None:
+                    # Unknown expressions can escape/mutate a parser through a
+                    # call, container or nested expression, not only Expr calls.
+                    for child in ast.walk(node):
+                        escaped = scope.get(child.id) if isinstance(child, ast.Name) else None
+                        if escaped and escaped.kind == 'config-parser':
+                            escaped.value.clear()
+                return result
+
+            def walk(statements, scope, stack=(), strict=False):
+                for node in statements:
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            name = alias.asname or alias.name.split('.')[0]
+                            kind, _ = self.paths.local_module(os.path.dirname(file), [alias.name], file)
+                            scope[name] = _Value({'pathlib': 'path-module', 'configparser': 'config-module', 'sys': 'sys-module'}.get(alias.name, 'unknown'), None) if kind == 'external' and not tainted else None
+                    elif isinstance(node, ast.ImportFrom):
+                        if any(a.name == '*' for a in node.names):
+                            scope.clear(); continue
+                        exports = imported(node)
+                        for alias in node.names:
+                            value = exports.get(alias.name)
+                            if not node.level and node.module == 'pathlib' and alias.name == 'Path' and not tainted:
+                                kinds = [self.paths.local_module(base, ['pathlib'], file)[0] for base in {self.root, os.path.dirname(file)}]
+                                value = _Value('path-constructor', None) if all(k == 'external' for k in kinds) else None
+                            binding = alias.asname or alias.name
+                            self.path_imports[(file, node.lineno, binding)] = value
+                            scope[binding] = value
+                    elif isinstance(node, ast.FunctionDef):
+                        scope[node.name] = _Value('path-helper', node.name) if node.name in helpers else None
+                    elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                        item = read(node.value, scope, stack)
+                        for target in targets:
+                            if isinstance(target, ast.Name):
+                                scope[target.id] = item
+                    elif isinstance(node, ast.If):
+                        condition = read(node.test, scope, stack)
+                        if condition and condition.kind == 'literal' and type(condition.value) is bool:
+                            result = walk(node.body if condition.value else node.orelse, scope, stack, strict)
+                            if result is not None:
+                                return result
+                        elif strict:
+                            return _Value('unknown', None)
+                        else:
+                            for item in scope.values():
+                                if item and item.kind == 'config-parser':
+                                    item.value.clear()
+                            for child in ast.walk(node):
+                                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                                    scope.pop(child.id, None)
+                    elif isinstance(node, ast.Return):
+                        return read(node.value, scope, stack) or _Value('unknown', None)
+                    elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                        call = node.value
+                        receiver = read(call.func.value, scope, stack) if isinstance(call.func, ast.Attribute) else None
+                        if receiver and receiver.kind == 'config-parser':
+                            if call.func.attr == 'read' and not stack and len(call.args) == 1 and all(k.arg == 'encoding' for k in call.keywords):
+                                filename = read(call.args[0], scope, stack)
+                                name = os.path.basename(filename.value) if filename and filename.kind == 'path' else ''
+                                if filename and os.path.dirname(filename.value) == os.path.dirname(file) and re.fullmatch(r'[\w.-]+\.ini', name, re.I):
+                                    self.config_fixtures.setdefault(file, {})[name] = ''
+                                    receiver.value['fixture'] = name
+                                    continue
+                            receiver.value.clear()
+                        # An opaque consumer may mutate a parser (including all
+                        # aliases), so its previous empty-fixture state expires.
+                        for argument in [*call.args, *(keyword.value for keyword in call.keywords)]:
+                            escaped = read(argument, scope, stack)
+                            if escaped and escaped.kind == 'config-parser':
+                                escaped.value.clear()
+                        if strict:
+                            return _Value('unknown', None)
+                    elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and type(node.value.value) is str:
+                        continue
+                    elif strict:
+                        return _Value('unknown', None)
+                    else:
+                        for item in scope.values():
+                            if item and item.kind == 'config-parser':
+                                item.value.clear()
+                        for child in ast.walk(node):
+                            if isinstance(child, ast.Name) and isinstance(child.ctx, (ast.Store, ast.Del)):
+                                scope.pop(child.id, None)
+                return None
+
+            walk(tree.body, env)
+            return env
+        except (ValueError, SyntaxError, OSError, RecursionError):
+            env.clear()
+            return env
+        finally:
+            self.path_loading.remove(file)
 
     def diagnostic(self, file, node, reason):
         item = {'file': file, 'reason': reason}
@@ -285,6 +521,9 @@ class SchemaPlanner:
                 anchor = os.path.dirname(anchor)
             return any(self.paths.local_module(base, [module], relative)[0] != 'external' for base in bases)
         sqlite_shadow, pathlib_shadow = shadow('sqlite3'), shadow('pathlib')
+        self.path_exports(file)
+        if self.path_hashes.get(file) != digest:
+            self.diagnostic(relative, None, 'source-changed-during-planning'); return
         env, helpers = {'__file__': _Value('file', file)}, {}
         sqlite_aliases = set()
         for statement in tree.body:
@@ -324,6 +563,7 @@ class SchemaPlanner:
         path_tainted = any(isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
                            for node in ast.walk(tree)) or tainted
         mutable_globals = {name for node in ast.walk(tree) if isinstance(node, (ast.Global, ast.Nonlocal)) for name in node.names}
+        incomplete_schema = False
 
         def value(node, local, stack=()):
             if isinstance(node, ast.Name):
@@ -333,6 +573,10 @@ class SchemaPlanner:
                 if receiver == ('sqlite-module', None) and node.attr == 'connect':
                     return ('sqlite-connect', None)
             if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == 'str' and 'str' not in local and len(node.args) == 1 and not node.keywords:
+                    item = value(node.args[0], local, stack)
+                    if isinstance(item, _Value) and item.kind in ('path', 'literal') and type(item.value) is str:
+                        return _Value('literal', item.value)
                 callable_value = value(node.func, local, stack)
                 if callable_value == ('sqlite-connect', None):
                     if len(node.args) != 1 or node.keywords:
@@ -364,7 +608,107 @@ class SchemaPlanner:
             path_env = {key: item for key, item in local.items() if isinstance(item, _Value)}
             return self.paths.value(node, path_env, file)
 
+        def literal_format(node, bindings):
+            if isinstance(node, ast.Constant) and type(node.value) is str:
+                return node.value
+            if not isinstance(node, ast.JoinedStr):
+                return None
+            pieces = []
+            for part in node.values:
+                if isinstance(part, ast.Constant) and type(part.value) is str:
+                    pieces.append(part.value)
+                elif isinstance(part, ast.FormattedValue) and isinstance(part.value, ast.Name) and part.conversion == -1 and part.format_spec is None and part.value.id in bindings:
+                    pieces.append(bindings[part.value.id])
+                else:
+                    return None
+            return ''.join(pieces)
+
+        def migration(call, local):
+            """Recognize an explicit PRAGMA-column guard plus literal ADD COLUMN.
+
+            Names are irrelevant; the receiver, query, comprehension, guard and
+            SQL placeholders must all agree. This is not an arbitrary evaluator.
+            """
+            nonlocal incomplete_schema
+            if not isinstance(call.func, ast.Name) or call.func.id in mutable_globals or local.get(call.func.id) != ('helper', call.func.id) or len(call.args) != 4 or call.keywords:
+                return False
+            helper = helpers[call.func.id]
+            params = [a.arg for a in helper.args.args]
+            body = [n for n in helper.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and type(n.value.value) is str)]
+            if len(params) != 4 or helper.args.posonlyargs or helper.args.kwonlyargs or helper.args.vararg or helper.args.kwarg or len(body) != 2:
+                return False
+            first, guard = body
+            if not (isinstance(first, ast.Assign) and len(first.targets) == 1 and isinstance(first.targets[0], ast.Name)
+                    and isinstance(first.value, ast.Call) and isinstance(first.value.func, ast.Name) and first.value.func.id in helpers
+                    and len(first.value.args) == 2 and not first.value.keywords
+                    and [_name(a) for a in first.value.args] == params[:2]
+                    and isinstance(guard, ast.If) and not guard.orelse and len(guard.body) == 1
+                    and isinstance(guard.test, ast.Compare) and _name(guard.test.left) == params[2]
+                    and len(guard.test.ops) == 1 and isinstance(guard.test.ops[0], ast.NotIn)
+                    and len(guard.test.comparators) == 1 and _name(guard.test.comparators[0]) == first.targets[0].id):
+                return False
+            query_name = first.value.func.id
+            if (query_name in mutable_globals or query_name in local_bindings(helper)
+                    or env.get(query_name) != ('helper', query_name)):
+                return False
+            query = helpers[query_name]
+            qp = [a.arg for a in query.args.args]
+            qb = [n for n in query.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and type(n.value.value) is str)]
+            if (len(qp) != 2 or query.args.posonlyargs or query.args.kwonlyargs or query.args.vararg or query.args.kwarg
+                    or len(qb) != 2 or not isinstance(qb[0], ast.Expr) or not isinstance(qb[0].value, ast.Call) or not isinstance(qb[1], ast.Return)):
+                return False
+            execute, result = qb[0].value, qb[1].value
+            if (_name(execute.func) != qp[0] + '.execute' or len(execute.args) != 1 or execute.keywords
+                    or literal_format(execute.args[0], {qp[1]: '__table__'}) != 'PRAGMA table_info(__table__)'
+                    or not isinstance(result, ast.ListComp) or len(result.generators) != 1):
+                return False
+            generator = result.generators[0]
+            if (not isinstance(generator.target, ast.Name) or generator.ifs or generator.is_async
+                    or not isinstance(generator.iter, ast.Call) or _name(generator.iter.func) != qp[0] + '.fetchall'
+                    or generator.iter.args or generator.iter.keywords or not isinstance(result.elt, ast.Subscript)
+                    or _name(result.elt.value) != generator.target.id or not isinstance(result.elt.slice, ast.Constant)
+                    or type(result.elt.slice.value) is not int or result.elt.slice.value != 1):
+                return False
+            statement = guard.body[0]
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                return False
+            alter = statement.value
+            if _name(alter.func) != params[0] + '.execute' or len(alter.args) != 1 or alter.keywords:
+                return False
+            rendered = literal_format(alter.args[0], dict(zip(params[1:], ['__table__', '__column__', '__definition__'])))
+            if rendered != 'ALTER TABLE __table__ ADD COLUMN __column__ __definition__':
+                return False
+            receiver = value(call.args[0], local)
+            arguments = [value(arg, local) for arg in call.args[1:]]
+            if (not isinstance(receiver, tuple) or receiver[0] not in ('connection', 'cursor') or receiver[1] is None
+                    or any(not isinstance(arg, _Value) or arg.kind != 'literal' or type(arg.value) is not str for arg in arguments)):
+                self.diagnostic(relative, call, 'dynamic-schema-migration'); incomplete_schema = True; return True
+            table_name, column_name, definition = [arg.value for arg in arguments]
+            try:
+                if not IDENTIFIER.fullmatch(table_name) or not IDENTIFIER.fullmatch(column_name):
+                    raise UnsupportedSchema()
+                parsed = parse_ddl('CREATE TABLE IF NOT EXISTS migration (' + column_name + ' ' + definition + ')')
+                if len(parsed) != 1 or len(parsed[0]['columns']) != 1 or parsed[0].get('unique'):
+                    raise UnsupportedSchema()
+                column = parsed[0]['columns'][0]
+                if column.get('primaryKey') or column.get('unique') or column.get('autoIncrement') or column.get('notNull') and column.get('default') is None:
+                    raise UnsupportedSchema()
+            except UnsupportedSchema:
+                self.diagnostic(relative, call, 'unsupported-schema-migration'); incomplete_schema = True; return True
+            owned = [item for item in self.candidates if item['file'] == relative and item['resource']['path'] == receiver[1]['resourcePath']
+                and item['resource'].get('scope') == receiver[1].get('resourceScope') and item['table']['name'] == table_name]
+            if not owned:
+                self.diagnostic(relative, call, 'migration-without-create'); incomplete_schema = True; return True
+            for item in owned:
+                if not any(c['name'] == column_name for c in item['table']['columns']):
+                    if len(item['table']['columns']) >= 32:
+                        self.diagnostic(relative, call, 'unsupported-schema-migration'); incomplete_schema = True; return True
+                    item['table']['columns'].append(column)
+                    item.setdefault('migrationLines', []).append(call.lineno)
+            return True
+
         def walk(statements, local):
+            nonlocal incomplete_schema
             for node in statements:
                 if isinstance(node, ast.Import):
                     for alias in node.names:
@@ -379,7 +723,8 @@ class SchemaPlanner:
                         local[alias.asname or alias.name] = (('sqlite-connect', None)
                             if not node.level and node.module == 'sqlite3' and alias.name == 'connect' and not sqlite_shadow and not tainted
                             else _Value('path-constructor', None)
-                            if not node.level and node.module == 'pathlib' and alias.name == 'Path' and not pathlib_shadow and not path_tainted else None)
+                            if not node.level and node.module == 'pathlib' and alias.name == 'Path' and not pathlib_shadow and not path_tainted
+                            else self.path_imports.get((file, node.lineno, alias.asname or alias.name)))
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     local[node.name] = ('helper', node.name) if node in helpers.values() else None
                 elif isinstance(node, (ast.AugAssign, ast.Delete)):
@@ -397,12 +742,23 @@ class SchemaPlanner:
                                     local.pop(child.id, None)
                 elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                     call = node.value
+                    if migration(call, local):
+                        continue
+                    if isinstance(call.func, ast.Name) and call.func.id in helpers and any(
+                            isinstance(child, ast.Constant) and type(child.value) is str and re.search(r'\b(?:ALTER|DROP)\s+TABLE\b', child.value, re.I)
+                            for child in ast.walk(helpers[call.func.id])):
+                        self.diagnostic(relative, call, 'unsupported-schema-migration')
+                        incomplete_schema = True
+                        continue
                     if not isinstance(call.func, ast.Attribute) or call.func.attr not in ('execute', 'executescript'):
                         continue
                     sql = call.args[0].value if call.args and isinstance(call.args[0], ast.Constant) and type(call.args[0].value) is str else None
                     if sql is None:
                         self.diagnostic(relative, call, 'nonliteral-sql'); continue
                     if not re.search(r'\bCREATE\s+TABLE\b', sql, re.I):
+                        if re.search(r'\b(?:ALTER|DROP)\s+TABLE\b', sql, re.I):
+                            self.diagnostic(relative, call, 'unsupported-schema-migration')
+                            incomplete_schema = True
                         continue
                     receiver = value(call.func.value, local)
                     if not isinstance(receiver, tuple) or receiver[0] not in ('connection', 'cursor'):
@@ -423,8 +779,17 @@ class SchemaPlanner:
                         resource = {'kind': 'sqlite', 'path': receiver[1]['resourcePath']}
                         if 'resourceScope' in receiver[1]:
                             resource['scope'] = receiver[1]['resourceScope']
+                        dependencies = sorted(self.path_dependencies.get(file, {file}) - {file})
+                        evidence = [{'file': os.path.relpath(p, self.root).replace('\\', '/'),
+                            'sourceHash': self.path_hashes[p]} for p in dependencies if p in self.path_hashes]
+                        configs = [{'file': os.path.relpath(p, self.root).replace('\\', '/'),
+                            'sourceHash': self.path_hashes[p], 'name': name, 'text': text}
+                            for p in [file, *dependencies] for name, text in self.config_fixtures.get(p, {}).items()]
                         self.candidates.append({'file': relative, 'sourceHash': digest, 'line': call.lineno,
-                            'connectionLine': receiver[2], 'resource': resource, 'table': table})
+                            'connectionLine': receiver[2], 'resource': resource, 'table': table,
+                            **({'sourceDependencies': evidence} if evidence else {}),
+                            **({'configFixtures': configs} if configs else {}),
+                            **({'pythonSourceMode': True} if file in self.source_mode else {})})
                 elif isinstance(node, (ast.If, ast.For, ast.While, ast.Try, ast.With, ast.AsyncWith)):
                     # Branch-dependent aliases are not facts; do not merge guesses.
                     if any(isinstance(child, ast.Constant) and type(child.value) is str and re.search(r'\bCREATE\s+TABLE\b', child.value, re.I) for child in ast.walk(node)):
@@ -439,6 +804,8 @@ class SchemaPlanner:
             for name in local_bindings(helper):
                 local.pop(name, None)
             walk(helper.body, local)
+        if incomplete_schema:
+            self.candidates[:] = [item for item in self.candidates if item['file'] != relative]
 
 
 def plan_schema(request):

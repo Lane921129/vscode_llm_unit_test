@@ -80,6 +80,29 @@ class ImportFixtures:
                 raise ValueError('Duplicate or invalid import fixture source')
             if hashlib.sha256(Path(filename).read_bytes()).hexdigest() != rule.get('sourceHash'):
                 raise ValueError('Import fixture source changed; rebuild the test setup')
+            if rule.get('pythonSourceMode') is not None and (rule['pythonSourceMode'] is not True or getattr(sys, 'frozen', False)):
+                raise ValueError('Import fixture requires the approved non-frozen Python source runtime')
+            dependencies = rule.get('sourceDependencies', [])
+            if not isinstance(dependencies, list) or len(dependencies) > 64:
+                raise ValueError('Invalid import fixture source dependencies')
+            dependency_names = set()
+            for dependency in dependencies:
+                if (not isinstance(dependency, dict) or set(dependency) - {'file', 'sourceHash', 'resolvedFile'}
+                        or not isinstance(dependency.get('file'), str) or not dependency['file'].endswith('.py')
+                        or os.path.isabs(dependency['file']) or re.search(r'[:\x00-\x1f\x7f]', dependency['file'])
+                        or any(part in ('', '.', '..') for part in re.split(r'[/\\]', dependency['file']))
+                        or not re.fullmatch(r'[a-f0-9]{64}', str(dependency.get('sourceHash', '')))):
+                    raise ValueError('Invalid import fixture source dependency')
+                original_dependency = Path(root, dependency['file'])
+                if any(part.is_symlink() or getattr(part, 'is_junction', lambda: False)() for part in [original_dependency, *original_dependency.parents] if part != Path(root)):
+                    raise ValueError('Import fixture source dependency cannot be a link')
+                target = dependency.get('resolvedFile') or original_dependency
+                if dependency.get('resolvedFile') and (not rule.get('resolvedFile') or not self.plan.get('trialRoot') or not _inside(target, self.plan['trialRoot'])):
+                    raise ValueError('Import fixture dependency escapes mutation trial')
+                key = _absolute(target)
+                if key in dependency_names or not _inside(original_dependency, root) or hashlib.sha256(Path(target).read_bytes()).hexdigest() != dependency['sourceHash']:
+                    raise ValueError('Import fixture source dependency changed; rebuild the test setup')
+                dependency_names.add(key)
             configs = rule.get('configFiles', {})
             entries = rule.get('entryPoints', [])
             entry_lines = rule.get('entryPointLines', {})
@@ -314,6 +337,30 @@ def mutation_environment(environment, trial_root, source_file, copy_bindings):
                 raise ValueError('Mutation fixture dependency changed during copy')
             seen[key] = _absolute(original)
             copy = dict(rule, resolvedFile=str(candidate), sourceHash=digest)
+            if rule.get('sourceDependencies'):
+                rebound = []
+                for dependency in rule['sourceDependencies']:
+                    dep_original = Path(plan['root'], dependency['file']).resolve()
+                    if hashlib.sha256(dep_original.read_bytes()).hexdigest() != dependency['sourceHash']:
+                        raise ValueError('Import fixture source dependency changed before mutation')
+                    destinations = []
+                    for bound_source, bound_destination, bound_package in copy_bindings:
+                        bound_source, bound_destination = Path(bound_source).resolve(), Path(bound_destination).resolve()
+                        if bound_package and dep_original.is_relative_to(bound_source):
+                            destinations.append((bound_destination / dep_original.relative_to(bound_source)).resolve())
+                        elif not bound_package and dep_original == bound_source:
+                            destinations.append(bound_destination)
+                    destinations = list(dict.fromkeys(destinations))
+                    if len(destinations) > 1:
+                        raise ValueError('Ambiguous mutation fixture dependency binding')
+                    if destinations:
+                        copied = destinations[0]
+                        if not copied.is_relative_to(trial_root) or hashlib.sha256(copied.read_bytes()).hexdigest() != dependency['sourceHash']:
+                            raise ValueError('Mutation fixture source dependency changed during copy')
+                        rebound.append(dict(dependency, resolvedFile=str(copied)))
+                    else:
+                        rebound.append(dict(dependency))
+                copy['sourceDependencies'] = rebound
             if rule.get('resources'):
                 if rule.get('resourceSourceHash') != rule.get('sourceHash'):
                     raise ValueError('Isolated resource source approval expired before mutation')

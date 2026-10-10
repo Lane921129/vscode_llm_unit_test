@@ -62,6 +62,7 @@ import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir } from './utils/utils';
 import { mergeTestSnippets } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
+import { buildOllamaPromptEnvelope } from './llm/ollamaPrompt';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { SerialRequestQueue } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
@@ -364,6 +365,7 @@ interface AstContext {
     executable_lines?: number[];
     raised_exceptions?: string[];
     condition_facts?: Array<{ kind: 'comparison' | 'membership' | 'match'; parameter: string; subject: 'value' | 'length'; operator?: string; literal?: string | null; literals?: string[]; line: number }>;
+    dependency_fixture_contract?: Record<string, unknown>;
     traceResult?: BehaviorProbeResult;
     dependencyContexts?: AstContext[];
     dependencyResolution?: ResolvedDependency[];
@@ -841,8 +843,7 @@ async function requestLlmApiUnlocked(
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
         bodyData = {
             model: params.modelName,
-            system: contractedSystemPrompt,
-            prompt: userPrompt,
+            ...buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt),
             stream: false,
             ...(params.requestContextTokens ? { options: { num_ctx: params.requestContextTokens } } : {}),
             ...(expectsJsonObject ? { format: ['review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
@@ -2748,6 +2749,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     baselineTimeoutSeconds: mutationRun.baselineTimeoutSeconds,
                     baselineAllocatedSeconds: mutationRun.baselineAllocatedSeconds,
                     baselineElapsedMs: mutationRun.baselineElapsedMs,
+                    mutantTimeoutPolicy: mutationRun.mutantTimeoutPolicy,
+                    configuredMutantTimeoutSeconds: mutationRun.configuredMutantTimeoutSeconds,
+                    effectiveMutantTimeoutSeconds: mutationRun.effectiveMutantTimeoutSeconds,
                     stageTimeoutSeconds: mutationRun.stageTimeoutSeconds,
                     scoreAvailable: false
                 });

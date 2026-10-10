@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -62,26 +63,26 @@ class Cases(unittest.TestCase):
     globalThis.fetch = async (_url, options) => {
         requests++;
         assert.ok(requests <= 8, 'a rejected rewrite must not start unbounded model retries');
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.system?.includes('You are the test Reviewer')) {
+        if (request.roleInstructions?.includes('You are the test Reviewer')) {
             reviews++; reviewPrompts.push(request.prompt);
             assert.doesNotMatch(request.prompt, /self\.assertGreaterEqual\(status/,
                 'the weakened candidate must be rejected before review');
             response = JSON.stringify({ findings: reviews === 1 ? [{ category: 'missing-scenario', test_line: 'L5',
                 reason: 'This case uses a positive height; a separate zero-height input is not tested.',
                 action: 'Add a separate zero-height exception case while preserving this passing normal-input case and its exact assertions.' }] : [] });
-        } else if (request.system?.includes('dependency_behaviors')) {
+        } else if (request.roleInstructions?.includes('dependency_behaviors')) {
             response = '{"dependency_behaviors":[]}';
-        } else if (request.system?.includes('Python unittest Bug Fixer')) {
+        } else if (request.roleInstructions?.includes('Python unittest Bug Fixer')) {
             assert.equal(scenario, 'dropped');
             fixes++;
             // A real execution failure exhausts the ordinary Tier 2 repair
             // allowance; Reviewer unavailability never triggers a downgrade.
             response = '```python\ndef test_zero_height(self):\n    self.assertIsNone(calculate_bmi(70, 0))\n```';
-        } else if (request.system?.includes('Analyst after successful')) {
+        } else if (request.roleInstructions?.includes('Analyst after successful')) {
             assert.fail('one measurement round must not request an unused quality plan');
-        } else if (request.system?.includes('Revise the current tests')) {
+        } else if (request.roleInstructions?.includes('Revise the current tests')) {
             revisions++; writerPrompts.push(request.prompt);
             const code = scenario === 'weakened' ? revisions === 1 ? weakened : complete
                 : revisions === 1 ? wrongException : complete;

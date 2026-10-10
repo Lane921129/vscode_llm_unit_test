@@ -15,6 +15,10 @@ export interface ImportFixtureRule {
     entryPointSourceHash?: string;
     resources?: TestResourceSpec[];
     resourceSourceHash?: string;
+    /** Source evidence used to resolve a proposed path/schema; expires on drift. */
+    sourceDependencies?: Array<{ file: string; sourceHash: string }>;
+    /** A fallback path was proved under a non-frozen Python interpreter. */
+    pythonSourceMode?: true;
 }
 export interface ImportFixturePlan {
     schemaVersion: 'import-fixtures-v1';
@@ -55,7 +59,7 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
         if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error(localize("匯入測試設定格式錯誤。")); }
         const rule = value as ImportFixtureRule;
         if (Object.keys(rule).some(key => !['file', 'mkdir', 'configFiles', 'entryPoints', 'entryPointLines', 'entryPointSourceHash',
-            'resources', 'resourceSourceHash'].includes(key))
+            'resources', 'resourceSourceHash', 'sourceDependencies', 'pythonSourceMode'].includes(key))
             || typeof rule.file !== 'string' || path.isAbsolute(rule.file) || !rule.file.endsWith('.py')
             || rule.file.split(/[\\/]/).some(part => !part || part === '..' || part === '.')
             || (rule.mkdir !== undefined && typeof rule.mkdir !== 'boolean')) { throw new Error(localize("匯入測試設定來源或操作無效。")); }
@@ -82,6 +86,29 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
             throw new Error(localize("初始化替身行號必須綁定已宣告入口及有限的正整數來源行。"));
         }
         const sourceHash = hash(fs.readFileSync(file));
+        const sourceDependencies = rule.sourceDependencies ?? [];
+        if (!Array.isArray(sourceDependencies) || sourceDependencies.length > 64 || rule.pythonSourceMode !== undefined && rule.pythonSourceMode !== true) {
+            throw new Error('Invalid isolated setup source evidence.');
+        }
+        const dependencyNames = new Set<string>();
+        for (const dependency of sourceDependencies) {
+            if (!dependency || typeof dependency !== 'object' || Object.keys(dependency).some(key => !['file', 'sourceHash'].includes(key))
+                || typeof dependency.file !== 'string' || !dependency.file.endsWith('.py') || path.isAbsolute(dependency.file)
+                || /[:\u0000-\u001f\u007f]/.test(dependency.file) || dependency.file.split(/[\\/]/).some(part => !part || part === '.' || part === '..')
+                || typeof dependency.sourceHash !== 'string' || !/^[a-f0-9]{64}$/.test(dependency.sourceHash)) {
+                throw new Error('Invalid isolated setup source dependency.');
+            }
+            let current = root;
+            for (const part of dependency.file.split(/[\\/]/)) {
+                current = path.join(current, part);
+                if (fs.lstatSync(current).isSymbolicLink()) { throw new Error('Isolated setup source dependency cannot be a link.'); }
+            }
+            const canonical = fs.realpathSync(current), key = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+            if (dependencyNames.has(key) || hash(fs.readFileSync(canonical)) !== dependency.sourceHash) {
+                throw new Error('Isolated setup source dependency changed; review the setup again.');
+            }
+            dependencyNames.add(key);
+        }
         const resources = rule.resources === undefined ? [] : validateTestResources(rule.resources);
         if (resources.length && (typeof rule.resourceSourceHash !== 'string'
             || !/^[a-f0-9]{64}$/.test(rule.resourceSourceHash) || rule.resourceSourceHash !== sourceHash)
@@ -100,6 +127,8 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
             ...(Object.keys(entryPointLines).length ? { entryPointLines: Object.fromEntries(Object.entries(entryPointLines)
                 .map(([name, lines]) => [name, [...new Set(lines)].sort((a, b) => a - b)])) } : {}),
             ...(rule.entryPointSourceHash ? { entryPointSourceHash: rule.entryPointSourceHash } : {}),
+            ...(sourceDependencies.length ? { sourceDependencies: structuredClone(sourceDependencies) } : {}),
+            ...(rule.pythonSourceMode ? { pythonSourceMode: true as const } : {}),
             ...(resources.length ? { resources, resourceSourceHash: rule.resourceSourceHash } : {}) };
     });
     validateResourcePlanConflicts(rules, root);

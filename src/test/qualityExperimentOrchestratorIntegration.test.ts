@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -52,18 +53,18 @@ class ModelCases(unittest.TestCase):
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.system?.includes('You are the test Reviewer')) {
+        if (request.roleInstructions?.includes('You are the test Reviewer')) {
             roles.push('reviewer'); response = '{"findings":[]}';
-        } else if (request.system?.includes('Analyst after successful')) {
+        } else if (request.roleInstructions?.includes('Analyst after successful')) {
             roles.push('quality-analyst');
             const focus = JSON.parse(request.prompt.match(/FOCUS\n([^\n]+)/)[1]);
             response = JSON.stringify({ tasks: [{ evidence_id: focus.id,
                 hypothesis: 'Return-only assertions do not distinguish the observed accumulated entries.',
                 scenario: "Construct Ledger(), then increase('entry', 3) twice and assert the observed entries after each call.",
                 verification: 'Run the preserved original test and new state test, obtain Reviewer approval, then rerun the same mutant set.' }] });
-        } else if (request.system?.includes('dependency_behaviors')) {
+        } else if (request.roleInstructions?.includes('dependency_behaviors')) {
             roles.push('planning'); response = '{"dependency_behaviors":[]}';
         } else {
             roles.push('writer'); response = '```python\n' + (roles.filter(role => role === 'writer').length === 1 ? weak : strong) + '\n```';

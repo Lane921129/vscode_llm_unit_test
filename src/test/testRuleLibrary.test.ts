@@ -90,8 +90,8 @@ test('evidence-bound rule selection keeps dependency mocking only when dependenc
 
 test('database isolation rule uses driver evidence rather than application naming', () => {
     const ids = inferTestRuleIdsFromCode(
-        'def add_record(value):\n    return value',
-        { file_imports: [{ module: 'sqlite3', name: null }] }
+        'def add_record(value):\n    return driver.connect(value)',
+        { calls: ['driver.connect'], file_imports: [{ module: 'sqlite3', name: null, bound_name: 'driver' }] }
     );
     const ordinary = inferTestRuleIdsFromCode('def database_label(value):\n    return value');
 
@@ -100,6 +100,37 @@ test('database isolation rule uses driver evidence rather than application namin
     assert.ok(!ordinary.includes('database_state_isolation'));
     assert.ok(getTestRuleCards(ids).find(card => card.id === 'database_state_isolation')?.rules
         .some(rule => rule.includes('Never connect to the application default')));
+});
+
+test('unused module-wide drivers and deterministic datetime parsing do not force external fixtures', () => {
+    const context = { calls: ['Moment.strptime', 'parsed.strftime'], dependencies: [{ name: 'Moment' }],
+        file_imports: [{ module: 'datetime', name: 'datetime', alias: 'Moment', bound_name: 'Moment' },
+            { module: 'sqlite3', name: null, bound_name: 'sqlite3' }, { module: 'requests', name: null, bound_name: 'requests' }] };
+    const rules = inferTestRuleIdsFromCode('def format_value(value):\n    parsed = Moment.strptime(value, "%Y")\n    return parsed.strftime("%m")', context);
+    for (const rule of ['datetime_freezing', 'database_state_isolation', 'http_client_mocking',
+        'mock_external_dependency', 'observation_mock_isolation', 'caller_dependency_contract']) {
+        assert.ok(!rules.includes(rule), rule);
+    }
+    assert.ok(inferTestRuleIdsFromCode('def read(value):\n    return Moment.custom(value)', {
+        ...context, calls: ['Moment.custom'] }).includes('mock_external_dependency'), 'unknown operations retain conservative dependency guidance');
+});
+
+test('clock rules follow actual standard-library call bindings and never a formatting name alone', () => {
+    for (const [call, imported] of [
+        ['Moment.now', { module: 'datetime', name: 'datetime', bound_name: 'Moment' }],
+        ['dates.date.today', { module: 'datetime', name: null, bound_name: 'dates' }],
+        ['clock', { module: 'time', name: 'time', bound_name: 'clock' }],
+        ['timer.monotonic', { module: 'time', name: null, bound_name: 'timer' }]
+    ] as const) {
+        assert.ok(inferTestRuleIdsFromCode(`def read():\n    return ${call}()`, {
+            calls: [call], file_imports: [imported] }).includes('datetime_freezing'), call);
+    }
+    for (const source of ['def label():\n    return "datetime.now()"', 'def label(value):\n    # time.time()\n    return value',
+        'def parse(value):\n    return datetime.strptime(value, "%Y")']) {
+        assert.ok(!inferTestRuleIdsFromCode(source).includes('datetime_freezing'), source);
+    }
+    assert.ok(!inferTestRuleIdsFromCode('def read(datetime):\n    return datetime.now()', {
+        calls: ['datetime.now'], file_imports: [] }).includes('datetime_freezing'), 'an injected receiver name is not a standard-library clock binding');
 });
 
 test('class instance rule is not injected for static or class-bound methods', () => {

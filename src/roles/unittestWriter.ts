@@ -116,19 +116,14 @@ export function getSystemPrompt(
     if (strategy === 'small') {
         const formatBlock = `Output format:\n\`\`\`python\n(your unittest code)\n\`\`\``;
 
-        let prompt = `You are a Python unit test writer. Write a unittest.TestCase for the given function.
+        let prompt = `You are a Python unit test writer. Return one complete runnable unittest file, no prose.
 
 ${formatBlock}
 
-Rules:
-1. Start with import unittest. Import the target function using its actual module name (e.g. from my_module import target_func). NEVER write literal "from MODULE import FUNCTION".
-2. Each test method starts with test_ and uses self.assert*().
-3. Do NOT copy or redefine the source function. Write test methods only.
-4. No pytest. No top-level assert.
-5. CRITICAL: If an input Raises an Exception (e.g. ValueError), you MUST use \`with self.assertRaises(ExceptionType):\` block. Do NOT assign the result of a call that raises an exception.
-   - WRONG: \`with self.assertRaises(ValueError, 'msg'):\` ← TypeError — NEVER pass a string as second arg to assertRaises!
-6. ALWAYS use Verified Real Execution Results (if provided) to determine expected behavior. Do NOT guess return values or exception types.
-7. Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.${isolatedResourceSystemRule()}`;
+Import unittest, target and test helpers explicitly. Use the exact target module/class binding, unittest.TestCase, test_ methods and self.assert*; no pytest or top-level assert.
+Keep the real target; never copy/redefine/mock it or its owner class. Assertions require exact Verified Real Execution Results, a proven source path or same-test controlled behavior; never guess outputs or exception types.
+For an evidenced exception use \`with self.assertRaises(ExceptionType):\`, never a message string as its second argument. Do not call dependencies to calculate expected values.
+Patch external dependencies at source-shown use points, with fresh per-test state; no direct test network/file/shell/dynamic execution or shared SQLite.${isolatedResourceSystemRule()}`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;
@@ -254,7 +249,7 @@ export function getUserPrompt(
     if (strategy === 'small' && semanticEvidence && typeof semanticEvidence !== 'string') {
         return buildCompactWriterContext({ module: moduleName, name: funcName,
             source: astContext?.code || code, context: astContext, evidence: semanticEvidence,
-            focus: focusContexts, budgetTokens });
+            focus: focusContexts, budgetTokens, scenarioCaseIds: astContext?.writerScenarioCaseIds });
     }
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n${formatTargetContract(moduleName, funcName, astContext?.args || [], astContext)}\n`

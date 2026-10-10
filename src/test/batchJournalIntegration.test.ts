@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, resultDataDirectory, createResultLayout, roundDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -119,13 +120,13 @@ class Cases(unittest.TestCase):
 `;
         const roles: string[] = [];
         globalThis.fetch = async (_url, options) => {
-            const request = JSON.parse(String(options?.body));
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             let response: string;
-            if (request.system.includes('You are the test Reviewer')) {
+            if (request.roleInstructions.includes('You are the test Reviewer')) {
                 roles.push('reviewer'); response = '{"findings":[]}';
-            } else if (request.system.includes('Analyst after successful')) {
+            } else if (request.roleInstructions.includes('Analyst after successful')) {
                 roles.push('analyst-quality'); response = '{"tasks":[]}';
-            } else if (request.system.includes('dependency_behaviors')) {
+            } else if (request.roleInstructions.includes('dependency_behaviors')) {
                 roles.push('analyst-planning'); response = '{"dependency_behaviors":[]}';
             } else {
                 roles.push('writer');

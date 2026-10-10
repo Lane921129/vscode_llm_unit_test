@@ -16,6 +16,42 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class ImportFixtureTests(unittest.TestCase):
+    def test_schema_dependency_approval_expires_in_workers_and_mutation_copies(self):
+        from import_fixtures import ImportFixtures, mutation_environment
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'app'
+            trial = Path(directory) / 'trial'
+            root.mkdir(); trial.mkdir()
+            file, config = root / 'neutral.py', root / 'settings.py'
+            file.write_text('def target(value): return value + 1\n', encoding='utf-8')
+            config.write_text('DB = "neutral.sqlite"\n', encoding='utf-8')
+            dependency = {'file': 'settings.py', 'sourceHash': hashlib.sha256(config.read_bytes()).hexdigest()}
+            plan = self.plan(root, [{'file': 'neutral.py', 'sourceDependencies': [dependency], 'pythonSourceMode': True}])
+            environment = {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan)}
+            with patch.dict(os.environ, environment), ImportFixtures():
+                pass
+            with patch.dict(os.environ, environment), patch('sys.frozen', True, create=True):
+                with self.assertRaisesRegex(ValueError, 'non-frozen'):
+                    ImportFixtures()
+            copied, copied_config = trial / 'neutral.py', trial / 'settings.py'
+            copied.write_bytes(file.read_bytes()); copied_config.write_bytes(config.read_bytes())
+            bindings = [(file, copied, False), (config, copied_config, False)]
+            rebound = mutation_environment(environment, trial, file, bindings)
+            rebound_plan = json.loads(rebound['LLM_UNIT_TEST_IMPORT_FIXTURES'])
+            self.assertEqual(rebound_plan['rules'][-1]['sourceDependencies'][0]['resolvedFile'], str(copied_config.resolve()))
+            with patch.dict(os.environ, rebound), ImportFixtures():
+                pass
+            copied_config.write_text('DB = "changed.sqlite"\n', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'dependency changed during copy'):
+                mutation_environment(environment, trial, file, bindings)
+            with patch.dict(os.environ, rebound):
+                with self.assertRaisesRegex(ValueError, 'dependency changed'):
+                    ImportFixtures()
+            config.write_text('DB = "new.sqlite"\n', encoding='utf-8')
+            with patch.dict(os.environ, environment):
+                with self.assertRaisesRegex(ValueError, 'dependency changed'):
+                    ImportFixtures()
+
     def test_line_bound_entry_preserves_later_calls_and_rebases_through_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

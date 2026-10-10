@@ -326,6 +326,43 @@ export function getTestRuleCards(ruleIds: string[]): TestGenerationRuleCard[] {
         .filter((rule): rule is TestGenerationRuleCard => rule !== undefined);
 }
 
+type TimeRuleContext = { calls?: string[]; file_imports?: Array<{
+    module?: string | null; name?: string | null; bound_name?: string | null; alias?: string | null;
+}> };
+
+/** AST call bindings distinguish a clock read from parsing an explicit value. */
+function canonicalLibraryCall(call: string, context?: TimeRuleContext): string {
+    const root = call.split('.')[0];
+    const imported = context?.file_imports?.find(item => (item.bound_name || item.alias || item.name || item.module?.split('.')[0]) === root);
+    if (!imported) { return call; }
+    const canonical = imported.name && imported.name !== '*' ? `${imported.module}.${imported.name}` : imported.module || root;
+    return canonical + call.slice(root.length);
+}
+
+export function currentClockCalls(source: string, context?: TimeRuleContext): string[] {
+    // When AST calls are available they are authoritative, including an empty
+    // set. The legacy syntax fallback strips comments/string literals first.
+    const code = source.replace(/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#[^\r\n]*)/g,
+        match => match.replace(/[^\r\n]/g, ' '));
+    const calls = context?.calls ?? [...code.matchAll(/\b((?:datetime\.)?(?:datetime|date)\.(?:now|utcnow|today)|time\.(?:time|time_ns|monotonic|monotonic_ns|perf_counter|perf_counter_ns|process_time|process_time_ns))\s*\(/g)].map(match => match[1]);
+    return calls.filter(call => {
+        if (context?.calls && context.file_imports && !context.file_imports.some(item =>
+            (item.bound_name || item.alias || item.name || item.module?.split('.')[0]) === call.split('.')[0])) { return false; }
+        return /^(?:datetime\.(?:datetime\.)?(?:now|utcnow|today)|datetime\.date\.today|date\.today|time\.(?:time|time_ns|monotonic|monotonic_ns|perf_counter|perf_counter_ns|process_time|process_time_ns))$/.test(canonicalLibraryCall(call, context));
+    });
+}
+
+function deterministicTimeDependency(dependency: unknown, context?: TimeRuleContext): boolean {
+    if (!dependency || typeof dependency !== 'object' || !('name' in dependency) || typeof dependency.name !== 'string') { return false; }
+    const root = dependency.name.split('.')[0];
+    const binding = context?.file_imports?.find(item => (item.bound_name || item.alias || item.name || item.module?.split('.')[0]) === root);
+    if (binding?.module !== 'datetime') { return false; }
+    const calls = (context?.calls || []).filter(call => call === root || call.startsWith(root + '.'));
+    // Narrow operation-based exemption; unresolved methods still receive normal
+    // dependency guidance. This does not certify outputs or suppress safety gates.
+    return calls.length > 0 && calls.every(call => /^datetime\.(?:(?:datetime|date|time)\.)?(?:strptime|strftime|fromisoformat|isoformat)$/.test(canonicalLibraryCall(call, context)));
+}
+
 /**
  * A conservative, domain-neutral safety net for when the semantic model is
  * unavailable or omits an obvious language construct.  It only reacts to
@@ -340,7 +377,7 @@ export function inferTestRuleIdsFromCode(
         is_generator?: boolean;
         calls?: string[];
         dependencies?: unknown[];
-        file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
+        file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null; alias?: string | null }>;
         condition_facts?: Array<{ kind?: string; parameter?: string; subject?: string; polarity?: string }>;
     }
 ): string[] {
@@ -366,12 +403,15 @@ export function inferTestRuleIdsFromCode(
     const needsInstance = context?.method_kind === 'instance' || context?.method_kind === 'property';
     const bindingUnknown = (context?.class_name || context?.class_context) && !context?.method_kind;
     if (needsInstance || bindingUnknown) { ids.add('class_method_testing'); }
-    if ((context?.dependencies?.length || 0) > 0) {
+    if ((context?.dependencies || []).some(dependency => !deterministicTimeDependency(dependency, context))) {
         ids.add('mock_external_dependency');
         ids.add('observation_mock_isolation');
         ids.add('caller_dependency_contract');
     }
-    const importedModuleText = (context?.file_imports || [])
+    const importedModuleText = (context?.file_imports || []).filter(item => {
+        const binding = item.bound_name || item.alias || item.name || item.module?.split('.')[0];
+        return !binding || (context?.calls || []).some(call => call === binding || call.startsWith(binding + '.'));
+    })
         .map(item => `${item.module || ''} ${item.name || ''}`)
         .join(' ');
     if (/\b(?:sqlite3|sqlalchemy|psycopg(?:2|3)?|pymysql|mysql\.connector|asyncpg)\b/i.test(`${source}\n${importedModuleText}`)) {
@@ -381,7 +421,7 @@ export function inferTestRuleIdsFromCode(
     if (/\basync\s+def\b|\bawait\b/.test(source)) { ids.add('async_coroutine_testing'); }
     if (context?.is_generator === true) { ids.add('generator_result_testing'); }
     if (/\bopen\s*\(|\.(?:read|write|read_text|write_text)\s*\(/.test(source)) { ids.add('file_io_mocking'); }
-    if (/\b(?:datetime|date|time|timezone)\b|\.(?:now|today)\s*\(/.test(source)) { ids.add('datetime_freezing'); }
+    if (currentClockCalls(source, context).length) { ids.add('datetime_freezing'); }
     if (/^\s*(?:async\s+)?with\s+.+:/m.test(source)) { ids.add('context_manager_testing'); }
     if (/^\s*async\s+with\s+.+:/m.test(source)) { ids.add('async_context_manager_testing'); }
 
@@ -422,7 +462,7 @@ export function mergeEvidenceBoundTestRuleIds(
         is_generator?: boolean;
         calls?: string[];
         dependencies?: unknown[];
-        file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null }>;
+        file_imports?: Array<{ module?: string | null; name?: string | null; bound_name?: string | null; alias?: string | null }>;
         condition_facts?: Array<{ kind?: string; parameter?: string; subject?: string; polarity?: string }>;
     }
 ): string[] {

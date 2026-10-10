@@ -52,6 +52,17 @@ test('restores only valid non-secret model metadata', () => {
         modelProfileKey({ envType: 'cloud', modelName: 'gemma-4-31b-it' }));
 });
 
+test('expires pre-provenance qualification results while retaining the saved model selection', () => {
+    const old = { ...localProfile, qualificationVersion: 'python-unittest-v6' };
+    const restored = restoreModelProfiles([old]);
+    assert.strictEqual(restored[0].testGenerationReady, false);
+    assert.strictEqual(restored[0].modelName, localProfile.modelName);
+    assert.strictEqual(restored[0].contextLength, localProfile.contextLength);
+    assert.strictEqual(findModelProfile([old], old)?.testGenerationReady, false);
+    assert.strictEqual(qualificationForSelectedProfile([old], old, false), false);
+    assert.strictEqual(qualificationForSelectedProfile([localProfile], localProfile, false), true);
+});
+
 test('does not let an unprobed model inherit another model\'s qualification', () => {
     assert.strictEqual(qualificationForSelectedProfile([localProfile], {
         envType: 'local', modelName: 'unprobed-model'

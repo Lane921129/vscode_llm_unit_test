@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, roundDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -56,11 +57,11 @@ class Cases(unittest.TestCase):
     const unsupportedWrong = valid.replace('        self.assertEqual',
         '        with self.subTest():\n            self.assertEqual').replace('(20.0,', '(19.0,');
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
-        else if (request.system.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
-        else if (request.system.includes('Analyst after successful')) {
+        if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+        else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+        else if (request.roleInstructions.includes('Analyst after successful')) {
             quality++;
             analystEvidence.push(request.prompt);
             const focus = JSON.parse(request.prompt.match(/FOCUS\n([^\n]+)/)[1]);
@@ -69,7 +70,7 @@ class Cases(unittest.TestCase):
                 scenario: 'Use the exact newly observed boundary inputs and preserve earlier passing cases.',
                 verification: 'Verify each exact result by execution, have the Reviewer approve, then measure the complete mutant set.' }] });
         }
-        else if (request.system.includes('Python unittest Bug Fixer')) { fixer++; response = '```python\npass\n```'; }
+        else if (request.roleInstructions.includes('Python unittest Bug Fixer')) { fixer++; response = '```python\npass\n```'; }
         else {
             writers++;
             let candidate = writers <= 2 ? unsupportedWrong : valid;

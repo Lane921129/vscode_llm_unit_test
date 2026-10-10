@@ -75,6 +75,58 @@ test('baseline timing survives persistence without extending the shared stage bu
     assert.equal(legacy.baselineTimeoutSeconds, undefined, 'historical reports have no invented timing');
 });
 
+test('baseline-calibrated mutant timeout and real allocation are verified and survive persistence', () => {
+    const raw = { ...builtin(), baselineTimeoutSeconds: 20, baselineAllocatedSeconds: 20, baselineElapsedMs: 5158,
+        mutantTimeoutPolicy: 'baseline-calibrated-v1', configuredMutantTimeoutSeconds: 5, effectiveMutantTimeoutSeconds: 11.316,
+        mutants: builtin().mutants.map(mutant => ({ ...mutant, allocatedSeconds: 11.316 })) };
+    const parsed = parseBuiltinMutationRun(raw, context);
+    assert.equal(parsed.status, 'complete', parsed.diagnostic);
+    assert.equal(parsed.configuredMutantTimeoutSeconds, 5);
+    assert.equal(parsed.effectiveMutantTimeoutSeconds, 11.316);
+    assert.equal(parsed.mutants[0].allocatedSeconds, 11.316);
+    const stored = readStoredMutationRun(JSON.stringify(parsed), context);
+    assert.equal(stored.ok, true);
+    if (stored.ok) { assert.equal(stored.run.effectiveMutantTimeoutSeconds, 11.316); }
+    for (const changes of [
+        { mutantTimeoutPolicy: 'unknown' }, { mutantTimeoutPolicy: undefined }, { configuredMutantTimeoutSeconds: undefined },
+        { configuredMutantTimeoutSeconds: 0 }, { configuredMutantTimeoutSeconds: -1 }, { configuredMutantTimeoutSeconds: Infinity },
+        { effectiveMutantTimeoutSeconds: undefined }, { effectiveMutantTimeoutSeconds: 5 }, { effectiveMutantTimeoutSeconds: 1000 },
+        { effectiveMutantTimeoutSeconds: Infinity }, { baselineElapsedMs: undefined },
+    ]) {
+        const invalid = parseBuiltinMutationRun({ ...raw, ...changes }, context);
+        assert.equal(invalid.status, 'failed', JSON.stringify(changes));
+        assert.equal(mutationScore(invalid), null);
+    }
+    for (const allocation of [0, -1, NaN, Infinity, 12, undefined]) {
+        const invalid = parseBuiltinMutationRun({ ...raw, mutants: raw.mutants.map(mutant => ({ ...mutant, allocatedSeconds: allocation })) }, context);
+        assert.equal(invalid.status, 'failed');
+        assert.equal(invalid.diagnostic, 'Invalid mutation trial allocation');
+    }
+    const clipped = { ...raw, stageTimeoutSeconds: 8, baselineAllocatedSeconds: 8,
+        mutants: raw.mutants.map(mutant => ({ ...mutant, allocatedSeconds: 2 })) };
+    assert.equal(parseBuiltinMutationRun(clipped, { ...context, stageTimeoutSeconds: 8 }).status, 'complete',
+        'effective cap may exceed the stage but actual allocation may not');
+    assert.equal(parseBuiltinMutationRun({ ...clipped, mutants: raw.mutants }, { ...context, stageTimeoutSeconds: 8 }).status, 'failed');
+    const legacy = parseBuiltinMutationRun(builtin(), context);
+    assert.equal(legacy.status, 'complete');
+    assert.equal(legacy.effectiveMutantTimeoutSeconds, undefined);
+
+    const invalidValues = [
+        { ...parsed, effectiveMutantTimeoutSeconds: 1000 },
+        { ...parsed, baselineElapsedMs: undefined },
+        { ...parsed, configuredMutantTimeoutSeconds: 0 },
+        { ...parsed, mutants: parsed.mutants.map(mutant => ({ ...mutant, allocatedSeconds: 12 })) },
+        { ...parsed, mutants: parsed.mutants.map(mutant => ({ ...mutant, allocatedSeconds: undefined })) },
+    ];
+    const fixtures = [parsed, legacy, ...invalidValues];
+    const python = path.resolve(process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
+    const script = 'import json,sys;sys.path.insert(0,"python_scripts");from quality_policy import read_stored_mutation_run;'
+        + 'data=json.load(sys.stdin);print(json.dumps([read_stored_mutation_run(v,data["context"])["ok"] for v in data["runs"]]))';
+    const run = spawnSync(python, ['-B', '-c', script], { input: JSON.stringify({ context, runs: fixtures }), encoding: 'utf8', timeout: 20000 });
+    assert.equal(run.status, 0, run.stderr || run.error?.message);
+    assert.deepEqual(JSON.parse(run.stdout), fixtures.map(fixture => readStoredMutationRun(fixture, context).ok));
+});
+
 test('persisted camelCase mutation results are revalidated and malformed evidence stays distinct from failed measurement', () => {
     const original = parseBuiltinMutationRun(builtin(), context);
     const saved = readStoredMutationRun(JSON.stringify(original), context);

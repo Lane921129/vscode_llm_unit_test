@@ -1,4 +1,6 @@
 {
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description": "支持此設定的來源檔案與 SHA-256；任一來源變動即撤銷批准。",
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description": "此批准設定限一般 Python 原始碼程序；封裝執行檔會在載入應用前被拒絕。",
   "contributes.commands.5.title": "LLM Unit Test：設定隔離測試資源",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resourceSourceHash.description": "隔離資源清單核准時的來源 SHA-256；來源變更須重新預覽。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.description": "暫存資源：空白目錄、測試文字或 SQLite schema／測試資料。專案旁、精確外部及 Windows UNC 虛擬路徑均先預覽確認，不存取原內容，格式見 docs/isolated-test-resources.md。",

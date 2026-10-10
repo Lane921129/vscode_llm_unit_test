@@ -1,4 +1,6 @@
 {
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description": "Source files and SHA-256 hashes that justify this fixture. Any change invalidates the approval.",
+  "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description": "This approved fixture requires a regular Python source process. Frozen executables are rejected before application loading.",
   "contributes.commands.5.title": "LLM Unit Test: Configure isolated test resources",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resourceSourceHash.description": "Source SHA-256 approved for the resource declaration; changed source requires a new preview.",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.description": "Temporary resources: empty directories, test text, or SQLite schemas/seed rows. Review project-parent, exact external or Windows UNC virtual paths before applying. Original contents are never accessed. See docs/isolated-test-resources.md.",

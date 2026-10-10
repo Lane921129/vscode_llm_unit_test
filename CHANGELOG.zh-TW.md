@@ -4,6 +4,21 @@
 
 ## 2026-10-10
 
+### 車輛全批第二輪修復：提示預算、實際 schema 與單筆突變時限
+
+- 針對 14:40 批次的 212 個目標重新分類；198 失敗、6 無突變候選、4 保留舊成果、3 審查受阻、1 完整通過。模組預檢成功不代表函式所需 schema 或候選品質就緒。
+- Writer 刪除無關的 module-wide import 語境、相同規則重複文字，限制 optional examples 佔用；保留完整目標與必要 setup／觀測。純日期轉換不再誤觸 clock freezing。新增保守 AST receiver 契約，明列來源消費的 connection、cursor、方法回傳路徑；unknown 不猜，不提供 expected 或 patch 授權。
+- Schema planner 支援來源可證明的新 DB 資源、本機 connection helper、ConfigParser fallback 與新增欄位；fallback 所需空白設定 fixture 併入批准預覽，不讀取／覆寫原設定。跨來源摘要與一般 Python 程序條件納入批准及每 worker 核對；未知套件初始化、副作用、rebind 與不保真 SQL 保持診斷。
+- 同版車輛 8 來源的靜態規劃得到 20 候選、去重後 18 提案；3 個隔離 DB 各 6 表。真實 fresh worker 12 次查詢成功，原資料未讀寫、lease 均回收；此驗證只證明隔離 schema 可供應用查詢，不代表模型已完成整批。
+- Reviewer 增加同候選 AST／執行事實支持的 unbound import/name、已有 mock assertion 與相同斷言替換診斷；無效回覆仍須有界重審，不冒充批准。
+- 成功 baseline 後校準每 mutant 時限為 `max(設定值, baseline × 2 + 1 秒)`，仍受原 stage deadline；保存設定／校準／分配欄位，中英文報告與兩種語言的證據驗證器同步。新增真實冷啟動測試，原 0.05 秒上限不足載入 0.2 秒模組的情境，修正後 3 個 mutant 均完成。
+- 修正資格探針把「呼叫目標卻只比較常數」算合格的缺口：每個固定案例必須把真正目標結果與獨立固定 expected 連到同一斷言；保留安全變數、反向 assertion 與舊式同值 fixture，相同結果互相比較或變數重綁不構成證據。另拒絕巢狀、同名覆寫或未執行範圍內的測試，runner 要求至少執行一個案例。資格升為 `python-unittest-v7`，撤回舊版 verified；已儲存模型與金鑰不因此移除。
+- 修正本機 Ollama 模板只讀 `.Prompt` 時遺失角色 system 指令：正式請求把完整角色契約與使用者證據依原預算順序合併一次，空白 system 抑制 Modelfile 預設回填；不改原模板、格式、context 或驗證門檻，也不依模型名稱分支。整合回歸直接檢查真實傳輸 prompt，文字可見性不冒充模型生成品質。
+- F5 正式 SecretStorage 確認可取得 `gemma-4-31b-it`；探索成功但三次最小生成仍為 HTTP 500。依使用者指示測試實際本機 `codegemma:2b`（服務規格回報 3B、completion/insert）；一般指令回覆不穩定，加入完整骨架／檔案起始提示後取得 1 個通過正式結構、AST 與隔離執行的 seed，不代表 Reviewer、突變或整批已通過。
+- 2026-10-11 收尾驗證：Node 全套 789／789、核心 Mocha 15／15 通過；Python 全套 535 項，533 通過、2 略過，跨磁碟機項目另於不同磁碟暫存環境補驗 1／1 通過，symbolic link 權限案例仍略過。TypeScript、lint、生產建置、Webview 語法、tracked／可達歷史密鑰掃描與差異檢查通過。
+- 前次 Node 在宿主預設暫存路徑出現路徑過長／隔離子程序失敗而中止；同版 schema 測試改用短暫存路徑與 UTF-8 後 7／7 通過，最終全套亦使用此環境。Python 首次編碼失敗後以 UTF-8 重跑全套；上述通過數指修正執行環境後的新完整執行，不把失敗嘗試與補驗合併成零失敗。
+- 真實本機車輛批次保留 8 檔／212 目標，在 30 分鐘截止時為 178 失敗、1 取消、33 未開始；7 模組載入、0 預檢阻擋、1154／1154 清理成功，但全部角色請求停在 Analyst，沒有 Writer／Reviewer／突變。此批為傳輸修正前 baseline；修正後固定 Analyst 對照雖確認完整契約可見，仍回覆無效 JSON。小模型全角色及車輛整批尚未驗收通過。
+
 ### 修復車輛批次的 schema、角色契約與突變冷啟動
 
 - Writer 增加明確 import、私有 helper、alias 使用點及 connection／cursor／context manager 形狀指引；修訂採專用完整證據，只去除完整且相同的 source／current test 重複。最終提示超預算由統一請求檢查記錄為 prompt-budget，停止而不誤分 unknown 或降 Tier；不增加模型名稱特例。

@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -59,10 +60,10 @@ class Cases(unittest.TestCase):
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.system.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
-        else if (request.system.includes('You are the test Reviewer')) {
+        if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[]}'; }
+        else if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviews++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             if (scenario === 'invalid') {
@@ -73,9 +74,9 @@ class Cases(unittest.TestCase):
                     reason: 'The expected tuple structure should be explicit in this assertion.',
                     action: 'Use assertTupleEqual for the verified tuple results while preserving all current input cases.' }] });
             }
-        } else if (request.system.includes('Python unittest Bug Fixer')) {
+        } else if (request.roleInstructions.includes('Python unittest Bug Fixer')) {
             fixes++; throw Error('passing candidates must not request method repair');
-        } else if (request.system.includes('Revise the current tests')) {
+        } else if (request.roleInstructions.includes('Revise the current tests')) {
             revisions++;
             assert.equal(scenario, 'quality');
             assert.match(request.prompt, /assertTupleEqual/);

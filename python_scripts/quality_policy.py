@@ -152,6 +152,24 @@ def read_stored_mutation_run(raw, context):
     if raw.get('baselineStatus') not in ('passed', 'failed', 'timeout', 'error', 'not-run') \
             or raw['baselinePassed'] != (raw['baselineStatus'] == 'passed'):
         return failure
+    timing = ('baselineTimeoutSeconds', 'baselineAllocatedSeconds', 'baselineElapsedMs')
+    if any(key in raw for key in timing):
+        if any(not (_positive_number(raw.get(key)) or type(raw.get(key)) in (int, float) and raw[key] == 0)
+               for key in timing) \
+                or not _positive_number(raw['baselineTimeoutSeconds']) or not _integer(raw['baselineElapsedMs']) \
+                or raw['baselineAllocatedSeconds'] > raw['baselineTimeoutSeconds'] \
+                or ('stageTimeoutSeconds' in context and raw['baselineAllocatedSeconds'] > context['stageTimeoutSeconds']) \
+                or (raw['baselineStatus'] not in ('not-run', 'error') and raw['baselineAllocatedSeconds'] == 0):
+            return failure
+    calibrated = any(key in raw for key in ('mutantTimeoutPolicy', 'configuredMutantTimeoutSeconds', 'effectiveMutantTimeoutSeconds'))
+    if calibrated:
+        if raw.get('mutantTimeoutPolicy') != 'baseline-calibrated-v1' or not raw['baselinePassed'] \
+                or not _integer(raw.get('baselineElapsedMs')) \
+                or not _positive_number(raw.get('configuredMutantTimeoutSeconds')) \
+                or not _positive_number(raw.get('effectiveMutantTimeoutSeconds')) \
+                or raw['effectiveMutantTimeoutSeconds'] != max(raw['configuredMutantTimeoutSeconds'],
+                                                               (2 * raw['baselineElapsedMs'] + 1000) / 1000):
+            return failure
     counts = raw.get('counts')
     fields = ('available', 'selected', 'executed', 'notRun', 'killed', 'survived', 'timeout', 'error')
     if type(counts) is not dict or any(key not in counts or not (key == 'available' and counts[key] is None)
@@ -185,6 +203,14 @@ def read_stored_mutation_run(raw, context):
                 or ('output' in item and type(item['output']) is not str):
             return failure
         if raw['operatorSetVersion'] != 'builtin-ast-v1' and item['status'] == 'KILLED' and not item.get('killedBy'):
+            return failure
+        if 'allocatedSeconds' in item:
+            allocation = item['allocatedSeconds']
+            if not _positive_number(allocation) or item['status'] == 'NOT_RUN' \
+                    or (calibrated and allocation > raw['effectiveMutantTimeoutSeconds']) \
+                    or ('stageTimeoutSeconds' in context and allocation > context['stageTimeoutSeconds']):
+                return failure
+        elif calibrated and item['status'] in ('KILLED', 'SURVIVED', 'TIMEOUT'):
             return failure
         if 'killedBy' in item:
             ids_of_failures = item['killedBy']

@@ -60,6 +60,7 @@ OPERATOR_SET_VERSION = 'builtin-ast-v1'
 FUNCTION_SCOPE_VERSION = 'selected-function-body-v1'
 MODULE_SCOPE_VERSION = 'module-ast-v1'
 CODE_CHANGE_MAX_CHARS = 6000
+MUTANT_TIMEOUT_POLICY = 'baseline-calibrated-v1'
 
 
 def mutation_code_change(before_source, after_source):
@@ -615,8 +616,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             raise ValueError(f'{label} must be a finite positive number')
     started = time.monotonic()
     deadline = started + stage_timeout_seconds if stage_timeout_seconds is not None else None
-    # The first fresh interpreter pays import/cold-start cost independently of
-    # each mutant. This allowance never extends the shared stage deadline.
+    # Every isolated trial starts a fresh interpreter. First measure the real
+    # baseline cost; it must not be larger than every mutant's execution cap.
+    # Neither baseline nor calibrated trial limits extend the stage deadline.
     baseline_timeout_seconds = max(20, timeout_seconds)
     source_file = Path(source_path).resolve()
     test_file = Path(test_path).resolve()
@@ -722,7 +724,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             identity = json.dumps([operator_version, result['scopeVersion'], source_hash, scope_name, candidate, variant_hash],
                                   sort_keys=True, separators=(',', ':'))
             record = {**candidate, 'id': candidate['id'] if candidate_provider is not None else hashlib.sha256(identity.encode('utf-8')).hexdigest()}
-            for runtime_field in ('status', 'output', 'killedBy', 'testFailures', 'elapsedMs'):
+            for runtime_field in ('status', 'output', 'killedBy', 'testFailures', 'elapsedMs', 'allocatedSeconds'):
                 record.pop(runtime_field, None)
             if not isinstance(record['id'], str) or not re.fullmatch(r'[a-f0-9]{64}', record['id']) or record['id'] in seen_ids:
                 raise ValueError('Candidate provider IDs must be distinct SHA-256 values')
@@ -744,7 +746,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     candidates = candidates[:max_mutations] if max_mutations else candidates
     result['total'] = result['counts']['selected'] = result['counts']['notRun'] = len(candidates)
 
-    def trial_timeout(limit=timeout_seconds):
+    def trial_timeout(limit):
         if deadline is None:
             return limit
         return max(0, min(limit, deadline - time.monotonic()))
@@ -832,6 +834,14 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
 
         result['baseline_passed'] = True
         result['baselineStatus'] = 'passed'
+        # Use only a passed baseline, not slow or timed-out mutants, to set the
+        # same execution cap for sequential and concurrent workers. Two times
+        # the observed interpreter/import/test duration plus one second allows
+        # scheduling jitter without an arbitrary global timeout increase.
+        effective_timeout_seconds = max(timeout_seconds, (2 * result['baselineElapsedMs'] + 1000) / 1000)
+        result.update(mutantTimeoutPolicy=MUTANT_TIMEOUT_POLICY,
+                      configuredMutantTimeoutSeconds=timeout_seconds,
+                      effectiveMutantTimeoutSeconds=effective_timeout_seconds)
         result['mutants'] = [{**candidate, 'status': 'NOT_RUN', 'output': ''} for candidate, _ in candidates]
 
         def execute_candidate(index):
@@ -846,7 +856,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             except (OSError, ValueError) as error:
                 return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
                         'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
-            allocated_seconds = trial_timeout()
+            allocated_seconds = trial_timeout(effective_timeout_seconds)
             if allocated_seconds <= 0:
                 return None
             trial_result_path = mutant_root / 'runner-result.json'
@@ -877,12 +887,15 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 output = (completed.stdout + completed.stderr).strip()[-500:]
             except subprocess.TimeoutExpired as error:
                 status = 'TIMEOUT'
-                output = f'Mutant timed out (per-trial limit {timeout_seconds}s; shared stage budget applies): {error}'
+                output = (f'Mutant timed out after {allocated_seconds:.3f}s '
+                          f'(baseline-calibrated limit {effective_timeout_seconds:.3f}s; '
+                          f'configured minimum {timeout_seconds}s; shared stage budget applies): {error}')
             except OSError as error:
                 status = 'ERROR'
                 output = str(error)
 
             record = {**candidate, 'status': status, 'output': output,
+                      'allocatedSeconds': allocated_seconds,
                       'importFixtures': detail.get('importFixtures') if detail else None,
                       'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
             if status == 'KILLED':

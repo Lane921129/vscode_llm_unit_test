@@ -1,3 +1,4 @@
+import { readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, resultArtifactPath } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -39,8 +40,8 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         return originalSpawn(command, args, options);
     };
     globalThis.fetch = async (_url, options) => {
-        const request = JSON.parse(String(options?.body)); requests.push(request);
-        assert.ok(!/You are the test Reviewer|SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.system));
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body))); requests.push(request);
+        assert.ok(!/You are the test Reviewer|SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.roleInstructions));
         if (changeSource) { fs.appendFileSync(file, '\n# source changed\n'); }
         if (cancel) { handlers.get('llm-unit-test.abortTest')!(); }
         const response = replies.length > 1 ? replies.shift()! : replies[0];
@@ -74,7 +75,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         assert.equal(passed.knowledge.qualityAssessment, null); assert.equal(passed.knowledge.coverage, null);
         assert.equal(passed.knowledge.mutationScore, null); assert.equal(passed.knowledge.reviewStatus, 'deferred');
         assert.equal(presentOutcome(passed.knowledge).kind, 'executed');
-        assert.equal(requests.length, 1); assert.match(requests[0].system, /EXECUTION_VERIFICATION_V1/);
+        assert.equal(requests.length, 1); assert.match(requests[0].roleInstructions, /EXECUTION_VERIFICATION_V1/);
         assert.equal(fs.readFileSync(file, 'utf8'), source);
         assert.ok(messages.some(message => message.outcome?.kind === 'executed'));
         const baseline = JSON.parse(fs.readFileSync(path.join(passed.directory, 'execution_baseline.json'), 'utf8'));

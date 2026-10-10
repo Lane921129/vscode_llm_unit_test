@@ -2,6 +2,7 @@ import ast
 import hashlib
 import json
 import sys
+from dependency_fixture_contract import build_dependency_fixture_contract
 
 
 def unparse(node):
@@ -857,6 +858,10 @@ def extract_info(filepath, func_name):
 
         referenced_globals = [module_globals[name] for name in sorted(loaded_names & module_globals.keys())]
         local_contexts, retrieval = retrieve_local_helpers(tree, func_node, lines)
+        target_source = source_for(lines, func_node)
+        module_bindings = set(imported_symbols) | set(module_globals) | {
+            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        }
 
         print(json.dumps({
             'name': func_node.name,
@@ -879,7 +884,8 @@ def extract_info(filepath, func_name):
             'executable_lines': executable_body_lines(func_node),
             'raised_exceptions': raised_exception_names(func_node),
             'condition_facts': branch_condition_facts(func_node, set(args)),
-            'code': source_for(lines, func_node)
+            'dependency_fixture_contract': build_dependency_fixture_contract(func_node, target_source, func_name, module_bindings),
+            'code': target_source
         }, ensure_ascii=False))
     except Exception as error:
         print(json.dumps({'error': str(error)}, ensure_ascii=False))

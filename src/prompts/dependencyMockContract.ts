@@ -8,22 +8,57 @@ export const TEST_IMPORT_GUIDANCE = 'Import test helpers (patch/Mock aliases) in
     + 'Use explicit target imports, never wildcard imports: underscore-prefixed targets are not imported by *. '
     + 'Patch the binding read by the target, preserving import aliases; never patch the selected target or its owner class.';
 
-/** Display existing AST bindings, not guessed patch permissions or return values. */
-export function formatDependencyMockContract(module: string, context?: any, allowedMockTargets?: readonly string[]): string {
+const TOPOLOGY_LEGEND = 'sourceConsumption steps: return_value = preceding call result; member = attribute; context-enter = source-proven with only. '
+    + 'Keep each recorded receiver; never add a return_value or __enter__ layer. Unknown steps remain unknown.';
+
+/** A conservative relevance filter, not a Python resolver or patch permission check.
+ * Keep unknown/star bindings and identifier mentions even in strings. This can
+ * retain extra context, but never removes a binding merely because it is used
+ * through a string or in constructor setup. Without source, retain everything.
+ */
+export function relevantSourceImports(context?: any): any[] {
     const imports: any[] = context?.file_imports || [];
+    if (typeof context?.code !== 'string' || !context.code.trim()) { return imports; }
+    const setup = [context.code, JSON.stringify(context.class_context || null),
+        JSON.stringify(context.property_context || null), JSON.stringify(context.referenced_globals || []),
+        JSON.stringify(context.callerContexts || []), JSON.stringify(context.dependency_fixture_contract || null)].join('\n');
+    const identifiers = new Set(setup.match(/[\p{L}_][\p{L}\p{N}_]*/gu) || []);
+    return imports.filter(item => {
+        const binding = item.bound_name || item.alias || item.name || item.module?.split('.')[0];
+        return !binding || binding === '*' || identifiers.has(binding);
+    });
+}
+
+/** Display existing AST bindings, not guessed patch permissions or return values. */
+export function formatDependencyMockContract(module: string, context?: any, allowedMockTargets?: readonly string[],
+    includeTopology = true): string {
+    const imports = relevantSourceImports(context);
     const calls: string[] = (context?.calls || []).filter((call: unknown): call is string => typeof call === 'string');
     const bindings = imports.map(item => ({
         import: formatSourceImport(item),
         binding: item.bound_name || item.alias || item.name || item.module?.split('.')[0],
     })).filter(item => item.import);
-    if (!bindings.length && !calls.length && !allowedMockTargets?.length) { return ''; }
+    const topology = includeTopology ? context?.dependency_fixture_contract : undefined;
+    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return ''; }
     return 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
         + JSON.stringify({ targetModule: module, imports: bindings, sourceCalls: calls,
+            ...(topology ? { sourceConsumption: topology } : {}),
             ...(allowedMockTargets ? { suppliedUsePoints: allowedMockTargets } : {}) })
-        + '\nFor a module-level from-import alias, patch target_module.alias; for a module import alias, patch target_module.alias.member. '
-        + 'These are binding rules, not permission to invent paths. Check source scope/rebindings; locals and constructor-injected objects are not module patch targets. '
+        + '\nPatch source-shown use points: from-import alias => target_module.alias; module alias => target_module.alias.member. '
+        + 'Check scope/rebindings; locals and constructor-injected objects are not module patch targets. '
         + (allowedMockTargets ? 'Supplied use points are setup hints, not an exhaustive whitelist; verify every patch against the source binding. ' : 'No patch list was supplied; source imports alone do not prove a patch is allowed. ')
+        + (topology ? TOPOLOGY_LEGEND + ' '
+            : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
         + 'A configured mock alone is not an assertion: assert the real target result or the source-shown dependency call with controlled arguments.';
+}
+
+/** This optional generation block is indivisible: identity, all flows/diagnostics and their legend travel together. */
+export function formatDependencyTopology(context?: any): string {
+    const topology = context?.dependency_fixture_contract;
+    if (!topology) { return ''; }
+    return 'SOURCE CONSUMPTION TOPOLOGY (source setup only, not an output oracle or patch permission):\n'
+        + JSON.stringify({ sourceConsumption: topology })
+        + '\n' + TOPOLOGY_LEGEND;
 }
 
 export function formatSourceImport(item: any): string {

@@ -21,6 +21,11 @@ test('baseline diagnostics distinguish the configured cap from the remaining sha
             assert.match(text, /killed/);
             if (language === 'en') { assert.doesNotMatch(text, /[\u4e00-\u9fff]/); }
             assert.equal(renderMutationBaselineTiming({ baselineStatus: 'not-run' }), '');
+            const calibrated = renderMutationBaselineTiming({ baselineStatus: 'passed', baselineTimeoutSeconds: 20,
+                baselineAllocatedSeconds: 20, baselineElapsedMs: 5158, mutantTimeoutPolicy: 'baseline-calibrated-v1',
+                configuredMutantTimeoutSeconds: 5, effectiveMutantTimeoutSeconds: 11.316 });
+            for (const value of ['5.00', '11.32']) { assert.ok(calibrated.includes(value)); }
+            if (language === 'en') { assert.doesNotMatch(calibrated, /[\u4e00-\u9fff]/); }
         }
     } finally { setLanguage('zh-tw'); }
 });
