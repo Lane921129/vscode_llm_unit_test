@@ -166,6 +166,18 @@ export function renderMutationCodeTable(mutants: NonNullable<TargetReportSummary
 }
 
 /** Attribution comes only from the guarded runner's structured unittest result. */
+export function renderMutationBaselineTiming(run: Pick<MutationRun,
+    'baselineStatus' | 'baselineTimeoutSeconds' | 'baselineAllocatedSeconds' | 'baselineElapsedMs'>): string {
+    if (![run.baselineTimeoutSeconds, run.baselineAllocatedSeconds, run.baselineElapsedMs]
+        .every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0)) { return ''; }
+    return '\n' + localize('### 突變基線執行\n\n')
+        + localize('狀態：{0}；冷啟動上限：{1} 秒；本輪剩餘預算內實際分配：{2} 秒；耗時：{3} 秒。\n\n',
+            reportCell(run.baselineStatus), run.baselineTimeoutSeconds!.toFixed(2),
+            run.baselineAllocatedSeconds!.toFixed(2), (run.baselineElapsedMs! / 1000).toFixed(2))
+        + localize('基線通過只允許開始突變；基線失敗或逾時不算 killed，也沒有有效突變分數。\n');
+}
+
+/** Attribution comes only from the guarded runner's structured unittest result. */
 export function renderMutationDiagnostics(mutants: MutationRun['mutants'], elapsedMs?: number): string {
     if (!mutants.some(m => m.elapsedMs !== undefined || m.killedBy?.length)) { return ''; }
     return '\n' + localize('### 突變執行診斷\n\n')

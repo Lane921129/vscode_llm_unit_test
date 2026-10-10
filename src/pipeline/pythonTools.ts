@@ -9,6 +9,7 @@ export const PYTHON_TOOLS = {
     trace: 'dynamic_tracer.py',
     preflight: 'module_preflight.py',
     initializationPlan: 'plan_import_initialization.py',
+    sqliteSchemaPlan: 'sqlite_schema_plan.py',
     environment: 'environment_probe.py',
     installer: 'package_installer.py',
     scaffold: 'mock_scaffold_generator.py',

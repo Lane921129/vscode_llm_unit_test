@@ -10,6 +10,7 @@ import { createImportFixturePlan, ImportFixtureRule, selectImportFixtureRules } 
 import { resourceSpecKey } from '../pipeline/isolatedResources';
 import { inspectProjectImports, ImportCheck, ImportCheckTarget, verifyImportProposal } from './projectImportCheck';
 import { ImportInitializationCandidate, readPlannedInitializationCandidate } from './importSetupProposal';
+import { planSqliteSchemas } from './schemaPlanning';
 
 export interface InitializationSource { file: string; sourceHash: string }
 const hash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -110,7 +111,7 @@ export async function inspectPreparedProjectImports(root: string, python: string
     const observed = diagnostics.some((item: { reason: string }) => item.reason === 'dynamic-directory')
         ? await inspectProjectImports(root, python, targets, directory, rules, log, boundRoot) : undefined;
     verifyInitializationSources(root, sources);
-    const proposedRules = structuredClone(observed?.proposedRules || selected);
+    let proposedRules = structuredClone(observed?.proposedRules || selected);
     const proposals: ImportInitializationCandidate[] = [...(observed?.proposals || [])];
     for (const raw of value.candidates) {
         const proposal = readPlannedInitializationCandidate(root, raw);
@@ -118,19 +119,34 @@ export async function inspectPreparedProjectImports(root: string, python: string
             && source.sourceHash === proposal.sourceHash)) { throw invalidPlan(); }
         if (mergeInitializationProposal(proposedRules, proposal)) { proposals.push(proposal); }
     }
+    const schema = await planSqliteSchemas(root, python, sources, proposedRules, directory);
+    proposedRules = schema.proposedRules;
+    const cell = (text: string) => text.replace(/[\r\n]/g, ' ').replace(/[\\`*_[\]<>|]/g, '\\$&');
+    const schemaReport = [
+        ...(schema.proposals.length || schema.diagnostics.length ? ['',
+            localize('SQLite schema 提案只採用可保真表示的明確 DDL；批准後每個 worker 建立全新資料庫，不執行應用程式初始化或複製正式資料。'),
+            '[schema_plan.json](schema_plan.json)', ''] : []),
+        ...schema.proposals.map(proposal => `- ${cell(proposal.file)}:${proposal.line} — sqlite-schema / ${cell(proposal.table.name)}`),
+        ...schema.diagnostics.map(item => `- ${cell(item.file)}${item.line ? ':' + item.line : ''} — `
+            + localize('SQLite schema 診斷：{0}；請在同一來源宣告精確資料庫資源，或提供可保真表示的結構化 schema。', item.reason)), ''
+    ];
     fs.writeFileSync(path.join(directory, 'initialization_plan.json'), JSON.stringify({
         schemaVersion: value.schemaVersion, complete: value.complete, sources, proposals, diagnostics,
+        schemaProposals: schema.proposals, schemaDiagnostics: schema.diagnostics,
         guardedObservation: !!observed,
         note: 'Static proposals and observed blockers retain distinct evidence; no proposed settings were applied.'
     }, null, 2));
-    if (!proposals.length) {
+    if (!proposals.length && !schema.proposals.length) {
         const check = observed || await inspectProjectImports(root, python, targets, directory, rules, log, boundRoot);
         verifyInitializationSources(root, sources);
         check.initializationSources = sources;
+        check.schemaProposals = schema.proposals; check.schemaDiagnostics = schema.diagnostics;
+        if (schema.diagnostics.length) { fs.appendFileSync(path.join(directory, 'import_check.md'), schemaReport.join('\n')); }
         return check;
     }
     const check: ImportCheck = { root, python, directory, fixtureId: actual?.id || null,
         planningSources: sources, proposedRules, proposedPlan: createImportFixturePlan(root, proposedRules), proposals,
+        schemaProposals: schema.proposals, schemaDiagnostics: schema.diagnostics,
         rows: files.map(file => ({ file: path.relative(root, file).replace(/\\/g, '/'), status: 'blocked',
             stage: 'initialization-plan', issue: { kind: 'other', issue: 'setup-confirmation-required',
                 advice: observed ? localize('初始化清單待確認；已完成一次隔離診斷，尚未套用新設定。')
@@ -150,8 +166,9 @@ export async function inspectPreparedProjectImports(root: string, python: string
     fs.writeFileSync(path.join(directory, 'import_check.md'), [localize('# 載入前初始化清單'), '',
         observed ? localize('初始化清單待確認；已完成一次隔離診斷，尚未套用新設定。')
             : localize('初始化清單待確認；尚未執行模組載入。'), '',
-        localize('已彙整 {0} 個初始化項目；確認後先建立暫存資源與入口替身，再檢查模組載入。', proposals.length), '',
+        localize('已彙整 {0} 個初始化項目；確認後先建立暫存資源與入口替身，再檢查模組載入。', proposals.length + schema.proposals.length), '',
         ...proposals.map(proposal => `- ${proposal.file.replace(/[\\`*_[\]<>|]/g, '\\$&')}:${proposal.line} — ${proposal.kind} / ${proposal.operation}`), '',
+        ...schemaReport,
         ...(observed ? ['[observed_import_check.md](observed_import_check.md)', ''] : []),
         localize('靜態候選不是已觀測錯誤；動態路徑、未知呼叫與資料庫 schema 仍須明確證據。'), ''
     ].join('\n'));

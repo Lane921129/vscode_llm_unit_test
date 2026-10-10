@@ -163,15 +163,19 @@ def build_review_facts(payload):
         raise ValueError('test-facts-budget')
     aliases = {}
     imports = []
+    import_statements = []
     rebound = set()
     wildcard_import = False
     for node in tree.body:
         if isinstance(node, ast.Import):
             for item in node.names:
+                import_statements.append({'line': node.lineno, 'module': item.name, 'wildcard': False})
                 binding = item.asname or item.name.split('.')[0]
                 aliases[binding] = item.name if item.asname else binding
                 imports.append({'line': node.lineno, 'binding': binding, 'origin': item.name})
         elif isinstance(node, ast.ImportFrom) and not node.level:
+            import_statements.append({'line': node.lineno, 'module': node.module or '',
+                                      'wildcard': any(item.name == '*' for item in node.names)})
             for item in node.names:
                 if item.name == '*':
                     wildcard_import = True
@@ -215,6 +219,10 @@ def build_review_facts(payload):
         if len(cls.bases) != 1 or resolve(cls.bases[0], {}) not in ('unittest.TestCase', 'unittest.IsolatedAsyncioTestCase'):
             continue
         classes.append({'line': cls.lineno, 'name': cls.name, 'kind': 'unittest-harness'})
+        base_binding = dotted(cls.bases[0]).split('.')[0]
+        for imported in imports:
+            if imported['binding'] == base_binding:
+                imported['harnessUseLines'] = [*imported.get('harnessUseLines', []), cls.lineno]
         overrides = {node.name for node in cls.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith('test_')}
         for node in cls.body:
             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
@@ -257,6 +265,10 @@ def build_review_facts(payload):
                     if base[0] == 'result' and type(index) is int:
                         return ('result', base[1], base[2] + [index])
                 if isinstance(node, ast.Call) and resolve(node.func, local) == target:
+                    binding = dotted(node.func).split('.')[0]
+                    for imported in imports:
+                        if imported['binding'] == binding:
+                            imported['targetUseLines'] = sorted({*imported.get('targetUseLines', []), node.lineno})
                     if any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):
                         return ('result', None, [])
                     try:
@@ -372,8 +384,9 @@ def build_review_facts(payload):
             methods.append(facts)
     return {'schemaVersion': 'review-test-facts-v1', 'runId': payload['runId'], 'sourceHash': payload['sourceHash'],
             'target': payload['target'], 'module': payload['module'], 'testHash': hashlib.sha256(code.encode()).hexdigest(),
-            'executionVerified': payload.get('executionVerified') is True, 'imports': imports, 'classes': classes, 'methods': methods,
-            'limitations': 'Static facts cover directly resolved unittest constructs, straight-line literal target calls and default patch-created mock call assertions. Mock assertions prove presence only, not return requirements or coverage. Unknown or unexecuted paths are not observations.'}
+            'executionVerified': payload.get('executionVerified') is True, 'imports': imports,
+            'importStatements': import_statements, 'classes': classes, 'methods': methods,
+            'limitations': 'Import statements prove syntax/presence only; wildcard exports and rebound bindings remain unknown. Static facts cover directly resolved unittest constructs, straight-line literal target calls and default patch-created mock call assertions. Mock assertions prove presence only, not return requirements or coverage. Unknown or unexecuted paths are not observations.'}
 
 
 if __name__ == '__main__':

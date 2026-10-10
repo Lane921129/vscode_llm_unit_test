@@ -65,6 +65,10 @@ export interface MutationRun extends MutationContext {
     status: 'complete' | 'partial' | 'failed' | 'no-candidates';
     baselinePassed: boolean;
     baselineStatus: 'passed' | 'failed' | 'timeout' | 'error' | 'not-run';
+    /** Cold-start cap and actual allocation within the original shared stage budget. */
+    baselineTimeoutSeconds?: number;
+    baselineAllocatedSeconds?: number;
+    baselineElapsedMs?: number;
     counts: MutationCounts;
     mutants: MutationRecord[];
     /** A sample may have a score without constituting complete measurement. */
@@ -208,6 +212,16 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
     if (!record(value.excluded) || ['noop', 'duplicate', 'invalid'].some(field => !integer((value.excluded as Record<string, unknown>)[field]))) {
         return fail('Invalid excluded mutation counts');
     }
+    const timingFields = ['baselineTimeoutSeconds', 'baselineAllocatedSeconds', 'baselineElapsedMs'] as const;
+    if (timingFields.some(field => value[field] !== undefined)) {
+        if (timingFields.some(field => typeof value[field] !== 'number' || !Number.isFinite(value[field]) || Number(value[field]) < 0)
+            || Number(value.baselineTimeoutSeconds) <= 0 || !integer(value.baselineElapsedMs)
+            || Number(value.baselineAllocatedSeconds) > Number(value.baselineTimeoutSeconds)
+            || (context.stageTimeoutSeconds !== undefined && Number(value.baselineAllocatedSeconds) > context.stageTimeoutSeconds)
+            || (value.baselineStatus !== 'not-run' && Number(value.baselineAllocatedSeconds) === 0 && value.baselineStatus !== 'error')) {
+            return fail('Invalid mutation baseline timing');
+        }
+    }
     return { ok: true, run: { ...context, targetScope: { ...value.targetScope } as unknown as MutationScope,
         schemaVersion: 1, engine, ...state, baselinePassed: value.baseline_passed,
         operatorSetVersion: value.operatorSetVersion, scopeVersion,
@@ -215,6 +229,9 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         engineVersion: typeof value.engineVersion === 'string' && /^[0-9][\w.+-]{0,60}$/.test(value.engineVersion) ? value.engineVersion : undefined,
         workers: integer(value.workers) && value.workers >= 1 && value.workers <= 4 ? value.workers : undefined,
         elapsedMs: integer(value.elapsedMs) ? value.elapsedMs : undefined,
+        baselineTimeoutSeconds: value.baselineTimeoutSeconds as number | undefined,
+        baselineAllocatedSeconds: value.baselineAllocatedSeconds as number | undefined,
+        baselineElapsedMs: value.baselineElapsedMs as number | undefined,
         candidateSetId: value.candidateSetId as string | null, candidateIds: [...candidateIds],
         baselineStatus: value.baselineStatus as MutationRun['baselineStatus'], counts, mutants,
         excluded: { ...value.excluded } as MutationRun['excluded'],

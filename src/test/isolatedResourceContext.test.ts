@@ -30,6 +30,23 @@ test('resource context binds schema and complete bounded seeds without original 
     assert.equal(buildIsolatedResourceContext(undefined), '');
 });
 
+test('resource prompts preserve declared defaults, autoincrement and composite uniqueness with withheld rows', () => {
+    const value = plan(); const db = value.rules[0].resources![0];
+    assert.equal(db.kind, 'sqlite');
+    if (db.kind !== 'sqlite') { return; }
+    db.tables[0].columns[0].autoIncrement = true;
+    Object.assign(db.tables[0].columns[1], { default: 'literal default', unique: true });
+    db.tables[0].unique = [['id', 'label']];
+    db.tables[0].rows![0].label = 'synthetic-secret-value';
+    const context = buildIsolatedResourceContext(value, 6000, ['synthetic-secret-value']);
+    assert.match(context, /"autoIncrement":true/);
+    assert.match(context, /"default":"literal default"/);
+    assert.match(context, /"unique":true/);
+    assert.match(context, /"unique":\[\["id","label"\]\]/);
+    assert.match(context, /"rowsStatus":"withheld"/);
+    assert.doesNotMatch(context, /synthetic-secret-value/);
+});
+
 test('resource context withholds a whole credential seed and never treats omitted rows as empty', () => {
     const value = plan(), secret = 'synthetic-secret-value-for-test';
     const db = value.rules[0].resources![0];

@@ -13,6 +13,7 @@ import { describeImportIssue, ImportExceptionSummary, ImportIssue, summarizeImpo
 import { ImportInitializationCandidate, readInitializationCandidate } from './importSetupProposal';
 import { resourceLogicalPath, resourceSpecKey } from '../pipeline/isolatedResources';
 import { inspectPreparedProjectImports, verifyInitializationSources } from './initializationPlanning';
+import type { SchemaDiagnostic, SchemaProposal } from './schemaPlanning';
 
 export interface ImportCheckTarget { file: string; target: string }
 export interface ImportCheckRow {
@@ -30,6 +31,8 @@ export interface ImportCheck {
     initializationSources?: Array<{ file: string; sourceHash: string }>;
     proposedRules: ImportFixtureRule[]; proposedPlan: ImportFixturePlan | null;
     proposals: ImportInitializationCandidate[];
+    schemaProposals?: SchemaProposal[];
+    schemaDiagnostics?: SchemaDiagnostic[];
 }
 const sourceHash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 

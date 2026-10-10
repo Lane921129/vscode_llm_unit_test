@@ -68,6 +68,37 @@ test('resource declarations bind reviewed source and seed identity without autho
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('SQLite default and uniqueness declarations retain exact values and bind the plan identity', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-identity-'));
+    const source = 'def target(): return 1\n'; fs.writeFileSync(path.join(root, 'sample.py'), source);
+    const spec: TestResourceSpec = { kind: 'sqlite', path: 'fixture.db', tables: [{ name: 'entries', columns: [
+        { name: 'id', type: 'INTEGER', primaryKey: true, autoIncrement: true },
+        { name: 'code', type: 'TEXT', unique: true, default: "quoted'; DROP TABLE entries; --" },
+        { name: 'amount', type: 'REAL', default: 2.5 }, { name: 'optional', type: 'TEXT', default: null }
+    ], unique: [['code', 'amount']] }] };
+    try {
+        assert.deepEqual(validateTestResources([spec]), [spec]);
+        const makePlan = (resource: TestResourceSpec) => createImportFixturePlan(root,
+            [{ file: 'sample.py', resourceSourceHash: digest(source), resources: [resource] }])!;
+        const plan = makePlan(spec);
+        for (const changed of [
+            { ...spec, tables: [{ ...spec.tables[0], unique: [['code']] }] },
+            { ...spec, tables: [{ ...spec.tables[0], columns: spec.tables[0].columns.map(column =>
+                column.name === 'code' ? { ...column, default: 'different' } : column) }] }
+        ]) { assert.notEqual(makePlan(changed).id, plan.id); }
+        for (const change of [{ default: { sql: 'CURRENT_TIMESTAMP' } }, { default: 'nul\0' },
+            { default: Number.NaN }, { default: 2 ** 53 }, { default: '漢'.repeat(1366) },
+            { autoIncrement: true, type: 'TEXT' }, { autoIncrement: true, primaryKey: false }, { unique: 'yes' }]) {
+            assert.throws(() => validateTestResources([{ ...spec, tables: [{ name: 'entries',
+                columns: [{ name: 'id', type: 'INTEGER', primaryKey: true, ...change }] }] }]));
+        }
+        for (const unique of [null, [[]], [['missing']], [['code', 'code']], [['code'], ['code']]]) {
+            assert.throws(() => validateTestResources([{ ...spec, tables: [{ ...spec.tables[0], unique }] }]));
+        }
+        assert.equal(fs.existsSync(path.join(root, 'fixture.db')), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('shared identical seeds are valid, while conflicting mounts and source-containing mounts are rejected', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-mount-'));
     const source = 'value = 1\n'; fs.mkdirSync(path.join(root, 'src'));

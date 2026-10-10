@@ -150,6 +150,53 @@ const mechanicalFacts = (tests = mechanicalCode, executionVerified = true) => bu
     code: tests, module: 'sample', executionVerified, env: process.env,
     python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') });
 
+test('executed import and AST identifiers contradict complete installation claims, never unknown semantic claims', async () => {
+    const current = await mechanicalFacts();
+    for (const [line, category, reason, action, diagnostic] of [
+        [1, 'setup-error', "The import statement at line L1 is not valid. The module 'unittest' is not available in the current Python environment.", 'Install unittest using pip.', 'existing-import-contradiction'],
+        [3, 'setup-error', "The import statement at line L3 is not valid. The module 'sample' is not available in the current Python environment.", 'Install sample using pip.', 'existing-import-contradiction'],
+        [4, 'setup-error', "The class definition at line L4 is not valid. The class name 'Cases' is not valid.", 'Change the class name to a valid Python identifier.', 'existing-definition-contradiction'],
+        [1, 'setup-error', 'Import of unittest is unnecessary', 'Remove unused import statement.', 'existing-import-contradiction'],
+        [3, 'target-binding', 'The target binding is incorrect.', 'Change the target binding to the correct type.', 'target-binding-contradiction'],
+        [3, 'target-binding', 'Target module is not properly bound', 'Bind target module as sample.', 'target-binding-contradiction'],
+        [3, 'target-binding', 'The target function `score` is not bound to a module.', 'Change the import to a wildcard import.', 'target-binding-contradiction'],
+    ] as const) {
+        const parsed = parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true, constraints(current));
+        assert.equal(parsed.review, undefined, reason);
+        assert.deepEqual(parsed.diagnostics, [diagnostic], reason);
+        assert.ok(parseTestReviewDetailed(response(line, category, reason, action), mechanicalCode, true,
+            constraints({ ...current, executionVerified: false })).review, 'no execution fact means no installation contradiction');
+    }
+    for (const reason of [
+        "The module 'other' is not available in the current Python environment.",
+        "The module 'Unittest' is not available in the current Python environment.",
+        "The module 'unittest' is not available in the current Python environment because the fixture replaces sys.modules.",
+        'Import of unittest is unnecessary in this separate helper scope.',
+    ]) {
+        assert.ok(parseTestReviewDetailed(response(1, 'setup-error', reason, 'Check the supplied dependency contract.'), mechanicalCode, true, constraints(current)).review);
+    }
+    const targetUse = code;
+    const targetFacts = await mechanicalFacts(targetUse);
+    assert.deepEqual(parseTestReviewDetailed(response(2, 'target-binding', 'Unnecessary from-module import',
+        'Remove unnecessary import statement.'), targetUse, true, constraints(targetFacts)).diagnostics, ['target-binding-contradiction']);
+    const unused = code.replace('number, label = score(value, 180)', 'number, label = (30.86, "high")').replace('score(1, 0)', 'int("invalid")');
+    assert.ok(parseTestReviewDetailed(response(2, 'target-binding', 'Unnecessary from-module import',
+        'Remove unnecessary import statement.'), unused, true, constraints(await mechanicalFacts(unused))).review);
+});
+
+test('wildcard syntax is not an export oracle and contradicting findings still require a fresh bounded review', async () => {
+    const tests = code.replace('from sample import score', 'from sample import *');
+    const current = await mechanicalFacts(tests);
+    const bad = response(2, 'setup-error', "The module 'sample' is not available in the current Python environment.", 'Install the sample module.');
+    assert.deepEqual(parseTestReviewDetailed(bad, tests, true, constraints(current)).diagnostics, ['existing-import-contradiction']);
+    assert.ok(parseTestReviewDetailed(response(2, 'target-binding', 'The wildcard may export a different target binding.',
+        'Use the explicit selected function import.'), tests, true, constraints(current)).review);
+    let calls = 0;
+    assert.equal(await reviewWithContractRepair({ tests, prompt: 'same exact tests and evidence', constraints: constraints(current),
+        deadlineAt: 1000, now: () => 1, checkCancelled: () => {}, event: () => {}, request: async () => { calls++; return bad; } }), undefined);
+    assert.equal(calls, 2, 'a repeated contradiction cannot become an approval');
+});
+
 test('passed exact imports reject only unsupported mechanical import and binding claims', async () => {
     const current = await mechanicalFacts();
     const examples = [

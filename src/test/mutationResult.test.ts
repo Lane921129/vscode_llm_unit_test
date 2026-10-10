@@ -49,6 +49,32 @@ test('builtin contract validates candidate identity and exact outcome counts', (
     assert.equal(mutationScore(parseBuiltinMutationRun('not json', context)), null);
 });
 
+test('baseline timing survives persistence without extending the shared stage budget or accepting malformed values', () => {
+    const raw = { ...builtin(), baselineTimeoutSeconds: 20, baselineAllocatedSeconds: 12.5, baselineElapsedMs: 6001 };
+    const parsed = parseBuiltinMutationRun(raw, context);
+    assert.equal(parsed.status, 'complete');
+    assert.equal(parsed.baselineTimeoutSeconds, 20);
+    assert.equal(parsed.baselineAllocatedSeconds, 12.5);
+    assert.equal(parsed.baselineElapsedMs, 6001);
+    const stored = readStoredMutationRun(JSON.stringify(parsed), context);
+    assert.equal(stored.ok, true);
+    if (stored.ok) { assert.equal(stored.run.baselineElapsedMs, 6001); }
+    for (const changes of [
+        { baselineTimeoutSeconds: NaN }, { baselineTimeoutSeconds: Infinity }, { baselineTimeoutSeconds: 0 },
+        { baselineAllocatedSeconds: -1 }, { baselineAllocatedSeconds: 21 }, { baselineAllocatedSeconds: 0 },
+        { baselineElapsedMs: -1 }, { baselineElapsedMs: 1.5 }, { baselineElapsedMs: undefined },
+        { baselineTimeoutSeconds: 30, baselineAllocatedSeconds: 25 },
+    ]) {
+        const invalid = parseBuiltinMutationRun({ ...raw, ...changes }, context);
+        assert.equal(invalid.status, 'failed');
+        assert.equal(mutationScore(invalid), null);
+        assert.equal(invalid.diagnostic, 'Invalid mutation baseline timing');
+    }
+    const legacy = parseBuiltinMutationRun(builtin(), context);
+    assert.equal(legacy.status, 'complete');
+    assert.equal(legacy.baselineTimeoutSeconds, undefined, 'historical reports have no invented timing');
+});
+
 test('persisted camelCase mutation results are revalidated and malformed evidence stays distinct from failed measurement', () => {
     const original = parseBuiltinMutationRun(builtin(), context);
     const saved = readStoredMutationRun(JSON.stringify(original), context);

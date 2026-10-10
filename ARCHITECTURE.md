@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## Schema、角色契約與冷啟動修復（2026-10-10）
+
+`initializationPlanning.ts` 在既有規劃閉包上呼叫 `schemaPlanning.ts`／`sqlite_schema_plan.py`。後者只做有界 AST 與 literal DDL 解析，沿可證明的 SQLite connection／cursor 鏈定位 `CREATE TABLE IF NOT EXISTS`；不 import 應用、不 eval、不讀取資料庫。TypeScript 再核对同來源摘要及已宣告的精確 SQLite 資源，將可新增的表與目錄／入口提案合併為一次預覽。已有 schema／seed 保留，衝突、未知路徑與無獨立來源證據的共享資源只列診斷；來源漂移使批准失效。`isolated_resources.py` 從驗證後結構建立每程序新資料庫，支援 literal default、UNIQUE 與 AUTOINCREMENT，從不直接執行來源 SQL。
+
+`buildWriterRevisionContext` 將目標、setup、規則、分區觀測與相依交給修訂角色，完整相同的 source／current test 才改用引用；必要證據仍太大時由 `requestBudgeted` 保存實際估量並停止。`semanticContractRepair.ts` 對已收到但格式錯誤的 Analyst 回覆只補問一次，共用原始 deadline；日誌只有回覆摘要與長度。Reviewer 的同候選 AST facts 提供 import statement／used binding，僅對明確機械矛盾重審，不能直接刪 finding 變成同意。
+
+Builtin／外部引擎的共用 trial runner 將 baseline 冷啟動上限與 mutant 上限分開，所有試驗仍受同一 stage deadline。`MutationRun` 保存 baseline 上限、實際分配與耗時；逐輪流程與失敗報告呈現此診斷，精簡最終報告保留原格式。歷史結果缺少新 timing 欄位仍可讀取，不補造時限或分數。
+
 ## 載入前初始化規劃（2026-10-10）
 
 `plan_import_initialization.py` 在不 import 應用或依賴的情況下，掃描選取來源與有界本機匯入閉包，提供來源摘要綁定的目錄及外部 callback 入口候選。只接受可明確解析的路徑與直接模組呼叫；符合支援參數形式但無法靜態解析 receiver 的 mkdir 只記為 `dynamic-directory`，不求值配置或 helper，也不據此認定 receiver 必然是 pathlib。planner 本身不執行 fallback import，不推導資料庫 schema；規劃完整性只代表掃描完成，不證明所有初始化或函式需求皆已滿足。

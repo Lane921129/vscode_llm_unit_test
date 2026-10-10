@@ -116,6 +116,27 @@ class ReviewFactsTests(unittest.TestCase):
             code = suite('self.assertEqual(score(1), 2)', prefix)
             self.assertFalse(any(item['origin'] == 'sample.score' for item in self.facts('', code=code)['imports']))
 
+    def test_syntax_presence_survives_wildcard_without_inventing_export_bindings(self):
+        code = 'import unittest\nfrom sample import *\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(score(1), 2)\n'
+        result = self.facts('', code=code)
+        self.assertEqual(result['importStatements'], [
+            {'line': 1, 'module': 'unittest', 'wildcard': False},
+            {'line': 2, 'module': 'sample', 'wildcard': True}])
+        self.assertEqual(result['imports'], [])
+        self.assertEqual(result['classes'], [])
+        self.assertEqual(result['methods'], [])
+
+    def test_harness_and_target_use_require_resolved_unshadowed_bindings(self):
+        result = self.facts('self.assertEqual(score(self.value), 2)')
+        self.assertEqual(result['imports'][0]['harnessUseLines'], [3])
+        self.assertEqual(result['imports'][1]['targetUseLines'], [5])
+        self.assertFalse(result['methods'][0]['calls'], 'nonliteral input is not a proven observation')
+        for body in ('score = other\nself.assertEqual(score(1), 2)', 'if flag:\n    self.assertEqual(score(1), 2)'):
+            result = self.facts(body)
+            self.assertNotIn('targetUseLines', result['imports'][1])
+        nested = 'if flag:\n    import missing\n'
+        self.assertFalse(any(item['module'] == 'missing' for item in self.facts('', code=nested)['importStatements']))
+
 
 if __name__ == '__main__':
     unittest.main()

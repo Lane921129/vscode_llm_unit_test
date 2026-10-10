@@ -1,5 +1,10 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    'SQLite schema 提案只採用可保真表示的明確 DDL；批准後每個 worker 建立全新資料庫，不執行應用程式初始化或複製正式資料。': 'SQLite schema proposals use only explicit DDL that can be represented faithfully. After approval, each worker creates a fresh database without running application initialization or copying production data.',
+    'SQLite schema 診斷：{0}；請在同一來源宣告精確資料庫資源，或提供可保真表示的結構化 schema。': 'SQLite schema diagnostic: {0}. Declare the exact database resource for the same source or provide a structured schema that preserves its constraints.',
+    '### 突變基線執行\n\n': '### Mutation baseline execution\n\n',
+    '狀態：{0}；冷啟動上限：{1} 秒；本輪剩餘預算內實際分配：{2} 秒；耗時：{3} 秒。\n\n': 'Status: {0}; cold-start limit: {1} seconds; allocated within the remaining stage budget: {2} seconds; elapsed: {3} seconds.\n\n',
+    '基線通過只允許開始突變；基線失敗或逾時不算 killed，也沒有有效突變分數。\n': 'A passing baseline only permits mutation trials to start. A failed or timed-out baseline is not killed and has no valid mutation score.\n',
     '初始化規劃：{0} 個模組等待確認；尚未核准新設定或執行函式測試。': 'Initialization planning: {0} modules await confirmation; new settings have not been approved and function tests have not run.',
     '- 第 {0} 次規劃：{1} 個模組等待初始化清單確認；實際診斷另列。': '- Planning {0}: {1} modules await initialization approval; observed diagnostics are recorded separately.',
     '初始化清單待確認；已完成一次隔離診斷，尚未套用新設定。': 'Initialization settings await confirmation. One guarded diagnostic has completed; new settings have not been applied.',

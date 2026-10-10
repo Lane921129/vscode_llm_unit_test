@@ -508,6 +508,65 @@ def target(): return (DATA / 'result.txt').read_text()
         (self.lease / '.llm-unit-test-resource-lease.json').unlink()
         self.assertFalse(self.preflight(plan)['ok'])
 
+    def test_schema_defaults_unique_and_autoincrement_are_fresh_literal_resources(self):
+        source = '''import sqlite3
+with sqlite3.connect('fixture.db') as connection:
+    assert connection.execute('SELECT id FROM entries').fetchall() == [(41,)]
+    connection.execute("INSERT INTO entries(code, group_id, label) VALUES ('second', 2, 'label')")
+    row = connection.execute('SELECT id, amount, enabled, note, optional FROM entries WHERE id=42').fetchone()
+    assert row == (42, 2.5, 1, "quoted'; DROP TABLE entries; --", None), row
+    connection.execute('DELETE FROM entries WHERE id=42')
+    connection.execute("INSERT INTO entries(code, group_id, label) VALUES ('third', 3, 'label')")
+    assert connection.execute("SELECT id FROM entries WHERE code='third'").fetchone() == (43,)
+    for values in [('third', 4, 'other'), ('fourth', 3, 'label')]:
+        try:
+            connection.execute('INSERT INTO entries(code, group_id, label) VALUES (?, ?, ?)', values)
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError('missing unique constraint')
+def target(): return 1
+'''
+        table = {'name': 'entries', 'columns': [
+            {'name': 'id', 'type': 'INTEGER', 'primaryKey': True, 'autoIncrement': True},
+            {'name': 'code', 'type': 'TEXT', 'notNull': True, 'unique': True},
+            {'name': 'group_id', 'type': 'INTEGER'}, {'name': 'label', 'type': 'TEXT'},
+            {'name': 'amount', 'type': 'REAL', 'default': 2.5},
+            {'name': 'enabled', 'type': 'INTEGER', 'default': True},
+            {'name': 'note', 'type': 'TEXT', 'default': "quoted'; DROP TABLE entries; --"},
+            {'name': 'optional', 'type': 'TEXT', 'default': None}],
+            'unique': [['group_id', 'label']], 'rows': [{'id': 41, 'code': 'seed'}]}
+        original = self.root / 'fixture.db'
+        original.write_bytes(b'original database is never read or changed')
+        plan = self.plan(source, [{'path': 'fixture.db', 'kind': 'sqlite', 'tables': [table]}])
+        for _ in range(2):
+            result = self.preflight(plan)
+            self.assertTrue(result['ok'], result)
+        self.assertEqual(original.read_bytes(), b'original database is never read or changed')
+        self.assertEqual(list(self.lease.iterdir()), [self.lease / '.llm-unit-test-resource-lease.json'])
+
+    def test_schema_rejects_unsupported_default_or_constraint_without_materializing(self):
+        from isolated_resources import validate_resources
+        import copy
+        table = {'name': 'entries', 'columns': [{'name': 'id', 'type': 'INTEGER', 'primaryKey': True}]}
+        for patch in [
+            {'default': {'sql': 'CURRENT_TIMESTAMP'}}, {'default': 'nul\0value'},
+            {'default': float('inf')}, {'default': 2 ** 53}, {'default': 10 ** 500},
+            {'default': '漢' * 1366}, {'autoIncrement': 'true'},
+            {'autoIncrement': True, 'type': 'TEXT'}, {'autoIncrement': True, 'primaryKey': False},
+            {'unique': 1}, {'collate': 'NOCASE'}
+        ]:
+            candidate = copy.deepcopy(table)
+            candidate['columns'][0].update(patch)
+            with self.subTest(patch=patch), self.assertRaises(ValueError):
+                validate_resources({'sourceHash': 'a' * 64, 'resourceSourceHash': 'a' * 64,
+                    'resources': [{'path': 'fixture.db', 'kind': 'sqlite', 'tables': [candidate]}]})
+        for groups in [None, [[]], [['missing']], [['id', 'id']], [['id'], ['id']], [['id; DROP TABLE entries']]]:
+            with self.subTest(groups=groups), self.assertRaises(ValueError):
+                validate_resources({'sourceHash': 'a' * 64, 'resourceSourceHash': 'a' * 64,
+                    'resources': [{'path': 'fixture.db', 'kind': 'sqlite', 'tables': [{**table, 'unique': groups}]}]})
+        self.assertFalse((self.root / 'fixture.db').exists())
+
     def test_invalid_schemas_and_executable_resource_paths_are_rejected(self):
         from isolated_resources import validate_resources
         invalid = [

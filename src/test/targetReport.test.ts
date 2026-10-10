@@ -6,10 +6,24 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { AnalysisJournal, evidenceHash } from '../pipeline/analysisJournal';
 import { BatchJournal } from '../pipeline/batchJournal';
-import { ReportIdentity, summarizeTarget, writeTargetReports, renderFinalReport } from '../pipeline/targetReport';
+import { ReportIdentity, summarizeTarget, writeTargetReports, renderFinalReport, renderMutationBaselineTiming } from '../pipeline/targetReport';
 import { MutationRecord, mutationCandidateSetId } from '../mutation/mutationResult';
 import { createDefaultQualityPolicy, createStrictQualityPolicy } from '../pipeline/qualityPolicy';
 import { setLanguage } from '../i18n/core';
+
+test('baseline diagnostics distinguish the configured cap from the remaining shared budget in both languages', () => {
+    try {
+        for (const language of ['en', 'zh-tw']) {
+            setLanguage(language);
+            const text = renderMutationBaselineTiming({ baselineStatus: 'timeout', baselineTimeoutSeconds: 20,
+                baselineAllocatedSeconds: 3.25, baselineElapsedMs: 3254 });
+            for (const value of ['timeout', '20.00', '3.25']) { assert.ok(text.includes(value)); }
+            assert.match(text, /killed/);
+            if (language === 'en') { assert.doesNotMatch(text, /[\u4e00-\u9fff]/); }
+            assert.equal(renderMutationBaselineTiming({ baselineStatus: 'not-run' }), '');
+        }
+    } finally { setLanguage('zh-tw'); }
+});
 
 test('mutation code table follows the unchanged summary with one row per variant and safe bilingual code', () => {
     const identity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: 'sample.py',

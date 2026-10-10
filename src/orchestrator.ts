@@ -7,7 +7,7 @@ import {
     getSystemPrompt, getUserPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt, getTier3UserPrompt,
     getBugFixerSystemPrompt, getBugFixerUserPrompt, getReviewEvidence, mergeBugFixReplacementDetailed, canRepairTestMethod,
     fitReviewPrompt, getTestReviewerSystemPrompt,
-    buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
+    buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
     getQualityAnalystSystemPrompt, selectQualityFocus, QualityAnalystSession, qualityStrategyHints,
     buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
 } from './roles';
@@ -15,6 +15,7 @@ import { CandidatePipelineHooks, CandidateValidationError } from './pipeline/tes
 import { validateSeedThenCandidate } from './pipeline/seedCandidatePipeline';
 import { RejectedCandidateStore, CandidateRejectionGate } from './pipeline/rejectedCandidateStore';
 import { reviewWithContractRepair } from './roles/reviewContractRepair';
+import { semanticWithContractRepair } from './roles/semanticContractRepair';
 import { buildReviewFacts } from './roles/reviewFacts';
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
 import { passingTestIds } from './validation/repairFeedback';
@@ -38,7 +39,7 @@ import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
 import { presentOutcome, presentSummaryOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
 import { TierHistory } from './pipeline/tierHistory';
-import { ReportIdentity, writeTargetReports } from './pipeline/targetReport';
+import { ReportIdentity, writeTargetReports, renderMutationBaselineTiming } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
 import { deduplicateTargets } from './pipeline/batchScope';
 import { prepareQualityExperiments, buildQualityExperimentEvidencePrompt, assessQualityCandidateNovelty } from './pipeline/qualityExperiments';
@@ -98,7 +99,7 @@ import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow } from './prompts/promptBudget';
-import { COMPACT_WRITER_VERSION } from './prompts/compactWriterContext';
+import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
@@ -1900,11 +1901,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     initialTargetObservations
                 }
             );
-            const semRaw = await requestBudgeted(
-                params, semSys, semUsr, log,
-                analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning'
-            );
-            const parsedSemResult = parseSemanticAnalysis(semRaw);
+            const parsedSemResult = await semanticWithContractRepair({ prompt: semUsr,
+                deadlineAt: Math.min(deadlineAtFromTimeoutSeconds(params.timeoutSeconds), currentTargetBudget()?.deadlineAt ?? Infinity),
+                request: (prompt, deadline) => requestBudgeted(params, semSys, prompt, log,
+                    analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning', deadline),
+                checkCurrent: () => {
+                    throwIfExecutionCancelled();
+                    if (!evidenceStillCurrent()) {
+                        throw new AnalysisStageError('validation', 'source-changed', localize('來源版本已改變，停止使用舊證據。'));
+                    }
+                },
+                event: (status, detail) => recordRole('analyst-planning', status, detail)
+            });
             if (parsedSemResult) {
                 const semResult = restrictSemanticInputHintsToTargetParameters(
                     parsedSemResult,
@@ -1920,18 +1928,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 recordRole('analyst-planning', 'parsed-hypotheses', {
                     inputContractVersion: ROLE_CONTRACT_VERSIONS.analystEvidence,
                     outputContractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan,
-                    raw: semRaw,
                     result: semanticPlanContract
                 });
                 const hasStrategy = semResult.test_strategy?.input_hints?.length > 0;
                 log(localize("[語意分析師] ✅ 分析完成！相依行為: {0} 個、候選不可達路徑: {1} 個、測資策略參數提示: {2} 個。", semResult.dependency_behaviors.length, semResult.unreachable_paths.length, hasStrategy ? semResult.test_strategy.input_hints.length : 0));
             } else {
-                recordRole('analyst-planning', 'invalid-response', {
-                    inputContractVersion: ROLE_CONTRACT_VERSIONS.analystEvidence,
-                    outputContractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan,
-                    raw: semRaw,
-                    result: null
-                });
                 throw new AnalysisStageError('model-format', 'analyst-planning',
                     localize('分析師回覆無效；已停止，尚未進入測試生成。'));
             }
@@ -2535,13 +2536,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             findings: failure,
                             moduleName: targetImportModule,
                             functionName: targetFuncName,
-                            evidence: roleEvidence
+                            evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
+                                source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
+                                allowedMockTargets: Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`) })
                         });
-                    if (estimateTokens(sys + prompt) > activeModelProfile.budgetTokens) {
-                        throw new Error(role === 'bug-fixer'
-                            ? localize("Bug Fixer 的單方法修復內容仍超過模型預算，停止本次修復。")
-                            : localize("Writer 修訂所需完整證據超過模型預算；未截斷待保留的測試。"));
-                    }
+                    // requestBudgeted checks the final prompt, including numeric/resource
+                    // evidence, and records a stage-owned failure without Tier fallback.
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
@@ -2742,6 +2742,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             let mutationRun: MutationRun = parseIsolatedMutationRun(mutationExecution.stdout, mutationContext, engine);
             // Persist rejected evidence before any gate can stop this round.
             fs.writeFileSync(path.join(loopDir, `loop${currentLoop}_mutation.json`), JSON.stringify(mutationRun, null, 2), 'utf8');
+            finalReportMarkdown += renderMutationBaselineTiming(mutationRun);
+            if (mutationRun.baselineAllocatedSeconds !== undefined) {
+                recordRole('mutation-baseline', mutationRun.baselineStatus, {
+                    baselineTimeoutSeconds: mutationRun.baselineTimeoutSeconds,
+                    baselineAllocatedSeconds: mutationRun.baselineAllocatedSeconds,
+                    baselineElapsedMs: mutationRun.baselineElapsedMs,
+                    stageTimeoutSeconds: mutationRun.stageTimeoutSeconds,
+                    scoreAvailable: false
+                });
+            }
             if (mutationRun.operatorSetVersion !== null && mutationRun.operatorSetVersion !== selectedMutation.operatorSetVersion) {
                 journal.knowledge({ latestMutation: mutationRun });
                 throw new AnalysisStageError('mutation', 'mutation-execution', localize('突變規則版本與預檢不一致；不接受量測結果。'));

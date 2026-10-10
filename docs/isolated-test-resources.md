@@ -4,6 +4,10 @@
 
 ## 操作
 
+現在初始化規劃也會檢查來源中的明確 SQLite 建表語句。先在「隔離測試資源」宣告精確資料庫位置與使用它的來源；支援的 literal `CREATE TABLE IF NOT EXISTS` 可自動加入待確認 schema，與目錄／啟動入口一起預覽一次。`schema_plan.json` 保存候選與原因碼。動態資料庫路徑、不支援 SQL、一般 `CREATE TABLE`、同表定義衝突或未宣告來源不自動套用；需在資源清單提供明確 schema，不能把找到的第一個 DB 當成目標。
+
+欄位可使用 `default`（JSON scalar literal）、`unique: true`、`autoIncrement: true`（僅 `INTEGER` 且 `primaryKey: true`）；表可用 `unique: [["column_a", "column_b"]]` 宣告複合唯一限制。保留原有 rows，提案不新增或複製正式資料。每個 worker 都重建 seed；測試方法間仍須透過受測公開 API 安排個別狀態。來源修改使既有批准失效，必須重新預覽。
+
 1. 選取專案並按「檢查模組載入／初始化設定」。實際阻擋的頂層 `Path.mkdir(exist_ok=True)` 若能確認路徑，清單會提出空白暫存目錄；確認套用後只重新預檢一次。
 2. 需要設定文字、SQLite 表格或資料時，按「隔離測試資源」→「新增／編輯隔離資源清單」，選使用資源的 Python 檔案。清單保存於結果根目錄 `resource_setup`。
 3. 編輯 `resources` 並保存，再按「隔離測試資源」→「套用已儲存清單並重新預檢」。確認時會列出資源／資料表／資料列數量。

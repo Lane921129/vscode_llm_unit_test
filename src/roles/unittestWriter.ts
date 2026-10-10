@@ -4,24 +4,23 @@ import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, formatDependencyMockContract, formatSourceImport, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { referenceRepeatedTestFile } from './roleContracts';
 
 export function getExecutionWriterSystemPrompt(): string {
-    return `You are the test Writer for EXECUTION_VERIFICATION_V1. Return one complete Python unittest file in one python code fence, without prose.
-Test the real selected target in isolation. Trace, coverage and mutation are unavailable.
-Use read-only source, imports, signatures, constructors and dependencies for setup. Preserve the exact target import/binding. Never copy, redefine or mock the target/class.
-Patch external operations${isolatedResourceSystemRule() ? ' without host-declared resources' : ''} at dependency use points with unittest.mock. Set returns/side effects within each test. Assert the real target's result, a source-declared exception, or its observable dependency call.
+    return `EXECUTION_VERIFICATION_V1 Writer: one complete unittest file in one python fence, no prose. Trace/coverage/mutation unavailable.
+Setup: read-only source/imports/signatures/constructors/dependencies. Keep the exact target binding; never copy/redefine/mock the target/class.
+Patch external operations${isolatedResourceSystemRule() ? ' without host-declared resources' : ''} at use points with unittest.mock; configure returns/side effects per test. Assert the real target result, source-supported exception or observed dependency call.
 ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
 ${TEST_IMPORT_GUIDANCE}
-For calculations without external operations, use the real target without mocks. Check inputs, units, arithmetic, rounding and every returned field; thresholds are not automatically expected results.
-Expected values require reachable literals, simple source-supported deterministic relationships or test-controlled dependencies; they remain hypotheses until executed. Invent no requirements, APIs, constructors, ambient values or exceptions. Never call the target or copy its implementation to compute expected.
-No tautologies, weakened/removed assertions, skip/expectedFailure, swallowed exceptions or unrelated checks. No direct file, network or process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}
-The host checks Python AST, target binding, signatures and meaningful assertions, then uses its guarded runner. Passing verifies only those cases/setup, not complete application or requirement correctness.`;
+For calculations without external operations, use the real target without mocks. Check inputs, units, arithmetic, rounding and each returned field; thresholds are not expected results.
+Expected values: reachable literals, simple source-supported relationships or test-controlled dependencies; hypotheses until executed. Invent no requirements, APIs, constructors, ambient values or exceptions. Never call/copy the target to compute expected.
+No tautologies, weaker/removed assertions, skip/expectedFailure, swallowed exceptions or unrelated checks. No direct file/network/process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}`;
 }
 
 export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {
-    return `EXECUTION_VERIFICATION_V1\n${evidence}\n`
-        + (code !== undefined ? `\nCURRENT TEST FILE\n${code}\nACTUAL VALIDATION FAILURE\n${failure}\nRepair the test setup or unsupported test hypothesis using the source evidence. For multiple failed methods, correct all supported failures together. Recheck every returned field: an earlier failed assertion can hide a later wrong expectation in the same method. Preserve inputs, fixtures, valid passing cases and assertion strength when correcting arithmetic constants. Do not edit the target or copy actual output without source justification.\n` : '\nGenerate the complete test file.\n');
+    return `EXECUTION_VERIFICATION_V1\n${code === undefined ? evidence : referenceRepeatedTestFile(evidence, code)}\n`
+        + (code !== undefined ? `\nCURRENT TEST FILE\n\`\`\`python\n${code}\n\`\`\`\nACTUAL VALIDATION FAILURE\n${referenceRepeatedTestFile(failure || '', code)}\nRepair the test setup or unsupported test hypothesis using the source evidence. For multiple failed methods, correct all supported failures together. Recheck every returned field: an earlier failed assertion can hide a later wrong expectation in the same method. Preserve inputs, fixtures, valid passing cases and assertion strength when correcting arithmetic constants. Do not edit the target or copy actual output without source justification.\n` : '\nGenerate the complete test file.\n');
 }
 
 /**
@@ -259,7 +258,8 @@ export function getUserPrompt(
     }
 
     let prompt = `Target file: ${fileName}\nTarget function: ${funcName}\n${formatTargetContract(moduleName, funcName, astContext?.args || [], astContext)}\n`
-        + `${DEPENDENCY_MOCK_SHAPE_GUIDANCE}\n${TEST_IMPORT_GUIDANCE}\n`;
+        + `${DEPENDENCY_MOCK_SHAPE_GUIDANCE}\n${TEST_IMPORT_GUIDANCE}\n`
+        + formatDependencyMockContract(moduleName, astContext) + '\n';
 
     const comparisonOperators: Record<string, string> = {
         Eq: '==', NotEq: '!=', Lt: '<', LtE: '<=', Gt: '>', GtE: '>=',
@@ -367,7 +367,7 @@ export function getUserPrompt(
             prompt += `- Calls: ${astContext.calls.join(', ')}\n`;
         }
         if (astContext.file_imports?.length > 0) {
-            prompt += `- Available module imports: ${astContext.file_imports.map((item: any) => item.kind === 'from' ? `from ${item.module} import ${item.name}` : `import ${item.module}`).join('; ')}\n`;
+            prompt += `- Available module imports: ${astContext.file_imports.map(formatSourceImport).join('; ')}\n`;
         }
         if (astContext.referenced_globals?.length > 0) {
             prompt += `- Referenced module constants (use exact values):\n`;

@@ -80,6 +80,7 @@ test('execution Writer retains complete neutral evidence within the existing 200
     const prompt = getExecutionWriterPrompt(completeEvidence);
     assert.ok(prompt.includes(completeEvidence), 'preserve source/evidence without clipping');
     assert.ok(promptFits(getExecutionWriterSystemPrompt(), prompt, 2000), 'mock guidance must not crowd out existing execution evidence');
+    assert.match(getExecutionWriterSystemPrompt(), /EXECUTION_VERIFICATION_V1/);
     assert.match(getExecutionWriterSystemPrompt(), /For calculations without external operations, use the real target without mocks/);
     assert.match(getExecutionWriterSystemPrompt(), /hypotheses until executed/);
 });
@@ -172,4 +173,48 @@ test('repair import guidance preserves parser limits and rejects unrelated metho
     assert.equal(scope(original, repaired.replace("transform('other-input'), 'other'", "transform('other-input'), 'changed'"), failure).reasonCode,
         'unrelated-method-change');
     assert.equal(scope(original, 'from boundary import build as transform\n' + repaired, failure).reasonCode, 'import-conflict');
+});
+
+test('private target and aliased connection use points execute only with explicit imports and source-shaped mocks', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-use-site-'));
+    try {
+        fs.writeFileSync(path.join(directory, 'boundary.py'), "def connect():\n    raise RuntimeError('unpatched boundary')\n");
+        for (const managed of [false, true]) {
+            const target = 'from boundary import connect as open_session\n'
+                + 'def _load(key):\n'
+                + (managed ? '    with open_session() as connection:\n' : '    connection = open_session()\n')
+                + (managed ? '        ' : '    ') + 'cursor = connection.cursor()\n'
+                + (managed ? '        ' : '    ') + "cursor.execute('lookup', (key,))\n"
+                + (managed ? '        ' : '    ') + 'return cursor.fetchone()\n';
+            fs.writeFileSync(path.join(directory, 'sample.py'), target);
+            const correct = 'import unittest\nfrom unittest.mock import patch\nfrom sample import _load\n'
+                + 'class Cases(unittest.TestCase):\n    def test_load(self):\n'
+                + "        with patch('sample.open_session') as factory:\n"
+                + '            connection = factory.return_value' + (managed ? '.__enter__.return_value' : '') + '\n'
+                + '            cursor = connection.cursor.return_value\n'
+                + "            cursor.fetchone.return_value = ('controlled',)\n"
+                + "            self.assertEqual(_load('input'), ('controlled',))\n"
+                + '            factory.assert_called_once_with()\n'
+                + "            cursor.execute.assert_called_once_with('lookup', ('input',))\n";
+            const run = (candidate: string) => {
+                fs.writeFileSync(path.join(directory, 'generated.py'), candidate);
+                return spawnSync(python, generatedUnittestArguments('generated', directory, false, true), {
+                    cwd: directory, encoding: 'utf8', timeout: 10000,
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+            };
+            assert.equal(validateUnittestStructure(correct, '_load', 'sample').valid, true);
+            const passing = run(correct);
+            assert.equal(passing.status, 0, passing.stdout + passing.stderr);
+            const wildcard = run(correct.replace('from sample import _load', 'from sample import *'));
+            assert.notEqual(wildcard.status, 0);
+            assert.match(wildcard.stdout + wildcard.stderr, /NameError: name '_load' is not defined/);
+            const wrongBinding = run(correct.replace("patch('sample.open_session')", "patch('boundary.connect')"));
+            assert.notEqual(wrongBinding.status, 0);
+            assert.match(wrongBinding.stdout + wrongBinding.stderr, /unpatched boundary/);
+            const scalar = run(correct.replace("            self.assertEqual(_load", "            factory.return_value = 'not-a-connection'\n            self.assertEqual(_load"));
+            assert.notEqual(scalar.status, 0);
+            assert.match(scalar.stdout + scalar.stderr, managed ? /context manager protocol/ : /has no attribute 'cursor'/);
+            assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), target);
+        }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

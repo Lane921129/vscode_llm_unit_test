@@ -185,12 +185,85 @@ class MutationV2Tests(unittest.TestCase):
         self.assertFalse(result['scoreAvailable'])
         self.assertTrue(all('killedBy' not in m for m in result['mutants']))
 
+    def test_cold_baseline_allowance_is_shared_by_builtin_and_external_candidates(self):
+        def provider(tree, scope, *args):
+            return {'engine': 'mutatest', 'engineVersion': '3.1.0', 'operatorSetVersion': 'test-provider-v1',
+                    'candidates': [({'id': 'a' * 64, 'kind': 'return', 'line': 2, 'column': 4, 'position': 0,
+                                     'from': 'return', 'to': 'None'}, ast.unparse(runner.apply_mutation(tree, 0, 'target')))]}
+        for candidate_provider in (None, provider):
+            clock, allocations = [0.0], []
+            def fake_run(args, **kwargs):
+                baseline = kwargs['cwd'].name == 'baseline'
+                allocations.append((baseline, kwargs['timeout']))
+                clock[0] += 6 if baseline else .1
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(runner.subprocess, 'run', side_effect=fake_run):
+                result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=60,
+                                      candidate_provider=candidate_provider)
+            self.assertEqual(result['baselineStatus'], 'passed')
+            self.assertEqual(result['baselineTimeoutSeconds'], 20)
+            self.assertEqual(result['baselineAllocatedSeconds'], 20)
+            self.assertEqual(result['baselineElapsedMs'], 6000)
+            self.assertEqual(allocations[0], (True, 20))
+            self.assertTrue(all(timeout == 5 for _, timeout in allocations[1:]))
+            self.assertEqual(result['counts']['killed'], 0)
+
+    def test_cold_baseline_uses_only_remaining_stage_time_and_timeout_never_kills(self):
+        clock = [0.0]
+        prepare = runner.prepare_trial_directory
+        def slow_setup(*args):
+            result = prepare(*args)
+            clock[0] += 2.25
+            return result
+        def timed_out(args, **kwargs):
+            self.assertAlmostEqual(kwargs['timeout'], .75)
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner, 'prepare_trial_directory', side_effect=slow_setup), \
+                patch.object(runner.subprocess, 'run', side_effect=timed_out) as run:
+            result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=3)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(result['baselineAllocatedSeconds'], .75)
+        self.assertEqual(result['baselineElapsedMs'], 750)
+        self.assertEqual(result['elapsedMs'], 3000)
+        self.assertEqual(result['baselineStatus'], 'timeout')
+        self.assertEqual(result['counts']['executed'], 0)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertEqual(result['counts']['notRun'], result['counts']['selected'])
+        self.assertFalse(result['scoreAvailable'])
+        self.assertIn('0.750s', result['baseline_output'])
+
+    def test_exhausted_setup_budget_starts_no_baseline(self):
+        clock = [0.0]
+        prepare = runner.prepare_trial_directory
+        def slow_setup(*args):
+            result = prepare(*args)
+            clock[0] = 3
+            return result
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner, 'prepare_trial_directory', side_effect=slow_setup), \
+                patch.object(runner.subprocess, 'run') as run:
+            result = self.measure(Path(directory), stage_timeout_seconds=3)
+        run.assert_not_called()
+        self.assertEqual(result['baselineStatus'], 'not-run')
+        self.assertEqual(result['baselineAllocatedSeconds'], 0)
+        self.assertEqual(result['baselineElapsedMs'], 0)
+        self.assertFalse(result['scoreAvailable'])
+
     def test_invalid_workers_and_versions_are_rejected(self):
         for workers in (0, 5, True, 1.5):
             with self.assertRaises(ValueError):
                 runner.run_mutation_trials('missing', 'missing', workers=workers)
         with self.assertRaises(ValueError):
             runner.run_mutation_trials('missing', 'missing', operator_version='unknown')
+        for budget in (0, -1, True, float('inf'), float('nan')):
+            for key in ('timeout_seconds', 'stage_timeout_seconds'):
+                with self.subTest(key=key, budget=budget), self.assertRaises(ValueError):
+                    runner.run_mutation_trials('missing', 'missing', **{key: budget})
 
 
 class StructuredTestResultsTests(unittest.TestCase):

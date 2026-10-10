@@ -22,7 +22,9 @@ export interface ReviewMethodFacts {
 }
 export interface ReviewFacts extends ReviewFactIdentity {
     schemaVersion: 'review-test-facts-v1'; module: string; testHash: string; executionVerified: boolean;
-    imports: Array<{ line: number; binding: string; origin: string }>;
+    imports: Array<{ line: number; binding: string; origin: string; harnessUseLines?: number[]; targetUseLines?: number[] }>;
+    /** Syntax presence only, never proof of wildcard exports or the final binding. */
+    importStatements?: Array<{ line: number; module: string; wildcard: boolean }>;
     classes: Array<{ line: number; name: string; kind: 'unittest-harness' }>;
     methods: ReviewMethodFacts[]; limitations: string;
 }

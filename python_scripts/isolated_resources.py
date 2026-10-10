@@ -229,7 +229,7 @@ def validate_resources(rule):
             raise ValueError('Invalid isolated SQLite tables')
         names = set()
         for table in tables:
-            if (type(table) is not dict or set(table) - {'name', 'columns', 'rows'}
+            if (type(table) is not dict or set(table) - {'name', 'columns', 'unique', 'rows'}
                     or type(table.get('name')) is not str or not _IDENTIFIER.fullmatch(table['name'])
                     or table['name'].lower().startswith('sqlite_') or table['name'].lower() in names):
                 raise ValueError('Invalid isolated SQLite table')
@@ -240,12 +240,21 @@ def validate_resources(rule):
             column_names = set()
             primary_keys = 0
             for column in columns:
-                if (type(column) is not dict or set(column) - {'name', 'type', 'primaryKey', 'notNull'}
+                if (type(column) is not dict or set(column) - {'name', 'type', 'primaryKey', 'notNull', 'unique', 'autoIncrement', 'default'}
                         or type(column.get('name')) is not str or not _IDENTIFIER.fullmatch(column['name'])
                         or column['name'].lower() in column_names
                         or column.get('type') not in ('INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC')
-                        or any(key in column and type(column[key]) is not bool for key in ('primaryKey', 'notNull'))):
+                        or any(key in column and type(column[key]) is not bool for key in ('primaryKey', 'notNull', 'unique', 'autoIncrement'))
+                        or column.get('autoIncrement') is True and (column.get('primaryKey') is not True or column['type'] != 'INTEGER')):
                     raise ValueError('Invalid isolated SQLite column')
+                if 'default' in column:
+                    value = column['default']
+                    if not (value is None or type(value) is bool
+                            or type(value) is int and abs(value) <= 2 ** 53 - 1
+                            or type(value) is float and math.isfinite(value)
+                                and (not value.is_integer() or abs(value) <= 2 ** 53 - 1)
+                            or type(value) is str and '\0' not in value and len(value.encode('utf-8')) <= 4096):
+                        raise ValueError('Invalid isolated SQLite default literal')
                 column_names.add(column['name'].lower())
                 primary_keys += column.get('primaryKey', False)
             if primary_keys > 1:
@@ -254,6 +263,19 @@ def validate_resources(rule):
             if type(rows) is not list or len(rows) > 256:
                 raise ValueError('Invalid isolated SQLite rows')
             exact_names = {column['name'] for column in columns}
+            unique_groups = table.get('unique', [])
+            if type(unique_groups) is not list or len(unique_groups) > 16:
+                raise ValueError('Invalid isolated SQLite unique constraints')
+            unique_keys = set()
+            for group in unique_groups:
+                if (type(group) is not list or not 1 <= len(group) <= 32
+                        or any(type(name) is not str or name not in exact_names for name in group)
+                        or len(set(group)) != len(group)):
+                    raise ValueError('Invalid isolated SQLite unique columns')
+                key = tuple(sorted(group))
+                if key in unique_keys:
+                    raise ValueError('Duplicate isolated SQLite unique constraint')
+                unique_keys.add(key)
             for row in rows:
                 if type(row) is not dict or set(row) - exact_names:
                     raise ValueError('Invalid isolated SQLite row columns')
@@ -479,7 +501,14 @@ class IsolatedResources:
                     for column in table['columns']:
                         columns.append('"' + column['name'] + '" ' + column['type']
                             + (' PRIMARY KEY' if column.get('primaryKey') else '')
-                            + (' NOT NULL' if column.get('notNull') else ''))
+                            + (' AUTOINCREMENT' if column.get('autoIncrement') else '')
+                            + (' NOT NULL' if column.get('notNull') else '')
+                            + (' UNIQUE' if column.get('unique') else '')
+                            # SQLite itself quotes a bound scalar as a literal. Source SQL is never executed here.
+                            + (' DEFAULT ' + connection.execute('SELECT quote(?)', (column['default'],)).fetchone()[0]
+                               if 'default' in column else ''))
+                    columns.extend('UNIQUE (' + ','.join('"' + name + '"' for name in group) + ')'
+                                   for group in table.get('unique', []))
                     connection.execute('CREATE TABLE "' + table['name'] + '" (' + ','.join(columns) + ')')
                     for row in table.get('rows', []):
                         if row:

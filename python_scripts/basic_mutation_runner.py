@@ -615,6 +615,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             raise ValueError(f'{label} must be a finite positive number')
     started = time.monotonic()
     deadline = started + stage_timeout_seconds if stage_timeout_seconds is not None else None
+    # The first fresh interpreter pays import/cold-start cost independently of
+    # each mutant. This allowance never extends the shared stage deadline.
+    baseline_timeout_seconds = max(20, timeout_seconds)
     source_file = Path(source_path).resolve()
     test_file = Path(test_path).resolve()
     original_source = source_file.read_bytes().decode('utf-8')
@@ -640,6 +643,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         'targetScope': {'kind': 'function' if target_function else 'module', 'qualifiedName': scope_name},
         'sourcePath': str(source_file),
         'timeoutSeconds': timeout_seconds,
+        'baselineTimeoutSeconds': baseline_timeout_seconds,
+        'baselineAllocatedSeconds': 0,
+        'baselineElapsedMs': 0,
         'stageTimeoutSeconds': stage_timeout_seconds,
         'counts': dict(available=0, selected=0, executed=0, notRun=0, killed=0, survived=0, timeout=0, error=0),
         'excluded': dict(noop=0, duplicate=0, invalid=0),
@@ -738,10 +744,10 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     candidates = candidates[:max_mutations] if max_mutations else candidates
     result['total'] = result['counts']['selected'] = result['counts']['notRun'] = len(candidates)
 
-    def trial_timeout():
+    def trial_timeout(limit=timeout_seconds):
         if deadline is None:
-            return timeout_seconds
-        return max(0.001, min(timeout_seconds, deadline - time.monotonic()))
+            return limit
+        return max(0, min(limit, deadline - time.monotonic()))
 
     def budget_exhausted():
         return deadline is not None and time.monotonic() >= deadline
@@ -764,11 +770,14 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                           baseline_output='Mutation trial import layout or fixture setup failed')
             return result
 
+        baseline_started = None
         try:
-            if budget_exhausted():
+            result['baselineAllocatedSeconds'] = trial_timeout(baseline_timeout_seconds)
+            if result['baselineAllocatedSeconds'] <= 0:
                 result['baseline_output'] = 'Stage budget exhausted before baseline'
                 return result
             baseline_result_path = baseline_root / 'runner-result.json'
+            baseline_started = time.monotonic()
             baseline = subprocess.run(
                 [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem,
                  '--result-json', str(baseline_result_path)],
@@ -778,7 +787,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=trial_timeout(),
+                timeout=result['baselineAllocatedSeconds'],
             )
             baseline_result = read_trial_result(baseline_result_path, result['importFixtureId'])
             result['baselineImportFixtures'] = baseline_result.get('importFixtures') if baseline_result else None
@@ -796,12 +805,14 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                     'mutants': [],
                 })
                 return result
-        except subprocess.TimeoutExpired as error:
+        except subprocess.TimeoutExpired:
             result.update({
                 'total': 0,
                 'baseline_passed': False,
                 'baselineStatus': 'timeout',
-                'baseline_output': f'Baseline timed out after {timeout_seconds}s: {error}',
+                'baseline_output': ('Baseline timed out after '
+                                    f'{result["baselineAllocatedSeconds"]:.3f}s '
+                                    f'(cold-start limit {baseline_timeout_seconds}s; shared stage budget applies)'),
                 'mutants': [],
             })
             return result
@@ -814,6 +825,10 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 'mutants': [],
             })
             return result
+        finally:
+            if baseline_started is not None:
+                result['baselineElapsedMs'] = max(0, round((time.monotonic() - baseline_started) * 1000))
+            result['elapsedMs'] = max(0, round((time.monotonic() - started) * 1000))
 
         result['baseline_passed'] = True
         result['baselineStatus'] = 'passed'
@@ -831,7 +846,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             except (OSError, ValueError) as error:
                 return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
                         'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
-            if budget_exhausted():
+            allocated_seconds = trial_timeout()
+            if allocated_seconds <= 0:
                 return None
             trial_result_path = mutant_root / 'runner-result.json'
             detail = None
@@ -846,7 +862,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                     text=True,
                     encoding='utf-8',
                     errors='replace',
-                    timeout=trial_timeout(),
+                    timeout=allocated_seconds,
                 )
                 # A forbidden external operation is missing test isolation,
                 # never proof that an assertion killed the mutant.

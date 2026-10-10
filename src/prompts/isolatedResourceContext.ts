@@ -54,6 +54,7 @@ export function buildIsolatedResourceContext(
                 ...(resource.scope ? { scope: resource.scope } : {}), kind: resource.kind };
             const summary = resource.kind === 'sqlite'
                 ? { ...common, tables: resource.tables.map(table => ({ name: table.name, columns: table.columns,
+                    ...(table.unique !== undefined ? { unique: table.unique } : {}),
                     rowCount: table.rows?.length || 0, rowsStatus: 'withheld' })) }
                 : resource.kind === 'text'
                     ? { ...common, textBytes: Buffer.byteLength(resource.text, 'utf8'),
@@ -61,6 +62,7 @@ export function buildIsolatedResourceContext(
                     : common;
             const complete = resource.kind === 'sqlite'
                 ? { ...common, tables: resource.tables.map(table => ({ name: table.name, columns: table.columns,
+                    ...(table.unique !== undefined ? { unique: table.unique } : {}),
                     rowCount: table.rows?.length || 0, rowsStatus: 'complete', rows: table.rows || [] })) }
                 : summary;
             const full = JSON.stringify(complete), brief = JSON.stringify(summary);

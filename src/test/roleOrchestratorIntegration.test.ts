@@ -330,6 +330,43 @@ class Cases(unittest.TestCase):
         externalEngine = undefined;
         utilities.detectMutationEngine = () => null;
 
+        // A returned analyst format error gets one correction; an oversized
+        // Writer revision is then diagnosed before transport and never lowers Tier.
+        let planningAttempts = 0, generatedAttempts = 0;
+        const rejectedLargeTest = code.replace('class Cases(unittest.TestCase):',
+            'class Cases(unittest.TestCase):\n    def setUp(self):\n        self.required_fixture()')
+            + '# ' + 'retained candidate context '.repeat(1200) + '\n';
+        globalThis.fetch = async (_url, options) => {
+            const request = JSON.parse(String(options?.body));
+            let response: string;
+            if (request.system.includes('dependency_behaviors')) {
+                planningAttempts++;
+                response = planningAttempts === 1 ? 'INVALID_ANALYST_PRIVATE_REPLY' : '{"dependency_behaviors":[]}';
+                if (planningAttempts === 2) { assert.match(request.prompt, /SEMANTIC_CONTRACT_REPAIR_V1/); }
+            } else {
+                generatedAttempts++;
+                response = '```python\n' + rejectedLargeTest + '\n```';
+            }
+            return new Response(JSON.stringify({ response }), { status: 200 });
+        };
+        const revisionBudgetRoot = path.join(directory, 'revision-budget');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier2',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: revisionBudgetRoot });
+        const revisionBudgetOutput = outputFor(revisionBudgetRoot);
+        const revisionEventsText = fs.readFileSync(path.join(revisionBudgetOutput, 'role_events.jsonl'), 'utf8');
+        const revisionEvents = revisionEventsText.trim().split('\n').map(line => JSON.parse(line));
+        assert.equal(planningAttempts, 2);
+        assert.equal(generatedAttempts, 1, 'oversized revision stops before any provider call or Tier fallback');
+        assert.doesNotMatch(revisionEventsText, /INVALID_ANALYST_PRIVATE_REPLY/);
+        assert.ok(revisionEvents.some(event => event.stage === 'analyst-planning' && event.status === 'repair-requested'));
+        assert.ok(revisionEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'
+            && event.detail.role === 'writer-revision' && event.detail.estimatedInputTokens > event.detail.inputBudget));
+        assert.ok(!revisionEvents.some(event => event.stage === 'tier' && event.status === 'fallback'));
+        const revisionKnowledge = JSON.parse(fs.readFileSync(path.join(revisionBudgetOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(revisionKnowledge.failureCategory, 'validation');
+        globalThis.fetch = fixtureFetcher;
+
         rejectAllModelRequests = true;
         handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
             paramSize: '1B', contextLength: 128, qualificationVersion: QUALIFICATION_VERSION,

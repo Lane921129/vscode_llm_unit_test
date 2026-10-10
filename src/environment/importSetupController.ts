@@ -137,6 +137,8 @@ export class ImportSetupController {
                     if (check.proposedPlan) { fs.writeFileSync(path.join(check.directory, 'setup_proposal.json'), JSON.stringify({
                         note: localize("清單中的 resources 會建立獨立暫存資源；mkdir/configFiles 舊設定與啟動入口仍是明確替身，不執行其副作用或 callback。受測原檔不變，不會複製正式資料。套用後重新預檢。"),
                         evidence: check.proposals,
+                        schemaEvidence: check.schemaProposals,
+                        schemaDiagnostics: check.schemaDiagnostics,
                         planningSources: check.planningSources,
                         expiredEntryPointSources: refreshed.expired,
                         'llmUnitTest.importFixtureRoot': check.root,

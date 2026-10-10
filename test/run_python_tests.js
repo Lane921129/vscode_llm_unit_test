@@ -41,6 +41,7 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_import_fixtures.py',
         'python_scripts/test_import_setup_advisor.py',
         'python_scripts/test_plan_import_initialization.py',
+        'python_scripts/test_sqlite_schema_plan.py',
         'python_scripts/test_export_results.py',
         'python_scripts/test_caller_artifacts.py',
         'python_scripts/test_writer_retrieval.py',

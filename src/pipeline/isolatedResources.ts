@@ -7,9 +7,11 @@ export const RESOURCE_LEASE_MARKER = '.llm-unit-test-resource-lease.json';
 export type ResourceCell = string | number | boolean | null;
 export interface ResourceColumn {
     name: string; type: 'INTEGER' | 'REAL' | 'TEXT' | 'BLOB' | 'NUMERIC';
-    primaryKey?: boolean; notNull?: boolean;
+    primaryKey?: boolean; notNull?: boolean; unique?: boolean; autoIncrement?: boolean;
+    /** Literal fixture data, never an SQL expression. */
+    default?: ResourceCell;
 }
-export interface ResourceTable { name: string; columns: ResourceColumn[]; rows?: Array<Record<string, ResourceCell>> }
+export interface ResourceTable { name: string; columns: ResourceColumn[]; unique?: string[][]; rows?: Array<Record<string, ResourceCell>> }
 export type TestResourceSpec = { path: string; scope?: 'project-parent' | 'external-exact' | 'unc-virtual' } & (
     { kind: 'directory' } | { kind: 'text'; text: string } | { kind: 'sqlite'; tables: ResourceTable[] });
 type ResourceRule = { file: string; resources?: TestResourceSpec[] };
@@ -157,24 +159,45 @@ export function validateTestResources(input: unknown): TestResourceSpec[] {
             if (!keys(value, ['path', 'scope', 'kind', 'tables']) || !Array.isArray(value.tables) || value.tables.length > 16) { throw invalid(); }
             const names = new Set<string>();
             const tables: ResourceTable[] = value.tables.map(table => {
-                if (!object(table) || !keys(table, ['name', 'columns', 'rows']) || !identifier(table.name)
+                if (!object(table) || !keys(table, ['name', 'columns', 'unique', 'rows']) || !identifier(table.name)
                     || /^sqlite_/i.test(table.name) || names.has(table.name.toLowerCase())
                     || !Array.isArray(table.columns) || !table.columns.length || table.columns.length > 32) { throw invalid(); }
                 names.add(table.name.toLowerCase());
                 const columnNames = new Set<string>();
                 const columns: ResourceColumn[] = table.columns.map(column => {
-                    if (!object(column) || !keys(column, ['name', 'type', 'primaryKey', 'notNull'])
+                    if (!object(column) || !keys(column, ['name', 'type', 'primaryKey', 'notNull', 'unique', 'autoIncrement', 'default'])
                         || !identifier(column.name) || columnNames.has(column.name.toLowerCase())
                         || !['INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC'].includes(String(column.type))
                         || column.primaryKey !== undefined && typeof column.primaryKey !== 'boolean'
-                        || column.notNull !== undefined && typeof column.notNull !== 'boolean') { throw invalid(); }
+                        || column.notNull !== undefined && typeof column.notNull !== 'boolean'
+                        || column.unique !== undefined && typeof column.unique !== 'boolean'
+                        || column.autoIncrement !== undefined && typeof column.autoIncrement !== 'boolean'
+                        || column.autoIncrement === true && (column.primaryKey !== true || column.type !== 'INTEGER')) { throw invalid(); }
+                    const literal = column.default;
+                    if (Object.hasOwn(column, 'default') && !(literal === null || typeof literal === 'boolean'
+                        || typeof literal === 'number' && Number.isFinite(literal) && (!Number.isInteger(literal) || Number.isSafeInteger(literal))
+                        || typeof literal === 'string' && !literal.includes('\0') && Buffer.byteLength(literal, 'utf8') <= 4096)) { throw invalid(); }
                     columnNames.add(column.name.toLowerCase());
                     return { name: column.name, type: column.type as ResourceColumn['type'],
                         ...(column.primaryKey !== undefined ? { primaryKey: column.primaryKey } : {}),
-                        ...(column.notNull !== undefined ? { notNull: column.notNull } : {}) };
+                        ...(column.notNull !== undefined ? { notNull: column.notNull } : {}),
+                        ...(column.unique !== undefined ? { unique: column.unique } : {}),
+                        ...(column.autoIncrement !== undefined ? { autoIncrement: column.autoIncrement } : {}),
+                        ...(Object.hasOwn(column, 'default') ? { default: literal as ResourceCell } : {}) };
                 });
                 if (columns.filter(column => column.primaryKey).length > 1
                     || table.rows !== undefined && (!Array.isArray(table.rows) || table.rows.length > 256)) { throw invalid(); }
+                if (table.unique !== undefined && (!Array.isArray(table.unique) || table.unique.length > 16)) { throw invalid(); }
+                const uniqueKeys = new Set<string>();
+                const unique = (table.unique as unknown[] | undefined)?.map(group => {
+                    if (!Array.isArray(group) || !group.length || group.length > 32
+                        || group.some(name => typeof name !== 'string' || !columns.some(column => column.name === name))
+                        || new Set(group).size !== group.length) { throw invalid(); }
+                    const key = [...group].sort().join('\0');
+                    if (uniqueKeys.has(key)) { throw invalid(); }
+                    uniqueKeys.add(key);
+                    return [...group] as string[];
+                });
                 const rows = (table.rows as unknown[] | undefined)?.map(row => {
                     if (!object(row) || Object.keys(row).some(key => !columns.some(column => column.name === key))) { throw invalid(); }
                     const normalized: Array<[string, ResourceCell]> = [];
@@ -187,7 +210,7 @@ export function validateTestResources(input: unknown): TestResourceSpec[] {
                     }
                     return Object.fromEntries(normalized);
                 });
-                return { name: table.name, columns, ...(rows !== undefined ? { rows } : {}) };
+                return { name: table.name, columns, ...(unique !== undefined ? { unique } : {}), ...(rows !== undefined ? { rows } : {}) };
             });
             result.push({ ...location, kind: value.kind, tables });
         } else { throw invalid(); }

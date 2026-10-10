@@ -4,6 +4,18 @@
 
 ## 2026-10-10
 
+### 修復車輛批次的 schema、角色契約與突變冷啟動
+
+- Writer 增加明確 import、私有 helper、alias 使用點及 connection／cursor／context manager 形狀指引；修訂採專用完整證據，只去除完整且相同的 source／current test 重複。最終提示超預算由統一請求檢查記錄為 prompt-budget，停止而不誤分 unknown 或降 Tier；不增加模型名稱特例。
+- Analyst 對已收到但格式無效的回覆最多補正一次，保留同證據及原 deadline；取消、來源漂移、傳輸失敗與超預算不補問。Reviewer 使用同候選 AST import／binding 事實處理明確機械矛盾，仍須重新取得有效同意，不刪 findings 冒充批准。
+- 初始化新增有界 SQLite DDL 規劃，將支援的 literal `CREATE TABLE IF NOT EXISTS` 配對同來源的精確已宣告資料庫後合併預覽。支援 literal default、UNIQUE／複合 UNIQUE 與 INTEGER PRIMARY KEY AUTOINCREMENT；既有 schema／seed 保留、衝突只診斷。工具不 import 應用、不執行來源 SQL、不讀取或複製原 DB，各 worker 新建資源，來源漂移使批准失效。
+- 本機同版來源只做 AST 核對：8 來源中 6 個可定位候選，另有 14 個動態 DB 路徑及 2 個非 literal SQL 診斷。候選不代表已套用，也不代表原 8 個 schema 失敗目標已全部解決；未修改原應用、呼叫 GUI 或重跑實驗室模型。
+- Builtin／外部引擎共用的 baseline 冷啟動上限改為 `max(20 秒, 每 mutant 上限)`，仍受 stage 剩餘時間限制，個別 mutant 時限不增加。結果保存 baseline 上限／實際分配／耗時，逐輪流程與失敗報告顯示診斷；timeout／error 不算 killed，精簡最終報告格式保留。
+- 新增真實隔離 worker、來源漂移、一次批准、冷啟動時限、完整修訂證據、分析格式及 Reviewer 矛盾回歸；中英文訊息、VS Code 設定 schema、規則與操作文件同步。
+- Node 完整回歸 761 項，760 通過；唯一失敗為精簡提示漏保留 execution 契約標記。恢復標記並新增保護斷言後，重新編譯的 Writer／執行驗證相關 33／33 通過，不把補驗冒充單次全套零失敗。Python 全套 514 項，513 通過、1 項因目前使用者無 symbolic link 權限略過；核心 Mocha 15／15 通過。
+- TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／可達 Git 歷史密鑰掃描與差異檢查通過。先前沙箱內 async 測試因 localhost 連線被拒而逾時；正常本機權限原測試及完整回歸皆通過該項，未更改 timeout 或隔離 gate。
+- 詳見 `docs/車輛批次品質修復_2026_10_10.md`。原工作區既有修改保留；本機固定模型回覆與工具測試不代表實驗室整批或 1B～5B 模型已通過。
+
 ### 載入前彙整初始化清單，確認後接續同一批次
 
 - 新增有界 AST 初始化規劃：讀取選取來源及本機 import 閉包，提前彙整直接模組目錄與外部 callback 啟動入口，包含沒有可測函式的相依檔。靜態候選保留獨立證據身份，不假冒已觀測錯誤；不求值 helper、註解或任意程式，也不查詢原 UNC 資源。
