@@ -1241,6 +1241,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
             **({'importFixtures': result['importFixtures']} if result.get('importFixtures') else {}),
             load_diagnostic=result.get('load_diagnostic'), blocked_operations=result['blocked_operations'],
             planned_cases=[case_base(encoded, index + len(invalid_supplied)) for index, encoded in enumerate(pending)])
+    total_deadline_exhausted = False
     for index, encoded in enumerate(pending):
         case = case_base(encoded, index + len(invalid_supplied))
         if result['load_error']:
@@ -1248,7 +1249,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
             append_case(case)
             continue
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if total_deadline_exhausted or remaining <= 0:
             case.update(status='not_started', reason='total-deadline')
             append_case(case)
             continue
@@ -1257,7 +1258,9 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
             append_case(case)
             continue
         case_started = time.monotonic()
-        allocated_timeout = min(effective_case_timeout, max(0, deadline - case_started))
+        case_remaining = max(0, deadline - case_started)
+        allocated_timeout = min(effective_case_timeout, case_remaining)
+        total_deadline_limited = case_remaining <= effective_case_timeout
         if allocated_timeout <= 0:
             case.update(status='not_started', reason='total-deadline')
             append_case(case)
@@ -1277,7 +1280,12 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
                 case.update({key: value for key, value in completed_cases[0].items()
                              if key not in ('case_id', 'case_index', 'allocated_timeout_seconds')})
         except subprocess.TimeoutExpired:
-            case.update(status='timeout', reason='total-deadline' if allocated_timeout < effective_case_timeout else 'case-deadline')
+            # A worker that exhausted the total allocation consumes that budget
+            # even if platform timeout rounding returns just before monotonic's
+            # deadline. Do not launch another process on a sub-millisecond tail.
+            if total_deadline_limited:
+                total_deadline_exhausted = True
+            case.update(status='timeout', reason='total-deadline' if total_deadline_limited else 'case-deadline')
         except (OSError, ValueError, RuntimeError) as error:
             case.update(status='worker_error', diagnostic=f'Trace worker failed: {type(error).__name__}')
         case['duration_ms'] = round((time.monotonic() - case_started) * 1000, 3)

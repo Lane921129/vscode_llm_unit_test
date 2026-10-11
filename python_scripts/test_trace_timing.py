@@ -96,6 +96,68 @@ class TraceTimingTests(unittest.TestCase):
                 self.assertEqual(result['errors'], [])
                 self.assertFalse(result['complete'])
 
+    def test_total_deadline_timeout_latches_exhaustion_when_worker_returns_before_clock_deadline(self):
+        for planning_seconds, configured_case, total_seconds in ((2.0, 0.25, 3.0), (0.25, 0.5, 1.0)):
+            with self.subTest(planning=planning_seconds, total=total_seconds), \
+                    tempfile.TemporaryDirectory(prefix='neutral-trace-deadline-') as directory:
+                clock = [0.0]
+                calls = []
+                planned_inputs = [snapshot_value([number]) for number in (1, 2, 3)]
+
+                def worker(payload, timeout):
+                    calls.append((payload['mode'], timeout))
+                    if payload['mode'] == 'plan':
+                        clock[0] += planning_seconds
+                        return {'args': ['value'], 'load_error': None, 'planned_inputs': planned_inputs}
+                    # Windows subprocess timeout rounding can report expiry while
+                    # monotonic() still shows a fraction of a millisecond left.
+                    clock[0] += max(0, timeout - 0.0005)
+                    raise subprocess.TimeoutExpired('neutral early-expiry worker', timeout)
+
+                progress = Path(directory) / 'progress.jsonl'
+                with patch.object(dynamic_tracer.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(dynamic_tracer, '_worker_result', side_effect=worker):
+                    result = dynamic_tracer.trace_function('neutral.py', 'target', [[1], [2], [3]],
+                        case_timeout_seconds=configured_case, total_timeout_seconds=total_seconds,
+                        progress_path=str(progress))
+                events = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
+                allocation = total_seconds - planning_seconds
+                self.assertEqual(calls, [('plan', total_seconds), ('case', allocation)])
+                self.assertLess(clock[0], total_seconds)
+                self.assertEqual([case['status'] for case in result['cases']],
+                                 ['timeout', 'not_started', 'not_started'])
+                self.assertEqual([case['reason'] for case in result['cases']], ['total-deadline'] * 3)
+                self.assertEqual([case['allocated_timeout_seconds'] for case in result['cases']],
+                                 [allocation, 0, 0])
+                self.assertEqual(sum(event['event'] == 'case_started' for event in events), 1)
+                self.assertEqual([event['case'] for event in events if event['event'] == 'case_completed'],
+                                 result['cases'])
+                self.assertEqual(result['examples'], [])
+                self.assertEqual(result['errors'], [])
+                self.assertFalse(result['complete'])
+
+    def test_successful_total_limited_worker_keeps_unused_time_for_later_cases(self):
+        clock = [0.0]
+        calls = []
+        planned_inputs = [snapshot_value([number]) for number in (1, 2, 3)]
+
+        def worker(payload, timeout):
+            calls.append((payload['mode'], timeout))
+            if payload['mode'] == 'plan':
+                clock[0] += 0.25
+                return {'args': ['value'], 'load_error': None, 'planned_inputs': planned_inputs}
+            clock[0] += 0.125
+            return {'cases': [{'status': 'returned'}], 'examples': [], 'errors': []}
+
+        with patch.object(dynamic_tracer.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(dynamic_tracer, '_worker_result', side_effect=worker):
+            result = dynamic_tracer.trace_function('neutral.py', 'target', [[1], [2], [3]],
+                                                  case_timeout_seconds=1, total_timeout_seconds=1)
+        self.assertEqual(calls, [('plan', 1.0), ('case', 0.75), ('case', 0.625), ('case', 0.5)])
+        self.assertEqual([case['status'] for case in result['cases']], ['returned'] * 3)
+        self.assertEqual([case['allocated_timeout_seconds'] for case in result['cases']], [0.75, 0.625, 0.5])
+        self.assertTrue(result['complete'])
+
     def test_infinite_target_remains_timeout_and_a_later_case_still_runs(self):
         with tempfile.TemporaryDirectory(prefix='neutral-trace-infinite-') as directory:
             source = Path(directory) / 'sample.py'
