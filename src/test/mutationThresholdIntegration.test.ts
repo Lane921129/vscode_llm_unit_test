@@ -57,6 +57,7 @@ class Cases(unittest.TestCase):
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572, 'the fixture uses its observed runtime, not the advertised maximum');
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
         else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
@@ -67,7 +68,9 @@ class Cases(unittest.TestCase):
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768 });
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture',
+            paramSize: '13B', contextLength: 32768, contextLengthKnown: true,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-ps' });
         settings.mutationEngine = 'mutmut';
         const blockedOutput = path.join(root, 'blocked');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
@@ -89,6 +92,8 @@ class Cases(unittest.TestCase):
         assert.ok(report, logs.join('\n'));
         const directory = path.dirname(path.join(outputPath, report));
         const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(events.some(e => e.stage === 'model-runtime' && e.status === 'selected'
+            && e.detail.contextWindow === 8572 && e.detail.inputBudget === 6000));
         const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
         assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify(knowledge.qualityAssessment || knowledge.lastFailure));
         assert.equal(knowledge.qualityPolicy.policyId, 'standard80-v1');

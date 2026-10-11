@@ -74,8 +74,8 @@ test('revision context retains required evidence and complete dependency sources
     assert.equal((prompt.match(/```/g) || []).length % 2, 0);
     const revision = { code, findings: 'Fix setup only', moduleName: 'sample', functionName: '_load' };
     const previous = getReviewEvidence('', '', '_load', ['value'], source, context, 'sample');
-    assert.equal(promptFits('', buildWriterRevisionRequest({ ...revision, evidence: previous }), 6000), false,
-        'duplicating complete dependency bodies exceeds the unchanged budget');
+    assert.equal(promptFits('', buildWriterRevisionRequest({ ...revision, evidence: previous }), 6000), true,
+        'Reviewer evidence now also references identical complete dependency bodies once');
     assert.equal(promptFits('', buildWriterRevisionRequest({ ...revision, evidence: prompt }), 6000), true,
         'the same complete sources and observations fit when identical bodies are referenced once');
     const tooLarge = buildWriterRevisionContext({ module: 'sample', name: '_load', source: helper.repeat(10), evidence });

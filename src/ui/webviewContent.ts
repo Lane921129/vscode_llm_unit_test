@@ -216,6 +216,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     <button id="btn-test-local" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
                 </div>
                 <button id="btn-refresh-models" style="width:100%;">🔄 Refresh Models</button>
+                <label for="runtime-context-tokens">${t('ui.runtimeContextLabel')}</label>
+                <div class="flex-row">
+                    <input id="runtime-context-tokens" type="number" value="0" min="0" step="1" disabled>
+                    <button id="btn-save-runtime-context" style="margin-top:0; flex-shrink:0;" disabled>${t('ui.runtimeContextSave')}</button>
+                </div>
+                <p>${t('ui.runtimeContextHint')}</p>
+                <p id="runtime-context-status" role="status" aria-live="polite" style="white-space:pre-line;"></p>
             </div>
 
             <div id="custom-ui" style="display:none;">
@@ -390,8 +397,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let currentViewMode = 'flat';
         let environmentBusy = false;
         let analysisRunning = false;
+        let runtimeContextRevision = 0;
+        let runtimeContextEndpointKey;
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting","batchScopeGuide"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         vscode.postMessage({ command: 'getInitialData' });
@@ -584,7 +593,35 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         window.addEventListener('message', event => {
             const msg = event.data;
             switch (msg.command) {
-                case 'setModels': document.getElementById('model-select').innerHTML = '<option value="">-- Select Model --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join(''); break;
+                case 'setModels': {
+                    const select = document.getElementById('model-select');
+                    const previous = select.value;
+                    select.innerHTML = '<option value="">-- Select Model --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join('');
+                    if (msg.models.includes(previous)) select.value = previous;
+                    requestLocalRuntimeContext();
+                    break;
+                }
+                case 'ollamaUrlSaved': requestLocalRuntimeContext(); break;
+                case 'modelRuntimeContext': {
+                    if (msg.modelName !== document.getElementById('model-select').value
+                        || (msg.revision !== undefined ? msg.revision !== runtimeContextRevision
+                            : msg.endpointKey !== runtimeContextEndpointKey)) break;
+                    runtimeContextEndpointKey = msg.endpointKey;
+                    document.getElementById('runtime-context-tokens').value = msg.configuredTokens > 0
+                        ? msg.configuredTokens : msg.savedSource === 'user-choice' ? msg.savedTokens : 0;
+                    const tokens = value => Number.isSafeInteger(value) && value > 0 ? value.toLocaleString() : i18n.runtimeContextUnknown;
+                    document.getElementById('runtime-context-status').textContent = [
+                        i18n.runtimeContextSavedValue + tokens(msg.savedTokens),
+                        (msg.allocationCurrent ? i18n.runtimeContextAllocated : i18n.runtimeContextRecent) + tokens(msg.allocatedTokens),
+                        ...(msg.defaultTokens ? [i18n.runtimeContextDefault + tokens(msg.defaultTokens)] : []),
+                        i18n.runtimeContextLimit + tokens(msg.modelLimit),
+                        i18n.runtimeContextRequest + tokens(msg.requestTokens),
+                        ...(msg.configuredTokens > 0 ? [i18n.runtimeContextGlobal] : []),
+                        ...(msg.reasonCode ? [i18n.runtimeContextUnavailable] : [])
+                    ].join('\\n');
+                    updateLocalContextControls();
+                    break;
+                }
                 case 'setApiKeys': currentKeys = msg.keys; const keys = Object.keys(msg.keys); document.getElementById('api-key-select').innerHTML = '<option value="">-- Select Setting --</option>' + keys.map(k => \`<option value="\${k}">\${k} (\${currentKeys[k].model})</option>\`).join(''); break;
                 case 'apiKeySaved':
                     document.getElementById('new-key-name').value = '';
@@ -674,12 +711,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = environmentBusy;
                     }
+                    updateLocalContextControls();
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
                     for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
                         document.getElementById(id).disabled = false;
                     }
+                    updateLocalContextControls();
                     break;
                 case 'analysisFinished':
                     analysisRunning = false;
@@ -698,9 +737,51 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     document.getElementById('btn-import-setup').disabled = environmentBusy;
                     document.getElementById('btn-resource-setup').disabled = environmentBusy;
                     document.getElementById('btn-batch-scope').disabled = environmentBusy;
+                    updateLocalContextControls();
                     break;
             }
         });
+
+        function updateLocalContextControls() {
+            const frozen = analysisRunning || environmentBusy;
+            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local']) {
+                document.getElementById(id).disabled = frozen;
+            }
+            const noSelection = !document.getElementById('model-select').value;
+            for (const id of ['runtime-context-tokens', 'btn-save-runtime-context']) {
+                document.getElementById(id).disabled = frozen || noSelection || !runtimeContextEndpointKey;
+            }
+        }
+        function clearLocalRuntimeContext() {
+            runtimeContextRevision++;
+            runtimeContextEndpointKey = undefined;
+            document.getElementById('runtime-context-tokens').value = 0;
+            document.getElementById('runtime-context-status').textContent = '';
+            updateLocalContextControls();
+        }
+        function requestLocalRuntimeContext() {
+            clearLocalRuntimeContext();
+            const modelName = document.getElementById('model-select').value;
+            if (!modelName || analysisRunning || environmentBusy) return;
+            vscode.postMessage({ command: 'getModelRuntimeContext', modelName,
+                ollamaUrl: document.getElementById('ollama-url').value, revision: runtimeContextRevision });
+        }
+        document.getElementById('model-select').onchange = requestLocalRuntimeContext;
+        document.getElementById('ollama-url').oninput = clearLocalRuntimeContext;
+        document.getElementById('btn-save-runtime-context').onclick = () => {
+            if (analysisRunning || environmentBusy || !runtimeContextEndpointKey) return;
+            const input = document.getElementById('runtime-context-tokens');
+            const tokens = Number(input.value);
+            if (!input.value.trim() || !Number.isSafeInteger(tokens) || tokens < 0) {
+                document.getElementById('runtime-context-status').textContent = i18n.runtimeContextInvalid;
+                return;
+            }
+            runtimeContextRevision++;
+            input.disabled = true;
+            document.getElementById('btn-save-runtime-context').disabled = true;
+            vscode.postMessage({ command: 'setModelRuntimeContextTokens', modelName: document.getElementById('model-select').value,
+                ollamaUrl: document.getElementById('ollama-url').value, tokens, revision: runtimeContextRevision });
+        };
 
         document.getElementById('lang-select').onchange = (e) => {
             vscode.postMessage({ command: 'setLanguage', lang: e.target.value });
@@ -857,7 +938,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('btn-test-local').onclick = () => {
             const modelName = document.getElementById('model-select').value;
             if(!modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Local model.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName, ...environmentSelection() });
+            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName, contextRevision: runtimeContextRevision, ...environmentSelection() });
         };
         document.getElementById('btn-test-custom').onclick = () => {
             const customUrl = document.getElementById('custom-url').value;
@@ -885,6 +966,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function setRunningState(isBatch) {
             analysisRunning = true;
+            updateLocalContextControls();
             updateValidationScope();
             document.getElementById('lang-select').disabled = true;
             document.getElementById('validation-mode').disabled = true;

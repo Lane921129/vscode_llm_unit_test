@@ -9,6 +9,7 @@ import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } f
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, missingNameRepairGuidance, relevantSourceImports, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { callerForPrompt } from '../pipeline/probeInputs';
+import { createPromptContextReferences } from '../prompts/compactWriterContext';
 
 interface TestMethodFragment {
     name: string;
@@ -158,15 +159,20 @@ export function getReviewEvidence(
     _semanticGuidance?: string,
     allowedMockTargets: string[] = []
 ): string {
+    const references = createPromptContextReferences();
+    references.source(focusedSource(_sourceCode), 'Target source (read-only)');
+    const setup = references.setup({ constructor: _astContext?.class_context || null,
+        imports: relevantSourceImports(_astContext), globals: _astContext?.referenced_globals || [] }, 'SOURCE SETUP');
+    const dependencies = dependencySetupForRole(_astContext?.dependencyContexts, references);
     return [
         formatTargetContract(moduleName, funcName, funcArgs, _astContext),
         `Allowed mock use points: ${allowedMockTargets.length ? allowedMockTargets.join(', ') : 'none supplied'}`,
         `Target source (read-only):\n${focusedSource(_sourceCode)}`,
         `Source setup and verified observations (read-only; same setup only):\n${JSON.stringify({
-            constructor: _astContext?.class_context || null, imports: relevantSourceImports(_astContext),
-            globals: _astContext?.referenced_globals || [], dependencies: dependencySetupForRole(_astContext?.dependencyContexts),
+            ...setup, dependencies,
             observations: observationsForPrompt(_astContext?.traceResult)
         })}`,
+        references.note(),
         'Every finding must quote TEST_FILE; these constraints cannot be quoted as evidence.'
     ].join('\n');
 }
@@ -188,20 +194,24 @@ function formatRepairSetup(code: string, astContext?: any, method?: TestMethodFr
         while (i + 1 < lines.length && (!lines[i + 1].trim() || (lines[i + 1].match(/^\s*/)?.[0].length || 0) > match[1].length)) { i++; }
         fixtures.push(lines.slice(start, i + 1).join('\n'));
     }
-    return JSON.stringify({ testClass: lines[0] || null, fixtures, constructor: astContext?.class_context || null,
+    const references = createPromptContextReferences();
+    const setup = references.setup({ testClass: lines[0] || null, fixtures, constructor: astContext?.class_context || null,
         imports: relevantSourceImports(astContext), globals: astContext?.referenced_globals || [],
-        dependencies: dependencySetupForRole(astContext?.dependencyContexts), observations: observationsForPrompt(astContext?.traceResult) });
+    }, 'TEST SETUP');
+    return JSON.stringify({ ...setup, dependencies: dependencySetupForRole(astContext?.dependencyContexts, references),
+        observations: observationsForPrompt(astContext?.traceResult) }) + (references.note() ? '\n' + references.note() : '');
 }
 
 /** Keep complete dependency source and observations. Typed transport trees are
  * artifact data; callerForPrompt retains their spellings and replay status.
  * Filter only irrelevant import bindings, using the same conservative rule as
  * Writer. Unknown fields and dependency setup facts remain available. */
-function dependencySetupForRole(contexts: any[] = []): unknown[] {
-    return dependencyContextsForPrompt(contexts).map((value: any, index) => ({ ...value,
+function dependencySetupForRole(contexts: any[] = [], references = createPromptContextReferences()): unknown[] {
+    return dependencyContextsForPrompt(contexts).map((value: any, index) => references.setup({ ...value,
+        ...(typeof value.code === 'string' ? { code: references.source(value.code, `dependencies[${index}].code`) } : {}),
         ...(Array.isArray(value.file_imports) ? { file_imports: relevantSourceImports(contexts[index]) } : {}),
         ...(Array.isArray(value.callerContexts) ? { callerContexts: value.callerContexts.map(callerForPrompt) } : {})
-    }));
+    }, `dependencies[${index}]`));
 }
 
 function parseReplacement(raw: string): BugFixReplacement | undefined {

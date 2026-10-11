@@ -57,6 +57,7 @@ test('numeric observations guide an AI revision which is reviewed before real mu
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572, 'the fixture uses its observed runtime, not the advertised maximum');
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
         else if (request.roleInstructions.includes('You are the test Reviewer')) {
@@ -79,7 +80,9 @@ test('numeric observations guide an AI revision which is reviewed before real mu
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768 });
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture',
+            paramSize: '13B', contextLength: 32768, contextLengthKnown: true,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-ps' });
         const outputPath = path.join(root, 'results');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
             funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', validationMode: 'full',
@@ -88,6 +91,8 @@ test('numeric observations guide an AI revision which is reviewed before real mu
         assert.ok(report, logs.join('\n'));
         const directory = path.dirname(path.join(outputPath, report));
         const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(events.some(e => e.stage === 'model-runtime' && e.status === 'selected'
+            && e.detail.contextWindow === 8572 && e.detail.inputBudget === 6000));
         const numeric = events.find(e => e.stage === 'numeric-skill' && e.status === 'verified');
         assert.ok(numeric, JSON.stringify(events.filter(e => /numeric|failed|rejected/.test(e.stage + e.status))));
         assert.equal(writers, 2, JSON.stringify(events.filter(e => ['failed', 'rejected', 'error', 'tier-failed'].includes(e.status))

@@ -1,20 +1,109 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { contextInputBudget, resolveLocalRuntimeContext, runtimeContextWindow } from '../prompts/promptBudget';
+import { contextInputBudget, promptFits, resolveLocalRuntimeContext, runtimeContextWindow } from '../prompts/promptBudget';
 import { getOllamaModelConnectionMetadata } from '../llm/ollamaRuntime';
+import { LOCAL_RUNTIME_QUALIFICATION_VERSION, ModelQualificationProfile, QUALIFICATION_VERSION,
+    qualificationAppliesToRequest, qualificationForRequest } from '../llm/modelQualification';
+import { qualifiedRole } from '../llm/roleQualification';
 
-test('default local runtime keeps existing caps without requiring advertised metadata', () => {
-    for (const paramSize of ['1B', '3B', '7B', '13B', '31B', 'unknown']) {
-        for (const contextLength of [4096, 8192, 32768, NaN]) {
-            const expected = { ok: true, configuredTokens: 0, mode: 'automatic',
-                contextWindow: runtimeContextWindow(paramSize, contextLength), inputBudget: contextInputBudget(paramSize, contextLength) };
-            assert.deepEqual(resolveLocalRuntimeContext({ paramSize, contextLength }), expected);
-            assert.deepEqual(resolveLocalRuntimeContext({ paramSize, contextLength, runtimeContextTokens: 0, contextLengthKnown: false }), expected);
+test('selected capacities have the same input budget across parameter sizes without an automatic size cap', () => {
+    for (const paramSize of ['500M', '2B', '3B', '7B', '13B', '31B', 'unknown']) {
+        for (const [contextLength, contextWindow, inputBudget] of [
+            [2048, 2048, 1433], [4096, 4096, 2867], [4097, 4097, 2867],
+            [8192, 8192, 5734], [16384, 16384, 11468], [32768, 32768, 22937],
+            [131072, 131072, 91750]
+        ]) {
+            assert.equal(runtimeContextWindow(paramSize, contextLength), contextWindow);
+            assert.equal(contextInputBudget(paramSize, contextLength), inputBudget);
+            for (const runtimeContextTokens of [undefined, 0]) {
+                assert.deepEqual(resolveLocalRuntimeContext({ paramSize, contextLength, contextLengthKnown: true,
+                    effectiveRuntimeContextTokens: contextWindow, runtimeContextTokens }), {
+                    ok: true, configuredTokens: 0, mode: 'automatic', contextWindow, inputBudget
+                });
+            }
         }
     }
-    assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '3B', contextLength: 32768 }), {
-        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 5000, inputBudget: 3500
+});
+
+test('automatic mode does not allocate the advertised maximum when runtime allocation is unknown', () => {
+    for (const contextLength of [8192, 16384, 131072, Number.MAX_SAFE_INTEGER]) {
+        assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '3B', contextLength, contextLengthKnown: true }), {
+            ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 4096, inputBudget: 2867
+        });
+    }
+    assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '13B', contextLength: 2048, contextLengthKnown: true }), {
+        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 2048, inputBudget: 1433
+    }, 'a conservative fallback must not exceed a smaller known model limit');
+});
+
+test('explicit selection wins over saved preference, qualified runtime and the current API allocation', () => {
+    const profile = { paramSize: '3B', contextLength: 32768, contextLengthKnown: true,
+        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8572 },
+        effectiveRuntimeContextTokens: 16384, preferredRuntimeContextTokens: 8192 };
+    assert.deepEqual(resolveLocalRuntimeContext(profile), {
+        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 8192, inputBudget: 5734
     });
+    assert.deepEqual(resolveLocalRuntimeContext({ ...profile, runtimeContextTokens: 32768 }), {
+        ok: true, configuredTokens: 32768, mode: 'explicit', contextWindow: 32768, inputBudget: 22937
+    });
+    assert.deepEqual(resolveLocalRuntimeContext({ ...profile, preferredRuntimeContextTokens: 0 }), {
+        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 8572, inputBudget: 6000
+    }, 'clearing a preference still preserves a previously qualified runtime');
+    assert.deepEqual(resolveLocalRuntimeContext({ ...profile, preferredRuntimeContextTokens: undefined, qualificationRuntime: undefined }), {
+        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 16384, inputBudget: 11468
+    });
+});
+
+test('captured runtime survives an unknown-metadata restart without becoming a new explicit user choice', () => {
+    const metadata = { paramSize: '3B', contextLength: 4096, contextLengthKnown: false };
+    const first = resolveLocalRuntimeContext({ ...metadata, effectiveRuntimeContextTokens: 12288 });
+    assert.deepEqual(first, { ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 12288, inputBudget: 8601 });
+    const saved = JSON.parse(JSON.stringify({ preferredRuntimeContextTokens: 12288, preferredRuntimeContextSource: 'captured-runtime' }));
+    assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, ...saved }), first);
+    assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, ...saved, preferredRuntimeContextSource: 'user-choice' }), {
+        ok: false, reasonCode: 'runtime-context-metadata-required'
+    });
+    assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, preferredRuntimeContextTokens: 12288 }), {
+        ok: false, reasonCode: 'runtime-context-metadata-required'
+    }, 'legacy preferences without origin cannot impersonate observed allocation');
+});
+
+test('saved choices and runtime observations cannot exceed a valid model bound or invent a valid capacity', () => {
+    const base = { paramSize: '3B', contextLength: 8192, contextLengthKnown: true };
+    for (const fields of [
+        { preferredRuntimeContextTokens: 16384 },
+        { preferredRuntimeContextTokens: 16384, preferredRuntimeContextSource: 'captured-runtime' as const },
+        { effectiveRuntimeContextTokens: 16384 },
+        { qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 16384 } }
+    ]) {
+        assert.deepEqual(resolveLocalRuntimeContext({ ...base, ...fields }), { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' });
+    }
+    for (const preferredRuntimeContextTokens of [-1, 8192.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '8192', null]) {
+        assert.deepEqual(resolveLocalRuntimeContext({ ...base, preferredRuntimeContextTokens }), {
+            ok: false, reasonCode: 'invalid-runtime-context'
+        });
+    }
+    for (const effectiveRuntimeContextTokens of [-1, 8192.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '8192', null]) {
+        assert.deepEqual(resolveLocalRuntimeContext({ ...base, effectiveRuntimeContextTokens }), {
+            ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 4096, inputBudget: 2867
+        });
+    }
+});
+
+test('unknown or malformed automatic metadata stays at 4096 even when a remembered number is larger', () => {
+    const expected = { ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 4096, inputBudget: 2867 };
+    for (const paramSize of ['2B', '3B', '13B', 'unknown']) {
+        for (const contextLength of [2048, 8192, 32768, 131072]) {
+            for (const contextLengthKnown of [undefined, false]) {
+                assert.deepEqual(resolveLocalRuntimeContext({ paramSize, contextLength, contextLengthKnown }), expected);
+            }
+        }
+        for (const contextLength of [0, -1, 8192.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+            assert.deepEqual(resolveLocalRuntimeContext({ paramSize, contextLength, contextLengthKnown: true }), expected);
+            assert.equal(runtimeContextWindow(paramSize, contextLength), 4096);
+            assert.equal(contextInputBudget(paramSize, contextLength), 2867);
+        }
+    }
 });
 
 test('explicit local runtime uses the advertised bound and reserves output capacity without a size cap', () => {
@@ -27,6 +116,61 @@ test('explicit local runtime uses the advertised bound and reserves output capac
     assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '3B', contextLength: 8192, contextLengthKnown: true, runtimeContextTokens: 8193 }), {
         ok: false, reasonCode: 'runtime-context-exceeds-model-limit'
     });
+    assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '2B', contextLength: 32768, contextLengthKnown: true, runtimeContextTokens: 32768 }), {
+        ok: true, configuredTokens: 32768, mode: 'explicit', contextWindow: 32768, inputBudget: 22937
+    }, 'the automatic allocation ceiling must not silently clamp an explicit supported capacity');
+});
+
+test('capacity budgeting preserves the output reserve and the complete format-repair reservation', () => {
+    const runtime = resolveLocalRuntimeContext({ paramSize: '2B', contextLength: 8192, contextLengthKnown: true, effectiveRuntimeContextTokens: 8192 });
+    assert.equal(runtime.ok, true);
+    if (!runtime.ok) { throw new Error('expected resolved neutral context'); }
+    const reservedInputTokens = 100;
+    const fittingPrompt = '中'.repeat(runtime.inputBudget - reservedInputTokens - 1);
+    assert.equal(promptFits('', fittingPrompt, runtime.inputBudget, reservedInputTokens), true);
+    assert.equal(promptFits('', fittingPrompt + '中', runtime.inputBudget, reservedInputTokens), false);
+    assert.equal(runtime.contextWindow - runtime.inputBudget, 2458, 'output space remains outside the input budget');
+});
+
+test('all local roles retain the saved runtime but require fresh qualification after a user capacity change', () => {
+    for (const [paramSize, oldNumCtx] of [['2B', 2572], ['3B', 5000], ['13B', 8572]] as const) {
+        const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: oldNumCtx };
+        const automatic = resolveLocalRuntimeContext({ paramSize, contextLength: 32768, contextLengthKnown: true, qualificationRuntime });
+        assert.deepEqual(automatic, { ok: true, configuredTokens: 0, mode: 'automatic',
+            contextWindow: oldNumCtx, inputBudget: Math.floor(oldNumCtx * 0.7) });
+        const runtime = resolveLocalRuntimeContext({ paramSize, contextLength: 32768, contextLengthKnown: true,
+            qualificationRuntime, runtimeContextTokens: 16384 });
+        assert.equal(runtime.ok, true);
+        if (!runtime.ok) { throw new Error('expected resolved neutral context'); }
+        const request = { envType: 'local' as const, modelName: 'neutral-model', runtimeContextTokens: runtime.contextWindow };
+        for (const role of ['writer', 'reviewer', 'bugFixer'] as const) {
+            const profile: ModelQualificationProfile = {
+                envType: 'local', modelName: 'neutral-model', qualificationVersion: QUALIFICATION_VERSION,
+                testGenerationReady: role === 'writer',
+                qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: oldNumCtx },
+                roleQualification: {
+                    writer: { state: role === 'writer' ? 'verified' : 'unverified', reason: 'neutral probe' },
+                    reviewer: { state: role === 'reviewer' ? 'verified' : 'unverified', reason: 'neutral probe' },
+                    bugFixer: { state: role === 'bugFixer' ? 'verified' : 'unverified', reason: 'neutral probe' }
+                }
+            };
+            assert.equal(qualificationAppliesToRequest(profile, request), false, `${paramSize}/${role} cannot reuse a smaller probe`);
+            assert.equal(qualificationForRequest(profile, request), false);
+            assert.equal(qualifiedRole(role, profile.roleQualification, qualificationAppliesToRequest(profile, request), profile.testGenerationReady), false);
+            const reprobed: ModelQualificationProfile = { ...profile,
+                qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: runtime.contextWindow } };
+            assert.equal(qualificationAppliesToRequest(reprobed, request), true);
+            assert.equal(qualifiedRole(role, reprobed.roleQualification, qualificationAppliesToRequest(reprobed, request), reprobed.testGenerationReady), true);
+            assert.equal(qualificationForRequest(reprobed, request), role === 'writer', 'matching capacity must not invent Writer success');
+        }
+    }
+    const unchangedRuntime = resolveLocalRuntimeContext({ paramSize: '13B', contextLength: 4096, contextLengthKnown: true });
+    assert.equal(unchangedRuntime.ok, true);
+    if (!unchangedRuntime.ok) { throw new Error('expected resolved neutral context'); }
+    assert.equal(qualificationForRequest({ envType: 'local', modelName: 'neutral-model', qualificationVersion: QUALIFICATION_VERSION,
+        testGenerationReady: true, qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 4096 } },
+    { envType: 'local', modelName: 'neutral-model', runtimeContextTokens: unchangedRuntime.contextWindow }), true,
+    'an already verified identical runtime remains valid; a contract version bump is unnecessary');
 });
 
 test('invalid runtime settings never become automatic defaults or silently clamped values', () => {

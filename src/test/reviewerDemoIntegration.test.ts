@@ -61,6 +61,8 @@ class Cases(unittest.TestCase):
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572,
+            'the fixture runtime allocation, not the model maximum, owns the input budget');
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
         else if (request.roleInstructions.includes('You are the test Reviewer')) {
@@ -87,7 +89,10 @@ class Cases(unittest.TestCase):
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768 });
+        // Fixed-response transport declares its actual runtime allocation separately:
+        // 8572 preserves this review-gate fixture's original 6000-token input budget.
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-num-ctx' });
         for (const selected of ['invalid', 'quality'] as const) {
             scenario = selected; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
             const outputPath = path.join(root, 'results-' + scenario);

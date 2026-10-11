@@ -5,6 +5,7 @@ import { qualificationAppliesToRequest, qualificationEndpointKey } from '../llm/
 import { BUG_FIXER_QUALIFICATION_PROMPT, REVIEWER_QUALIFICATION_PROMPT } from '../llm/roleQualification';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
 
 const writerResponse = `import unittest
 class TestCases(unittest.TestCase):
@@ -15,7 +16,7 @@ class TestCases(unittest.TestCase):
 `;
 const fixerResponse = '```python\ndef test_increment(self):\n    self.assertEqual(increment(1), 2)\n```';
 const metadata = { details: { parameter_size: '3B' },
-    model_info: { 'general.architecture': 'neutral', 'neutral.context_length': 32768 } };
+    model_info: { 'general.architecture': 'neutral', 'neutral.context_length': 32768 }, parameters: 'num_ctx 8192' };
 
 test('Sidebar connection binds actual role probes to one local runtime snapshot', async t => {
     const Module = require('module');
@@ -25,6 +26,7 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
     const settings = new Map<string, unknown>([['language', 'zh-tw'], ['pythonPath', python],
         ['ollamaBaseUrl', 'http://127.0.0.1:11434'], ['runtimeContextTokens', 0]]);
     const executed: any[][] = [], messages: any[] = [], information: string[] = [], warnings: string[] = [], errors: string[] = [];
+    const stored = new Map<string, unknown>();
     const vscode = {
         commands: { executeCommand: async (...args: any[]) => { executed.push(args); } },
         workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => settings.has(key) ? settings.get(key) : fallback }) },
@@ -44,19 +46,22 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
         const { MutationViewProvider } = require('../ui/SidebarProvider');
         let receive!: (message: unknown) => Promise<void>;
         const provider = new MutationViewProvider({ get: async (key: string) => key === 'llm_api_keys'
-            ? JSON.stringify({ neutral: { model: 'neutral-cloud', key: 'fixture-only-credential' } }) : undefined }, { get: () => undefined });
+            ? JSON.stringify({ neutral: { model: 'neutral-cloud', key: 'fixture-only-credential' } }) : undefined },
+        { get: (key: string) => stored.get(key), update: async (key: string, value: unknown) => { stored.set(key, value); } });
         provider.resolveWebviewView({ webview: { options: {}, html: '',
             postMessage: (message: unknown) => { messages.push(message); },
             onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } } });
-        const reset = () => { executed.length = messages.length = information.length = warnings.length = errors.length = 0; };
+        const reset = () => { executed.length = messages.length = information.length = warnings.length = errors.length = 0; stored.clear(); };
         const finalProfile = () => executed.filter(item => item[0] === 'llm-unit-test.updateModelProfile').at(-1)?.[1];
         const request = () => receive({ command: 'testConnection', envType: 'local', modelName: 'neutral-model' });
-        const installTransport = (show: () => Response = () => Response.json(metadata), onWriter?: () => void) => {
+        const installTransport = (show: () => Response = () => Response.json(metadata), onWriter?: () => void,
+            running: unknown = { models: [] }) => {
             const probes: any[] = [];
             globalThis.fetch = async (url, init) => {
                 const endpoint = String(url);
                 if (endpoint.endsWith('/api/tags')) { return Response.json({ models: [{ name: 'neutral-model' }] }); }
                 if (endpoint.endsWith('/api/show')) { return show(); }
+                if (endpoint.endsWith('/api/ps')) { return Response.json(running); }
                 assert.ok(endpoint.endsWith('/api/generate'), 'only normal connection endpoints are used');
                 const body = JSON.parse(String(init?.body));
                 probes.push(body);
@@ -94,9 +99,39 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             reset(); settings.set('runtimeContextTokens', 0);
             const probes = installTransport();
             await request();
-            assert.deepEqual(probes.map(body => body.options.num_ctx), [5000, 5000, 5000]);
-            assertVerified(5000, true);
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
             assert.equal(information.length, 1);
+        });
+
+        await t.test('saved choice changes during a probe require fresh qualification and cannot relabel its wire capacity', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 8192, 'user-choice'));
+            const probes = installTransport(undefined, () => {
+                stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 16384, 'user-choice'));
+            });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.equal(information.length, 0);
+            assert.ok(warnings.some(message => message.includes('設定已變更')));
+            assert.equal(qualificationAppliesToRequest(finalProfile(), { envType: 'local', ...identity, runtimeContextTokens: 16384 }), false);
+        });
+
+        await t.test('metadata-fetch preference changes cannot hide a probe snapshot mismatch', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 8192, 'user-choice'));
+            const probes = installTransport(() => {
+                stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 16384, 'user-choice'));
+                return Response.json(metadata);
+            });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.equal(information.length, 0);
+            assert.ok(warnings.some(message => message.includes('設定已變更')));
         });
 
         await t.test('configuration changes during generation cannot relabel the old probes as the new context', async () => {
@@ -147,9 +182,21 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
                 await request();
                 assert.deepEqual(probes.map(body => body.options.num_ctx), [4096, 4096, 4096]);
                 assertVerified(4096, false);
-                assert.ok(messages.some(item => item.command === 'appendLog' && item.text.includes('自動保守值')));
+                assert.ok(messages.some(item => item.command === 'appendLog' && item.text.includes('已選容量')));
                 assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_PROVIDER_ERROR|PRIVATE_INVALID_JSON/);
             }
+        });
+
+        await t.test('unknown upper bound describes an observed ps capacity as the selected context without calling it a conservative fallback', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const probes = installTransport(() => Response.json({ details: metadata.details }), undefined,
+                { models: [{ name: 'neutral-model', context_length: 16384 }] });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [16384, 16384, 16384]);
+            assertVerified(16384, false);
+            const log = messages.find(item => item.command === 'appendLog' && item.text.includes('未提供可驗證的 Context 上限'))?.text;
+            assert.match(log, /已選容量 16,384 tokens/);
+            assert.doesNotMatch(log, /自動保守值/);
         });
 
         await t.test('generation transport failure preserves the attempted context without a successful role claim', async () => {

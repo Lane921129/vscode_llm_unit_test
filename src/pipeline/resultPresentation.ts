@@ -67,6 +67,21 @@ export function stageLabel(status: string): string {
 
 /** Human progress messages never turn intermediate acceptance into certification. */
 export function describeStageEvent(stage: string, status: string, detail: unknown, mode: 'full' | 'execution' = 'full'): string {
+    if (stage === 'model-request' && status === 'budget-exceeded') {
+        const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
+            ? detail as Record<string, unknown> : {};
+        const keys = ['estimatedInputTokens', 'inputBudget', 'reservedInputTokens', 'contextWindow'] as const;
+        if (keys.every(key => Number.isSafeInteger(metrics[key]) && Number(metrics[key]) >= 0)
+            && Number.isSafeInteger(Number(metrics.estimatedInputTokens) + Number(metrics.reservedInputTokens))) {
+            const roles = ['writer', 'writer-revision', 'reviewer', 'bug-fixer', 'analyst-planning', 'analyst-quality'];
+            const role = typeof metrics.role === 'string' && roles.includes(metrics.role)
+                ? metrics.role : localize('模型角色');
+            const excess = Math.max(0, Number(metrics.estimatedInputTokens) + Number(metrics.reservedInputTokens) - Number(metrics.inputBudget));
+            return localize('提示超出預算：{0}，估計輸入 {1} + 補正預留 {2}，上限 {3}，超出 {4} tokens（Context {5}）；未送出模型請求',
+                role, metrics.estimatedInputTokens, metrics.reservedInputTokens, metrics.inputBudget, excess, metrics.contextWindow);
+        }
+        return localize('提示超出輸入預算；完整證據已保留，未送出模型請求');
+    }
     const value = detail as { reason?: unknown; diagnostics?: unknown; role?: unknown; focus?: unknown; globalProgress?: unknown } | undefined;
     if (stage === 'quality-experiment' && value?.focus) {
         if (status === 'resolved') { return localize('實測確認指定品質缺口已解決；整體品質仍須另外判定'); }

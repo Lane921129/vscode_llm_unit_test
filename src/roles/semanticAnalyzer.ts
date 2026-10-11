@@ -14,6 +14,7 @@ import { BehaviorObservations, observationsForPrompt } from '../pipeline/evidenc
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { relevantSourceImports } from '../prompts/dependencyMockContract';
+import { createPromptContextReferences } from '../prompts/compactWriterContext';
 
 // === Type Definitions ===
 
@@ -122,14 +123,14 @@ export function formatVerifiedTargetObservations(
 }
 
 function formatVerifiedDependencyFacts(dependencies: DependencyEvidenceForPrompt[]): string {
-    const traced = dependencies.filter(dependency => dependency.observations);
+    const traced = dependencies.flatMap((dependency, index) => dependency.observations ? [{ dependencyIndex: index + 1,
+        name: dependency.name, sourceHash: dependency.sourceHash, observations: observationsForPrompt(dependency.observations) }] : []);
     if (traced.length === 0) {
         return '';
     }
 
     return '=== VERIFIED DEPENDENCY EXECUTION FACTS ===\n'
-        + JSON.stringify(traced.map(dependency => ({ name: dependency.name, sourceHash: dependency.sourceHash,
-            observations: observationsForPrompt(dependency.observations) })))
+        + JSON.stringify(traced)
         + '\nExact call/setup only; diagnostics and unassertable records are not oracles. Dependency results are not target results.\n\n';
 }
 
@@ -241,6 +242,8 @@ export function getSemanticAnalyzerUserPrompt(
 ): string {
     const dependencies = evidence.dependencies || [];
     const callSites = evidence.callSites || [];
+    const references = createPromptContextReferences();
+    references.source(evidence.target.source, 'TARGET FUNCTION SOURCE CODE');
     let prompt = '=== ANALYSIS EVIDENCE V2 ===\n';
     prompt += `Target: ${evidence.target.moduleName}.${evidence.target.functionName}\n`;
     prompt += `Source hash: ${evidence.target.sourceHash}\n\n`;
@@ -254,14 +257,17 @@ export function getSemanticAnalyzerUserPrompt(
 
     if (dependencies.length > 0) {
         prompt += '=== DEPENDENCY SOURCE CODE ===\n';
-        for (const dep of dependencies) {
-            prompt += '```python\n# Dependency: ' + dep.name + (dep.sourceHash ? '\n# Source hash: ' + dep.sourceHash : '')
-                + '\n' + dep.code + '\n```\n';
+        for (const [index, dep] of dependencies.entries()) {
+            const source = references.source(dep.code, `DEPENDENCY ${index + 1} SOURCE CODE`);
+            prompt += `DEPENDENCY ${index + 1} SOURCE CODE\n# Dependency: ` + dep.name
+                + (dep.sourceHash ? '\n# Source hash: ' + dep.sourceHash : '') + '\n'
+                + (typeof source === 'string' ? '```python\n' + source + '\n```\n' : JSON.stringify(source) + '\n');
         }
         prompt += '\n';
     }
 
     prompt += formatVerifiedDependencyFacts(dependencies);
+    if (references.note()) { prompt += references.note() + '\n\n'; }
 
     if (callSites.length > 0) {
         prompt += '=== TARGET CALL SITES (INPUT CANDIDATES ONLY) ===\n';

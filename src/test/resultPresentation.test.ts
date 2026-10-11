@@ -9,6 +9,34 @@ import * as vm from 'node:vm';
 import zhTw from '../i18n/zh-tw';
 import { getLanguage, setLanguage } from '../i18n/core';
 
+test('prompt-budget progress shows safe role metrics and distinguishes reserved input from context', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const label = describeStageEvent('model-request', 'budget-exceeded', {
+                role: 'analyst-planning', estimatedInputTokens: 6200, reservedInputTokens: 300,
+                inputBudget: 6400, contextWindow: 16384, raw: 'PRIVATE_PROVIDER_RESPONSE'
+            });
+            assert.match(label, /analyst-planning.*6200.*300.*6400.*100.*16384/);
+            assert.match(label, lang === 'en' ? /model request not sent/ : /未送出模型請求/);
+            assert.doesNotMatch(label, /PRIVATE_PROVIDER_RESPONSE|完整通過|Fully passed/);
+            if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            for (const malformed of [null, [], { estimatedInputTokens: 'PRIVATE_PROVIDER_RESPONSE' },
+                { estimatedInputTokens: NaN, reservedInputTokens: 0, inputBudget: 100, contextWindow: 4096 },
+                { estimatedInputTokens: Number.MAX_SAFE_INTEGER, reservedInputTokens: 1, inputBudget: 100, contextWindow: 4096 }]) {
+                const fallback = describeStageEvent('model-request', 'budget-exceeded', malformed);
+                assert.match(fallback, lang === 'en' ? /model request not sent/ : /未送出模型請求/);
+                assert.doesNotMatch(fallback, /PRIVATE_PROVIDER_RESPONSE|NaN|Infinity/);
+            }
+            assert.doesNotMatch(describeStageEvent('model-request', 'budget-exceeded', {
+                role: 'PRIVATE_PROVIDER_RESPONSE', estimatedInputTokens: 101, reservedInputTokens: 0,
+                inputBudget: 100, contextWindow: 4096
+            }), /PRIVATE_PROVIDER_RESPONSE/);
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
 test('mutation progress is localized and never describes selection as a completed measurement', () => {
     const originalLanguage = getLanguage();
     try {

@@ -11,8 +11,11 @@ import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGen
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, LOCAL_RUNTIME_QUALIFICATION_VERSION, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
 import { buildOllamaPlainTestGenerationProbe, buildOllamaRoleQualificationProbe } from '../llm/ollamaCapability';
-import { getOllamaModelConnectionMetadata } from '../llm/ollamaRuntime';
+import { getOllamaModelConnectionMetadata, getOllamaRuntimeContextMetadata } from '../llm/ollamaRuntime';
 import { resolveLocalRuntimeContext } from '../prompts/promptBudget';
+import { findModelProfile, restoreModelProfiles } from '../llm/modelProfileRegistry';
+import { getRuntimeContextPreference, restoreRuntimeContextPreferences, RuntimeContextPreference, RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
+import { getOllamaAllocationObservation, OLLAMA_ALLOCATION_OBSERVATIONS_KEY, upsertOllamaAllocationObservation } from '../llm/ollamaAllocationObservations';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
@@ -29,6 +32,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     private languageRefreshPending = false;
     private readonly batchScope: BatchScopeController;
     private projectRevision = 0;
+    private contextPreferenceWrites: Promise<void> = Promise.resolve();
 
     constructor(private readonly secretStorage: vscode.SecretStorage, private readonly uiState: vscode.Memento) {
         this.batchScope = new BatchScopeController(uiState);
@@ -39,6 +43,90 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     }
 
     public cancelBatchScopePreview(): void { this.batchScope.invalidate(); }
+
+    public runtimeContextPreferencesSnapshot(): RuntimeContextPreference[] {
+        return restoreRuntimeContextPreferences(this.uiState.get(RUNTIME_CONTEXT_PREFERENCES_KEY));
+    }
+
+    private async saveRuntimeContextPreference(identity: { endpointKey: string; modelName: string },
+        tokens: number, source: RuntimeContextPreference['source'], initializeOnly = false): Promise<void> {
+        const write = this.contextPreferenceWrites.catch(() => undefined).then(async () => {
+            const current = this.uiState.get(RUNTIME_CONTEXT_PREFERENCES_KEY);
+            if (initializeOnly && getRuntimeContextPreference(current, identity)) { return; }
+            await this.uiState.update(RUNTIME_CONTEXT_PREFERENCES_KEY,
+                upsertRuntimeContextPreference(current, identity, tokens, source));
+        });
+        this.contextPreferenceWrites = write;
+        await write;
+    }
+
+    /** Allocation and model upper bound are separate facts. Reading the upper
+     * bound never increases a saved choice or the actual request context. */
+    private async readLocalRuntimeContext(modelName: string, configuredTokens: unknown, capture = true, endpoint?: string, ignoreQualification = false) {
+        const config = vscode.workspace.getConfiguration('llmUnitTest');
+        const baseUrl = (endpoint || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')).replace(/\/$/, '');
+        const identity = { endpointKey: qualificationEndpointKey('local', baseUrl), modelName };
+        const preference = getRuntimeContextPreference(this.runtimeContextPreferencesSnapshot(), identity);
+        const stored = findModelProfile(restoreModelProfiles(this.uiState.get('llmUnitTest.modelProfiles.v1')),
+            { ...identity, envType: 'local' });
+        const readJson = async (url: string, init: RequestInit): Promise<unknown> => {
+            try {
+                const response = await fetchWithTimeout<Response>((input, options) => fetch(input, options),
+                    url, init, CONNECTION_DISCOVERY_TIMEOUT_MS);
+                return response.ok ? await response.json() : undefined;
+            } catch { return undefined; }
+        };
+        const [shown, running] = await Promise.all([
+            readJson(`${baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName }) }),
+            readJson(`${baseUrl}/api/ps`, {})
+        ]);
+        const metadata = getOllamaModelConnectionMetadata(shown);
+        const allocation = getOllamaRuntimeContextMetadata(shown, running, modelName);
+        if (allocation?.runtimeContextSource === 'ollama-ps') {
+            const write = this.contextPreferenceWrites.catch(() => undefined).then(async () => {
+                await this.uiState.update(OLLAMA_ALLOCATION_OBSERVATIONS_KEY,
+                    upsertOllamaAllocationObservation(this.uiState.get(OLLAMA_ALLOCATION_OBSERVATIONS_KEY),
+                        { ...identity, tokens: allocation.effectiveRuntimeContextTokens }));
+            });
+            this.contextPreferenceWrites = write;
+            await write;
+        }
+        const runtime = resolveLocalRuntimeContext({ ...metadata, ...allocation, runtimeContextTokens: configuredTokens,
+            preferredRuntimeContextTokens: preference?.tokens, preferredRuntimeContextSource: preference?.source,
+            qualificationRuntime: ignoreQualification ? undefined : stored?.qualificationRuntime });
+        let usedPreference = preference;
+        if (capture && !this.activeAnalysis && configuredTokens === 0 && !preference && runtime.ok
+            && config.get<unknown>('runtimeContextTokens', 0) === configuredTokens
+            && qualificationEndpointKey('local', config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) === identity.endpointKey) {
+            await this.saveRuntimeContextPreference(identity, runtime.contextWindow, 'captured-runtime', true);
+            // Keep the preference that actually selected this request, even if a
+            // newer user choice arrived while metadata was being fetched.
+            usedPreference = { ...identity, tokens: runtime.contextWindow, source: 'captured-runtime' };
+        }
+        const lastAllocation = getOllamaAllocationObservation(this.uiState.get(OLLAMA_ALLOCATION_OBSERVATIONS_KEY), identity)?.tokens
+            ?? (stored?.runtimeContextSource === 'ollama-ps' && Number.isSafeInteger(stored.effectiveRuntimeContextTokens)
+                && stored.effectiveRuntimeContextTokens! > 0 ? stored.effectiveRuntimeContextTokens : undefined);
+        const profileRuntime = allocation?.runtimeContextSource === 'ollama-num-ctx' && lastAllocation
+            ? undefined : allocation;
+        return { baseUrl, identity, metadata, allocation, lastAllocation, profileRuntime, runtime, preference: usedPreference };
+    }
+
+    private publishLocalRuntimeContext(selection: Awaited<ReturnType<MutationViewProvider['readLocalRuntimeContext']>>,
+        configuredTokens: unknown, revision?: unknown, allocationCurrent = true): void {
+        void this.webview?.postMessage({ command: 'modelRuntimeContext', modelName: selection.identity.modelName,
+            endpointKey: selection.identity.endpointKey, revision, configuredTokens,
+            savedTokens: selection.preference?.tokens, savedSource: selection.preference?.source,
+            allocatedTokens: selection.allocation?.runtimeContextSource === 'ollama-ps'
+                ? selection.allocation.effectiveRuntimeContextTokens : selection.lastAllocation,
+            allocationCurrent: allocationCurrent && selection.allocation?.runtimeContextSource === 'ollama-ps',
+            allocationSource: selection.allocation?.runtimeContextSource,
+            defaultTokens: selection.allocation?.runtimeContextSource === 'ollama-num-ctx'
+                ? selection.allocation.effectiveRuntimeContextTokens : undefined,
+            modelLimit: selection.metadata.contextLengthKnown ? selection.metadata.contextLength : undefined,
+            requestTokens: selection.runtime.ok ? selection.runtime.contextWindow : undefined,
+            reasonCode: selection.runtime.ok ? undefined : selection.runtime.reasonCode });
+    }
 
     public beginAnalysis(id: string): void { this.activeAnalysis = id; }
     public endAnalysis(id: string): void {
@@ -203,6 +291,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'saveOllamaUrl': {
                     await config.update('ollamaBaseUrl', message.url, true);
+                    void this.webview?.postMessage({ command: 'ollamaUrlSaved' });
                     vscode.window.showInformationMessage(localize("✅ 已儲存 Ollama URL：{0}", message.url));
                     this.fetchLocalModels().then(models => {
                         this.webview?.postMessage({ command: 'setModels', models });
@@ -440,6 +529,46 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'getModelRuntimeContext': {
+                    if (this.activeAnalysis || typeof message.modelName !== 'string' || !message.modelName.trim()) { break; }
+                    if (typeof message.ollamaUrl === 'string' && qualificationEndpointKey('local', message.ollamaUrl)
+                        !== qualificationEndpointKey('local', config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434'))) { break; }
+                    const configured = config.get<unknown>('runtimeContextTokens', 0);
+                    const selection = await this.readLocalRuntimeContext(message.modelName, configured);
+                    this.publishLocalRuntimeContext(selection, configured, message.revision);
+                    break;
+                }
+                case 'setModelRuntimeContextTokens': {
+                    if (this.activeAnalysis || typeof message.modelName !== 'string' || !message.modelName.trim()
+                        || typeof message.tokens !== 'number' || !Number.isSafeInteger(message.tokens) || message.tokens < 0) { break; }
+                    if (typeof message.ollamaUrl === 'string' && qualificationEndpointKey('local', message.ollamaUrl)
+                        !== qualificationEndpointKey('local', config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434'))) { break; }
+                    const configured = config.get<unknown>('runtimeContextTokens', 0);
+                    const selection = await this.readLocalRuntimeContext(message.modelName, configured, false);
+                    const newRuntime = resolveLocalRuntimeContext({ ...selection.metadata, ...selection.allocation,
+                        runtimeContextTokens: 0, preferredRuntimeContextTokens: message.tokens,
+                        preferredRuntimeContextSource: 'user-choice' });
+                    if (!newRuntime.ok) {
+                        vscode.window.showWarningMessage(t('ui.runtimeContextInvalid'));
+                        this.publishLocalRuntimeContext(selection, configured, message.revision);
+                        break;
+                    }
+                    // Never overwrite an explicit setting during discovery. A direct
+                    // save action may edit that same setting at its existing scope.
+                    const current = vscode.workspace.getConfiguration('llmUnitTest');
+                    if (current.get<unknown>('runtimeContextTokens', 0) !== configured
+                        || qualificationEndpointKey('local', current.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) !== selection.identity.endpointKey
+                        || this.activeAnalysis) { break; }
+                    if (typeof configured === 'number' && configured > 0) {
+                        await this.rememberRunPreference(current, 'runtimeContextTokens', message.tokens);
+                    }
+                    await this.saveRuntimeContextPreference(selection.identity, message.tokens, 'user-choice');
+                    const updated = await this.readLocalRuntimeContext(message.modelName,
+                        current.get<unknown>('runtimeContextTokens', 0), true, undefined, message.tokens === 0);
+                    this.publishLocalRuntimeContext(updated, current.get<unknown>('runtimeContextTokens', 0), message.revision);
+                    void this.webview?.postMessage({ command: 'appendLog', text: t('ui.runtimeContextSaved') });
+                    break;
+                }
                 case 'testConnection': {
                     // One connection action owns one immutable runtime setting,
                     // including when the user edits configuration during a probe.
@@ -480,22 +609,19 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 if (!response.ok) {throw new Error(`HTTP ${response.status}`);}
 
                                 if (message.modelName) {
-                                    let metadata = getOllamaModelConnectionMetadata(undefined);
-                                    try {
-                                        const showResponse = await timedFetch(`${baseUrl}/api/show`, {
-                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ model: message.modelName })
-                                        }, CONNECTION_DISCOVERY_TIMEOUT_MS);
-                                        if (showResponse.ok) { metadata = getOllamaModelConnectionMetadata(await showResponse.json()); }
-                                    } catch { /* Automatic mode may still qualify the measured fallback runtime. */ }
+                                    const selection = await this.readLocalRuntimeContext(message.modelName, requestedRuntimeContext, true, baseUrl);
+                                    const { metadata, runtime } = selection;
+                                    // A probe may change allocation; its pre-request ps observation
+                                    // remains a recent fact, rather than a claim about post-request state.
+                                    this.publishLocalRuntimeContext(selection, requestedRuntimeContext, message.contextRevision, false);
                                     const profile = {
                                         paramSize: metadata.paramSize, contextLength: metadata.contextLength,
                                         contextLengthKnown: metadata.contextLengthKnown,
+                                        ...selection.profileRuntime,
                                         envType: 'local' as const,
-                                        endpointKey: qualificationEndpointKey('local', baseUrl),
+                                        endpointKey: selection.identity.endpointKey,
                                         modelName: message.modelName
                                     };
-                                    const runtime = resolveLocalRuntimeContext({ ...metadata, runtimeContextTokens: requestedRuntimeContext });
                                     if (!runtime.ok) {
                                         const reason = runtime.reasonCode === 'invalid-runtime-context'
                                             ? localize("Context 必須為 0（自動）或正整數。")
@@ -513,7 +639,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     }
                                     const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: runtime.contextWindow } as const;
                                     if (!metadata.contextLengthKnown) {
-                                        this.webview?.postMessage({ command: 'appendLog', text: localize("模型未提供可驗證的 Context 上限，本次使用自動保守值 {0} tokens；資格僅綁定此值。", runtime.contextWindow.toLocaleString()) });
+                                        this.webview?.postMessage({ command: 'appendLog', text: localize("模型未提供可驗證的 Context 上限，本次角色探針使用已選容量 {0} tokens；資格僅綁定此值。", runtime.contextWindow.toLocaleString()) });
                                     }
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
@@ -544,7 +670,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
                                         this.appendModelQualificationLog(qualificationProfile);
                                         this.appendRoleQualificationLog(qualificationProfile);
-                                        if (vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('runtimeContextTokens', 0) !== requestedRuntimeContext) {
+                                        const latestConfig = vscode.workspace.getConfiguration('llmUnitTest');
+                                        const latestPreference = getRuntimeContextPreference(this.runtimeContextPreferencesSnapshot(), selection.identity);
+                                        if (latestConfig.get<unknown>('runtimeContextTokens', 0) !== requestedRuntimeContext
+                                            || qualificationEndpointKey('local', latestConfig.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) !== selection.identity.endpointKey
+                                            || JSON.stringify(latestPreference) !== JSON.stringify(selection.preference)) {
                                             vscode.window.showWarningMessage(localize("本次角色探針使用 Runtime Context {0} tokens；設定已變更，請重新測試連線以驗證目前設定。", runtime.contextWindow.toLocaleString()));
                                         } else if (capability.capability === 'verified') {
                                             vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！模型：{0}，本次 Runtime Context：{1} tokens；已通過純 Python unittest 驗證。", metadata.paramSize, runtime.contextWindow.toLocaleString()));

@@ -131,6 +131,38 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
             assert.equal(result.knowledge.terminalStatus, 'failed');
         });
 
+        await t.test('a rejected single-case seed restores all observations for structure revision', async () => {
+            requests.length = 0;
+            fs.writeFileSync(source, 'def _read(value):\n    return value + 1\n'
+                + 'def caller_two():\n    return _read(2)\n'
+                + 'def caller_five():\n    return _read(5)\n');
+            let writers = 0;
+            let seedCaseId: string | undefined;
+            respondToWriter = prompt => {
+                const observations = JSON.parse(prompt.match(/VERIFIED OBSERVATIONS[^\n]*\n([^\n]+)/)![1]);
+                if (++writers === 1) {
+                    assert.equal(observations.examples.length, 1, 'initial generation selects a complete single case');
+                    seedCaseId = observations.examples[0].case_ids[0];
+                    assert.ok(seedCaseId);
+                    assert.match(prompt, /SCENARIO SELECTION: exact case IDs/);
+                    return bad;
+                }
+                assert.equal(writers, 2);
+                assertRepairPrompt(prompt, bad, validateUnittestStructure(bad, '_read', 'sample').reason!);
+                assert.ok(observations.examples.length > 1, 'structure retry retains all original observations');
+                assert.ok(observations.examples.some((example: any) => example.case_ids?.includes(seedCaseId)));
+                assert.doesNotMatch(prompt, /SCENARIO SELECTION: exact case IDs/);
+                return good;
+            };
+            const outputPath = path.join(directory, 'seed-full-revision');
+            await run({ ...params, outputPath });
+            const result = readRun(outputPath);
+            assert.equal(writers, 2);
+            assert.ok(result.events.some(event => event.stage === 'writer-context' && event.status === 'selected'));
+            assert.ok(result.events.some(event => event.stage === 'reviewer' && event.status === 'approved'));
+            assert.ok(result.events.some(event => event.stage === 'mutation' && event.status === 'measured'));
+        });
+
         await t.test('the complete oversize repair stops before a second transport or Tier fallback', async () => {
             requests.length = 0;
             const large = bad + '\n# ' + 'complete neutral candidate context '.repeat(900) + '\n# COMPLETE_CANDIDATE_TAIL';

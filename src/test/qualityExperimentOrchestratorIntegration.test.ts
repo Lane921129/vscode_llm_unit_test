@@ -54,6 +54,7 @@ class ModelCases(unittest.TestCase):
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572, 'the fixture uses its observed runtime, not the advertised maximum');
         let response: string;
         if (request.roleInstructions?.includes('You are the test Reviewer')) {
             roles.push('reviewer'); response = '{"findings":[]}';
@@ -75,7 +76,9 @@ class ModelCases(unittest.TestCase):
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture', paramSize: '13B', contextLength: 32768 });
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture',
+            paramSize: '13B', contextLength: 32768, contextLengthKnown: true,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-ps' });
         const output = path.join(root, 'results');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: targetFile,
             funcName: 'Ledger.increase', outputPath: output, promptStrategy: 'tier2', maxLoops: 3,
@@ -85,6 +88,8 @@ class ModelCases(unittest.TestCase):
         const runRoot = path.dirname(path.join(output, knowledgeFile));
         const knowledge = JSON.parse(fs.readFileSync(path.join(runRoot, 'function_knowledge.json'), 'utf8'));
         const events = fs.readFileSync(path.join(runRoot, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(events.some(e => e.stage === 'model-runtime' && e.status === 'selected'
+            && e.detail.contextWindow === 8572 && e.detail.inputBudget === 6000));
         assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify({ failure: knowledge.lastFailure, roles,
             budgets: events.filter(e => e.stage === 'model-request' && ['budget-exceeded', 'requested'].includes(e.status)).map(e => e.detail) }));
         const seedAccepted = events.findIndex(e => e.stage === 'writer-seed' && e.status === 'accepted');
@@ -123,7 +128,8 @@ class ModelCases(unittest.TestCase):
         // candidate file, executable seed, mutation input, or report detail.
         const syntheticCredential = 'sk-' + 'x'.repeat(32);
         let rejectedRequests = 0;
-        globalThis.fetch = async () => {
+        globalThis.fetch = async (_url, options) => {
+            assert.equal(JSON.parse(String(options?.body)).options.num_ctx, 8572);
             rejectedRequests++;
             return new Response(JSON.stringify({ response: syntheticCredential, done: true }), { status: 200 });
         };

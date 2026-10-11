@@ -81,7 +81,7 @@ For a traceable function such as `increment(value)`, Tier 1 executes safe inputs
 - Start the Ollama server and use its base URL, normally `http://127.0.0.1:11434`.
 - Select an installed model and run **Test Connection**.
 - If the model cannot enforce JSON output but can write Python, the extension retries with a plain-Python contract.
-- `llmUnitTest.runtimeContextTokens` controls the local Ollama context. The default `0` preserves automatic sizing; an explicit positive integer (for example `8192` or `16384`) requires a verified model context limit from Ollama and must not exceed it. About 30% remains available for output. Larger values need more memory and can be slower.
+- The local sidebar lets you save `num_ctx` for each Ollama endpoint and model. The first automatic choice preserves an existing qualified context, otherwise uses the selected model's current `/api/ps` allocation or `/api/show` `num_ctx`; if neither is available it uses 4,096. Repeated runs keep that choice. `0` in the sidebar clears the saved choice and discovers it again. A positive `llmUnitTest.runtimeContextTokens` setting overrides the sidebar. User-entered values require a verified model limit and cannot exceed it. Input budgets use that same request context, independent of parameter count; about 30% remains available for output. The sidebar distinguishes the saved request value, last observed allocation and model limit. Larger values need more memory and can be slower.
 - After changing the effective context, run **Test Connection** again. Writer, Reviewer and Bug Fixer qualifications belong to that context; old local profiles without this binding require a fresh probe. Auto uses matching verified roles. Manual Tiers retain best-effort generation and all validation gates. A running batch keeps its starting setting. This setting does not affect Cloud or Custom API.
 
 ### Google AI Studio
@@ -220,7 +220,7 @@ npm run compile
 - 啟動 Ollama server，通常使用 `http://127.0.0.1:11434`。
 - 選取已安裝模型後按 **Test Connection**。
 - 若模型無法強制 JSON、但可生成 Python，系統會改用純 Python 輸出契約重試。
-- `llmUnitTest.runtimeContextTokens` 控制本機 Ollama 的 context。預設 `0` 保留自動估算；明確正整數（例如 `8192` 或 `16384`）須有 Ollama 提供的有效模型上限，且不得超過上限。約 30% 保留給輸出；較大設定需要更多記憶體，也可能更慢。
+- 本機側欄可依 Ollama 端點與模型保存 `num_ctx`。首次自動選擇先保留既有角色資格使用的容量，否則讀取同模型 `/api/ps` 的實際分配或 `/api/show` 的 `num_ctx`；皆未知時使用 4,096。重測沿用已保存的選擇；側欄輸入 `0` 可清除選擇並重新偵測。`llmUnitTest.runtimeContextTokens` 的正值優先於側欄，使用者手填的容量須有有效模型上限且不可超過。輸入預算依正式請求同一個 context 計算，不按參數量設限，約 30% 留給輸出。側欄分開顯示已保存的請求值、最近觀測的實際分配及模型上限；較大容量需要更多記憶體，也可能更慢。
 - 有效 context 改變後請重新按 **Test Connection**。Writer、Reviewer、Bug Fixer 資格各自綁定該容量；缺少綁定的舊本機 profile 須重驗。Auto 只使用相符且通過的角色，手動 Tier 保留試跑與全部驗證門檻。執行中的批次固定使用啟動時設定；Cloud／Custom API 不受此設定影響。
 
 ### Google AI Studio

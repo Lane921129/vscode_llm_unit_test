@@ -328,7 +328,7 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 
 新 AI 閉環的保留候選只有零 findings 且同一候選獲批准才可記為 `reviewStatus=completed`；候選回傳 `approvedCodeHash`，再將同意保存為 `reviewApproval.testHash` 及 run/source/target，跟隨 rollback 同步還原。未獲同意為 `review-blocked`，尚未啟動的 mutation 明示 not-measured／null。deterministic 的 `not-required` 與舊 `execution-passed-review-incomplete` 只保留既有工具／歷史契約。BatchJournal 與 scorecard 在 manifest 或 knowledge 任一宣告 `ai-reviewed-loop-v1` 時，另核對 `reviewApproval` 的 workflowVersion、runId、sourceHash、target、testHash 與保留測試／品質快照；缺批准、錯版本或跨候選批准，即使終態自稱 passed 也不能計入通過。舊版本維持原讀取契約，不拼接不同輪次最高分，也不以舊 fallback 冒充新版 AI 閉環通過。
 
-同模組 helper 檢索由 `ast_extractor.py` 執行，與既有跨檔相依合併供分析角色和 Writer 使用。來源碼是 setup/path 語境，無執行時不得成為 oracle。`src/prompts/compactWriterContext.ts` 負責小模型完整證據與可省略 context 的排序，`verifiedWriterExamples.ts` 提供經回歸執行的中性範例；`promptBudget.ts` 統一 M/B 參數量、輸入預算與 Ollama context 設定。所有正式角色請求均先檢查完整提示預算，並記錄估計 tokens 與 logical request 耗時。Reviewer 拒絕帶穩定 diagnostics，完成 gate 維持不變。實作範圍與實驗室驗收見 [Writer 檢索與模型相容性](docs/Writer檢索與模型相容性_2026_09_17.md)。
+同模組 helper 檢索由 `ast_extractor.py` 執行，與既有跨檔相依合併供分析角色和 Writer 使用。來源碼是 setup/path 語境，無執行時不得成為 oracle。`src/prompts/compactWriterContext.ts` 為 structured small／large Writer 共用完整必要證據投影；完全相同來源與 setup 只在同一請求內引用，相依身分與觀測分開保留。必要 helper 先於可省略 topology／範例。初次 seed 可選一個完整、可重播且同呼叫無衝突的觀測，原產物保持完整；結構重試與正式修訂恢復全部觀測。`verifiedWriterExamples.ts` 提供經回歸執行的中性範例；`promptBudget.ts` 統一實際請求容量與輸入預算，參數量只作詳略及 Tier 參考。所有正式角色請求均先檢查完整提示預算，並記錄估計 tokens 與 logical request 耗時。Reviewer 拒絕帶穩定 diagnostics，完成 gate 維持不變。實作範圍與實驗室驗收見 [Writer 檢索與模型相容性](docs/Writer檢索與模型相容性_2026_09_17.md)。
 
 Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀測不再按舊筆數／字串長度裁切；只移除明確留在產物中的狀態快照。解析後與目標參數過濾後都必須仍有具體策略。第一次請求預留一次格式補正的完整固定文字，最終 provider envelope 仍檢查實際總量；傳輸失敗不啟動格式補正。Cloud 的 `semantic-json` schema 完整描述各陣列元素及巢狀策略，但 schema 或 HTTP 成功本身不代表策略有效。
 
@@ -336,7 +336,7 @@ Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀
 
 Writer 在選擇 optional 材料前，先預扣相同的初始化與資源語境；Reviewer 初步預算也包含它，最終傳輸 gate 再核對全部文字。角色事件保存估計 input、格式修正預留量、實際 context 設定、耗時與安全失敗分類；HTTP 狀態只採 transport 階段持有的數值，不由訊息文字猜測，也不保存 provider 本文。這些估量和基本資格探針不能證明完整小模型批次通過。
 
-`llmUnitTest.runtimeContextTokens` 預設 `0`，保留本機既有尺寸估算；明確容量經 `resolveLocalRuntimeContext` 核對正安全整數與 Ollama 模型上限，並統一輸入預算及實際 `num_ctx`。`ollamaRuntime.ts` 只將有效模型 metadata 當上限證據，Modelfile 的配置值或 `/api/ps` 的目前 allocation 都不能替代上限。未知上限可使用自動模式，但不得據 fallback 值批准明確容量。
+`llmUnitTest.runtimeContextTokens` 預設 `0`，使用依端點與模型保存的側欄容量；正值為全域明確覆寫。首次自動選擇先保留既有角色資格的 `numCtx`，否則採同模型 `/api/ps` 的 `context_length`、`/api/show` 的 `num_ctx`，最後才使用 4,096 fallback，不從參數量或模型最大上限自動擴大分配。自動捕捉值與使用者手填值分開保存；重測及新分析沿用選擇，角色探針與正式 wire `num_ctx` 使用同值。`resolveLocalRuntimeContext` 保留約 30% 給輸出，手填正值須有模型上限證據且不可超過；自動捕捉的已分配容量可在上限未知時進行資格實探。`ollamaRuntime.ts` 分開核驗模型上限、Modelfile 配置與實際 allocation；後兩者不證明模型支援上限，未知／多筆匹配不借用其他模型資料。分析啟動時固定完整偏好快照，執行中設定變更不改當次請求。
 
 本機角色資格另外綁定 `ollama-context-v1` 與實際請求的 `numCtx`；provider、端點、模型及探針版本仍須一致。舊 profile 保留 metadata，但撤回缺少容量綁定的資格；測試連線中的三角色採同一設定快照，中途修改則提示重驗。正式執行的單檔／全檔／批次在 `ExecutionContext` 固定設定，Auto 不借用其他容量的角色結果。手動 Tier 仍可試跑，所有後續驗證不變。非法本機設定在模型請求前保存 `model-runtime/rejected` 與原因碼；Cloud／Custom 不受本機設定影響。
 

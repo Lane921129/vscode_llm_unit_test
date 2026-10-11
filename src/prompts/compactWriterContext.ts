@@ -1,11 +1,50 @@
-import { BehaviorObservations, observationsForPrompt, summarizeObservationPhase, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
+import { BehaviorObservations, observationsForPrompt, summarizeObservationPhase, TraceInputSnapshot, TraceValueSnapshot, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { estimatePromptTokens } from './promptBudget';
 import { matchingWriterExamples } from './verifiedWriterExamples';
-import { callerForPrompt } from '../pipeline/probeInputs';
+import { callerForPrompt, callerMatchesObservation, typedCallFields } from '../pipeline/probeInputs';
+import { validTraceInputSnapshot, validTraceValueSnapshot } from '../pipeline/traceValues';
 import { formatDependencyMockContract, formatDependencyTopology, relevantSourceImports } from './dependencyMockContract';
 
 export const COMPACT_WRITER_VERSION = 'compact-writer-v1';
+
+/** Request-local references only replace complete, byte-identical source/setup
+ * fields. They never share observations, identities, unknown fields or tests.
+ * Call only for sections that will actually be included in this request.
+ */
+export function createPromptContextReferences() {
+    const setups = new Map<string, string>();
+    const sources = new Map<string, string>();
+    const kinds: Record<string, string> = { constructor: 'constructor', class_context: 'constructor',
+        property: 'property', property_context: 'property', globals: 'globals', referenced_globals: 'globals',
+        imports: 'imports', file_imports: 'imports' };
+    let reused = false;
+    return {
+        setup(fields: Record<string, unknown>, location: string): Record<string, unknown> {
+            return Object.fromEntries(Object.entries(fields).map(([field, value]) => {
+                const kind = Object.hasOwn(kinds, field) ? kinds[field] : undefined;
+                if (!kind || !value || typeof value !== 'object') { return [field, value]; }
+                const serialized = JSON.stringify(value);
+                if (serialized.length < 256) { return [field, value]; }
+                const key = kind + '\n' + serialized;
+                const earlier = setups.get(key);
+                if (earlier) { reused = true; return [field, { same_complete_setup_as: earlier }]; }
+                setups.set(key, `${location}.${field}`);
+                return [field, value];
+            }));
+        },
+        source(value: string, location: string): string | { same_complete_source_as: string } {
+            if (value.length < 256) { return value; }
+            const earlier = sources.get(value);
+            if (earlier) { reused = true; return { same_complete_source_as: earlier }; }
+            sources.set(value, location);
+            return value;
+        },
+        note(): string {
+            return reused ? 'same_complete_setup_as / same_complete_source_as reuse the complete identical field at the named earlier location in this request. Only source/setup is shared; keep each identity and observation separate. These references grant no patch permission or output oracle.' : '';
+        }
+    };
+}
 
 /** Required evidence is never sliced to fit; the caller refuses oversize requests. */
 interface WriterContextInput {
@@ -29,6 +68,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
     const context = { ...input.context, code: input.source };
     const dependencies: any[] = context.dependencyContexts || [];
     const scenario = selectWriterScenario(context.traceResult, input.scenarioCaseIds);
+    const references = createPromptContextReferences();
     const sections = [
         (revision ? 'writer-revision-context-v1' : COMPACT_WRITER_VERSION) + ' (metadata, never an import)',
         '=== WRITER EVIDENCE BUNDLE V3 ===',
@@ -39,11 +79,11 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + `Deterministically selected test rules: ${input.evidence.ruleSelection.ids.join(', ') || 'none'}\n`
             + 'Test-generation rules constrain test construction. They are not evidence of a return value or exception.',
         `TARGET SOURCE (read-only, not an output oracle):\n\`\`\`python\n${input.source}\n\`\`\``,
-        'SETUP FACTS (source only; caller values are input candidates, not expected outputs):\n' + JSON.stringify({
+        'SETUP FACTS (source only; caller values are input candidates, not expected outputs):\n' + JSON.stringify(references.setup({
             constructor: context.class_context || null, property: context.property_context || null,
             globals: context.referenced_globals || [],
             callers: (context.callerContexts || []).map(callerForPrompt), conditions: context.condition_facts || []
-        }),
+        }, 'SETUP FACTS')),
         'FIXTURE CHECK: Import unittest and test helpers explicitly in test scope; never use wildcard target imports. '
             + 'Arrange constructor inputs and per-case state. Dependency returns are not target returns.',
         formatDependencyMockContract(input.module, context, input.allowedMockTargets, revision),
@@ -54,7 +94,8 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
         ...(scenario.note ? [scenario.note] : []),
         'uncontrolled-ambient-read observations cannot supply expected values or exceptions. Control clock/entropy at its use point before asserting.',
         'VERIFIED DEPENDENCY OBSERVATIONS (never substitute for target results):\n'
-            + JSON.stringify(dependencies.filter(dep => dep.traceResult).map(dep => ({ name: dep.name, observations: observationsForPrompt(dep.traceResult) }))),
+            + JSON.stringify(dependencies.flatMap((dep, index) => dep.traceResult ? [{ dependencyIndex: index + 1,
+                name: dep.name, sourceHash: dep.sourceHash, observations: observationsForPrompt(dep.traceResult) }] : [])),
         'SELECTED RULES (construction constraints, not output facts):\n'
             + formatUniqueRules(input.evidence),
         ...(input.focus ? ['CURRENT TESTS AND NEXT TASK (preserve passing methods; proposed tasks are hypotheses):\n' + input.focus] : []),
@@ -65,9 +106,26 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + (context.is_async ? 'Use IsolatedAsyncioTestCase and await. ' : '')
             + 'No evidence means omit that assertion, never guess.'
     ];
-    // Optional retrieval must not expand a small target to the entire context.
-    // Reserve space for host contracts and a concrete repair; required evidence
-    // above remains complete even when it exceeds the final request budget.
+    const sourceReferences = new Map<string, string>([[input.source, 'TARGET SOURCE']]);
+    for (const [index, dep] of dependencies.entries()) {
+        // All revision dependency fields remain available. The raw trace is
+        // represented once above with its safety/assertability flags intact.
+        const { code } = dep;
+        const rawFacts = dependencySetupFacts(dep);
+        const facts = references.setup(rawFacts, `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}]`);
+        const dependencySource = typeof code === 'string' ? code : '';
+        const previous = dependencySource ? sourceReferences.get(dependencySource) : undefined;
+        const block = `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}] (setup/path context only):\n`
+            + JSON.stringify(facts)
+            + (previous ? `\nComplete source is identical to ${previous} above; reuse that source, not its observations.`
+                : `\n\`\`\`python\n${dependencySource}\n\`\`\``);
+        sections.push(block);
+        if (dependencySource && !previous) { sourceReferences.set(dependencySource, `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}]`); }
+    }
+    if (references.note()) { sections.push(references.note()); }
+    if (revision) { return sections.filter(Boolean).join('\n\n'); }
+    // Complete dependency source/setup is required in both full Writer sizes.
+    // Only derived topology, neutral examples and hypotheses are optional.
     const requiredTokens = estimatePromptTokens(sections.filter(Boolean).join('\n\n'));
     const optionalBudget = Math.max(0, Math.min(input.budgetTokens - 1200,
         requiredTokens + Math.min(600, Math.floor(input.budgetTokens / 8))));
@@ -75,33 +133,11 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
         if (estimatePromptTokens([...sections, section].join('\n\n')) > optionalBudget) { return false; }
         sections.push(section); return true;
     };
-    // This AST projection duplicates full target-source structure, not executed
-    // evidence. Prefer its complete bound graph over optional helpers/examples;
-    // generation may omit it as one unit. Repairs retain it as required above.
-    const topology = revision ? '' : formatDependencyTopology(context);
+    const topology = formatDependencyTopology(context);
     if (topology && !append(topology)) {
         sections.push('Topology/legend omitted whole for budget, not absence of dependencies. '
             + 'Use complete TARGET SOURCE; unknown stays unknown.');
     }
-    const omitted: string[] = [];
-    const sourceReferences = new Map<string, string>([[input.source, 'TARGET SOURCE']]);
-    for (const dep of dependencies) {
-        // All revision dependency fields remain available. The raw trace is
-        // represented once above with its safety/assertability flags intact.
-        const { code } = dep;
-        const facts = dependencySetupFacts(dep);
-        const dependencySource = typeof code === 'string' ? code : '';
-        const previous = dependencySource ? sourceReferences.get(dependencySource) : undefined;
-        const block = `RETRIEVED DEPENDENCY ${dep.name} (setup/path context only):\n`
-            + JSON.stringify(facts)
-            + (previous ? `\nComplete source is identical to ${previous} above; reuse that source, not its observations.`
-                : `\n\`\`\`python\n${dependencySource}\n\`\`\``);
-        if (revision) { sections.push(block); }
-        else if (!append(block)) { omitted.push(dep.name); continue; }
-        if (dependencySource && !previous) { sourceReferences.set(dependencySource, `RETRIEVED DEPENDENCY ${dep.name}`); }
-    }
-    if (omitted.length) { sections.push(`Dependency source omitted as whole units for budget: ${omitted.join(', ')}. Their behavior is unknown; do not infer it.`); }
-    if (revision) { return sections.filter(Boolean).join('\n\n'); }
     for (const example of matchingWriterExamples({ ...context, selectedRuleIds: input.evidence.ruleSelection.ids })) {
         append(`VERIFIED PATTERN ${example.id} (unrelated neutral fixture; adapt setup only, never copy its target, inputs or expected values):\n`
             + `Example source:\n\`\`\`python\n${example.source}\n\`\`\`\nExample test:\n\`\`\`python\n${example.tests}\n\`\`\``);
@@ -155,4 +191,48 @@ export function selectWriterScenario(observations?: BehaviorObservations, caseId
     return { observations: { ...observations, examples: selected(observations.examples), errors: selected(observations.errors),
         cases: selected(observations.cases) },
     note: `SCENARIO SELECTION: exact case IDs ${[...wanted].join(', ')}. Other cases remain in the artifact, not this request; make no claims about them.` };
+}
+
+/** Select one complete observed call for initial generation only. Unknown or
+ * conflicting same-call evidence retains the full context; this is no oracle
+ * inference and does not change the original Trace, later revisions or gates.
+ */
+export function selectWriterSeedCaseIds(observations?: BehaviorObservations): string[] | undefined {
+    if (observations?.complete !== true || observations.load_error || observations.blocked_operations?.length
+        || !observations.run_id || !observations.cases?.length) { return undefined; }
+    const cases = observations.cases;
+    const ids = new Set(cases.map(item => item.case_id));
+    if (ids.size !== cases.length || [...ids].some(id => !id)) { return undefined; }
+    const facts = [...observations.examples, ...observations.errors];
+    if (facts.some(item => !item.case_id || !ids.has(item.case_id))
+        || new Set(facts.map(item => item.case_id)).size !== facts.length) { return undefined; }
+    const call = (input?: TraceInputSnapshot | null): TraceValueSnapshot | undefined => {
+        if (!validTraceInputSnapshot(input) || !input.replayable) { return undefined; }
+        return typedCallFields(input.call_graph) ? input.call_graph : undefined;
+    };
+    const calls = cases.map(item => call(item.input_before));
+    if (calls.some(item => !item)) { return undefined; }
+    // The live v2 producer omits these optional flags for safe observations.
+    // Their omission is accepted only with the complete typed proof below.
+    const assertable = (value: unknown) => value === undefined || value === true;
+    for (const observed of observations.examples) {
+        const index = cases.findIndex(item => item.case_id === observed.case_id);
+        const candidate = cases[index];
+        const result = (candidate as unknown as Record<string, unknown>).result_snapshot;
+        if (candidate.status !== 'returned' || candidate.inputs_mutated || observed.inputs_mutated
+            || !assertable(candidate.call_assertable) || !assertable(observed.call_assertable) || !assertable(observed.result_assertable)
+            || typeof observed.result !== 'string' || observed.result_truncated || observed.oracle_reason || observed.non_deterministic_operations?.length
+            || !validTraceValueSnapshot(result) || !result.replayable
+            || !callerMatchesObservation({ trace_input: calls[index] }, candidate.input_before)
+            || !call(candidate.input_after) || !callerMatchesObservation({ trace_input: calls[index] }, candidate.input_after!)) { continue; }
+        const sameCall = cases.filter(item => callerMatchesObservation({ trace_input: calls[index] }, item.input_before));
+        if (sameCall.some(item => item.status !== 'returned' || item.inputs_mutated || !assertable(item.call_assertable)
+            || !call(item.input_after) || !callerMatchesObservation({ trace_input: calls[index] }, item.input_after!)
+            || JSON.stringify((item as unknown as Record<string, unknown>).result_snapshot) !== JSON.stringify(result)
+            || !observations.examples.some(example => example.case_id === item.case_id && assertable(example.call_assertable)
+                && assertable(example.result_assertable) && !example.inputs_mutated && !example.result_truncated
+                && !example.oracle_reason && !example.non_deterministic_operations?.length))) { return undefined; }
+        return [candidate.case_id];
+    }
+    return undefined;
 }

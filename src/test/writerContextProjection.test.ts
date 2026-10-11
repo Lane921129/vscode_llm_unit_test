@@ -106,7 +106,7 @@ test('generation omits a whole optional topology without dropping source, observ
     assert.doesNotMatch(revision, /Topology\/legend omitted/);
 });
 
-test('whole topology receives generation budget before optional retrieved helpers', () => {
+test('required helper source precedes whole optional topology in the generation budget', () => {
     const topology = { schemaVersion: 'dependency-fixture-contract-v1', target: 'load', targetSourceHash: 'bound-source-hash',
         assertionOracle: false, patchAuthorization: false,
         flows: [{ root: { kind: 'parameter', name: 'client' }, steps: [], method: 'fetch', line: 2 }] };
@@ -114,7 +114,8 @@ test('whole topology receives generation budget before optional retrieved helper
         dependencyContexts: [{ name: 'helper', code: 'def helper(value):\n    return value' }] };
     const prompt = buildCompactWriterContext({ module: 'sample', name: 'load', source, context, evidence, budgetTokens: 6000 });
     const graph = prompt.indexOf(formatDependencyTopology(context)), helper = prompt.indexOf('RETRIEVED DEPENDENCY helper');
-    assert.ok(graph >= 0 && helper > graph, 'complete topology is considered and displayed before optional helper code');
+    assert.ok(helper >= 0 && graph > helper, 'required helper source is delivered before optional topology');
+    assert.ok(prompt.includes(context.dependencyContexts[0].code), 'complete dependency source is required');
     assert.equal(prompt.split(JSON.stringify(topology)).length - 1, 1);
 });
 

@@ -253,7 +253,9 @@ export function getUserPrompt(
     const moduleName = astContext?.target_import_module
         || fileName.replace(/\\/g, '/').split('/').pop()?.replace('.py', '') || 'module';
 
-    if (strategy === 'small' && semanticEvidence && typeof semanticEvidence !== 'string') {
+    // Full AI workflows share one evidence projection regardless of prompt detail.
+    // Larger models need the same complete facts, not the duplicated legacy layout.
+    if (semanticEvidence && typeof semanticEvidence !== 'string') {
         return buildCompactWriterContext({ module: moduleName, name: funcName,
             source: astContext?.code || code, context: astContext, evidence: semanticEvidence,
             focus: focusContexts, budgetTokens, scenarioCaseIds: astContext?.writerScenarioCaseIds });

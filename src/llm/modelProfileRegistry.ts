@@ -8,6 +8,9 @@ export interface StoredModelProfile extends ModelQualificationProfile {
     contextLength: number;
     /** True only when the provider supplied a validated model context upper bound. */
     contextLengthKnown?: boolean;
+    /** Same-model runtime setting/allocation, distinct from the architecture upper bound. */
+    effectiveRuntimeContextTokens?: number;
+    runtimeContextSource?: 'ollama-ps' | 'ollama-num-ctx';
 }
 
 const MAX_STORED_PROFILES = 50;

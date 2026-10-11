@@ -42,6 +42,7 @@ test('laboratory unpacked BMI failures hand arithmetic hypotheses to AI and exec
         requests++;
         assert.ok(requests <= 2, 'the Writer must revise once from bounded arithmetic evidence');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572, 'the fixture runtime allocation, not the model maximum, owns the input budget');
         assert.doesNotMatch(request.roleInstructions, /Reviewer|Python unittest Bug Fixer/,
             'multiple failing methods use Writer revision; execution mode does not review');
         if (requests === 2) {
@@ -55,7 +56,10 @@ test('laboratory unpacked BMI failures hand arithmetic hypotheses to AI and exec
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture', paramSize: '13B', contextLength: 32768 });
+        // Fixed-response transport declares a separate runtime setting: 8572
+        // keeps this arithmetic-repair fixture's original 6000-token input budget.
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture', paramSize: '13B', contextLength: 32768,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-num-ctx' });
         const outputPath = path.join(root, 'results');
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: file,
             funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', maxLoops: 2, timeoutSeconds: 30 });

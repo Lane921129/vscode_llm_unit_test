@@ -20,6 +20,8 @@ import { buildReviewFacts } from './roles/reviewFacts';
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
 import { passingTestIds } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt } from './roles/writerPhases';
+import { selectWriterSeedCaseIds } from './prompts/compactWriterContext';
+import { getRuntimeContextPreference, RuntimeContextPreference } from './llm/runtimeContextPreferences';
 import { collectNumericRepairEvidence } from './pipeline/numericTestSkill';
 import { NumericEvidenceLedger } from './pipeline/numericEvidenceLedger';
 import { verificationMode, VerificationMode } from './pipeline/verificationMode';
@@ -209,6 +211,8 @@ interface ModelProfile extends ModelQualificationProfile {
     paramSize: string;      // e.g. "2.0B", "13.0B", "Cloud (Gemini)"
     contextLength: number;  // max context tokens from model
     contextLengthKnown?: boolean;
+    effectiveRuntimeContextTokens?: number;
+    runtimeContextSource?: StoredModelProfile['runtimeContextSource'];
     budgetTokens: number;   // calculated usable budget
     envType?: 'local' | 'cloud' | 'custom';
     modelName?: string;
@@ -234,6 +238,7 @@ interface ModelSnapshot {
     current: ModelProfile;
     stored: StoredModelProfile[];
     runtimeContextTokens: unknown;
+    runtimeContextPreferences: RuntimeContextPreference[];
 }
 const analysisRuns = new ExecutionManager<ModelSnapshot>();
 interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
@@ -251,7 +256,8 @@ async function runAnalysisSession<T extends object>(
         return;
     }
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
-        runtimeContextTokens: vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('runtimeContextTokens', 0) });
+        runtimeContextTokens: vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('runtimeContextTokens', 0),
+        runtimeContextPreferences: sidebar.runtimeContextPreferencesSnapshot() });
     if (!execution) {
         environmentLease.release();
         await vscode.window.showInformationMessage(localize("已有分析執行中，請等待完成或先中止。"));
@@ -642,6 +648,8 @@ export function activate(context: vscode.ExtensionContext) {
         paramSize: string;
         contextLength: number;
         contextLengthKnown?: boolean;
+        effectiveRuntimeContextTokens?: number;
+        runtimeContextSource?: StoredModelProfile['runtimeContextSource'];
         qualificationRuntime?: ModelQualificationProfile['qualificationRuntime'];
         envType?: 'local' | 'cloud' | 'custom';
         modelName?: string;
@@ -652,10 +660,15 @@ export function activate(context: vscode.ExtensionContext) {
         endpointKey?: string;
         roleQualification?: RoleQualificationProfile;
     }) => {
+        const previousRuntimeMetadata = profile.envType === 'local' && profile.modelName
+            ? findModelProfile(storedModelProfiles, { envType: 'local', modelName: profile.modelName,
+                endpointKey: profile.endpointKey }) : undefined;
         const updatedProfile: ModelProfile = {
             paramSize: profile.paramSize,
             contextLength: profile.contextLength,
             contextLengthKnown: profile.contextLengthKnown === true,
+            effectiveRuntimeContextTokens: profile.effectiveRuntimeContextTokens ?? previousRuntimeMetadata?.effectiveRuntimeContextTokens,
+            runtimeContextSource: profile.runtimeContextSource ?? previousRuntimeMetadata?.runtimeContextSource,
             qualificationRuntime: profile.qualificationRuntime,
             budgetTokens: getContextBudget({ paramSize: profile.paramSize, contextLength: profile.contextLength, budgetTokens: 0 }),
             envType: profile.envType,
@@ -675,6 +688,8 @@ export function activate(context: vscode.ExtensionContext) {
                 paramSize: updatedProfile.paramSize,
                 contextLength: updatedProfile.contextLength,
                 contextLengthKnown: updatedProfile.contextLengthKnown,
+                effectiveRuntimeContextTokens: updatedProfile.effectiveRuntimeContextTokens,
+                runtimeContextSource: updatedProfile.runtimeContextSource,
                 qualificationRuntime: updatedProfile.qualificationRuntime,
                 testGenerationReady: updatedProfile.testGenerationReady,
                 testGenerationReason: updatedProfile.testGenerationReason,
@@ -1305,7 +1320,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const gateDescription = mode === 'full' ? localize("結構、執行、覆蓋率與突變驗證") : localize("結構、真實目標呼叫與隔離執行驗證");
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
-        ?? { current: currentModelProfile, stored: storedModelProfiles, runtimeContextTokens: 0 };
+        ?? { current: currentModelProfile, stored: storedModelProfiles, runtimeContextTokens: 0, runtimeContextPreferences: [] };
     let currentLoop = 1;
     let mutationScore = 0;
     let qualityToolsSatisfied = false;
@@ -1359,10 +1374,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             && (modelSnapshot.current.endpointKey || qualificationEndpointKey(params.envType)) === selectedEndpointKey
             ? modelSnapshot.current
             : defaultModelProfile());
+    const contextPreference = getRuntimeContextPreference(modelSnapshot.runtimeContextPreferences,
+        { endpointKey: selectedEndpointKey, modelName: params.modelName });
     const localRuntime = params.envType === 'local' ? resolveLocalRuntimeContext({
         paramSize: selectedModelProfile.paramSize, contextLength: selectedModelProfile.contextLength,
         contextLengthKnown: selectedModelProfile.contextLengthKnown,
-        runtimeContextTokens: modelSnapshot.runtimeContextTokens
+        runtimeContextTokens: modelSnapshot.runtimeContextTokens,
+        preferredRuntimeContextTokens: contextPreference?.tokens,
+        preferredRuntimeContextSource: contextPreference?.source,
+        qualificationRuntime: selectedModelProfile.qualificationRuntime,
+        effectiveRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens
     }) : undefined;
     const requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
         : runtimeContextWindow(selectedModelProfile.paramSize, selectedModelProfile.contextLength);
@@ -1620,6 +1641,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         recordRole('model-runtime', 'selected', { contextWindow: requestContextWindow,
             inputBudget: activeModelProfile.budgetTokens, configuredContextTokens: localRuntime.configuredTokens,
             contextPolicy: localRuntime.mode, metadataContextKnown: activeModelProfile.contextLengthKnown === true,
+            savedContextTokens: contextPreference?.tokens, savedContextSource: contextPreference?.source,
+            lastObservedRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens,
+            runtimeContextSource: selectedModelProfile.runtimeContextSource,
             qualificationApplicable: currentQualification });
     }
     let astContext: AstContext | null = null;
@@ -2151,19 +2175,27 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             - estimateTokens(addOutputContract(systemPrompt, testGenerationResponseFormat))
             - estimateTokens(phasePrompt) - estimateTokens(qualityObservationEvidence)
             - estimateTokens(numericEvidencePrompt()) - estimateTokens(importResourcePrompt()));
+        // Select one complete observed case for initial generation only. Original
+        // artifacts and the contexts used by validation/review/repair stay complete.
+        const seedCaseIds = seedPending ? selectWriterSeedCaseIds(astContext?.traceResult) : undefined;
+        const writerContext = seedCaseIds ? { ...astContext, writerScenarioCaseIds: seedCaseIds } : astContext;
+        if (seedCaseIds) {
+            recordRole('writer-context', 'selected', { phase: 'seed', caseIds: seedCaseIds,
+                scope: 'one-complete-observation', evidenceRetained: true });
+        }
         const userPrompt = getUserPrompt(
             params.filePath,
             targetFuncName,
             targetCode,
             evalStrategy as 'small' | 'large',
-            astContext,
+            writerContext,
             focusContext,
             generationBudget,
             params.modelName,
             writerEvidenceBundle
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
-        log(localize("[Budget] Prompt 估算：{0} / {1} tokens (模型: {2}, Context: {3})", estimatedTokens.toLocaleString(), activeModelProfile.budgetTokens.toLocaleString(), activeModelProfile.paramSize, activeModelProfile.contextLength.toLocaleString()));
+        log(localize("[Budget] Prompt 估算：{0} / {1} tokens (模型: {2}, Context: {3})", estimatedTokens.toLocaleString(), activeModelProfile.budgetTokens.toLocaleString(), activeModelProfile.paramSize, requestContextWindow.toLocaleString()));
 
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取
@@ -2430,7 +2462,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             generationPrompt = buildWriterRevisionRequest({
                                 code: sanitizedCode, findings: validationReason || localize("不明驗證錯誤"),
                                 moduleName: targetImportModule, functionName: targetFuncName,
-                                evidence: userPrompt
+                                evidence: writerEvidenceBundle ? buildWriterRevisionContext({
+                                    module: targetImportModule, name: targetFuncName,
+                                    source: astContext?.code || targetCode, context: astContext,
+                                    evidence: writerEvidenceBundle
+                                }) : userPrompt
                             });
                             sanitizedCode = '';
                             continue;

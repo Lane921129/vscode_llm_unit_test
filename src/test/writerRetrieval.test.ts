@@ -21,7 +21,7 @@ const bundle: WriterEvidenceBundleV3 = {
     evidencePriority: ['executed-observations', 'explicit-source-paths', 'ast-structure', 'analyst-hypotheses-and-rule-guidance']
 };
 
-test('1B–13B budgeting uses measured units and keeps compact prompts even with a long context', () => {
+test('small-model prompts stay compact while input budgets follow context capacity instead of parameter size', () => {
     assert.equal(parameterBillions('500M'), 0.5);
     assert.equal(parameterBillions('1.5B'), 1.5);
     assert.equal(parameterBillions('13B（依模型名稱推定）'), undefined);
@@ -33,10 +33,10 @@ test('1B–13B budgeting uses measured units and keeps compact prompts even with
                 traceResult: { examples: [{ args: ['1'], result: '1' }], errors: [] } }, evidence: bundle, budgetTokens: budget });
         assert.ok(promptFits(getSystemPrompt(1, 'small'), prompt, budget), size);
     }
-    assert.equal(contextInputBudget('500M', 8192), 1800);
+    assert.equal(contextInputBudget('500M', 8192), 5734);
     assert.equal(contextInputBudget('13B', 4096), 2867);
     assert.equal(runtimeContextWindow('13B', 4096), 4096);
-    assert.ok(runtimeContextWindow('13B', 131072) < 9000);
+    assert.equal(runtimeContextWindow('13B', 131072), 131072);
     assert.ok(contextInputBudget('unknown', NaN) > 0);
     assert.equal(estimatePromptTokens('中文中文'), 4);
 });
@@ -61,18 +61,27 @@ test('compact Writer preserves full source, class setup, rules, facts and caller
     assert.match(prompt, /never copy its target, inputs or expected values/);
 });
 
-test('budget pressure drops whole optional snippets and examples before required evidence', () => {
-    const source = 'def target(value):\n    return value';
-    const huge = 'def helper():\n    ' + 'return 1 #'.repeat(2000);
-    const context = { args: ['value'], calls: ['helper'], traceResult: { examples: [{ args: ['1'], result: '1' }] },
-        dependencyContexts: [{ name: 'helper', code: huge }] };
+test('budget pressure drops whole optional topology and neutral examples, never required helper source', () => {
+    const source = 'async def target(value):\n    return await helper(value)';
+    const huge = 'async def helper(value):\n' + '    # complete helper setup and body\n'.repeat(300) + '    return value';
+    const topology = { schemaVersion: 'dependency-fixture-contract-v1', target: 'target', targetSourceHash: 'source-v1',
+        assertionOracle: false, patchAuthorization: false, flows: [], diagnostics: [{ code: 'OPTIONAL_TOPOLOGY_DIAGNOSTIC' }] };
+    const context = { is_async: true, args: ['value'], calls: ['helper'], traceResult: { examples: [{ args: ['1'], result: '1' }] },
+        dependency_fixture_contract: topology, dependencyContexts: [{ name: 'helper', code: huge }] };
     const prompt = buildCompactWriterContext({ module: 'sample', name: 'target', source,
         context, evidence: bundle, budgetTokens: 1000 });
     assert.ok(prompt.includes(source));
+    assert.ok(prompt.includes(huge), 'retrieved helper remains a complete required unit despite the low budget');
     assert.match(prompt, /"result":"1"/);
-    assert.doesNotMatch(prompt, /def helper|VERIFIED PATTERN/);
-    assert.match(prompt, /source omitted as whole units/);
+    assert.doesNotMatch(prompt, /VERIFIED PATTERN|OPTIONAL_TOPOLOGY_DIAGNOSTIC/);
+    assert.match(prompt, /Topology\/legend omitted whole for budget/);
+    assert.equal(promptFits(getSystemPrompt(1, 'small'), prompt, 1000), false);
     assert.equal((prompt.match(/```/g) || []).length % 2, 0);
+    const roomy = buildCompactWriterContext({ module: 'sample', name: 'target', source,
+        context, evidence: bundle, budgetTokens: 20000 });
+    assert.ok(roomy.includes(huge));
+    assert.ok(roomy.includes(JSON.stringify(topology)), 'the optional topology is included whole when capacity allows');
+    assert.match(roomy, /VERIFIED PATTERN async-boundary-v1/, 'the neutral example is actually eligible for this fixture');
     const tooLarge = buildCompactWriterContext({ module: 'sample', name: 'target', source: huge,
         context, evidence: bundle, budgetTokens: 1000 });
     assert.ok(tooLarge.includes(huge));

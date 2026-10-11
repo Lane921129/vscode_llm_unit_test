@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
+import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON, qualificationEndpointKey } from '../llm/modelQualification';
+import { RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
 
@@ -17,6 +18,7 @@ test('formal requests bind context, qualification and whole-file settings to one
     const persisted = new Map<string, unknown>();
     let setting: unknown = 8192;
     let changeDuringRequest = true;
+    let changePreferenceDuringRequest = false;
     const requests: Array<{ role: string; numCtx?: number }> = [];
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 },
@@ -47,6 +49,12 @@ test('formal requests bind context, qualification and whole-file settings to one
         const role = request.roleInstructions.includes('dependency_behaviors') ? 'analyst' : 'writer';
         requests.push({ role, numCtx: request.options.num_ctx });
         if (changeDuringRequest) { setting = 16384; changeDuringRequest = false; }
+        if (changePreferenceDuringRequest) {
+            changePreferenceDuringRequest = false;
+            persisted.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference(
+                persisted.get(RUNTIME_CONTEXT_PREFERENCES_KEY),
+                { endpointKey: qualificationEndpointKey('local'), modelName: 'neutral-context' }, 16384, 'user-choice'));
+        }
         if (role === 'analyst') {
             return new Response(JSON.stringify({ response: JSON.stringify({ dependency_behaviors: [],
                 test_strategy: { approach: 'Exercise the selected target using the verified observations.' } }) }), { status: 200 });
@@ -128,6 +136,34 @@ test('formal requests bind context, qualification and whole-file settings to one
         await run({ ...params, envType: 'cloud', modelName: 'neutral-cloud', cloudKey: 'neutral-fixture-value', outputPath: cloud });
         assert.ok(requests.some(row => row.role === 'cloud'), 'local configuration does not block Cloud requests');
         assert.notEqual(knowledge(cloud)[0].failureStage, 'model-runtime');
+
+        requests.length = 0;
+        setting = 0;
+        persisted.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], {
+            endpointKey: qualificationEndpointKey('local'), modelName: 'neutral-context'
+        }, 8192, 'user-choice'));
+        update(profile(8192, { effectiveRuntimeContextTokens: 16384, runtimeContextSource: 'ollama-ps' }));
+        assert.equal((persisted.get('llmUnitTest.modelProfiles.v1') as any[])
+            .find(row => row.envType === 'local').effectiveRuntimeContextTokens, 16384);
+        changePreferenceDuringRequest = true;
+        const savedSnapshot = path.join(directory, 'saved-snapshot');
+        await run({ ...params, funcName: '', outputPath: savedSnapshot });
+        assert.equal(knowledge(savedSnapshot).length, 2);
+        assert.ok(requests.length >= 4 && requests.every(row => row.numCtx === 8192),
+            'saved model choice wins over allocation and remains fixed for the whole-file run');
+        requests.length = 0;
+        const savedChanged = path.join(directory, 'saved-changed');
+        await run({ ...params, outputPath: savedChanged });
+        assert.equal(requests.length, 0, 'new saved capacity cannot reuse qualification for the old capacity');
+        assert.equal(knowledge(savedChanged)[0].failureStage, 'role-qualification');
+        assert.ok(events(savedChanged).some(row => row.stage === 'model-runtime'
+            && row.detail.contextWindow === 16384 && row.detail.savedContextSource === 'user-choice'));
+        update(profile(8192));
+        const retainedAllocation = (persisted.get('llmUnitTest.modelProfiles.v1') as any[])
+            .find(row => row.envType === 'local');
+        assert.equal(retainedAllocation.effectiveRuntimeContextTokens, 16384,
+            'a later probe without allocation data retains the last same-model observation');
+        assert.equal(retainedAllocation.runtimeContextSource, 'ollama-ps');
     } finally {
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;

@@ -64,6 +64,7 @@ class Cases(unittest.TestCase):
         requests++;
         assert.ok(requests <= 8, 'a rejected rewrite must not start unbounded model retries');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572, 'the fixture runtime allocation, not the model maximum, owns the input budget');
         let response: string;
         if (request.roleInstructions?.includes('You are the test Reviewer')) {
             reviews++; reviewPrompts.push(request.prompt);
@@ -102,7 +103,10 @@ class Cases(unittest.TestCase):
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture', paramSize: '13B', contextLength: 32768 });
+        // Fixed-response transport declares a separate runtime setting: 8572
+        // keeps this preservation fixture's original 6000-token input budget.
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture', paramSize: '13B', contextLength: 32768,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-num-ctx' });
         for (const selected of ['weakened', 'dropped'] as const) {
             scenario = selected; writers = 0; revisions = 0; reviews = 0; requests = 0; fixes = 0;
             writerPrompts.length = 0; reviewPrompts.length = 0;

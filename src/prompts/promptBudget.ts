@@ -1,3 +1,5 @@
+import { isLocalRuntimeQualification } from '../llm/modelQualification';
+
 /** Capability metadata only; model/provider names are deliberately absent. */
 export function parameterBillions(size: string): number | undefined {
     const match = size.trim().match(/^(\d+(?:\.\d+)?)\s*([BM])$/i);
@@ -5,18 +7,16 @@ export function parameterBillions(size: string): number | undefined {
     return Number(match[1]) / (match[2].toUpperCase() === 'M' ? 1000 : 1);
 }
 
+const UNKNOWN_CONTEXT_WINDOW = 4096;
+
 export function contextInputBudget(size: string, contextLength: number): number {
-    const context = Number.isFinite(contextLength) && contextLength > 0 ? contextLength : 4096;
-    const parameters = parameterBillions(size);
-    const cap = parameters === undefined ? 20000 : parameters <= 2 ? 1800
-        : parameters <= 7 ? 3500 : parameters <= 13 ? 6000 : 12000;
-    return Math.min(Math.floor(context * 0.7), cap);
+    return Math.floor(runtimeContextWindow(size, contextLength) * 0.7);
 }
 
-/** Stable across roles, reserves 30% for output, never expands to a huge advertised maximum. */
-export function runtimeContextWindow(size: string, contextLength: number): number {
-    const advertised = Number.isFinite(contextLength) && contextLength > 0 ? Math.floor(contextLength) : 4096;
-    return Math.min(advertised, Math.ceil(contextInputBudget(size, advertised) / 0.7));
+/** Budget a selected capacity; local callers resolve allocation separately from the model upper bound. */
+export function runtimeContextWindow(_size: string, contextLength: number): number {
+    return Number.isSafeInteger(contextLength) && contextLength > 0
+        ? contextLength : UNKNOWN_CONTEXT_WINDOW;
 }
 
 export type LocalRuntimeContextReasonCode =
@@ -41,28 +41,42 @@ export function resolveLocalRuntimeContext(profile: {
     contextLength: number;
     contextLengthKnown?: boolean;
     runtimeContextTokens?: unknown;
+    preferredRuntimeContextTokens?: unknown;
+    preferredRuntimeContextSource?: 'user-choice' | 'captured-runtime';
+    qualificationRuntime?: unknown;
+    effectiveRuntimeContextTokens?: unknown;
 }): LocalRuntimeContextResolution {
     const configured = profile.runtimeContextTokens === undefined ? 0 : profile.runtimeContextTokens;
     if (typeof configured !== 'number' || !Number.isSafeInteger(configured) || configured < 0) {
         return { ok: false, reasonCode: 'invalid-runtime-context' };
     }
-    if (configured === 0) {
-        return {
-            ok: true, configuredTokens: 0, mode: 'automatic',
-            contextWindow: runtimeContextWindow(profile.paramSize, profile.contextLength),
-            inputBudget: contextInputBudget(profile.paramSize, profile.contextLength)
-        };
+    const knownUpperBound = profile.contextLengthKnown === true
+        && Number.isSafeInteger(profile.contextLength) && profile.contextLength > 0;
+    const preferred = profile.preferredRuntimeContextTokens;
+    if (configured === 0 && preferred !== undefined
+        && (typeof preferred !== 'number' || !Number.isSafeInteger(preferred) || preferred < 0)) {
+        return { ok: false, reasonCode: 'invalid-runtime-context' };
     }
-    if (profile.contextLengthKnown !== true
-        || !Number.isSafeInteger(profile.contextLength) || profile.contextLength <= 0) {
+    const hasPreference = configured === 0 && typeof preferred === 'number' && preferred > 0;
+    if (hasPreference && profile.preferredRuntimeContextSource !== undefined
+        && !['user-choice', 'captured-runtime'].includes(profile.preferredRuntimeContextSource)) {
+        return { ok: false, reasonCode: 'invalid-runtime-context' };
+    }
+    const requiresKnownBound = configured > 0 || (hasPreference && profile.preferredRuntimeContextSource !== 'captured-runtime');
+    if (requiresKnownBound && !knownUpperBound) {
         return { ok: false, reasonCode: 'runtime-context-metadata-required' };
     }
-    if (configured > profile.contextLength) {
+    const observed = profile.effectiveRuntimeContextTokens;
+    const contextWindow = configured > 0 ? configured : hasPreference ? preferred
+        : isLocalRuntimeQualification(profile.qualificationRuntime) ? profile.qualificationRuntime.numCtx
+        : typeof observed === 'number' && Number.isSafeInteger(observed) && observed > 0 ? observed
+        : knownUpperBound ? Math.min(UNKNOWN_CONTEXT_WINDOW, profile.contextLength) : UNKNOWN_CONTEXT_WINDOW;
+    if (knownUpperBound && contextWindow > profile.contextLength) {
         return { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' };
     }
     return {
-        ok: true, configuredTokens: configured, mode: 'explicit',
-        contextWindow: configured, inputBudget: Math.floor(configured * 0.7)
+        ok: true, configuredTokens: configured, mode: configured > 0 ? 'explicit' : 'automatic',
+        contextWindow, inputBudget: Math.floor(contextWindow * 0.7)
     };
 }
 
