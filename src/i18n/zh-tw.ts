@@ -99,7 +99,7 @@ export default {
         env: "執行環境",
         ollamaUrl: "Ollama URL",
         runtimeContextLabel: "請求 Context（tokens）",
-        runtimeContextHint: "0 表示自動模式，沿用此模型與端點已保存的容量。保存 0 會清除選擇並重新偵測容量；正整數保存你的選擇。改變容量後須重新測試連線。模型宣告上限不會自動增加此值。",
+        runtimeContextHint: "自動模式使用已核實模型上限的一半；已保存的手動選擇優先。保存 0 會清除手動選擇並恢復自動模式。上限未知時沿用保存或偵測的容量，最後使用 4096。改變容量後須重新測試連線；請求容量與觀測到的實際分配分開顯示。",
         runtimeContextSave: "保存容量",
         runtimeContextSavedValue: "已保存選擇：",
         runtimeContextAllocated: "Ollama 目前實際分配容量：",

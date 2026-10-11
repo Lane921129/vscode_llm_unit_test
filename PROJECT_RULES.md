@@ -63,7 +63,7 @@
 - AST 提供的 imports、相依與引用 globals 必須遵守所選函式的 Python lexical scope；參數、區域重綁定、巢狀 callable、`nonlocal` 與 comprehension target 不得誤認為模組常數或模組 import 相依。只有可靜態證明未遭 shadow 的模組 binding 才可進入 Prompt。
 - 來源碼中的 `return` 表達式只可提示可能的結果形狀與路徑；除非測試輸入可明確到達 literal return，否則不得把 `return helper(value)`、attribute 或運算式直接轉化為 expected value。精確 assertion 仍須來自可 assertion Dynamic Trace 或同測試控制的 mock side effect。
 - Prompt 詳細程度與 Tier 2 分治策略必須依已探測的參數量、Context 與已解析 Tier 決定；不得以供應商、模型品牌或名稱片段建立白名單／黑名單。
-- 本機輸入預算必須使用當次 wire `num_ctx`，不得按 2B／3B／13B 等參數量另設小上限，亦不得把模型最大支援容量自動當作分配值。使用者明確設定優先；自動選擇按端點／模型保存既有合格容量或同模型實際分配／Modelfile `num_ctx`，未知時採保守 fallback。重測沿用選擇，使用者可修改或清除；實際 allocation 與模型上限分開顯示，容量變更須重驗各角色。手填值與自動捕捉值區分，未知上限不能由 fallback 證明手填值可用。
+- 本機輸入預算必須使用當次 wire `num_ctx`，不得按 2B／3B／13B 等參數量另設小上限。明確設定及真正手動保存值優先；自動模式在模型上限已核實時選其一半（向下取整且至少 1），不把舊自動捕捉值或舊資格容量當作手動選擇。上限未知時才沿用保存／合格容量、同模型實際分配／Modelfile `num_ctx` 或保守 fallback。自動選擇是請求設定，不冒稱實際 allocation；兩者與模型上限分開顯示。連線探針與生成請求使用同一選擇，容量變更須重驗各角色，批次維持啟動時快照。使用者可手動修改或保存 0 清除；未知上限不能由 fallback 證明手填值可用。
 - 相同請求內可引用完全相同且完整的 source／setup 欄位，引用位置必須唯一；各相依身分、來源雜湊與觀測不得合併。structured small／large Writer 使用相同完整必要證據投影。初次 seed 可選完整、可重播且無同呼叫衝突的一案，原證據產物保留；結構重試與修訂必須恢復全部原觀測及完整候選，超額仍在傳輸前停止。
 - Writer 的輸出契約必須對所有 provider、模型與 Tier 使用相同的純 Python code fence；包括 Tier 3 Scaffold、Tier 4 與 Self-repair。不得依模型名稱插入或移除 `<thinking>` 等分析標籤，以免分析文字混入可執行測試。
 - 產生測試前必須保留必要的語境：目標函式、imports、引用的模組常數、類別與 `__init__`、相依函式、呼叫站與動態追蹤結果。

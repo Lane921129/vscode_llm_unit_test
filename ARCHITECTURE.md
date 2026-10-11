@@ -336,7 +336,7 @@ Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀
 
 Writer 在選擇 optional 材料前，先預扣相同的初始化與資源語境；Reviewer 初步預算也包含它，最終傳輸 gate 再核對全部文字。角色事件保存估計 input、格式修正預留量、實際 context 設定、耗時與安全失敗分類；HTTP 狀態只採 transport 階段持有的數值，不由訊息文字猜測，也不保存 provider 本文。這些估量和基本資格探針不能證明完整小模型批次通過。
 
-`llmUnitTest.runtimeContextTokens` 預設 `0`，使用依端點與模型保存的側欄容量；正值為全域明確覆寫。首次自動選擇先保留既有角色資格的 `numCtx`，否則採同模型 `/api/ps` 的 `context_length`、`/api/show` 的 `num_ctx`，最後才使用 4,096 fallback，不從參數量或模型最大上限自動擴大分配。自動捕捉值與使用者手填值分開保存；重測及新分析沿用選擇，角色探針與正式 wire `num_ctx` 使用同值。`resolveLocalRuntimeContext` 保留約 30% 給輸出，手填正值須有模型上限證據且不可超過；自動捕捉的已分配容量可在上限未知時進行資格實探。`ollamaRuntime.ts` 分開核驗模型上限、Modelfile 配置與實際 allocation；後兩者不證明模型支援上限，未知／多筆匹配不借用其他模型資料。分析啟動時固定完整偏好快照，執行中設定變更不改當次請求。
+`llmUnitTest.runtimeContextTokens` 預設 `0`；正值為全域明確覆寫，其次為端點／模型的手動保存值。未手動指定且模型上限已核實時，自動選擇上限的一半（向下取整、至少 1），16,384 因而選 8,192；舊 captured-runtime 值與舊角色資格不能壓回 4,096。側欄刷新自動保存值，但串行寫入不得覆蓋稍後的手動選擇；保存 0 撤回手動值並重選。上限未知時才重用自動保存／合法資格容量、同模型 `/api/ps` 的 `context_length`、`/api/show` 的 `num_ctx`，最後使用 4,096 fallback。角色探針與正式 wire `num_ctx` 使用同值，輸入仍保留約 30% 給輸出；容量變更使舊資格不適用。自動選擇為請求設定，不冒稱當下實際分配。`ollamaRuntime.ts` 分開核驗模型上限、Modelfile 配置與實際 allocation；後兩者不證明上限，未知／多筆匹配不借用其他模型資料。分析啟動時固定完整偏好快照，執行中設定變更不改當次請求。
 
 本機角色資格另外綁定 `ollama-context-v1` 與實際請求的 `numCtx`；provider、端點、模型及探針版本仍須一致。舊 profile 保留 metadata，但撤回缺少容量綁定的資格；測試連線中的三角色採同一設定快照，中途修改則提示重驗。正式執行的單檔／全檔／批次在 `ExecutionContext` 固定設定，Auto 不借用其他容量的角色結果。手動 Tier 仍可試跑，所有後續驗證不變。非法本機設定在模型請求前保存 `model-runtime/rejected` 與原因碼；Cloud／Custom 不受本機設定影響。
 

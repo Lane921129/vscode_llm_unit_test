@@ -5,7 +5,7 @@ import { qualificationAppliesToRequest, qualificationEndpointKey } from '../llm/
 import { BUG_FIXER_QUALIFICATION_PROMPT, REVIEWER_QUALIFICATION_PROMPT } from '../llm/roleQualification';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
+import { getRuntimeContextPreference, RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
 
 const writerResponse = `import unittest
 class TestCases(unittest.TestCase):
@@ -16,7 +16,7 @@ class TestCases(unittest.TestCase):
 `;
 const fixerResponse = '```python\ndef test_increment(self):\n    self.assertEqual(increment(1), 2)\n```';
 const metadata = { details: { parameter_size: '3B' },
-    model_info: { 'general.architecture': 'neutral', 'neutral.context_length': 32768 }, parameters: 'num_ctx 8192' };
+    model_info: { 'general.architecture': 'neutral', 'neutral.context_length': 16384 }, parameters: 'num_ctx 4096' };
 
 test('Sidebar connection binds actual role probes to one local runtime snapshot', async t => {
     const Module = require('module');
@@ -95,13 +95,53 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             assert.equal(errors.length, 0);
         };
 
-        await t.test('automatic mode sends the same measured num_ctx to Writer, Reviewer and Bug Fixer', async () => {
+        await t.test('automatic mode sends half the known model limit to all role probes and retains that choice on next selection', async () => {
             reset(); settings.set('runtimeContextTokens', 0);
-            const probes = installTransport();
+            const probes = installTransport(undefined, undefined, { models: [{ name: 'neutral-model', context_length: 4096 }] });
             await request();
             assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
             assertVerified(8192, true);
             assert.equal(information.length, 1);
+            await receive({ command: 'getModelRuntimeContext', modelName: 'neutral-model', revision: 1 });
+            const selection = messages.filter(item => item.command === 'modelRuntimeContext').at(-1);
+            assert.equal(selection.requestTokens, 8192);
+            assert.equal(selection.savedTokens, 8192);
+            assert.equal(selection.allocatedTokens, 4096, 'a previous allocation remains a separate observed fact');
+            assert.equal(selection.allocationSource, 'ollama-ps');
+            assert.equal(selection.defaultTokens, undefined, 'the selected PS observation is not relabeled as a Modelfile default');
+            assert.equal(selection.modelLimit, 16384);
+            assert.equal(probes.length, 3, 'selection does not fabricate or repeat role qualification');
+        });
+
+        await t.test('legacy captured 4096 migrates to half the known limit before real role qualification', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 4096, 'captured-runtime'));
+            stored.set('llmUnitTest.modelProfiles.v1', [{ envType: 'local', ...identity, paramSize: '3B',
+                contextLength: 16384, contextLengthKnown: true, qualificationRuntime: { version: 'ollama-context-v1', numCtx: 4096 } }]);
+            const probes = installTransport(undefined, undefined, { models: [{ name: 'neutral-model', context_length: 4096 }] });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.deepEqual(getRuntimeContextPreference(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY), identity),
+                { ...identity, tokens: 8192, source: 'captured-runtime' });
+            await receive({ command: 'getModelRuntimeContext', modelName: 'neutral-model', revision: 2 });
+            const selection = messages.filter(item => item.command === 'modelRuntimeContext').at(-1);
+            assert.equal(selection.requestTokens, 8192);
+            assert.equal(selection.savedTokens, 8192);
+            assert.equal(qualificationAppliesToRequest(finalProfile(), { envType: 'local', ...identity, runtimeContextTokens: 4096 }), false);
+        });
+
+        await t.test('an explicit per-model 4096 choice remains the wire context despite a larger automatic default', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 4096, 'user-choice'));
+            const probes = installTransport();
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [4096, 4096, 4096]);
+            assertVerified(4096, true);
+            assert.deepEqual(getRuntimeContextPreference(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY), identity),
+                { ...identity, tokens: 4096, source: 'user-choice' });
         });
 
         await t.test('saved choice changes during a probe require fresh qualification and cannot relabel its wire capacity', async () => {

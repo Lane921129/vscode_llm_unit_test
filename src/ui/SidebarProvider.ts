@@ -49,19 +49,29 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async saveRuntimeContextPreference(identity: { endpointKey: string; modelName: string },
-        tokens: number, source: RuntimeContextPreference['source'], initializeOnly = false): Promise<void> {
+        tokens: number, source: RuntimeContextPreference['source'],
+        expectedAutomaticPreference?: RuntimeContextPreference | null): Promise<boolean> {
+        let saved = false;
         const write = this.contextPreferenceWrites.catch(() => undefined).then(async () => {
             const current = this.uiState.get(RUNTIME_CONTEXT_PREFERENCES_KEY);
-            if (initializeOnly && getRuntimeContextPreference(current, identity)) { return; }
+            if (expectedAutomaticPreference !== undefined) {
+                const config = vscode.workspace.getConfiguration('llmUnitTest');
+                if (this.activeAnalysis || config.get<unknown>('runtimeContextTokens', 0) !== 0
+                    || qualificationEndpointKey('local', config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) !== identity.endpointKey
+                    || JSON.stringify(getRuntimeContextPreference(current, identity) ?? null)
+                        !== JSON.stringify(expectedAutomaticPreference)) { return; }
+            }
             await this.uiState.update(RUNTIME_CONTEXT_PREFERENCES_KEY,
                 upsertRuntimeContextPreference(current, identity, tokens, source));
+            saved = true;
         });
         this.contextPreferenceWrites = write;
         await write;
+        return saved;
     }
 
     /** Allocation and model upper bound are separate facts. Reading the upper
-     * bound never increases a saved choice or the actual request context. */
+     * bound may refresh automatic capacity, but never overrides a user choice. */
     private async readLocalRuntimeContext(modelName: string, configuredTokens: unknown, capture = true, endpoint?: string, ignoreQualification = false) {
         const config = vscode.workspace.getConfiguration('llmUnitTest');
         const baseUrl = (endpoint || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')).replace(/\/$/, '');
@@ -92,17 +102,23 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             this.contextPreferenceWrites = write;
             await write;
         }
-        const runtime = resolveLocalRuntimeContext({ ...metadata, ...allocation, runtimeContextTokens: configuredTokens,
-            preferredRuntimeContextTokens: preference?.tokens, preferredRuntimeContextSource: preference?.source,
-            qualificationRuntime: ignoreQualification ? undefined : stored?.qualificationRuntime });
+        const resolveRuntime = (currentPreference: RuntimeContextPreference | undefined) =>
+            resolveLocalRuntimeContext({ ...metadata, ...allocation, runtimeContextTokens: configuredTokens,
+                preferredRuntimeContextTokens: currentPreference?.tokens, preferredRuntimeContextSource: currentPreference?.source,
+                qualificationRuntime: ignoreQualification ? undefined : stored?.qualificationRuntime });
+        let runtime = resolveRuntime(preference);
         let usedPreference = preference;
-        if (capture && !this.activeAnalysis && configuredTokens === 0 && !preference && runtime.ok
+        if (capture && !this.activeAnalysis && configuredTokens === 0 && runtime.ok
+            && (!preference || preference.source === 'captured-runtime' && preference.tokens !== runtime.contextWindow)
             && config.get<unknown>('runtimeContextTokens', 0) === configuredTokens
             && qualificationEndpointKey('local', config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) === identity.endpointKey) {
-            await this.saveRuntimeContextPreference(identity, runtime.contextWindow, 'captured-runtime', true);
-            // Keep the preference that actually selected this request, even if a
-            // newer user choice arrived while metadata was being fetched.
-            usedPreference = { ...identity, tokens: runtime.contextWindow, source: 'captured-runtime' };
+            const saved = await this.saveRuntimeContextPreference(identity, runtime.contextWindow,
+                'captured-runtime', preference ?? null);
+            usedPreference = saved ? { ...identity, tokens: runtime.contextWindow, source: 'captured-runtime' }
+                : getRuntimeContextPreference(this.runtimeContextPreferencesSnapshot(), identity);
+            // An automatic refresh cannot replace a manual choice queued while
+            // metadata was being fetched. Probes still share this resolved value.
+            if (!saved) { runtime = resolveRuntime(usedPreference); }
         }
         const lastAllocation = getOllamaAllocationObservation(this.uiState.get(OLLAMA_ALLOCATION_OBSERVATIONS_KEY), identity)?.tokens
             ?? (stored?.runtimeContextSource === 'ollama-ps' && Number.isSafeInteger(stored.effectiveRuntimeContextTokens)

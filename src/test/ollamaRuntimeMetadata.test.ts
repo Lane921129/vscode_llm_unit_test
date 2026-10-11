@@ -6,14 +6,14 @@ import { resolveLocalRuntimeContext } from '../prompts/promptBudget';
 const show = { model_info: { 'general.architecture': 'neutral', 'neutral.context_length': 131072 },
     details: { parameter_size: '3B' }, parameters: 'temperature 0\nnum_ctx 8192\nstop "end"' };
 
-test('same-model running allocation takes precedence over a Modelfile default without using the upper bound', () => {
+test('running allocation remains a separate observed fact when automatic requests use half the known model limit', () => {
     const running = { models: [{ name: 'other:latest', context_length: 65536 },
         { name: 'neutral:latest', model: 'neutral:latest', context_length: 12288 }] };
     const runtime = getOllamaRuntimeContextMetadata(show, running, 'neutral');
     assert.deepEqual(runtime, { effectiveRuntimeContextTokens: 12288, runtimeContextSource: 'ollama-ps' });
     assert.equal(getOllamaModelConnectionMetadata(show).contextLength, 131072);
     assert.deepEqual(resolveLocalRuntimeContext({ ...getOllamaModelConnectionMetadata(show), ...runtime }), {
-        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 12288, inputBudget: 8601
+        ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 65536, inputBudget: 45875
     });
 });
 

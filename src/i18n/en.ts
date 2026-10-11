@@ -99,7 +99,7 @@ export default {
         env: "Environment",
         ollamaUrl: "Ollama URL",
         runtimeContextLabel: "Request context (tokens)",
-        runtimeContextHint: "0 displays automatic mode using the saved capacity for this model and endpoint. Saving 0 clears the choice and detects capacity again; a positive value saves your choice. Changing context requires another connection test. A model's advertised maximum does not increase this value.",
+        runtimeContextHint: "Automatic mode uses half of the verified model maximum. A saved manual choice takes priority; saving 0 clears it and restores automatic mode. Unknown limits use the saved or detected runtime, with 4096 as fallback. Changing context requires another connection test. Request context is separate from observed allocation.",
         runtimeContextSave: "Save context",
         runtimeContextSavedValue: "Saved choice: ",
         runtimeContextAllocated: "Ollama current allocation: ",

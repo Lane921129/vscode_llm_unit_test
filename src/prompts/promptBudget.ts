@@ -67,10 +67,15 @@ export function resolveLocalRuntimeContext(profile: {
         return { ok: false, reasonCode: 'runtime-context-metadata-required' };
     }
     const observed = profile.effectiveRuntimeContextTokens;
-    const contextWindow = configured > 0 ? configured : hasPreference ? preferred
+    // A known model limit drives automatic allocation. Only a real user choice
+    // overrides it; old captures and probe capacities must not pin auto mode.
+    const userPreference = hasPreference && profile.preferredRuntimeContextSource === 'user-choice';
+    const contextWindow = configured > 0 ? configured : userPreference ? preferred
+        : knownUpperBound ? Math.max(1, Math.floor(profile.contextLength / 2))
+        : hasPreference ? preferred
         : isLocalRuntimeQualification(profile.qualificationRuntime) ? profile.qualificationRuntime.numCtx
         : typeof observed === 'number' && Number.isSafeInteger(observed) && observed > 0 ? observed
-        : knownUpperBound ? Math.min(UNKNOWN_CONTEXT_WINDOW, profile.contextLength) : UNKNOWN_CONTEXT_WINDOW;
+        : UNKNOWN_CONTEXT_WINDOW;
     if (knownUpperBound && contextWindow > profile.contextLength) {
         return { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' };
     }

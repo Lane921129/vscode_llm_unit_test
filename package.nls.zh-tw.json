@@ -1,5 +1,5 @@
 {
-  "contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description": "本機 Ollama 每次請求的 num_ctx；0 使用側欄保存的端點／模型選擇，首次保留已驗證容量，否則讀取實際分配或模型 num_ctx，未知時使用 4096。正值優先於側欄，須有有效模型 metadata 且不可超過上限。輸入預算使用同一 num_ctx，不依參數量設限，約 30% 留給輸出。容量變更後須重新測試角色資格；較大容量需要更多記憶體，執行中的批次保留啟動時選擇。",
+  "contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description": "本機 Ollama 每次請求的 num_ctx；0 保留側欄手動選擇，否則自動採已核實模型上限的一半並刷新舊自動值。上限未知時沿用保存或偵測容量，最後使用 4096。正值優先於側欄，須有有效模型 metadata 且不可超過上限。輸入預算使用同一 num_ctx，約 30% 留給輸出。容量變更後須重新測試角色資格；較大容量需要更多記憶體，執行中的批次保留啟動時選擇。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description": "支持此設定的來源檔案與 SHA-256；任一來源變動即撤銷批准。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description": "此批准設定限一般 Python 原始碼程序；封裝執行檔會在載入應用前被拒絕。",
   "contributes.commands.5.title": "LLM Unit Test：設定隔離測試資源",
