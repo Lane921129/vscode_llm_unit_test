@@ -68,7 +68,7 @@ test('manual resource drafts preserve parent scope and do not conflate equal in-
 });
 
 test('external exact candidates and manual drafts retain the approved absolute mapping and source version', () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'external-resource-draft-'));
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'external-resource-draft-')));
     const root = path.join(base, 'selected', 'app'); fs.mkdirSync(root, { recursive: true });
     const file = path.join(root, 'settings.py'); fs.writeFileSync(file, 'VALUE = 1\n');
     const exact = canonicalExternalResourcePath(path.join(base, 'external', 'data'));

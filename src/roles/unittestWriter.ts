@@ -7,6 +7,11 @@ import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, formatDependencyMockContract, formatSourceImport, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { referenceRepeatedTestFile } from './roleContracts';
 
+const PURE_STDLIB_INPUT_GUIDANCE = 'For pure standard-library parsing, formatting or calculation, prefer real target calls with source-supported literal inputs. '
+    + 'Imported helpers alone do not require mocks. Mock only source-shown external or ambient boundaries when control is needed. '
+    + 'Never patch immutable built-in class members; replace the owning module binding if necessary. '
+    + 'Inputs and source expressions do not prove expected values; retain verified-observation or explicit same-test evidence requirements.';
+
 export function getExecutionWriterSystemPrompt(): string {
     return `EXECUTION_VERIFICATION_V1 Writer: one complete unittest file in one python fence, no prose. Trace/coverage/mutation unavailable.
 Setup: read-only source/imports/signatures/constructors/dependencies. Keep the exact target binding; never copy/redefine/mock the target/class.
@@ -123,6 +128,7 @@ ${formatBlock}
 Import unittest, target and test helpers explicitly. Use the exact target module/class binding, unittest.TestCase, test_ methods and self.assert*; no pytest or top-level assert.
 Keep the real target; never copy/redefine/mock it or its owner class. Assertions require exact Verified Real Execution Results, a proven source path or same-test controlled behavior; never guess outputs or exception types.
 For an evidenced exception use \`with self.assertRaises(ExceptionType):\`, never a message string as its second argument. Do not call dependencies to calculate expected values.
+${PURE_STDLIB_INPUT_GUIDANCE}
 Patch external dependencies at source-shown use points, with fresh per-test state; no direct test network/file/shell/dynamic execution or shared SQLite.${isolatedResourceSystemRule()}`;
 
         if (loopCount > 1 && survivedMutants) {
@@ -145,6 +151,7 @@ Output only that single Python code fence. Do not include analysis, reasoning, h
 
 Guidelines:
 - Use absolute import (e.g. from module_name import target_function).
+- ${PURE_STDLIB_INPUT_GUIDANCE}
 - Use unittest.mock (patch, MagicMock) for external dependencies${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}.${isolatedResourceSystemRule()}
 - Cover branches, boundaries, and exception paths that are supported by the source code, selected test-generation rule cards, or verified execution facts. Do not add None or empty-input tests merely by habit.
 - Do NOT copy the source code into your output.

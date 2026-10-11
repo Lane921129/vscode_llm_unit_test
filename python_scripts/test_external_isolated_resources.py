@@ -20,7 +20,7 @@ class ExternalIsolatedResourceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.base = Path(temporary.name)
+        self.base = Path(temporary.name).resolve()
         self.root = self.base / 'workspace' / 'project'
         self.root.mkdir(parents=True)
         for package in (self.root, self.root.parent):
@@ -267,6 +267,8 @@ class ExternalIsolatedResourceTests(unittest.TestCase):
             prefix + '/run.py', prefix + '/run.exe', prefix + '/bad\x00', 'x' * 241,
             external_resource_identity(self.root), external_resource_identity(self.root / 'data'),
             external_resource_identity(self.root.parent / 'sibling'), external_resource_identity(self.root.parent)]
+        if os.name == 'nt':
+            values += ['C:/SOURCE~1', 'C:/arbitrary/TEST~42.txt']
         for value in values:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):

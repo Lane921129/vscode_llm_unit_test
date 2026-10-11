@@ -45,7 +45,7 @@ test('observed UNC mkdir is explicitly previewed and rechecked using only local 
 });
 
 test('observed absolute mkdir retains an exact external proposal without reading or writing original data', async () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'external-import-'));
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'external-import-')));
     const root = path.join(base, 'selected', 'app'); fs.mkdirSync(root, { recursive: true });
     const external = canonicalExternalResourcePath(path.join(base, 'external', 'data'));
     fs.mkdirSync(external, { recursive: true }); fs.writeFileSync(path.join(external, 'existing.txt'), 'original must remain untouched');

@@ -4,6 +4,28 @@
 
 ## 2026-10-11
 
+### CI 路徑一致性、Analyst 模板回聲與角色提示預算
+
+- GitHub 四組 CI 的 Node 階段確實失敗：Windows 的 Node／Python 對既存來源之 8.3 短路徑解析不同，造成執行、突變、品質與初始化證據誤拒；Ubuntu 的歷史 coverage 相容解析則把 Windows 路徑當作一般檔名。新增既存檔案的 native 實體身分工具，跨語言只對已批准來源建立別名；歷史 coverage 只在相容解析處統一分隔符號，不放寬目前執行的來源、摘要或 runId 驗證。
+- 一併納入工作區原有且已核對的 CI 工作流程：Node、Webview、Python 與建置分開顯示結果，非取消時後續檢查仍執行；總上限 45 分鐘。這不是原路徑失敗的修法，而是避免較長的完整回歸與相依安裝共用 30 分鐘上限，並保留各階段診斷。其餘既有工作區修改保留。
+- 路徑正規化不授權資源存取：保留原拼法的連結／junction 檢查，UNC 僅作虛擬字串，原 DB／設定不讀取。外部精確資源的未證明 `~N` 短名稱拒絕；突變副本排除資源時同樣使用已證明的來源別名，避免短路徑漏過排除。
+- 原車輛批次 173 次無效 Analyst 回覆的 214 字元與 SHA-256，完全符合公開 system prompt 的 JSON 範本。移除可直接照抄的完整範本，改成逐欄契約；補正仍最多一次、共用原期限。日誌增加固定原因碼、回覆形狀／數量與是否重複的診斷，不保存完整 provider 回覆或任意回覆欄位。
+- Analyst、Reviewer 與 Bug Fixer 的目標 import 使用保守的相關性投影；未知綁定保留。Reviewer／Bug Fixer 去除 caller 的重複 transport 樹，沿用型別敏感的完整呼叫投影，保留目標／依賴來源、constructor、globals、setup 與受控觀測。自動模式的輸入預算改用當次實際 Ollama context 計算，避免使用過期 profile 預算；自動容量上限與約三成輸出預留不變。Reviewer 超額事件增加實際容量、預算及提示估量。
+- 分治合併新增 Python AST 工具，保留已執行基線的 class、方法、fixture 與順序；只去除相同 AST 定義，安全情況下才改新 class 名稱。無法保留 import／fixture／全域綁定的合併仍拒絕並交 Writer；不靠改掉已通過方法身分來合併，不省略同候選執行與審查。
+- 真實小批次另揭露模型把純日期解析誤作 mock，以及把函式參數誤作模組屬性。完整模式 Writer 補充純標準庫解析／格式化／計算優先真實輸入；捕捉例外規則改為必要時才配置 `side_effect`。參數指引按實際 AST 簽名列出在測試建立並傳入的值，保留獨立來源支持的全域 lookup 例外；不猜 fixture 形狀或預期值，不放寬執行與去重 gate。
+- 獨立重跑確認 Trace 規劃約需 4.4 秒，每案例重新載入模組卻只有 2 秒，因此沒有有效觀測。僅在規劃成功且無載入錯誤時，將當次規劃耗時加入案例上限作為啟動成本估量；每案例仍受原總期限剩餘時間限制，不新增重試或共用 worker。工具與進度紀錄保存設定、校準、實際分配及原因，timeout／未啟動仍不是 oracle。
+- 真實 builtin 對照中，車輛 `get_vehicle_status_map` 取得同候選 Reviewer 核准、目標覆蓋 2／2、11／11 killed，scorecard 重算完整通過；Mutatest 對同函式零候選的結果仍獨立保留。同步修正頂層 journal 保存品質成果時漏更新 `mutationStatus`，不更動突變前 executable checkpoint 的歷史狀態，也不以此欄位取代完整品質證據。
+- 真實模型驗收、完整回歸與尚未完成界線另記於 `docs/CI與車輛小批次修復_2026_10_11.md`；不以本機 3B 結果冒稱 Codellama 13B 或 212 個目標整批通過。
+- 本機完整 Node 894／894、Python 562 通過／1 因符號連結權限跳過、核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 與憑證／歷史掃描通過。最後 journal 欄位同步重新編譯後，直接相關整合補驗 2／2 通過；GitHub 平台矩陣在 push 後獨立確認。
+
+### 生成重試保留失敗候選與正確匯入指引
+
+- 真實小模型重跑中，Writer 已改正時間來源的 mock，卻漏掉被測私有函式的 import；原結構診斷誤將被測函式視為一般 helper，建議 point-of-use patch，與「不可 mock 被測目標」的契約互相矛盾。
+- 保留原拒絕條件，只在缺少匯入的名稱等於被測目標時，提示依 `Target import` 明確匯入並呼叫真實目標；類別方法須匯入 owner 並依 `Target binding` 呼叫，不可退回同名頂層函式。缺少模組 metadata 時引用既有契約，不捏造 import 路徑；其他 helper 的原診斷不變。
+- 一般生成與分治子任務的首次結構／觀測證據重試，改以既有 Writer 修訂契約附上完整被拒候選、具體診斷與原來同一份證據；分治保留該 caller 的證據範圍。先前僅重送原提示與錯誤原因，獨立請求無法看到剛被拒絕的測試。維持原 seed／expansion 指令、重試上限與全部 gate；完整修訂超出預算時在傳輸前停止，不截斷候選或必要證據、不用降 Tier 繞過容量限制。
+- 新增 6 項回歸，涵蓋繁體中文／英文提示、類別 owner、缺少 metadata、合法 alias／module import，以及真實 Python AST 對 target patch 和 class-to-module fallback 的拒絕。6／6 通過；TypeScript、lint、生產建置、Webview 語法與差異檢查通過。這次是診斷修正，不改變品質門檻或模型資格，不以單元回歸宣稱真實車輛批次通過。
+- 修正後的 3B／16K 單點試跑共 6 次請求且全部完成。缺少 target import 的後一份候選已補上匯入，但保存紀錄沒有請求提示全文，不能把此結果當成提示送達的直接證據。4 個實際執行候選仍直接 patch 不可變的 `datetime.datetime.now` 而失敗；2 次 Bug Fixer 均已解析、合併並執行，最後因相同失敗停止，並非 scope 拒絕。尚未進 Reviewer／突變；34 個隔離租約均回收，來源及依賴未變。
+
 ### 名稱綁定修復分流、相依關係與小模型生成一致性
 
 - 真實 16K 車輛試跑發現，生成測試缺少 `datetime` 匯入卻交給 Bug Fixer；候選僅補 import，因方法本體未變而遭範圍檢查拒絕。修正候選流程的角色排程，對可辨識的 unittest `ERROR`／`NameError` 或 `UnboundLocalError` 優先交 Writer 處理完整測試；Bug Fixer 的解析、合併與方法範圍 gate 保持不變。

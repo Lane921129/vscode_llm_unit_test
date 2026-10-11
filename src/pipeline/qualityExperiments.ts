@@ -8,6 +8,7 @@ import { TraceValueSnapshot } from './evidenceContracts';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { importFixtureEnvironment, IMPORT_FIXTURE_ENV } from './importFixtures';
+import { canonicalExistingPath, existingRealPath } from '../utils/fileIdentity';
 
 export interface QualityExperimentFocus {
     id: string;
@@ -178,10 +179,11 @@ export async function prepareQualityExperiments(input: QualityExperimentInput): 
         throw new Error('Invalid quality experiment identity.');
     }
     if (result.context) {
-        const sourcePath = fs.realpathSync(input.sourcePath);
+        const sourcePath = existingRealPath(input.sourcePath);
         let root = path.dirname(sourcePath);
         while (fs.existsSync(path.join(root, '__init__.py'))) { root = path.dirname(root); }
-        if (path.resolve(result.context.sourceRoot) !== root || path.resolve(result.context.sourcePath) !== sourcePath
+        if (canonicalExistingPath(result.context.sourceRoot) !== canonicalExistingPath(root)
+            || canonicalExistingPath(result.context.sourcePath) !== canonicalExistingPath(sourcePath)
             || result.context.module !== input.module
             || result.context.importFixturePlanHash !== evidenceHash(effectiveEnvironment[IMPORT_FIXTURE_ENV] ?? '')) {
             throw new Error('Quality observation execution context mismatch.');

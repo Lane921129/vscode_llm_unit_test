@@ -23,7 +23,7 @@ interface SetupSession {
 }
 
 test('initialization setup stops after one confirmed recheck and preserves the remaining evidence', async t => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-recheck-'));
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     let root = '', settings: Record<string, any> = {}, approve = true, confirmations = 0, updates = 0, modelCalls = 0;
@@ -63,7 +63,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
                 'from pathlib import Path\ndef launch():\n    Path("must_not_exist").mkdir()\n');
             settings = { pythonPath: python, projectPath: root, importFixtures: [] };
             approve = true; confirmations = 0; updates = 0; messages.length = 0; confirmationMessages.length = 0; duringConfirmation = undefined;
-            const output = path.join(parent, 'results');
+            const output = path.join(base, 'results', name.length < 12 ? name : createHash('sha256').update(name).digest('hex').slice(0, 8));
             const controller = new ImportSetupController((message: unknown) => messages.push(message));
             return { file, source, output, controller };
         };
@@ -71,10 +71,10 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             const before = fs.existsSync(fixture.output) ? fs.readdirSync(fixture.output) : [];
             const outcome: ImportSetupResult = await fixture.controller.prepare(root, fixture.output, targets);
             const added = fs.readdirSync(fixture.output).filter(file => !before.includes(file));
-            assert.equal(added.length, 1, 'one user action owns one terminal session report');
+            assert.equal(added.length, 1, 'one user action owns one terminal session report: ' + JSON.stringify(outcome));
             const directory = path.join(fixture.output, added[0]);
             assert.equal(outcome.directory, directory);
-            assert.equal(outcome.root, fs.realpathSync(root));
+            assert.equal(outcome.root, fs.realpathSync.native(root));
             assert.equal(outcome.python, python);
             const session: SetupSession = JSON.parse(fs.readFileSync(path.join(directory, 'import_setup.json'), 'utf8'));
             assert.equal(session.schemaVersion, 'import-setup-session-v1');
@@ -126,7 +126,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             if (scope === 'unc-virtual' && process.platform !== 'win32') { continue; }
             await t.test(`${scope} initialization requires an unchanged confirmed proposal: ${outcome}`, async () => {
                 const external = scope === 'unc-virtual' ? canonicalUncResourcePath('//fixture-host/test-share/' + outcome)
-                    : canonicalExternalResourcePath(path.join(base, 'external', outcome));
+                    : canonicalExternalResourcePath(path.join(fs.realpathSync.native(base), 'external', outcome));
                 const fixture = createFixture(scope + '-' + outcome, 'from pathlib import Path\n'
                     + `DATA = Path(${JSON.stringify(external)})\n`
                     + 'DATA.mkdir(parents=True, exist_ok=True)\ndef target(): return DATA.is_dir()\n');
@@ -238,7 +238,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(result.session.status, 'ready');
             assert.equal(result.outcome.status, 'ready');
             assert.equal(result.outcome.fixtureId, null);
-            assert.deepEqual(result.outcome.targets, [{ file: fs.realpathSync(fixture.file), target: 'target' }]);
+            assert.deepEqual(result.outcome.targets, [{ file: fs.realpathSync.native(fixture.file), target: 'target' }]);
             assert.equal(result.session.reason, 'initial-check');
             assert.deepEqual(result.session.checks.map(check => [check.loaded, check.blocked]), [[1, 0]]);
             const check = JSON.parse(fs.readFileSync(path.join(result.directory, '1', 'import_check.json'), 'utf8'));

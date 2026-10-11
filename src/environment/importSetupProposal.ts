@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -36,8 +37,8 @@ function readCandidate(root: string, value: any, evidence: ImportInitializationC
         || value.operation.trim() !== value.operation || !/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(value.operation)
         || value.kind === 'mkdir' && value.operation !== 'pathlib.Path.mkdir') { return undefined; }
     try {
-        root = fs.realpathSync(root);
-        const file = fs.realpathSync(path.join(root, value.file));
+        root = existingRealPath(root);
+        const file = existingRealPath(path.join(root, value.file));
         const relative = path.relative(root, file);
         if (relative.startsWith('..') || path.isAbsolute(relative)
             || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== value.sourceHash) { return undefined; }

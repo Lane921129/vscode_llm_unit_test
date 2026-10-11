@@ -56,6 +56,57 @@ test('source and required setup remain complete beyond old count limits and pres
     assert.match(prompt, /does not prove a return value, exception, or external side effect/);
 });
 
+test('Analyst import projection keeps source aliases and all setup references, with a full fallback when source is absent', () => {
+    const astFacts: NonNullable<AnalysisEvidenceV2['astFacts']> = {
+        code: 'def choose(self, value):\n    return api.convert(value, "string_binding")\n', args: ['value'],
+        file_imports: [
+            { kind: 'import', module: 'converter', alias: 'api', bound_name: 'api' },
+            { kind: 'import', module: 'unused_module' },
+            { kind: 'import', module: 'string_binding' },
+            { kind: 'import', module: 'class_binding' },
+            { kind: 'import', module: 'global_binding' },
+            { kind: 'import', module: 'property_binding' },
+            { kind: 'import', module: 'caller_binding' },
+            { kind: 'import', module: 'topology_binding' },
+            { kind: 'from', module: 'unknown_exports', name: '*' },
+            { kind: 'import' }
+        ],
+        class_context: { name: 'Choose', bases: ['class_binding.Base'] },
+        referenced_globals: [{ name: 'SETTING', code: 'SETTING = global_binding.setting' }],
+        property_context: { getter: 'property_binding.read' },
+        callerContexts: [{ call_expr: 'choose(caller_binding.value)' }],
+        dependency_fixture_contract: { usePoint: 'topology_binding' }
+    };
+    const prompt = getSemanticAnalyzerUserPrompt(evidence({ astFacts }));
+    assert.match(prompt, /import converter as api/);
+    assert.doesNotMatch(prompt, /unused_module/);
+    for (const binding of ['string_binding', 'class_binding', 'global_binding', 'property_binding', 'caller_binding', 'topology_binding']) {
+        assert.ok(prompt.includes('import ' + binding), binding);
+    }
+    assert.match(prompt, /from unknown_exports import \*/);
+    assert.match(prompt, /import \?/);
+    const withoutSource = getSemanticAnalyzerUserPrompt(evidence({ astFacts: { ...astFacts, code: undefined } }));
+    assert.match(withoutSource, /import unused_module/);
+});
+
+test('Analyst retains imports for Unicode-normalized aliases and computed namespace access', () => {
+    for (const source of ['def target():\n    """取得無限大"""\n    return K.inf\n', 'def target():\n    return globals()["i" + "nf"]\n']) {
+        const prompt = getSemanticAnalyzerUserPrompt(evidence({
+            target: { moduleName: 'sample', functionName: 'target', source, sourceHash: 'd'.repeat(64) },
+            astFacts: { code: source, args: [], file_imports: [
+                { kind: 'import', module: 'math', alias: 'K', bound_name: 'K' },
+                { kind: 'from', module: 'math', name: 'inf' },
+                { kind: 'import', module: 'unrelated_module' }
+            ] }
+        }));
+        assert.ok(prompt.includes(source));
+        assert.match(prompt, /import math as K/);
+        assert.match(prompt, /from math import inf/);
+        if (source.includes('globals()')) { assert.match(prompt, /import unrelated_module/); }
+        else { assert.doesNotMatch(prompt, /import unrelated_module/); }
+    }
+});
+
 test('controlled observation projection keeps complete assertion facts while leaving snapshots in artifacts', () => {
     const longRepr = "'" + 'value'.repeat(80) + "-tail'";
     const artifactValue = 'artifact-snapshot-only-' + 'x'.repeat(16000);

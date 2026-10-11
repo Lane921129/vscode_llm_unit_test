@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -10,7 +11,7 @@ export interface ResourceSetupDraft {
 
 /** A draft cannot introduce a new remote source root merely by being previewed. */
 function draftBelongsToSelectedRoot(root: string, declaredRoot: string): boolean {
-    const selected = fs.realpathSync(root);
+    const selected = existingRealPath(root);
     if (/^[\\/]{2}/.test(declaredRoot)) {
         const lexical = (value: string) => {
             let normalized = path.resolve(value).replace(/\\/g, '/').replace(/\/$/, '');
@@ -24,7 +25,7 @@ function draftBelongsToSelectedRoot(root: string, declaredRoot: string): boolean
         // An unselected network-style draft value is compared as text only.
         return lexical(declaredRoot) === lexical(selected);
     }
-    return fs.realpathSync(declaredRoot) === selected;
+    return existingRealPath(declaredRoot) === selected;
 }
 
 /** Validate the exact edited declaration and its original source approvals. */
@@ -51,8 +52,8 @@ export function mergeResourceSetupRules(root: string, saved: ImportFixtureRule[]
     const validated = readResourceSetupDraft(root, JSON.stringify(draft)).draft;
     const rules = structuredClone(selectImportFixtureRules(root, saved, boundRoot));
     for (const update of validated.rules) {
-        const canonical = fs.realpathSync(path.join(root, update.file));
-        let rule = rules.find(item => fs.realpathSync(path.join(root, item.file)) === canonical);
+        const canonical = existingRealPath(path.join(root, update.file));
+        let rule = rules.find(item => existingRealPath(path.join(root, item.file)) === canonical);
         if (!rule) { rule = { file: update.file }; rules.push(rule); }
         delete rule.resources; delete rule.resourceSourceHash;
         if (update.resources?.length) {
@@ -67,7 +68,7 @@ export function mergeResourceSetupRules(root: string, saved: ImportFixtureRule[]
 }
 
 export function newResourceSetupRule(root: string, file: string): ImportFixtureRule {
-    root = fs.realpathSync(root); file = fs.realpathSync(file);
+    root = existingRealPath(root); file = existingRealPath(file);
     const relative = path.relative(root, file);
     if (relative.startsWith('..') || path.isAbsolute(relative) || !relative.endsWith('.py')) {
         throw new Error('Choose a Python source inside the selected project.');

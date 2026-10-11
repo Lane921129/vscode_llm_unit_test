@@ -33,6 +33,7 @@ _ORIGINAL_LSTAT = os.lstat
 _ORIGINAL_CONNECT = sqlite3.connect
 _SESSIONS = {}
 _GENERATED_TEST_FILES = set()
+_GENERATED_TEST_SPELLINGS = []
 _REDIRECT_CODES = set()
 _IDENTIFIER = re.compile(r'[A-Za-z_]\w{0,63}', re.ASCII)
 _FORBIDDEN_SUFFIXES = {'.py', '.pyc', '.pyo', '.so', '.pyd', '.dll', '.exe', '.sh', '.bat', '.cmd', '.ps1'}
@@ -78,6 +79,12 @@ def set_generated_test_file(path):
     """Runner registers the actual generated module before importing any tests."""
     if path:
         _GENERATED_TEST_FILES.add(absolute(path))
+        # Filename aliases must be denied too, including short basenames under
+        # an otherwise long source root. Only the actual test file is queried.
+        try:
+            _GENERATED_TEST_SPELLINGS.extend(_source_path_spellings((path,), include_parent=False))
+        except FileNotFoundError:
+            pass
 
 
 def is_redirect_frame(frame):
@@ -106,6 +113,59 @@ def _has_link(path):
     return False
 
 
+def _source_path_spellings(roots, *, include_parent=True):
+    """Resolve aliases of approved existing source anchors, never resource paths.
+
+    Python code filenames may retain Windows 8.3 spelling even when the host
+    plan uses the native long name. Record only those proven root/parent aliases
+    before installing I/O guards; later comparisons are purely lexical.
+    """
+    if os.name != 'nt':
+        return []
+    import ctypes
+    short_path = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+    short_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    short_path.restype = ctypes.c_uint32
+    aliases = {}
+    for root in roots:
+        if not root or is_unc_or_device(root):
+            continue
+        if _has_link(root):
+            raise ValueError('Isolated resource source anchor uses a link')
+        canonical = absolute(os.path.realpath(root, strict=True))
+        anchors = [(absolute(root), canonical)]
+        if include_parent:
+            anchors.append((absolute(os.path.dirname(root)), os.path.dirname(canonical)))
+        for recorded, anchor in anchors:
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = short_path(anchor, buffer, len(buffer))
+            if not length or length >= len(buffer):
+                raise ValueError('Isolated resource source identity unavailable')
+            for spelling in (recorded, absolute(buffer.value)):
+                previous = aliases.get(spelling)
+                if previous is not None and previous != anchor:
+                    raise ValueError('Conflicting isolated resource source identity')
+                aliases[spelling] = anchor
+    return sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True)
+
+
+def _known_source_identity(value, spellings):
+    canonical = absolute(value)
+    if os.name != 'nt' or is_unc_or_device(canonical):
+        return canonical
+    parts = canonical.split(os.sep)
+    for spelling, anchor in spellings:
+        short_parts, long_parts = spelling.split(os.sep), anchor.split(os.sep)
+        # Windows can preserve a mixture of long and short ancestor names.
+        # Every accepted component must be one of the two names proven by the
+        # native query for this exact source anchor, never a guessed prefix.
+        count = len(long_parts)
+        if len(short_parts) == count and len(parts) >= count and all(
+                part in (short_parts[index], long_parts[index]) for index, part in enumerate(parts[:count])):
+            return absolute(os.path.join(anchor, *parts[count:]))
+    return canonical
+
+
 def _relative_path(value):
     if (type(value) is not str or not 1 <= len(value) <= 240 or '\\' in value or ':' in value
             or any(ord(char) < 32 or ord(char) == 127 for char in value)
@@ -126,6 +186,10 @@ def _external_path(value):
         if not re.match(r'^[A-Za-z]:/', value):
             raise ValueError('External resource requires a local drive absolute path')
         tail = value[3:]
+        # Match host policy: do not inspect a virtual external location to
+        # discover whether its spelling aliases the selected source tree.
+        if any(re.search(r'~[0-9]+(?:\.|$)', part) for part in tail.split('/')):
+            raise ValueError('External resource requires an unambiguous long path')
     else:
         if not value.startswith('/') or value.startswith('//'):
             raise ValueError('External resource requires a local absolute path')
@@ -354,6 +418,9 @@ class IsolatedResources:
         self.pid = os.getpid()
         self.root = absolute(plan['root'])
         self.trial_root = absolute(plan['trialRoot']) if plan.get('trialRoot') else None
+        self.source_spellings = _source_path_spellings((self.root, self.trial_root))
+        self.root = self._source_identity(self.root)
+        self.trial_root = self._source_identity(self.trial_root) if self.trial_root else None
         self.worker = None
         self.active = False
         self.local = threading.local()
@@ -362,7 +429,7 @@ class IsolatedResources:
         self.mounts = []
         self.specs = {}
         self.block = None
-        sources = [absolute(rule.get('resolvedFile') or os.path.join(self.root, rule['file'])) for rule in plan['rules']]
+        sources = [self._source_identity(rule.get('resolvedFile') or os.path.join(self.root, rule['file'])) for rule in plan['rules']]
         for rule in plan['rules']:
             specs = validate_resources(rule)
             for spec in specs:
@@ -375,11 +442,11 @@ class IsolatedResources:
                 self.specs[logical] = spec
                 aliases = [logical]
                 if rule.get('resolvedFile'):
-                    if not self.trial_root or not inside(rule['resolvedFile'], self.trial_root):
+                    if not self.trial_root or not inside(self._source_identity(rule['resolvedFile']), self.trial_root):
                         raise ValueError('Isolated resource mutation source escapes trial')
                 if rule.get('resolvedFile') and spec.get('scope') not in ('external-exact', 'unc-virtual'):
                     original = absolute(os.path.join(self.root, rule['file']))
-                    derived = absolute(os.path.join(os.path.dirname(rule['resolvedFile']),
+                    derived = self._source_identity(os.path.join(os.path.dirname(rule['resolvedFile']),
                         os.path.relpath(logical, os.path.dirname(original))))
                     # A source-bound sibling expression can legitimately point
                     # outside the mutation copy (e.g. trial/../VMS_Data). Treat
@@ -421,7 +488,7 @@ class IsolatedResources:
         lease = os.environ.get(LEASE_ENV, '')
         if not lease or not os.path.isabs(lease):
             raise ValueError('Isolated resource host lease is required')
-        self.lease = absolute(lease)
+        self.lease = self._source_identity(lease)
         if (_has_link(self.lease) or inside(self.lease, self.root) or inside(self.root, self.lease)
                 or self.trial_root and inside(self.lease, self.trial_root)):
             raise ValueError('Invalid isolated resource host lease location')
@@ -459,6 +526,7 @@ class IsolatedResources:
         atexit.register(self.cleanup)
 
     def _physical(self, logical):
+        logical = self._source_identity(logical)
         if is_unc_or_device(logical):
             canonical = unc_resource_identity(os.fsdecode(logical))
             for anchor, kind in self.unc_roots:
@@ -551,17 +619,22 @@ class IsolatedResources:
         return any(logical == alias or kind == 'directory' and inside(logical, alias)
                    for alias, _, kind in self.mounts)
 
+    def _source_identity(self, value):
+        return _known_source_identity(value, self.source_spellings)
+
     def _logical(self, value):
         raw = os.fsdecode(value)
-        return absolute(raw if os.path.isabs(raw) else os.path.join(self.root, raw))
+        return self._source_identity(raw if os.path.isabs(raw) else os.path.join(self.root, raw))
 
     def _application_caller(self):
         frame = sys._getframe(1)
         while frame:
             filename = frame.f_code.co_filename
             if os.path.isabs(filename):
-                canonical = absolute(filename)
-                if canonical in _GENERATED_TEST_FILES:
+                canonical = self._source_identity(filename)
+                generated_identity = _known_source_identity(canonical, _GENERATED_TEST_SPELLINGS)
+                if any(generated_identity == _known_source_identity(self._source_identity(item), _GENERATED_TEST_SPELLINGS)
+                       for item in _GENERATED_TEST_FILES):
                     return False
                 if inside(canonical, self.root) or self.trial_root and inside(canonical, self.trial_root):
                     # Tool output and generated test files are registered by

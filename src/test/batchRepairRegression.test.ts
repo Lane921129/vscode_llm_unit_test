@@ -20,6 +20,7 @@ import { pythonToolPath } from '../pipeline/pythonTools';
 import { repairFailureKey } from '../validation/repairFeedback';
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 import { getTestRuleCards } from '../prompts/testRuleLibrary';
+import { canonicalExistingPath } from '../utils/fileIdentity';
 
 const root = path.resolve(__dirname, '../..');
 const python = resolvePythonExecutable(undefined, root);
@@ -208,8 +209,8 @@ test('preflight resolves nested absolute/relative imports and package initialize
         fs.writeFileSync(file, 'from pkg.helper import normalize\nfrom . import exported\ndef target(value): return normalize(exported(value))\n');
         const dependencies = [{ module: 'pkg.helper', name: 'normalize' }, { module: '', name: 'exported', level: 1 }];
         const result = await preflightTargetModule(python, file, 'pkg.service', [project, directory], directory, dependencies, directory);
-        assert.equal(result.dependencies?.[0].file && fs.realpathSync(result.dependencies[0].file), fs.realpathSync(path.join(pkg, 'helper.py')));
-        assert.equal(result.dependencies?.[1].file && fs.realpathSync(result.dependencies[1].file), fs.realpathSync(path.join(pkg, '__init__.py')));
+        assert.equal(result.dependencies?.[0].file && canonicalExistingPath(result.dependencies[0].file), canonicalExistingPath(path.join(pkg, 'helper.py')));
+        assert.equal(result.dependencies?.[1].file && canonicalExistingPath(result.dependencies[1].file), canonicalExistingPath(path.join(pkg, '__init__.py')));
         // An unrelated source root cannot provide even the selected module's
         // version evidence; the new provenance contract must fail closed.
         await assert.rejects(preflightTargetModule(python, file, 'pkg.service', [project], directory, dependencies,

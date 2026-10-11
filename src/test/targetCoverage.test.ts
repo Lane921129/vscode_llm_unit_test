@@ -86,6 +86,25 @@ test('detects that every executable target line was missed', () => {
     assert.strictEqual(assessment.targetExecuted, false);
 });
 
+test('legacy coverage accepts Windows and POSIX report paths independently of the host OS', () => {
+    for (const [targetFile, reportFile] of [
+        ['C:\\project\\target.py', 'C:\\project\\target.py'],
+        ['C:\\project\\target.py', 'C:/project/target.py'],
+        ['/project/target.py', '/project/target.py'],
+        ['project\\target.py', 'project/target.py'],
+        ['project/target.py', 'project\\target.py'],
+        ['target.py', 'target.py'],
+        ['C:\\project with spaces\\target.py', 'C:/project with spaces/target.py']
+    ]) {
+        const assessment = assessTargetCoverage(`${reportFile} 5 4 20% 2-5`, targetFile, [2, 3, 4, 5]);
+        assert.strictEqual(assessment.available, true, `${targetFile} / ${reportFile}`);
+        assert.strictEqual(assessment.targetExecuted, false);
+        assert.strictEqual(assessment.targetFullyCovered, false);
+        assert.deepStrictEqual(assessment.missingTargetLines, [2, 3, 4, 5]);
+        assert.strictEqual(assessTargetCoverage('other.py 5 0 100%', targetFile, [2, 3, 4, 5]).available, false);
+    }
+});
+
 test('reports partial target coverage separately from basic execution', () => {
     const assessment = assessTargetCoverage(
         'target.py 5 2 60% 4-5',

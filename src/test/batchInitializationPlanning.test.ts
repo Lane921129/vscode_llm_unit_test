@@ -8,6 +8,7 @@ import { createImportFixturePlan, ImportFixtureRule } from '../pipeline/importFi
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import type { ImportCheck, ImportCheckTarget } from '../environment/projectImportCheck';
+import { existingRealPath } from '../utils/fileIdentity';
 
 test('batch planning confirms once, resumes the same 212 targets, and preserves the latest blockers or cancellation', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-planning-'));
@@ -99,7 +100,7 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
             assert.equal(planBeforeImport, true, 'batch and setup must request the pre-import planning path');
             assert.equal(scanRoot, root); assert.equal(scanPython, python);
             scansWithTargets.push(structuredClone(targets));
-            const check: ImportCheck = { root: fs.realpathSync(root), python, directory,
+            const check: ImportCheck = { root: existingRealPath(root), python, directory,
                 fixtureId: createImportFixturePlan(root, rules, boundRoot)?.id || null,
                 rows: selectedFiles.map(file => ({ file, status: 'loaded' })),
                 proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
@@ -144,8 +145,10 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
                 assert.deepEqual(inventory(manifest), inventory(beforeApproval));
                 assert.equal(manifest.expectedTargets, 212); assert.equal(manifest.finishedTargets, 0);
                 assert.deepEqual(manifest.discoveryFailures, []);
-                const expectedImportTargets = selectedFiles.map(file => ({ file: path.join(root, file), target: targetNames[0] }));
-                assert.ok(scansWithTargets.every(targets => JSON.stringify(targets) === JSON.stringify(expectedImportTargets)),
+                const expectedImportTargets = selectedFiles.map(file => ({ file: existingRealPath(path.join(root, file)), target: targetNames[0] }));
+                assert.ok(scansWithTargets.every(targets => JSON.stringify(targets.map(target => ({
+                    ...target, file: existingRealPath(target.file)
+                }))) === JSON.stringify(expectedImportTargets)),
                     'dependency-only planning evidence must not broaden the selected target scope');
                 assert.equal(manifest.preflightEvents[0].status, 'planned-awaiting-confirmation');
                 assert.equal(manifest.preflightEvents[0].blockedModules, 2, 'the initial historical observation remains intact');

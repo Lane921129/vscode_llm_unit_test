@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -19,6 +20,7 @@ const invalidPlan = () => new AnalysisStageError('environment', 'initialization-
     localize('初始化靜態規劃未完成；尚未載入受測模組，請查看規劃診斷。'));
 
 function sourceFile(root: string, file: unknown): string {
+    root = existingRealPath(root);
     if (typeof file !== 'string' || !file.endsWith('.py') || file.length > 1000
         || /[:\u0000-\u001f\u007f]/.test(file) || path.isAbsolute(file)
         || file.split(/[\\/]/).some(part => !part || part === '.' || part === '..')) { throw invalidPlan(); }
@@ -27,9 +29,34 @@ function sourceFile(root: string, file: unknown): string {
         current = path.join(current, part);
         if (fs.lstatSync(current).isSymbolicLink()) { throw invalidPlan(); }
     }
-    const canonical = fs.realpathSync(current);
+    const canonical = existingRealPath(current);
     if (sourceIdentity(canonical) !== sourceIdentity(current)) { throw invalidPlan(); }
     return canonical;
+}
+
+/** Validate the selected spelling before native resolution can erase a link. */
+export function initializationTargetFile(root: string, file: string): string {
+    const selectedRoot = path.resolve(root), canonicalRoot = existingRealPath(root), selected = path.resolve(file);
+    const within = (anchor: string) => {
+        const relative = path.relative(anchor, selected);
+        return !!relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+    };
+    let anchor = [selectedRoot, canonicalRoot].find(within);
+    if (!anchor) {
+        // A mixed Windows 8.3 spelling needs physical proof after every original
+        // component passes lstat. Only the explicitly selected local source is
+        // inspected; remote/device spellings never enter this alias fallback.
+        if (process.platform !== 'win32' || [selected, canonicalRoot].some(value => /^[\\/]{2}/.test(value))
+            || path.parse(selected).root.toLowerCase() !== path.parse(canonicalRoot).root.toLowerCase()) { throw invalidPlan(); }
+        anchor = path.parse(selected).root;
+    }
+    let current = anchor;
+    for (const part of path.relative(anchor, selected).split(path.sep)) {
+        current = path.join(current, part);
+        if (fs.lstatSync(current).isSymbolicLink()) { throw invalidPlan(); }
+    }
+    const canonical = existingRealPath(selected);
+    return sourceFile(canonicalRoot, path.relative(canonicalRoot, canonical).replace(/\\/g, '/'));
 }
 
 export function verifyInitializationSources(root: string, sources: InitializationSource[]): void {
@@ -66,10 +93,11 @@ export function mergeInitializationProposal(rules: ImportFixtureRule[], proposal
 /** Collect static proposals, optionally observe unresolved directories under the existing guard, then confirm together. */
 export async function inspectPreparedProjectImports(root: string, python: string, targets: ImportCheckTarget[], directory: string,
     rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = ''): Promise<ImportCheck> {
-    root = fs.realpathSync(root);
+    const selectedRoot = root;
+    root = existingRealPath(root);
     const selected = selectImportFixtureRules(root, rules, boundRoot);
     const actual = createImportFixturePlan(root, selected, boundRoot);
-    const files = [...new Set(targets.map(target => sourceFile(root, path.relative(root, path.resolve(target.file)).replace(/\\/g, '/'))))];
+    const files = [...new Set(targets.map(target => initializationTargetFile(selectedRoot, target.file)))];
     for (const file of files) { sourceFile(root, path.relative(root, file).replace(/\\/g, '/')); }
     if (!files.length) { return inspectProjectImports(root, python, targets, directory, rules, log, boundRoot); }
     log(localize('[初始化規劃] 載入前彙整目錄與啟動入口；不執行受測程式。'));

@@ -12,7 +12,7 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
 const external = (resourcePath: string): TestResourceSpec => ({ path: resourcePath, scope: 'external-exact', kind: 'directory' });
 
 function fixture() {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'external-resource-'));
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'external-resource-')));
     const root = path.join(base, 'selected', 'app'), data = path.join(base, 'ExternalData');
     fs.mkdirSync(root, { recursive: true });
     const source = 'def target(): return 1\n', file = path.join(root, 'sample.py');
@@ -41,7 +41,7 @@ test('external paths use a native absolute canonical identity and reject unsafe 
         prefix + 'data/NUL', prefix + 'data/COM1.txt', prefix + 'data/item:stream', prefix + 'data/runner.PY',
         prefix + 'data/load.dll', prefix + 'data/run.ps1', prefix + 'data/*', prefix + 'data/\u0000name',
         prefix + 'x'.repeat(241), '//server/share/data', '\\\\server\\share\\data', '\\\\?\\C:\\data',
-        '\\\\.\\C:\\data', 'C:relative', ...(windows ? ['/rooted-without-drive'] : ['C:/foreign-drive', '/data\\name'])]) {
+        '\\\\.\\C:\\data', 'C:relative', ...(windows ? ['/rooted-without-drive', 'C:/SOURCE~1', 'C:/external/TEST~12.txt'] : ['C:/foreign-drive', '/data\\name'])]) {
         assert.throws(() => validateTestResources([external(value)]), /Invalid/, value);
     }
     assert.throws(() => validateTestResources([{ path: input, scope: 'external', kind: 'directory' }]), /Invalid/);

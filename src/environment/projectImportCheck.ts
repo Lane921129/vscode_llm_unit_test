@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import { localize } from '../i18n/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -40,7 +41,7 @@ const sourceHash = (file: string) => createHash('sha256').update(fs.readFileSync
 export async function inspectProjectImports(root: string, python: string, targets: ImportCheckTarget[], directory: string,
     rules: ImportFixtureRule[], log: (text: string) => void = () => {}, boundRoot = '', planBeforeImport = false): Promise<ImportCheck> {
     if (planBeforeImport) { return inspectPreparedProjectImports(root, python, targets, directory, rules, log, boundRoot); }
-    root = fs.realpathSync(root);
+    root = existingRealPath(root);
     const selectedRules = selectImportFixtureRules(root, rules, boundRoot);
     if (rules.length && !selectedRules.length) { log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。")); }
     rules = selectedRules;
@@ -94,7 +95,7 @@ export async function inspectProjectImports(root: string, python: string, target
         const seen = new Set<string>();
         for (const target of targets) {
             throwIfExecutionCancelled();
-            const file = fs.realpathSync(target.file);
+            const file = existingRealPath(target.file);
             if (seen.has(file)) { continue; }
             seen.add(file);
             const relative = path.relative(root, file);
@@ -125,8 +126,8 @@ export async function inspectProjectImports(root: string, python: string, target
                 const proposal = observed?.kind === 'mkdir' && !observed.resourcePath ? undefined : observed;
                 if (proposal) {
                     row.suggestion = proposal;
-                    const candidate = fs.realpathSync(path.join(root, proposal.file));
-                    let existing = result.proposedRules.find(rule => fs.realpathSync(path.join(root, rule.file)) === candidate);
+                    const candidate = existingRealPath(path.join(root, proposal.file));
+                    let existing = result.proposedRules.find(rule => existingRealPath(path.join(root, rule.file)) === candidate);
                     const lines = existing?.entryPointLines?.[proposal.operation];
                     const proposedResource = { path: proposal.resourcePath || '',
                         ...(proposal.resourceScope ? { scope: proposal.resourceScope } : {}) };

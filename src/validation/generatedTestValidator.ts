@@ -607,9 +607,17 @@ export function validateUnittestStructure(
         const callReference = targetCallReference(executable, targetCallable, targetModule, targetClassName);
         const barePrivateHelper = unimportedPrivateHelperCall(executable);
         if (barePrivateHelper) {
+            const targetParts = targetCallable.split('.');
+            const targetLeaf = targetParts.at(-1)!;
+            const targetOwner = targetClassName || (targetParts.length > 1 ? targetParts[0] : undefined);
+            const targetImport = targetModule ? `from ${targetModule} import ${targetOwner || targetLeaf}` : 'Target import';
             return {
                 valid: false,
-                reason: localize("測試呼叫未匯入的私有 helper {0}；請改用 module point-of-use patch 或明確匯入。", barePrivateHelper)
+                reason: barePrivateHelper === targetLeaf
+                    ? targetOwner
+                        ? localize("測試將被測方法 {0} 當作未匯入的頂層函式；請依 Target import 匯入其擁有類別（{1}），並依 Target binding 使用類別或已驗證實例；不可把方法當作同名頂層函式、patch 或替換被測目標。", targetCallable, targetImport)
+                        : localize("測試呼叫未匯入的被測目標 {0}；請依 Target import 明確匯入（{1}），並呼叫真實目標；不可 patch 或替換被測目標。", targetCallable, targetImport)
+                    : localize("測試呼叫未匯入的私有 helper {0}；請改用 module point-of-use patch 或明確匯入。", barePrivateHelper)
             };
         }
         const targetPrivateHelper = invokesTargetPrivateHelper(executable, targetCallable, callReference);

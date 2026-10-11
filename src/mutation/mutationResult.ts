@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import * as path from 'path';
 import { ExternalMutationEngine } from './mutationExecution';
+import { sameRecordedFile } from '../utils/fileIdentity';
 
 export type MutationEngine = ExternalMutationEngine | 'builtin';
 export type MutationOutcome = 'KILLED' | 'SURVIVED' | 'TIMEOUT' | 'ERROR' | 'NOT_RUN';
@@ -90,7 +91,6 @@ const integer = (value: unknown): value is number => Number.isSafeInteger(value)
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const outcomes: MutationOutcome[] = ['KILLED', 'SURVIVED', 'TIMEOUT', 'ERROR', 'NOT_RUN'];
-const normalizePath = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
 const sourceBasename = (value: string) => path.posix.basename(value.replace(/\\/g, '/'));
 
 /** Optional display data must not invalidate otherwise valid historical measurements. */
@@ -150,7 +150,7 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         return fail('Unsupported mutation operator set or scope version');
     }
     if (!digest(value.sourceHash) || !digest(value.testHash) || value.sourceHash !== context.sourceHash || value.testHash !== context.testHash
-        || typeof value.sourcePath !== 'string' || normalizePath(value.sourcePath) !== normalizePath(context.sourcePath)) {
+        || typeof value.sourcePath !== 'string' || !sameRecordedFile(value.sourcePath, context.sourcePath)) {
         return fail('Mutation source/test identity does not match this candidate');
     }
     if (!record(value.targetScope) || value.targetScope.kind !== context.targetScope.kind
@@ -303,7 +303,7 @@ export function parseExternalMutationRun(engine: ExternalMutationEngine, text: s
     const summary = clean.match(/^Overall mutation trial summary\n=+\n([\s\S]*?)\nMutations by result status\n=+\n([\s\S]*)$/m);
     if (!/^Mutatest diagnostic summary\n=+\n/m.test(clean) || !summary) { return fail('Expected complete Mutatest RST report'); }
     const source = clean.match(/^ - Source location: (.+)$/m)?.[1];
-    if (!source || normalizePath(source) !== normalizePath(context.sourcePath)) { return fail('External report source does not match target'); }
+    if (!source || !sameRecordedFile(source, context.sourcePath)) { return fail('External report source does not match target'); }
     const declared = new Map<string, number>();
     for (const match of summary[1].matchAll(/^ - ([A-Z ]+): (.*)$/gm)) {
         const [, label, raw] = match;

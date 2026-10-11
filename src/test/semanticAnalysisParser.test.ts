@@ -1,6 +1,63 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { formatSemanticContextForPrompt, parseSemanticAnalysis, restrictSemanticInputHintsToTargetParameters } from '../roles/semanticAnalyzer';
+import { createHash } from 'node:crypto';
+import { formatSemanticContextForPrompt, getSemanticAnalyzerSystemPrompt, parseSemanticAnalysis,
+    parseSemanticAnalysisDetailed, restrictSemanticInputHintsToTargetParameters } from '../roles/semanticAnalyzer';
+
+test('the recorded repeated Analyst hash identifies the previous public placeholder template, which stays rejected', () => {
+    const template = '{"dependency_behaviors":[],"unreachable_paths":[],"mock_required_for":[],"test_strategy":{"approach":"<concrete plan for this target>","input_hints":[],"assertion_style":"mixed","mock_needed":false,"key_rules":[]}}';
+    assert.equal(template.length, 214);
+    assert.equal(createHash('sha256').update(template).digest('hex'), '5a6b30d9f53242998e8aa6da656ccb89e9edfccfa3e73f41fee029b83c768076');
+    const result = parseSemanticAnalysisDetailed(template);
+    assert.equal(result.analysis, null);
+    assert.equal(result.diagnostic.reasonCode, 'template-only-strategy');
+    assert.equal(result.diagnostic.responseShape.topLevelKeyCount, 4);
+    assert.equal(result.diagnostic.responseShape.semanticKeyCount, 4);
+    assert.equal(result.diagnostic.responseShape.strategyKeyCount, 5);
+    assert.equal(result.diagnostic.responseShape.placeholderStrategyTextCount, 1);
+    const system = getSemanticAnalyzerSystemPrompt();
+    assert.ok(!system.includes(template));
+    assert.doesNotMatch(system, /<concrete plan|\{"dependency_behaviors"|\{"approach"/);
+    for (const field of ['dependency_behaviors', 'unreachable_paths', 'mock_required_for', 'test_strategy',
+        'approach', 'input_hints', 'assertion_style', 'mock_needed', 'key_rules', 'param_name', 'strategy',
+        'boundary_inputs', 'invalid_inputs', 'notes', 'when_caller_passes', 'always_returns', 'can_raise']) {
+        assert.ok(system.includes(field), field);
+    }
+});
+
+test('semantic rejection diagnostics distinguish transport text shape without recording provider keys or content', () => {
+    for (const [raw, reasonCode] of [
+        ['  ', 'empty-response'], ['PRIVATE_RESPONSE_NOT_JSON', 'invalid-json'],
+        ['[]', 'invalid-envelope'], ['null', 'invalid-envelope'],
+        ['{"PRIVATE_PROVIDER_KEY":"PRIVATE_PROVIDER_VALUE"}', 'unrelated-json'],
+        ['{"type":"object","properties":{"PRIVATE_PROVIDER_KEY":{}}}', 'schema-envelope'],
+        ['{"dependency_behaviors":[]}', 'missing-test-strategy'],
+        ['{"test_strategy":[]}', 'invalid-test-strategy'], ['{"test_strategy":{}}', 'empty-test-strategy'],
+        ['{"test_strategy":{"approach":"<PRIVATE_PROVIDER_VALUE>"}}', 'template-only-strategy'],
+        ['{"test_strategy":{"input_hints":[{"param_name":4,"strategy":"Exercise a source branch"}]}}', 'no-usable-strategy']
+    ]) {
+        const result = parseSemanticAnalysisDetailed(raw);
+        assert.equal(result.analysis, null);
+        assert.equal(parseSemanticAnalysis(raw), null);
+        assert.equal(result.diagnostic.reasonCode, reasonCode);
+        assert.doesNotMatch(JSON.stringify(result.diagnostic), /PRIVATE_PROVIDER|PRIVATE_RESPONSE|Exercise a source branch/);
+    }
+});
+
+test('safe semantic shape counts do not change accepted direct, fenced or embedded analyses', () => {
+    const body = '{"test_strategy":{"approach":"Exercise the controlled input"},"PRIVATE_UNKNOWN_KEY":"PRIVATE_VALUE"}';
+    for (const [raw, format] of [[body, 'json'], ['```json\n' + body + '\n```', 'json-fence'],
+        ['Analysis:\n' + body + '\nDone.', 'embedded-json']]) {
+        const result = parseSemanticAnalysisDetailed(raw);
+        assert.ok(result.analysis);
+        assert.deepEqual(result.analysis, parseSemanticAnalysis(body));
+        assert.equal(result.diagnostic.reasonCode, 'accepted');
+        assert.equal(result.diagnostic.responseShape.format, format);
+        assert.equal(result.diagnostic.responseShape.topLevelKeyCount, 2);
+        assert.equal(result.diagnostic.responseShape.semanticKeyCount, 1);
+        assert.doesNotMatch(JSON.stringify(result.diagnostic), /PRIVATE_|Exercise the controlled input/);
+    }
+});
 
 test('drops unfinished semantic placeholders before they reach a Writer prompt', () => {
     const parsed = parseSemanticAnalysis(JSON.stringify({

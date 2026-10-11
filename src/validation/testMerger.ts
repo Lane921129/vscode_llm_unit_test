@@ -1,6 +1,37 @@
+import { runSpawn } from '../utils/processRunner';
+import { pythonToolPath } from '../pipeline/pythonTools';
+
 export interface MergeResult {
     mergedCode: string;
     totalMethodsCount: number;
+}
+
+export type BaselineMergeResult = ({ ok: true } & MergeResult) | { ok: false; reasonCode: string };
+
+/** Preserve the actual executed baseline; AST composition is never approval to
+ * execute or an exemption from the existing preservation/structure gates. */
+export async function mergeTestSnippetsPreservingBaseline(options: {
+    baseline: string; snippets: string[]; className: string; python: string; env?: NodeJS.ProcessEnv;
+}): Promise<BaselineMergeResult> {
+    const run = await runSpawn(options.python, ['-B', pythonToolPath('testMerge')], {
+        input: JSON.stringify({ baseline: options.baseline, snippets: options.snippets, className: options.className }),
+        env: options.env, timeout: 5000
+    });
+    if (run.code === 0) {
+        try {
+            const result = JSON.parse(run.stdout);
+            if (result.schemaVersion === 'baseline-test-merge-v1') {
+                if (result.ok === true && typeof result.mergedCode === 'string' && result.mergedCode.trim()
+                    && Number.isSafeInteger(result.totalMethodsCount) && result.totalMethodsCount > 0) {
+                    return { ok: true, mergedCode: result.mergedCode, totalMethodsCount: result.totalMethodsCount };
+                }
+                if (result.ok === false && typeof result.reasonCode === 'string' && /^[a-z-]+$/.test(result.reasonCode)) {
+                    return { ok: false, reasonCode: result.reasonCode };
+                }
+            }
+        } catch { /* Invalid tool output is never a merged candidate. */ }
+    }
+    return { ok: false, reasonCode: 'merge-tool-error' };
 }
 
 interface ExtractedTestClass {

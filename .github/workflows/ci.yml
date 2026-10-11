@@ -14,7 +14,7 @@ jobs:
   verify:
     name: Verify extension and Python pipeline
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -57,8 +57,20 @@ jobs:
       - name: Scan tracked files and reachable Git history for secrets
         run: python python_scripts/secret_scan.py --history
 
-      - name: Run TypeScript and Python regression tests
-        run: npm run test:unit
+      - name: Compile regression tests
+        run: npm run compile-tests
+
+      - name: Run Node regression tests
+        run: node test/run_unit_tests.js
+
+      - name: Run Webview regression tests
+        if: ${{ !cancelled() }}
+        run: npm run test:webview
+
+      - name: Run Python regression tests
+        if: ${{ !cancelled() }}
+        run: npm run test:python
 
       - name: Build extension
+        if: ${{ !cancelled() }}
         run: npm run compile

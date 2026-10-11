@@ -161,6 +161,11 @@ class Cases(unittest.TestCase):
         const runManifest = readClockJson('run_manifest.json');
         const executable = readClockJson('executable_baseline.json');
         const checkpoint = readClockJson('quality_baseline.json');
+        assert.equal(checkpoint.mutationStatus, 'complete');
+        assert.equal(knowledge.mutationStatus, checkpoint.mutationStatus,
+            'the final journal describes the retained measured quality checkpoint');
+        assert.equal(executable.mutationStatus, 'not-measured', 'keep the pre-mutation executable snapshot unchanged');
+        assert.equal(knowledge.executableBaseline.mutationStatus, 'not-measured');
         const policy = createDefaultQualityPolicy();
         for (const artifact of [runManifest, knowledge, executable, checkpoint]) {
             assert.deepEqual(artifact.qualityPolicy, policy, 'every stage must retain the policy fixed before execution');

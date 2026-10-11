@@ -546,17 +546,23 @@ class ResourcePipelineTests(unittest.TestCase):
             from basic_mutation_runner import package_copy_ignore
         finally:
             sys.path.remove(str(TOOLS))
-        original_lstat = os.lstat
-        resource = os.path.normcase(os.path.abspath(self.root / 'data'))
+        original_lstat, original_realpath = os.lstat, os.path.realpath
+        source_root = os.path.normcase(os.path.abspath(self.root))
+        native_root = os.path.normcase(original_realpath(self.root))
+        resources = {os.path.join(root, 'data') for root in (source_root, native_root)}
+        def source_anchor_only(file, *args, **kwargs):
+            self.assertIn(os.path.normcase(os.path.abspath(file)), {source_root, native_root},
+                          'only the approved source anchor may be resolved, never its resource link')
+            return original_realpath(file, *args, **kwargs)
         for mode, attributes in [(stat.S_IFLNK, 0), (stat.S_IFDIR, 1024)]:
             with self.subTest(link='symlink' if mode == stat.S_IFLNK else 'junction'):
                 def lstat_metadata(file, *args, **kwargs):
-                    if os.path.normcase(os.path.abspath(file)) == resource:
+                    if os.path.normcase(os.path.abspath(file)) in resources:
                         return SimpleNamespace(st_mode=mode, st_file_attributes=attributes)
                     return original_lstat(file, *args, **kwargs)
                 with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(self.plan)}), \
                         patch('basic_mutation_runner.os.lstat', side_effect=lstat_metadata), \
-                        patch('basic_mutation_runner.os.path.realpath', side_effect=AssertionError('must not follow resource link')), \
+                        patch('basic_mutation_runner.os.path.realpath', side_effect=source_anchor_only), \
                         patch('basic_mutation_runner.shutil.copytree', side_effect=AssertionError('must not copy invalid plan')):
                     with self.assertRaisesRegex(ValueError, 'symlink or junction'):
                         package_copy_ignore()

@@ -7,6 +7,7 @@ import { currentExecution, ExecutionContext, throwIfExecutionCancelled } from '.
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { canonicalExistingPath } from '../utils/fileIdentity';
 import { currentImportFixtures } from './importFixtures';
 import { SourceVersion, SOURCE_VERSIONS_VERSION, validSourceVersions } from './sourceVersions';
 
@@ -84,11 +85,24 @@ function currentCache(): PreflightCache | undefined {
     return cache;
 }
 
+function preflightPathIdentity(file: string): string {
+    const resolved = path.resolve(file);
+    // An absent output cwd or an unselected remote import path has no proven
+    // local identity. Preserve its spelling; never infer one through a resource.
+    if (process.platform === 'win32' && /^[\\/]{2}/.test(resolved)) { return resolved.toLowerCase(); }
+    try { return canonicalExistingPath(resolved); }
+    catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code || '')) { throw error; }
+        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    }
+}
+
 function preflightKey(python: string, file: string, module: string, importPaths: string[], cwd: string): string {
     const source = fs.readFileSync(file);
+    const directory = preflightPathIdentity(cwd);
     return createHash('sha256').update(JSON.stringify({
-        python: path.resolve(python), file: path.resolve(file), module,
-        importPaths: [...new Set(importPaths.map(item => path.resolve(item)).filter(item => item !== path.resolve(cwd)))],
+        python: path.resolve(python), file: preflightPathIdentity(file), module,
+        importPaths: [...new Set(importPaths.map(preflightPathIdentity).filter(item => item !== directory))],
         inheritedPythonPath: process.env.PYTHONPATH || '',
         executableSearchPath: process.env.PATH || '',
         importFixtures: currentImportFixtures()?.id || null,

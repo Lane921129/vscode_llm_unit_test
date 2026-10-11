@@ -17,7 +17,7 @@ const applyLabel = '套用已儲存清單並重新預檢';
 const refreshLabel = '更新來源版本供重新預覽';
 
 test('resource setup UI preserves drafts, explicit consent and source-bound approvals', async t => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-setup-ui-'));
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'resource-setup-ui-')));
     const Module = require('module'), originalLoad = Module._load, originalLanguage = getLanguage();
     let root = '', file = '', action = editLabel, approve = false, updates = 0, confirmations = 0;
     let settings: Record<string, any> = {}, beforeConfirmation: (() => void) | undefined;

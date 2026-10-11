@@ -1,6 +1,8 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { semanticWithContractRepair, SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE, SEMANTIC_CONTRACT_REPAIR_SUFFIX } from '../roles/semanticContractRepair';
+import { buildSemanticContractRepairSuffix, semanticWithContractRepair, SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE,
+    SEMANTIC_CONTRACT_REPAIR_SUFFIX } from '../roles/semanticContractRepair';
+import { SEMANTIC_ANALYSIS_REJECTION_CODES } from '../roles/semanticAnalyzer';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { estimatePromptTokens } from '../prompts/promptBudget';
 import { runWithTargetBudget, TargetBudget } from '../pipeline/targetBudget';
@@ -19,9 +21,39 @@ test('semantic format correction preserves complete evidence and shares one dead
     assert.equal(result?.test_strategy.approach, 'verify observed boundary');
     assert.equal(requests.length, 2);
     assert.ok(requests[1].startsWith(prompt + '\n\nSEMANTIC_CONTRACT_REPAIR_V1'));
-    assert.equal(requests[1], prompt + SEMANTIC_CONTRACT_REPAIR_SUFFIX);
+    assert.equal(requests[1], prompt + buildSemanticContractRepairSuffix('invalid-json'));
     assert.doesNotMatch(requests[1] + JSON.stringify(events), /PRIVATE_RESPONSE_NOT_JSON/);
     assert.match(JSON.stringify(events), /responseHash/);
+    assert.match(JSON.stringify(events), /"reasonCode":"invalid-json"/);
+});
+
+test('every specific correction fits the unchanged original reservation without sending provider text', () => {
+    assert.equal(SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE, estimatePromptTokens(SEMANTIC_CONTRACT_REPAIR_SUFFIX));
+    for (const reason of SEMANTIC_ANALYSIS_REJECTION_CODES) {
+        const suffix = buildSemanticContractRepairSuffix(reason);
+        assert.match(suffix, new RegExp(`Failure: ${reason}\\.`));
+        assert.ok(estimatePromptTokens(suffix) <= SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE, reason);
+        assert.match(suffix, /Same complete evidence/);
+        assert.match(suffix, /Hypotheses need verification/);
+    }
+});
+
+test('a repeated placeholder reply stays failed and records only shape, hash and a stable repair reason', async () => {
+    const raw = '{"test_strategy":{"approach":"<PRIVATE_PLACEHOLDER>"},"PRIVATE_EXTRA_KEY":"PRIVATE_EXTRA_VALUE"}';
+    const requests: string[] = [];
+    const events: Array<{ status: string; detail: any }> = [];
+    const result = await semanticWithContractRepair({ prompt: 'Full source and exact evidence', deadlineAt: 100, now: () => 0,
+        checkCurrent: () => {}, event: (status, detail) => events.push({ status, detail }),
+        request: async prompt => { requests.push(prompt); return raw; } });
+    assert.equal(result, undefined);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1], /Failure: template-only-strategy\. Replace placeholder strategy text/);
+    const failures = events.filter(event => event.status === 'invalid-response');
+    assert.deepEqual(failures.map(event => event.detail.reasonCode), ['template-only-strategy', 'template-only-strategy']);
+    assert.deepEqual(failures.map(event => event.detail.sameResponseAsPrevious), [false, true]);
+    assert.equal(failures[0].detail.responseHash, failures[1].detail.responseHash);
+    assert.equal(failures[0].detail.responseShape.topLevelKeyCount, 2);
+    assert.doesNotMatch(JSON.stringify(events) + requests[1], /PRIVATE_/);
 });
 
 test('invalid semantic output has only one correction and never becomes an empty successful plan', async () => {
@@ -93,15 +125,21 @@ test('target parameter filtering cannot convert an irrelevant hint into a succes
     for (const repairWithPlan of [false, true]) {
         let calls = 0;
         const statuses: string[] = [];
+        const diagnostics: any[] = [];
         const result = await semanticWithContractRepair({ prompt: 'def selected(): return None', deadlineAt: 100,
-            targetParameters: [], now: () => 0, checkCurrent: () => {}, event: status => statuses.push(status),
-            request: async (_prompt, deadline) => {
+            targetParameters: [], now: () => 0, checkCurrent: () => {}, event: (status, detail) => {
+                statuses.push(status); if (status === 'invalid-response') { diagnostics.push(detail); }
+            },
+            request: async (prompt, deadline) => {
                 assert.equal(deadline, 100);
+                if (calls === 1) { assert.match(prompt, /Failure: target-parameter-mismatch/); }
                 return ++calls === 2 && repairWithPlan
                     ? '{"test_strategy":{"approach":"Call the zero-parameter target and verify the same controlled observation."}}'
                     : '{"test_strategy":{"input_hints":[{"param_name":"invented","strategy":"Exercise the neutral branch.","boundary_inputs":["0"]}]}}';
             } });
         assert.equal(calls, 2);
+        assert.equal(diagnostics[0].reasonCode, 'target-parameter-mismatch');
+        assert.equal(diagnostics[0].discardedInputHintCount, 1);
         assert.deepEqual(statuses, ['invalid-response', 'repair-requested', repairWithPlan ? 'parsed' : 'invalid-response']);
         if (repairWithPlan) { assert.ok(result); assert.deepEqual(result.test_strategy.input_hints, []); }
         else { assert.equal(result, undefined); }

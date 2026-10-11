@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 import { inspectProjectImports, verifyImportProposal } from '../environment/projectImportCheck';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { getLanguage, setLanguage } from '../i18n/core';
+import { initializationTargetFile } from '../environment/initializationPlanning';
+import { withoutUncFileSystem } from './uncPathGuard';
 import { currentImportFixtures } from '../pipeline/importFixtures';
 
 function fixture(mixedCase = false) {
@@ -223,4 +225,31 @@ test('controller confirms a combined static plan once and then performs the actu
         });
         controller.dispose();
     } finally { Module._load = original; fs.rmSync(f.base, { recursive: true, force: true }); }
+});
+
+
+test('selected source spelling rejects internal junctions and unselected UNC paths before resolving their targets', async t => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'source-link-'));
+    const root = path.join(base, 'app'), real = path.join(root, 'real'), linked = path.join(root, 'linked');
+    fs.mkdirSync(real, { recursive: true });
+    const file = path.join(real, 'sample.py'); fs.writeFileSync(file, 'def target(): return 1\n');
+    try {
+        try { fs.symlinkSync(real, linked, process.platform === 'win32' ? 'junction' : 'dir'); }
+        catch (error) {
+            if (['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code || '')) {
+                t.skip('This host does not permit creating the source link fixture.'); return;
+            }
+            throw error;
+        }
+        assert.equal(initializationTargetFile(root, file), fs.realpathSync.native(file));
+        assert.throws(() => initializationTargetFile(root, path.join(linked, 'sample.py')), /規劃|planning/);
+        await assert.rejects(inspectProjectImports(root, 'not-invoked', [{ file: path.join(linked, 'sample.py'), target: 'target' }],
+            path.join(base, 'result'), [], undefined, root, true), /規劃|planning/);
+        assert.equal(fs.existsSync(path.join(base, 'result')), false, 'reject before any worker or result is created');
+        if (process.platform === 'win32') {
+            await withoutUncFileSystem(() => assert.throws(() => initializationTargetFile(root,
+                '//unselected.invalid/share/sample.py'), /規劃|planning/));
+        }
+        assert.equal(fs.readFileSync(file, 'utf8'), 'def target(): return 1\n');
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

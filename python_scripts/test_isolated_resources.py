@@ -271,7 +271,7 @@ def target(): return (DATA / 'result.txt').read_text()
             return original_open(file, *args, **kwargs)
         def checked_copytree(source, destination, *args, **kwargs):
             result = original_copytree(source, destination, *args, **kwargs)
-            if Path(source) == container:
+            if Path(source).resolve() == container.resolve():
                 self.assertFalse((Path(destination) / 'VMS_Data').exists())
                 self.assertTrue((Path(destination) / 'project' / 'app.py').is_file())
                 copied.append(str(destination))

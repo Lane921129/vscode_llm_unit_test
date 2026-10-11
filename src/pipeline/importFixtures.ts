@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import { localize } from '../i18n/core';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
@@ -36,7 +37,7 @@ const hash = (value: string | Buffer) => createHash('sha256').update(value).dige
 export function selectImportFixtureRules(root: string, input: unknown, boundRoot = ''): ImportFixtureRule[] {
     const canonical = (value: string) => {
         let resolved: string;
-        try { resolved = fs.realpathSync(value); }
+        try { resolved = existingRealPath(value); }
         catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; }
             resolved = path.resolve(value);
@@ -53,7 +54,7 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
     input = selectImportFixtureRules(root, input, boundRoot);
     if (!Array.isArray(input) || input.length > 64) { throw new Error(localize("匯入測試設定必須是最多 64 筆的清單。")); }
     if (!input.length) { return null; }
-    root = fs.realpathSync(root);
+    root = existingRealPath(root);
     const seen = new Set<string>();
     const rules = input.map((value: unknown) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error(localize("匯入測試設定格式錯誤。")); }
@@ -63,7 +64,7 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
             || typeof rule.file !== 'string' || path.isAbsolute(rule.file) || !rule.file.endsWith('.py')
             || rule.file.split(/[\\/]/).some(part => !part || part === '..' || part === '.')
             || (rule.mkdir !== undefined && typeof rule.mkdir !== 'boolean')) { throw new Error(localize("匯入測試設定來源或操作無效。")); }
-        const file = fs.realpathSync(path.join(root, rule.file));
+        const file = existingRealPath(path.join(root, rule.file));
         const relative = path.relative(root, file);
         if (relative.startsWith('..') || path.isAbsolute(relative) || seen.has(file.toLowerCase())) {
             throw new Error(localize("匯入測試設定來源重複或超出受測專案。"));
@@ -103,7 +104,7 @@ export function createImportFixturePlan(root: string, input: unknown, boundRoot 
                 current = path.join(current, part);
                 if (fs.lstatSync(current).isSymbolicLink()) { throw new Error('Isolated setup source dependency cannot be a link.'); }
             }
-            const canonical = fs.realpathSync(current), key = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+            const canonical = existingRealPath(current), key = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
             if (dependencyNames.has(key) || hash(fs.readFileSync(canonical)) !== dependency.sourceHash) {
                 throw new Error('Isolated setup source dependency changed; review the setup again.');
             }

@@ -188,7 +188,8 @@ export function assessTargetCoverage(
     targetFile: string,
     executableLines: number[]
 ): TargetCoverageAssessment {
-    const targetName = path.basename(targetFile).toLowerCase();
+    // Historical reports may be read on a different OS from the one that produced them.
+    const targetName = path.posix.basename(targetFile.replace(/\\/g, '/')).toLowerCase();
     for (const rawLine of output.split(/\r?\n/)) {
         const row = reportRow(rawLine);
         if (!row) {

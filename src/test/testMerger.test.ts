@@ -1,6 +1,9 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
-import { mergeTestSnippets } from '../validation/testMerger';
+import { mergeTestSnippets, mergeTestSnippetsPreservingBaseline } from '../validation/testMerger';
+import * as path from 'node:path';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { validatePassingTestPreservation } from '../pipeline/passingTestPreservation';
 
 test('keeps independently validated Tier 2 TestCase setup isolated during merge', () => {
     const first = [
@@ -83,5 +86,37 @@ test('preserves multiline parenthesized imports in merged snippets', () => {
     const merged = mergeTestSnippets([snippet], 'TestCalcMerged');
     assert.strictEqual(merged.totalMethodsCount, 1);
     assert.match(merged.mergedCode, /from my_package\.calculator import \(\n\s*add,\n\s*subtract\n\)/);
+});
+
+test('baseline-aware composition keeps executed names and every full-file expansion class', async () => {
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const baseline = 'import unittest\nfrom neutral_source import target\n'
+        + 'class Original(unittest.TestCase):\n    def setUp(self): self.value = 1\n'
+        + '    def test_first(self): self.assertEqual(target(self.value), 1)\n';
+    const additional = '\nclass Added(unittest.TestCase):\n    def test_second(self): self.assertEqual(target(2), 2)\n';
+    const collision = baseline.replace('self.value = 1', 'self.value = 3').replace('test_first', 'test_third')
+        .replace('target(self.value), 1', 'target(self.value), 3');
+    const merged = await mergeTestSnippetsPreservingBaseline({ baseline, snippets: [baseline + additional, collision],
+        className: 'Merged', python });
+    assert.ok(merged.ok);
+    assert.equal(merged.totalMethodsCount, 3);
+    assert.ok(merged.mergedCode.startsWith(baseline), 'the actual baseline text remains intact');
+    assert.equal((merged.mergedCode.match(/def test_first\(/g) || []).length, 1);
+    assert.match(merged.mergedCode, /class Added\(/);
+    assert.match(merged.mergedCode, /class Merged_Site1\(/);
+    const preservation = await validatePassingTestPreservation({ previousCode: baseline, candidateCode: merged.mergedCode,
+        protectedMethods: 'all', python });
+    assert.equal(preservation.valid, true, preservation.reasonCode || preservation.reason);
+});
+
+test('baseline-aware composition reports a fixture conflict instead of dropping a candidate change', async () => {
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const baseline = 'import unittest\nfrom neutral_source import target\nclass Cases(unittest.TestCase):\n'
+        + '    def test_value(self): self.assertTrue(target())\n';
+    const merged = await mergeTestSnippetsPreservingBaseline({ baseline,
+        snippets: [baseline.replace('from neutral_source import target', 'from unrelated import target')],
+        className: 'Merged', python });
+    assert.deepEqual(merged, { ok: false, reasonCode: 'import-binding-conflict' });
+    assert.equal('mergedCode' in merged, false);
 });
 

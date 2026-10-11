@@ -5,6 +5,7 @@ import { currentImportFixtures, type ImportFixturePlan } from '../pipeline/impor
 import { containsCredential } from '../pipeline/artifactSafety';
 import { canonicalExternalResourcePath, canonicalUncResourcePath, resourceSpecKey } from '../pipeline/isolatedResources';
 import { SOURCE_VERSIONS_VERSION, validSourceVersions, type SourceVersion } from '../pipeline/sourceVersions';
+import { existingRealPath } from '../utils/fileIdentity';
 
 export interface IsolatedResourceSourceEvidence {
     version: typeof SOURCE_VERSIONS_VERSION;
@@ -33,9 +34,9 @@ export function buildTargetIsolatedResourceContext(plan: ImportFixturePlan | und
     if (plan && evidence?.version === SOURCE_VERSIONS_VERSION && validSourceVersions(evidence.sources)
         && validSourceVersions([evidence.target])) {
         try {
-            const root = fs.realpathSync(plan.root);
+            const root = existingRealPath(plan.root);
             const sourceKey = (file: string) => {
-                const absolute = fs.realpathSync(file), relative = path.relative(root, absolute);
+                const absolute = existingRealPath(file), relative = path.relative(root, absolute);
                 if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
                     throw new Error('outside-source-root');
                 }

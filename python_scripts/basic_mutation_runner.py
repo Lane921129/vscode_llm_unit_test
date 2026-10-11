@@ -374,9 +374,12 @@ def package_copy_ignore():
     plan = import_fixture_plan()
     if not plan:
         return ordinary_ignore, lambda _path: False
-    normalize = lambda value: os.path.normcase(os.path.abspath(os.fspath(value)))
+    from isolated_resources import logical_resource_path, is_unc_or_device, _source_path_spellings, _known_source_identity
+    # Prove only existing source anchors. Compare copy candidates lexically in
+    # that identity before resolving or opening any declared resource.
+    spellings = _source_path_spellings((plan['root'],))
+    normalize = lambda value: _known_source_identity(value, spellings)
     root = normalize(plan['root'])
-    from isolated_resources import logical_resource_path, is_unc_or_device
     resources = [(logical_resource_path(root, spec), spec['kind'])
                  for rule in plan['rules'] for spec in validate_resources(rule)]
     if not resources:

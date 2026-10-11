@@ -1173,7 +1173,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         # The digest identifies input content; run/index identifies this actual
         # attempt, including duplicate supplied inputs when planning fails.
         return {'case_id': f'probe-{run_id}-{index}-{digest}', 'case_index': index, 'source': source,
-                'input_before': before, 'input_after': None, 'duration_ms': 0}
+                'input_before': before, 'input_after': None, 'duration_ms': 0,
+                'allocated_timeout_seconds': 0}
 
     def append_case(case, observations=None):
         observations = observations or {}
@@ -1224,8 +1225,19 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         result['load_error'] = f'Trace planning failed: {type(error).__name__}'
         result['planning'] = {'status': 'worker_error'}
     result['planning']['duration_ms'] = round((time.monotonic() - plan_started) * 1000, 3)
+    # Every case repeats process startup and guarded import. A successful plan
+    # measures a conservative allowance for that work (including planning),
+    # not the target's runtime. Keep the original total deadline unchanged.
+    calibrated = result['planning']['status'] == 'completed' and not result['load_error']
+    effective_case_timeout = case_timeout + result['planning']['duration_ms'] / 1000 if calibrated else case_timeout
+    result['case_timing'] = {
+        'configured_timeout_seconds': case_timeout,
+        'effective_timeout_seconds': effective_case_timeout,
+        'calibration_reason': 'completed-planning-startup' if calibrated else 'planning-unavailable',
+    }
     pending = planned.get('planned_inputs', []) if not result['load_error'] else (valid_supplied or [])
     journal('planning_completed', planning=result['planning'], args=result['args'], load_error=result['load_error'],
+            case_timing=result['case_timing'],
             **({'importFixtures': result['importFixtures']} if result.get('importFixtures') else {}),
             load_diagnostic=result.get('load_diagnostic'), blocked_operations=result['blocked_operations'],
             planned_cases=[case_base(encoded, index + len(invalid_supplied)) for index, encoded in enumerate(pending)])
@@ -1245,20 +1257,27 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
             append_case(case)
             continue
         case_started = time.monotonic()
+        allocated_timeout = min(effective_case_timeout, max(0, deadline - case_started))
+        if allocated_timeout <= 0:
+            case.update(status='not_started', reason='total-deadline')
+            append_case(case)
+            continue
+        case['allocated_timeout_seconds'] = allocated_timeout
         observations = None
         journal('case_started', case=case)
         try:
             observations = _worker_result({'mode': 'case', 'file_path': file_path,
-                                           'func_name': func_name, 'inputs': [encoded]}, min(case_timeout, remaining))
+                                           'func_name': func_name, 'inputs': [encoded]}, allocated_timeout)
             completed_cases = observations.get('cases', [])
             if len(completed_cases) != 1:
                 case.update(status='setup_error' if observations.get('load_error') else 'worker_error',
                             reason='case-import-failed' if observations.get('load_error') else 'missing-case-result',
                             diagnostic=observations.get('load_error'))
             else:
-                case.update({key: value for key, value in completed_cases[0].items() if key not in ('case_id', 'case_index')})
+                case.update({key: value for key, value in completed_cases[0].items()
+                             if key not in ('case_id', 'case_index', 'allocated_timeout_seconds')})
         except subprocess.TimeoutExpired:
-            case.update(status='timeout', reason='total-deadline' if remaining < case_timeout else 'case-deadline')
+            case.update(status='timeout', reason='total-deadline' if allocated_timeout < effective_case_timeout else 'case-deadline')
         except (OSError, ValueError, RuntimeError) as error:
             case.update(status='worker_error', diagnostic=f'Trace worker failed: {type(error).__name__}')
         case['duration_ms'] = round((time.monotonic() - case_started) * 1000, 3)

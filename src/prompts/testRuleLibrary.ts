@@ -144,9 +144,9 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
         rules: [
             'try/except RETURNS STRING: this function catches exceptions and returns an error string.',
             '  - Only the exception types named by the matching except clause are caught. Other exceptions may propagate; do not invent a catch-all contract.',
-            '  - For the caught path, configure the dependency side_effect with that exception. return_value is a normal return and cannot enter except.',
-            '  - Use assertEqual(result, "exact error message string").',
-            '  - Check the exact return statement in the source code for the error string.',
+            '  - For pure parsing, formatting or calculation, prefer source-supported literal inputs, including invalid inputs for an evidenced caught path.',
+            '  - Only if the caught path requires controlling a source-shown dependency, configure side_effect with a caught exception; return_value cannot raise it.',
+            '  - Assert the exact target result from verified observations or explicit same-test controlled behavior. Source return text alone is not an output oracle.',
         ]
     },
     {

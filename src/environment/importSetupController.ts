@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import { localize } from '../i18n/core';
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
@@ -14,7 +15,7 @@ import { inspectProjectImports, ImportCheck, ImportCheckTarget, verifyImportProp
 import { hasDummyFunctionNameMarker } from '../tier/stubClassifier';
 import { importSetupMessage, ImportSetupReason, recheckReason, saveImportSetupSession } from './importSetupSession';
 import { externalExactResourcePaths, projectParentResourcePaths, uncVirtualResourcePaths } from './resourceSetup';
-import { verifyInitializationSources } from './initializationPlanning';
+import { initializationTargetFile, verifyInitializationSources } from './initializationPlanning';
 
 export type ImportSetupStatus = 'ready' | 'blocked' | 'cancelled' | 'declined' | 'failed'
     | 'busy' | 'no-targets' | 'untrusted' | 'invalid-root';
@@ -77,14 +78,15 @@ export class ImportSetupController {
                 refreshEntryPointApprovals(root, rules, config.get<string>('importFixtureRoot', ''));
                 const excluded = [directory, ...(outputPath && path.resolve(outputPath) !== path.resolve(root) ? [outputPath] : [])];
                 if (requestedTargets) {
-                    const canonicalRoot = fs.realpathSync(root);
+                    const canonicalRoot = existingRealPath(root);
                     for (const target of requestedTargets) {
-                        const relative = path.relative(canonicalRoot, fs.realpathSync(target.file));
+                        const file = initializationTargetFile(root, target.file);
+                        const relative = path.relative(canonicalRoot, file);
                         if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)
                             || !target.file.endsWith('.py') || !target.target) {
                             throw new Error(localize('預檢來源超出受測根目錄。'));
                         }
-                        targets.push({ file: fs.realpathSync(target.file), target: target.target });
+                        targets.push({ file, target: target.target });
                     }
                 } else {
                     const files = await findPythonFilesInDir(root, true, excluded, true);
@@ -103,8 +105,8 @@ export class ImportSetupController {
                     const refreshed = refreshEntryPointApprovals(root, savedRules, boundRoot);
                     const activeRules = refreshed.rules;
                     const scannedPlan = createImportFixturePlan(root, activeRules, boundRoot);
-                    const canonicalRoot = fs.realpathSync(root);
-                    const sourceHashes = new Map(targets.map(target => [fs.realpathSync(target.file),
+                    const canonicalRoot = existingRealPath(root);
+                    const sourceHashes = new Map(targets.map(target => [existingRealPath(target.file),
                         createHash('sha256').update(fs.readFileSync(target.file)).digest('hex')]));
                     const expectedFiles = new Set([...sourceHashes.keys()].map(file => path.relative(canonicalRoot, file).replace(/\\/g, '/')));
                     const check = await inspectProjectImports(root, scanPython, targets,
@@ -119,7 +121,7 @@ export class ImportSetupController {
                             || check.rows.some(row => !expectedFiles.has(row.file))) {
                             throw new Error(localize('預檢來源超出受測根目錄。'));
                         }
-                        if ([...sourceHashes].some(([file, hash]) => fs.realpathSync(file) !== file
+                        if ([...sourceHashes].some(([file, hash]) => existingRealPath(file) !== file
                             || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== hash)) {
                             throw new Error(localize('來源在預檢期間改變；請重新檢查後再建立初始化設定。'));
                         }

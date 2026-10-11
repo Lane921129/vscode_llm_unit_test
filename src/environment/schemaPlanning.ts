@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -33,6 +34,7 @@ const sourceName = (value: unknown): value is string => typeof value === 'string
 const line = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0;
 
 function verifySources(root: string, sources: Source[]): void {
+    root = existingRealPath(root);
     for (const source of sources) {
         if (!sourceName(source.file) || !source.file.endsWith('.py') || !/^[a-f0-9]{64}$/.test(source.sourceHash)) { throw invalid(); }
         let current = root;
@@ -40,7 +42,7 @@ function verifySources(root: string, sources: Source[]): void {
             current = path.join(current, part);
             if (fs.lstatSync(current).isSymbolicLink()) { throw invalid(); }
         }
-        if (identity(fs.realpathSync(current)) !== identity(current)
+        if (identity(existingRealPath(current)) !== identity(current)
             || createHash('sha256').update(fs.readFileSync(current)).digest('hex') !== source.sourceHash) { throw invalid(); }
     }
 }
@@ -172,6 +174,7 @@ export function mergeSchemaProposals(rules: ImportFixtureRule[], candidates: Sch
 
 /** Parse source syntax in a separate tool; no target imports, SQL execution or database reads. */
 export async function planSqliteSchemas(root: string, python: string, sources: Source[], rules: ImportFixtureRule[], directory: string): Promise<SchemaPlan> {
+    root = existingRealPath(root);
     verifySources(root, sources);
     const result = await runSpawn(python, ['-B', pythonToolPath('sqliteSchemaPlan')], {
         input: JSON.stringify({ root, files: sources.map(source => path.join(root, source.file)) }), timeout: 15000,

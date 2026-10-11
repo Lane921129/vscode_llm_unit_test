@@ -30,12 +30,13 @@ function forbidUncFilesystem() {
     let uncCalls = 0;
     for (const name of names) {
         const original = files[name]; originals.set(name, original);
-        files[name] = (...args: any[]) => {
+        const wrap = (call: (...args: any[]) => any) => (...args: any[]) => {
             if (typeof args[0] === 'string' && args[0].replace(/\\/g, '/').startsWith('//')) {
                 uncCalls++; throw new Error('UNC identifiers must never reach filesystem operations');
             }
-            return original(...args);
+            return call(...args);
         };
+        files[name] = Object.assign(wrap(original), original.native ? { native: wrap(original.native) } : {});
     }
     return { count: () => uncCalls, restore: () => { for (const [name, original] of originals) { files[name] = original; } } };
 }

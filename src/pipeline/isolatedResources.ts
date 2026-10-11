@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -67,6 +68,9 @@ export function canonicalExternalResourcePath(value: unknown): string {
     const normalized = windows ? value.replace(/\\/g, '/') : value;
     const tail = normalized.slice(windows ? 3 : 1);
     if (tail.split('/').some(unsafePathPart) || executableSuffix.test(tail)) { throw invalid(); }
+    // A virtual external address cannot be resolved to prove its 8.3 alias.
+    // Keep source-overlap checks sound without querying the original location.
+    if (windows && tail.split('/').some(part => /~[0-9]+(?:\.|$)/.test(part))) { throw invalid(); }
     return identity(normalized);
 }
 
@@ -107,7 +111,7 @@ export function validateResourceLocation(root: string, resource: TestResourceSpe
         if (contains(source, selected) || contains(selected, source)) { throw invalid(); }
         return;
     }
-    root = fs.realpathSync(root);
+    root = existingRealPath(root);
     const base = resource.scope === 'project-parent' ? path.dirname(root) : root;
     const external = resource.scope === 'external-exact';
     const selected = external ? path.resolve(canonicalExternalResourcePath(resource.path))
@@ -247,7 +251,7 @@ export function resourceLeaseEnvironment(base: NodeJS.ProcessEnv, lease?: Resour
 /** The host owns the outer lease; workers create separate instances underneath it. */
 export function createResourceLease(plan?: { id: string; rules: readonly ResourceRule[] }): ResourceLease | undefined {
     if (!plan?.rules.some(rule => rule.resources?.length)) { return undefined; }
-    const parent = fs.realpathSync(os.tmpdir());
+    const parent = existingRealPath(os.tmpdir());
     const directory = fs.mkdtempSync(path.join(parent, 'llm-unit-resources-'));
     const rootStat = fs.lstatSync(directory);
     const marker = JSON.stringify({ schemaVersion: 'isolated-resource-lease-v1', ownerPid: process.pid });
@@ -261,7 +265,7 @@ export function createResourceLease(plan?: { id: string; rules: readonly Resourc
         try {
             const current = fs.lstatSync(directory);
             if (path.dirname(directory) !== parent || current.isSymbolicLink() || !current.isDirectory()
-                || current.dev !== rootStat.dev || current.ino !== rootStat.ino || fs.realpathSync(directory) !== directory
+                || current.dev !== rootStat.dev || current.ino !== rootStat.ino || existingRealPath(directory) !== directory
                 || fs.lstatSync(markerPath).isSymbolicLink() || fs.readFileSync(markerPath, 'utf8') !== marker) {
                 throw new Error('Resource lease ownership changed.');
             }

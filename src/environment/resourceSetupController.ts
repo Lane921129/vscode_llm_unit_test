@@ -1,3 +1,4 @@
+import { existingRealPath } from '../utils/fileIdentity';
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -18,7 +19,7 @@ export async function configureTestResources(projectRoot?: string, outputPath?: 
     const release = pythonEnvironmentActivity.acquire('setup');
     if (!release) { await vscode.window.showInformationMessage(localize('請等待目前分析或環境準備完成。')); return false; }
     try {
-        const root = fs.realpathSync(rootInput);
+        const root = existingRealPath(rootInput);
         const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(root));
         const directory = path.join(outputPath || config.get<string>('outputPath', '') || os.tmpdir(), 'resource_setup');
         const draftPath = path.join(directory, createHash('sha256').update(root).digest('hex').slice(0, 16) + '.json');

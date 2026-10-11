@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
+import { existingRealPath } from '../utils/fileIdentity';
 
 export interface SavedBatchScope { knownFiles: string[]; selectedFiles: string[] }
 export interface BatchScopeSelection extends SavedBatchScope {
@@ -11,7 +12,7 @@ export interface BatchScopeSelection extends SavedBatchScope {
 export interface BatchScopeItem { file: string; selected: boolean; added: boolean; hint?: 'backup' | 'test-fixture' }
 
 export function canonicalScopeRoot(root: string): string {
-    const canonical = fs.realpathSync(root);
+    const canonical = existingRealPath(root);
     if (!fs.statSync(canonical).isDirectory()) { throw new Error('Invalid batch source root'); }
     return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
 }
@@ -21,7 +22,7 @@ export function batchScopeFiles(root: string, files: readonly string[]): string[
     const canonical = canonicalScopeRoot(root);
     const selected = new Map<string, string>();
     for (const file of files) {
-        const real = fs.realpathSync(file);
+        const real = existingRealPath(file);
         const relative = path.relative(canonical, real);
         if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)
             || !real.endsWith('.py') || !fs.statSync(real).isFile()) { throw new Error('Batch source escapes selected root'); }

@@ -923,6 +923,8 @@ export const englishMessages: Record<string, string> = {
     "測試包含不允許的{0}；請以 unittest.mock.patch 模擬外部或危險操作。": "Test contains disallowed {0}; mock external or dangerous operations with unittest.mock.patch.",
     "assertRaises({0}) 沒有目標原始碼、已驗證行為觀測或 mock side_effect 的例外事實依據。": "assertRaises({0}) lacks exception evidence from target source, verified observations or mock side_effect.",
     "測試呼叫未匯入的私有 helper {0}；請改用 module point-of-use patch 或明確匯入。": "Test calls unimported private helper {0}; use a module point-of-use patch or explicit import.",
+    "測試呼叫未匯入的被測目標 {0}；請依 Target import 明確匯入（{1}），並呼叫真實目標；不可 patch 或替換被測目標。": "Test calls the selected target {0} without importing it. Follow Target import with an explicit import ({1}) and call the real target; never patch or replace the selected target.",
+    "測試將被測方法 {0} 當作未匯入的頂層函式；請依 Target import 匯入其擁有類別（{1}），並依 Target binding 使用類別或已驗證實例；不可把方法當作同名頂層函式、patch 或替換被測目標。": "Test calls the selected method {0} as an unimported top-level function. Follow Target import to import its owner class ({1}), then follow Target binding on the class or verified instance; never substitute a same-named top-level function, patch or replace the selected target.",
     "測試直接呼叫被測模組私有 helper {0}；請 patch 該使用點而非直接操作內部狀態。": "Test directly calls target module private helper {0}; patch its use point instead of manipulating internal state.",
     "測試檔重新定義了被測函式 ": "Test file redefines target function ",
     "，可能沒有測到原始模組": " and may not test the original module",

@@ -42,6 +42,7 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
     // preflight, validation and runner, not live-model generation quality.
     globalThis.fetch = async (_url, init) => {
         const request = JSON.parse(String(init?.body));
+        assert.equal(request.options.num_ctx, 4096, 'automatic requests use the resolved fallback context');
         assert.doesNotMatch(request.prompt, /trace-value-v1|"trace_input"\s*:|"trace_args"\s*:/,
             'caller input trees must not duplicate source input hints in the Writer prompt');
         assert.match(request.prompt, /"caller_file":"tests\/test_bmi\.py"/,
@@ -70,6 +71,11 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
             assert.equal(knowledge.terminalStatus, 'execution-passed', JSON.stringify(knowledge.lastFailure));
             assert.equal(knowledge.importFixtureId, undefined);
             assert.equal(verifyExecutionEvidence(directory, file, read('execution_baseline.json'), read('run_manifest.json')), true);
+            const requests = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split(/\r?\n/)
+                .map(line => JSON.parse(line)).filter(event => event.stage === 'model-request' && event.status === 'requested');
+            assert.ok(requests.length > 0);
+            assert.ok(requests.every(event => event.detail.inputBudget === 2867 && event.detail.contextWindow === 4096),
+                'automatic input budget must match the wire context rather than the old cached 2000-token default');
         }
         assert.equal(JSON.stringify(settings), savedSettings);
         assert.equal(fs.readFileSync(file, 'utf8'), before);

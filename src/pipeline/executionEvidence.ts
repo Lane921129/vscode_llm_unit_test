@@ -1,17 +1,13 @@
 import * as fs from 'node:fs';
 import { resultArtifactPath as artifact } from './resultLayout';
 import { evidenceHash } from './analysisJournal';
+import { canonicalExistingPath } from '../utils/fileIdentity';
 
 export interface ExecutionBaseline {
     schemaVersion: 'execution-baseline-v1'; validationMode: 'execution';
     runId: string; sourceHash: string; target: string; testFile: string; testHash: string;
     testRunId: string; invocationFile: string; isolationFile: string;
     dependencyVersions: Array<{ file: string; hash: string }>;
-}
-
-function canonical(file: string): string {
-    const value = fs.realpathSync(file);
-    return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 /** Re-read runner-owned artifacts and current source. A saved boolean alone is not proof. */
@@ -32,8 +28,8 @@ export function verifyExecutionEvidence(directory: string, sourceFile: string, b
             || invocation.observed !== true || invocation.profileIntact !== true
             || invocation.testRunId !== baseline.testRunId || invocation.sourceHash !== baseline.sourceHash
             || invocation.testHash !== baseline.testHash || invocation.target !== baseline.target
-            || canonical(invocation.canonicalFile) !== canonical(sourceFile)
-            || canonical(invocation.canonicalTestFile) !== canonical(test)
+            || canonicalExistingPath(invocation.canonicalFile) !== canonicalExistingPath(sourceFile)
+            || canonicalExistingPath(invocation.canonicalTestFile) !== canonicalExistingPath(test)
             || !/^[a-f0-9]{64}$/.test(invocation.targetCodeHash) || invocation.coverageDataHash !== null
             || !result || ['testsRun', 'failures', 'errors', 'skipped', 'expectedFailures', 'unexpectedSuccesses']
                 .some(key => !Number.isSafeInteger(result[key]) || result[key] < 0)

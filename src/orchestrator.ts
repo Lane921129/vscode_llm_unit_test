@@ -60,7 +60,7 @@ import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from '.
 import { dispatchTestRules } from './pipeline/testRuleDispatcher';
 import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir } from './utils/utils';
-import { mergeTestSnippets } from './validation/testMerger';
+import { mergeTestSnippets, mergeTestSnippetsPreservingBaseline } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
 import { buildOllamaPromptEnvelope } from './llm/ollamaPrompt';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
@@ -1367,8 +1367,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
         : runtimeContextWindow(selectedModelProfile.paramSize, selectedModelProfile.contextLength);
     const activeModelProfile = { ...selectedModelProfile,
-        budgetTokens: localRuntime?.ok && localRuntime.mode === 'explicit'
-            ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
+        // Both automatic and explicit requests must use the budget resolved
+        // for the exact num_ctx sent on the wire, not a stale cached estimate.
+        budgetTokens: localRuntime?.ok ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
     const qualificationRequest = { envType: params.envType, modelName: params.modelName,
         endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow };
     const modelParamBillion = parseFloat(activeModelProfile.paramSize);
@@ -1542,10 +1543,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     : localize('隔離資源語境無法完整核對，未送出模型請求。'),
                 { status: resourceContext.status, resourceCount: resourceContext.resourceCount });
         }
-        return '\n\n[Import test setup] The original module runs under the saved import-fixtures-v1 contract. '
-            + 'Declared entry-point initialization is mocked. Legacy mkdir/configFiles fixtures remain import-only mocks. '
-            + 'Only explicitly declared isolated resources are materialized by the host. Observations apply to this test setup; '
-            + 'do not claim production data, network or GUI startup behavior was tested.'
+        // The complete resource context below already explains materialization,
+        // controlled seeds and forbidden direct I/O. Do not repeat those rules.
+        return '\n\n[Import test setup] Saved import-fixtures-v1: entry points and legacy mkdir/configFiles are import-only mocks. '
+            + 'Observations describe this test setup, not production data, network or GUI startup.'
             + '\n\n' + resourceContext.context;
     };
     const requestBudgeted = async (
@@ -2310,7 +2311,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                     subValidation.valid ? 'trace-evidence-rejected' : 'candidate-structure-rejected');
                                 if (retry === 0) {
                                     log(localize("[分治合流] 呼叫點 {0} 子回覆未通過格式／行為觀測證據驗證：{1}；將重試此子任務。", cIdx + 1, subReason));
-                                    subGenerationPrompt = `${subUserPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${subReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Preserve exact verified behavior observations.`;
+                                    subGenerationPrompt = buildWriterRevisionRequest({
+                                        code: subClean, findings: subReason,
+                                        moduleName: targetImportModule, functionName: targetFuncName,
+                                        evidence: subUserPrompt
+                                    });
                                 } else {
                                     log(localize("[警告] 呼叫點 {0} 子回覆連續未通過格式／行為觀測證據驗證：{1}", cIdx + 1, subReason));
                                 }
@@ -2328,9 +2333,17 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
                 if (subSnippets.length > 0) {
                     log(localize("[分治合流] 成功取得 {0} 個單一呼叫點測試，正在進行 AST/正則機械式合併...", subSnippets.length));
-                    const mergeRes = mergeTestSnippets(subSnippets, `Test${targetFuncName || 'Merged'}`);
-                    sanitizedCode = mergeRes.mergedCode;
-                    log(localize("[分治合流] 🎉 成功重組為單一類別，共包含 {0} 個獨立測試方法！", mergeRes.totalMethodsCount));
+                    const mergeBaseline = checkpoints.executable?.code || bestCode;
+                    const mergeRes = mergeBaseline
+                        ? await mergeTestSnippetsPreservingBaseline({ baseline: mergeBaseline, snippets: subSnippets,
+                            className: `Test${targetFuncName || 'Merged'}`, python: pythonExecutable, env: testExecutionEnv })
+                        : { ok: true as const, ...mergeTestSnippets(subSnippets, `Test${targetFuncName || 'Merged'}`) };
+                    if (mergeRes.ok) {
+                        sanitizedCode = mergeRes.mergedCode;
+                        log(localize("[分治合流] 🎉 成功重組為單一類別，共包含 {0} 個獨立測試方法！", mergeRes.totalMethodsCount));
+                    } else {
+                        recordRole('caller-merge', 'rejected', { reasonCode: mergeRes.reasonCode, preservedBaseline: true });
+                    }
                 }
             }
 
@@ -2414,7 +2427,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             candidateValidation.valid ? 'trace-evidence-rejected' : 'candidate-structure-rejected');
                         if (llmRetry === 0) {
                             log(localize("[警告] 模型輸出未通過證據／Python unittest 驗證：{0}；將以嚴格格式要求重試。", validationReason));
-                            generationPrompt = `${userPrompt}\n\nEVIDENCE AND FORMAT REPAIR REQUIRED: ${validationReason}\nReturn ONLY one complete Python unittest file inside a single \`\`\`python code block. Do not include analysis, Markdown bullets, or prose outside the code block. Keep every assertion for an exact verified call equal to its behavior observation.`;
+                            generationPrompt = buildWriterRevisionRequest({
+                                code: sanitizedCode, findings: validationReason || localize("不明驗證錯誤"),
+                                moduleName: targetImportModule, functionName: targetFuncName,
+                                evidence: userPrompt
+                            });
                             sanitizedCode = '';
                             continue;
                         }
@@ -2553,8 +2570,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     throwIfExecutionCancelled();
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true, facts },
                         Number.MAX_SAFE_INTEGER);
-                    if (!prompt || !promptFits(addOutputContract(sys, 'review-json'), prompt + importResourcePrompt(), activeModelProfile.budgetTokens)) {
-                        recordRole('reviewer', 'budget-exceeded', { reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
+                    const completeReviewPrompt = prompt && prompt + importResourcePrompt();
+                    if (!completeReviewPrompt || !promptFits(addOutputContract(sys, 'review-json'), completeReviewPrompt, activeModelProfile.budgetTokens)) {
+                        recordRole('reviewer', 'budget-exceeded', {
+                            role: 'reviewer', inputBudget: activeModelProfile.budgetTokens,
+                            contextWindow: requestContextWindow,
+                            estimatedInputTokens: completeReviewPrompt ? estimateTokens(addOutputContract(sys, 'review-json') + '\n' + completeReviewPrompt) : null,
+                            reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
                         return undefined;
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt + '\n' + (importFixtures?.id || '')), async () => {
@@ -2963,7 +2985,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 acceptedCodeHash: evidenceHash(fs.readFileSync(testPath, 'utf8')),
                 dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
                 dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions,
-                scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage, mutationScore: noMutationCandidates ? null : mutationScore,
+                scenarios: acceptedScenarios, execution: loopExecution, coverage: loopCoverage,
+                mutationStatus: checkpoints.quality!.mutationStatus, mutationScore: noMutationCandidates ? null : mutationScore,
                 survivors: survivedMutants.split('\n').filter(Boolean), qualityGaps,
                 reviewWarnings, reviewStatus, reviewApproval,
                 mutation: mutationRun, qualityAssessment: checkpoints.quality?.qualityAssessment,

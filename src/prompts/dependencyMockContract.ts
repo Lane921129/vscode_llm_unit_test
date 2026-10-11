@@ -11,10 +11,14 @@ export const TEST_IMPORT_GUIDANCE = 'Import test helpers (patch/Mock aliases) in
 const TOPOLOGY_LEGEND = 'sourceConsumption steps: return_value = preceding call result; member = attribute; context-enter = source-proven with only. '
     + 'Keep each recorded receiver; never add a return_value or __enter__ layer. Unknown steps remain unknown.';
 
+const dynamicNamespaceNames = new Set(['globals', 'locals', 'vars', 'eval', 'exec', 'compile', '__import__', 'import_module',
+    'getattr', 'setattr', 'delattr', '__dict__', '__builtins__', '__getattribute__', '__getattr__']);
+
 /** A conservative relevance filter, not a Python resolver or patch permission check.
  * Keep unknown/star bindings and identifier mentions even in strings. This can
  * retain extra context, but never removes a binding merely because it is used
- * through a string or in constructor setup. Without source, retain everything.
+ * through a string or in constructor setup. Without source or with dynamic
+ * namespace uncertainty, retain everything rather than guessing bindings.
  */
 export function relevantSourceImports(context?: any): any[] {
     const imports: any[] = context?.file_imports || [];
@@ -22,10 +26,23 @@ export function relevantSourceImports(context?: any): any[] {
     const setup = [context.code, JSON.stringify(context.class_context || null),
         JSON.stringify(context.property_context || null), JSON.stringify(context.referenced_globals || []),
         JSON.stringify(context.callerContexts || []), JSON.stringify(context.dependency_fixture_contract || null)].join('\n');
-    const identifiers = new Set(setup.match(/[\p{L}_][\p{L}\p{N}_]*/gu) || []);
+    const normalizedSetup = setup.normalize('NFKC');
+    const bindingEvidence = normalizedSetup + '\n' + JSON.stringify(imports).normalize('NFKC');
+    // Python normalizes identifiers using NFKC. Scan Unicode identifiers (also
+    // inside strings/comments, conservatively) without changing source evidence.
+    // Dynamic lookups can assemble names from fragments: disable this optional
+    // projection in that case. Neither branch grants execution/patch permission.
+    if ((bindingEvidence.match(/[_\p{ID_Start}][_\p{ID_Continue}]*/gu) || [])
+        .some(name => dynamicNamespaceNames.has(name))) {
+        return imports;
+    }
+    const identifiers = new Set(normalizedSetup.match(/[_\p{ID_Start}][_\p{ID_Continue}]*/gu) || []);
     return imports.filter(item => {
         const binding = item.bound_name || item.alias || item.name || item.module?.split('.')[0];
-        return !binding || binding === '*' || identifiers.has(binding);
+        if (typeof binding !== 'string') { return true; }
+        const normalizedBinding = binding.normalize('NFKC');
+        return !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(normalizedBinding)
+            || identifiers.has(normalizedBinding);
     });
 }
 
@@ -39,8 +56,17 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         binding: item.bound_name || item.alias || item.name || item.module?.split('.')[0],
     })).filter(item => item.import);
     const topology = includeTopology ? context?.dependency_fixture_contract : undefined;
-    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return ''; }
-    return 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
+    const declaredParameters: unknown[] = Array.isArray(context?.signature)
+        ? context.signature.map((parameter: any) => parameter?.name)
+        : Array.isArray(context?.args) ? context.args : [];
+    const parameters = [...new Set(declaredParameters.filter((name): name is string => typeof name === 'string'
+        && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(name.normalize('NFKC'))))];
+    const parameterSetup = parameters.length ? 'PARAMETER SETUP (source signature): ' + JSON.stringify(parameters)
+        + '. Build input values in test scope and pass them to the target; parameter names alone do not authorize '
+        + 'patching target_module.<parameter>. An independent source-proven global lookup may justify a module patch. '
+        + 'Do not infer fixture shapes or expected outputs from parameter names.\n' : '';
+    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return parameterSetup; }
+    return parameterSetup + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
         + JSON.stringify({ targetModule: module, imports: bindings, sourceCalls: calls,
             ...(topology ? { sourceConsumption: topology } : {}),
             ...(allowedMockTargets ? { suppliedUsePoints: allowedMockTargets } : {}) })

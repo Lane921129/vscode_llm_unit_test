@@ -109,6 +109,7 @@ class Cases(unittest.TestCase):
                 assert.equal(knowledge.terminalStatus, 'review-blocked', JSON.stringify(knowledge.lastFailure || knowledge.failure));
                 assert.equal(knowledge.failureStage, 'reviewer');
                 assert.equal(knowledge.reviewStatus, 'incomplete');
+                assert.equal(knowledge.mutationStatus, 'not-measured', 'unapproved tests cannot acquire a measured journal status');
                 assert.equal(checkpoint.mutationScore, null);
                 assert.equal(checkpoint.mutationStatus, 'not-measured');
                 assert.equal(checkpoint.reviewStatus, 'incomplete');

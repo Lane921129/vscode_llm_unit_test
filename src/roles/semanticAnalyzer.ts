@@ -13,6 +13,7 @@
 import { BehaviorObservations, observationsForPrompt } from '../pipeline/evidenceContracts';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
+import { relevantSourceImports } from '../prompts/dependencyMockContract';
 
 // === Type Definitions ===
 
@@ -75,6 +76,10 @@ export interface AnalysisEvidenceV2 {
 
 /** A bounded AST setup view.  These are source facts, not execution oracles. */
 export interface SemanticAstSetupContext {
+    /** Complete selected source, when available; absence disables import filtering. */
+    code?: string;
+    callerContexts?: unknown[];
+    dependency_fixture_contract?: unknown;
     /** Selected callable parameters from AST, never dependency parameters. */
     args?: string[];
     file_imports?: Array<{ kind?: string; module?: string; level?: number; name?: string | null; alias?: string | null; bound_name?: string }>;
@@ -137,7 +142,7 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
     } else if (Array.isArray(context.args)) {
         lines.push('Target function parameters: none.');
     }
-    const imports = context.file_imports || [];
+    const imports = relevantSourceImports(context);
     if (imports.length > 0) {
         lines.push('Imports available in the target module:');
         for (const item of imports) {
@@ -211,14 +216,15 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
 
 export function getSemanticAnalyzerSystemPrompt(_legacyRuleSummary?: string): string {
     return `You are a Python code analyst. Propose source-specific unittest scenarios; the runner selects rules and executes probes. Do not write tests or classify equivalent mutants.
-Return one JSON object with this shape; replace placeholders, keep unsupported arrays empty:
-{"dependency_behaviors":[],"unreachable_paths":[],"mock_required_for":[],"test_strategy":{"approach":"<concrete plan for this target>","input_hints":[],"assertion_style":"mixed","mock_needed":false,"key_rules":[]}}
-Array item shapes:
-dependency_behaviors: {"name":"...","when_caller_passes":"...","always_returns":"<verified Python repr>","can_raise":[]}
-unreachable_paths: {"condition":"...","reason":"..."}
-mock_required_for: {"path":"...","mock_target":"<use-point>","example":"..."}
-input_hints: {"param_name":"<target parameter>","strategy":"...","boundary_inputs":[],"invalid_inputs":[],"notes":"..."}
-assertion_style is assertEqual, assertRaises or mixed. key_rules are source-specific strings. A meaningful test_strategy is required, including for zero-parameter functions.
+Return one JSON object. Field contract (descriptions are not response content):
+test_strategy: object with approach (source-specific string), input_hints (array), assertion_style (assertEqual, assertRaises or mixed), mock_needed (boolean), key_rules (source-specific string array).
+Top-level arrays: dependency_behaviors, unreachable_paths, mock_required_for. Keep unsupported arrays empty.
+Array item fields:
+dependency_behaviors: name, when_caller_passes, always_returns (verified Python repr), can_raise (string array).
+unreachable_paths: condition, reason (strings).
+mock_required_for: path, mock_target (source use-point), example (strings).
+input_hints: param_name (selected target parameter), strategy (concrete string), boundary_inputs and invalid_inputs (Python literal string arrays), notes (string).
+A meaningful test_strategy is required, including for zero-parameter functions. Write actual source-specific content, never placeholders or copies of these field descriptions.
 Evidence rules:
 - Source, annotations, setup and caller sites guide bindings and inputs, not output/exception proof. Input hints use only selected target parameters; never name dependency parameters or dependency return keys.
 - Controlled observations support only their exact call and constructor/setup. Preserve Python repr. Blocked/load-error, mutated, truncated, incomplete or unassertable records are diagnostics, not target exceptions or expected values; snapshots stay artifact-only.
@@ -375,11 +381,52 @@ function normalizeSemanticAnalysis(value: unknown): SemanticAnalysis | null {
     };
 }
 
-export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | null {
+export const SEMANTIC_ANALYSIS_REJECTION_CODES = [
+    'empty-response', 'invalid-json', 'invalid-envelope', 'unrelated-json', 'schema-envelope',
+    'missing-test-strategy', 'invalid-test-strategy', 'empty-test-strategy', 'template-only-strategy',
+    'no-usable-strategy', 'target-parameter-mismatch'
+] as const;
+export type SemanticAnalysisRejectionCode = typeof SEMANTIC_ANALYSIS_REJECTION_CODES[number];
+type SemanticJsonType = 'missing' | 'unparsed' | 'null' | 'object' | 'array' | 'string' | 'number' | 'boolean';
+type SemanticResponseFormat = 'empty' | 'json' | 'json-fence' | 'embedded-json' | 'unparsed';
+
+/** Counts and fixed labels only: never provider values, arbitrary keys, or parse-error messages. */
+export interface SemanticResponseShape {
+    format: SemanticResponseFormat;
+    jsonType: SemanticJsonType;
+    topLevelKeyCount: number;
+    semanticKeyCount: number;
+    schemaKeywordCount: number;
+    strategyType: SemanticJsonType;
+    strategyKeyCount: number;
+    inputHintCount: number;
+    usableInputHintCount: number;
+    keyRuleCount: number;
+    usableKeyRuleCount: number;
+    strategyTextCount: number;
+    placeholderStrategyTextCount: number;
+}
+
+export interface SemanticAnalysisDiagnostic {
+    version: 'semantic-response-diagnostics-v1';
+    reasonCode: SemanticAnalysisRejectionCode | 'accepted';
+    responseShape: SemanticResponseShape;
+}
+
+function semanticJsonType(value: unknown): SemanticJsonType {
+    if (value === undefined) { return 'missing'; }
+    if (value === null) { return 'null'; }
+    if (Array.isArray(value)) { return 'array'; }
+    return typeof value as SemanticJsonType;
+}
+
+/** Keep the existing direct/fenced/embedded JSON acceptance order unchanged. */
+function decodeSemanticResponse(llmResponse: string): { value?: unknown; format: SemanticResponseFormat } {
     const trimmed = llmResponse.trim();
+    if (!trimmed) { return { format: 'empty' }; }
     if (trimmed.startsWith('{')) {
         try {
-            return normalizeSemanticAnalysis(JSON.parse(trimmed));
+            return { value: JSON.parse(trimmed), format: 'json' };
         } catch {
             // trimmed parse failed; proceed to code block or regex match
         }
@@ -387,7 +434,7 @@ export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | n
     const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (codeBlockMatch) {
         try {
-            return normalizeSemanticAnalysis(JSON.parse(codeBlockMatch[1].trim()));
+            return { value: JSON.parse(codeBlockMatch[1].trim()), format: 'json-fence' };
         } catch {
             // proceed to json match
         }
@@ -395,12 +442,63 @@ export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | n
     const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
         try {
-            return normalizeSemanticAnalysis(JSON.parse(jsonMatch[0]));
+            return { value: JSON.parse(jsonMatch[0]), format: 'embedded-json' };
         } catch {
             // all parse attempts failed
         }
     }
-    return null;
+    // Non-object JSON is still rejected; decoding it only improves safe shape diagnostics.
+    try { return { value: JSON.parse(trimmed), format: 'json' }; }
+    catch { return { format: 'unparsed' }; }
+}
+
+export function parseSemanticAnalysisDetailed(llmResponse: string): {
+    analysis: SemanticAnalysis | null; diagnostic: SemanticAnalysisDiagnostic;
+} {
+    const decoded = decodeSemanticResponse(llmResponse);
+    const value = decoded.value;
+    const record = isRecord(value) ? value : {};
+    const strategy = isRecord(record.test_strategy) ? record.test_strategy : {};
+    const hints = Array.isArray(strategy.input_hints) ? strategy.input_hints : [];
+    const rules = Array.isArray(strategy.key_rules) ? strategy.key_rules : [];
+    const strategyTexts = [strategy.approach, ...hints.map(item => isRecord(item) ? item.strategy : undefined), ...rules]
+        .filter((text): text is string => typeof text === 'string' && Boolean(text.trim()));
+    const shape: SemanticResponseShape = {
+        format: decoded.format,
+        jsonType: decoded.format === 'empty' || decoded.format === 'unparsed' ? 'unparsed' : semanticJsonType(value),
+        topLevelKeyCount: Object.keys(record).length,
+        semanticKeyCount: Object.keys(record).filter(key => semanticTopLevelFields.has(key)).length,
+        schemaKeywordCount: ['$schema', 'type', 'properties', 'required', 'additionalProperties', 'items']
+            .filter(key => Object.hasOwn(record, key)).length,
+        strategyType: semanticJsonType(record.test_strategy),
+        strategyKeyCount: Object.keys(strategy).length,
+        inputHintCount: hints.length,
+        usableInputHintCount: hints.filter(item => isRecord(item)
+            && meaningfulText(item.param_name) && meaningfulStrategyText(item.strategy)).length,
+        keyRuleCount: rules.length,
+        usableKeyRuleCount: rules.filter(rule => Boolean(meaningfulStrategyText(rule))).length,
+        strategyTextCount: strategyTexts.length,
+        placeholderStrategyTextCount: strategyTexts.filter(text => !meaningfulStrategyText(text)).length
+    };
+    const analysis = normalizeSemanticAnalysis(value);
+    let reasonCode: SemanticAnalysisDiagnostic['reasonCode'];
+    if (analysis) { reasonCode = 'accepted'; }
+    else if (decoded.format === 'empty') { reasonCode = 'empty-response'; }
+    else if (decoded.format === 'unparsed') { reasonCode = 'invalid-json'; }
+    else if (!isRecord(value)) { reasonCode = 'invalid-envelope'; }
+    else if (!shape.semanticKeyCount) { reasonCode = shape.schemaKeywordCount ? 'schema-envelope' : 'unrelated-json'; }
+    else if (!Object.hasOwn(record, 'test_strategy')) { reasonCode = 'missing-test-strategy'; }
+    else if (!isRecord(record.test_strategy)) { reasonCode = 'invalid-test-strategy'; }
+    else if (shape.strategyTextCount > 0 && shape.placeholderStrategyTextCount === shape.strategyTextCount) {
+        reasonCode = 'template-only-strategy';
+    } else if (!Object.keys(strategy).length || (strategy.approach === undefined || strategy.approach === '')
+        && !hints.length && !rules.length) { reasonCode = 'empty-test-strategy'; }
+    else { reasonCode = 'no-usable-strategy'; }
+    return { analysis, diagnostic: { version: 'semantic-response-diagnostics-v1', reasonCode, responseShape: shape } };
+}
+
+export function parseSemanticAnalysis(llmResponse: string): SemanticAnalysis | null {
+    return parseSemanticAnalysisDetailed(llmResponse).analysis;
 }
 
 /**
