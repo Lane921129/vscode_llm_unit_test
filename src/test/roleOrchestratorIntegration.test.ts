@@ -78,6 +78,7 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const handlers = new Map<string, (...args: any[]) => any>();
     const logs: string[] = [];
     const roles: string[] = [];
+    const reviewerTransport: Array<{ format: 'schema' | 'text'; temperature: number; numCtx: number }> = [];
     let writers = 0;
     let reviewerAvailable = true;
     let rejectedReviewSchema = false;
@@ -127,9 +128,12 @@ class Cases(unittest.TestCase):
     globalThis.fetch = async (_url, options) => {
         assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
-        assert.equal(request.options.num_ctx, 8572);
+        assert.deepEqual(request.options, { temperature: 0, num_ctx: 8572 },
+            'formal local roles use the same sampling and context as qualification probes');
         let response: string;
         if (request.roleInstructions.includes('You are the test Reviewer')) {
+            reviewerTransport.push({ format: typeof request.format === 'object' ? 'schema' : 'text',
+                temperature: request.options.temperature, numCtx: request.options.num_ctx });
             if (!rejectedReviewSchema && typeof request.format === 'object') {
                 assert.equal(request.format.properties.findings.maxItems, 5);
                 rejectedReviewSchema = true;
@@ -202,6 +206,10 @@ class Cases(unittest.TestCase):
         assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'completed'
             && event.detail.elapsedMs >= 0 && event.detail.writerContext === 'compact-writer-v1'));
         assert.equal(rejectedReviewSchema, true);
+        assert.deepEqual(reviewerTransport.slice(0, 2), [
+            { format: 'schema', temperature: 0, numCtx: 8572 },
+            { format: 'text', temperature: 0, numCtx: 8572 }
+        ], 'the actual structured-output fallback retains sampling and context');
         const seedStart = events.findIndex(event => event.stage === 'writer-seed' && event.status === 'started');
         const seedAccepted = events.findIndex(event => event.stage === 'writer-seed' && event.status === 'accepted');
         const firstReviewer = events.findIndex(event => event.stage === 'reviewer' && event.status === 'parsed');
@@ -591,6 +599,8 @@ class Cases(unittest.TestCase):
             let fixerCalls = 0;
             globalThis.fetch = async (_url, options) => {
                 const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+                assert.deepEqual(request.options, { temperature: 0, num_ctx: 8572 },
+                    'Bug Fixer and its surrounding roles retain the qualified local runtime');
                 let response: string;
                 if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
                 else if (request.roleInstructions.includes('Python unittest Bug Fixer')) {

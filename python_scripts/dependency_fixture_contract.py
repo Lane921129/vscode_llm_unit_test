@@ -13,6 +13,7 @@ VERSION = 'dependency-fixture-contract-v1'
 MAX_FLOWS = 128
 MAX_DIAGNOSTICS = 64
 NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 CONTROL = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try)
 if hasattr(ast, 'Match'):
     CONTROL += (ast.Match,)
@@ -139,7 +140,27 @@ def build_dependency_fixture_contract(func_node, target_source, target_name, mod
                                       'method': method, 'line': node.lineno, 'receiverSource': ast.unparse(node.func)})
             callee['steps'].append({'kind': 'return_value'})
             return callee
-        if isinstance(node, (ast.Await, ast.IfExp, ast.BoolOp, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+        if isinstance(node, COMPREHENSIONS):
+            # Python evaluates the first iterable in the enclosing scope,
+            # before binding any comprehension loop variable. Observe only a
+            # straight receiver call there; element/filter/inner-for behavior
+            # remains unknown, including for lazy generator expressions.
+            diagnostic('expression-flow-unsupported', node)
+            first = node.generators[0].iter if node.generators else None
+            unsupported = (ast.Await, ast.IfExp, ast.BoolOp, ast.NamedExpr,
+                           ast.Subscript, ast.Starred) + NESTED + COMPREHENSIONS
+            if (isinstance(first, ast.Call)
+                    and not any(generator.is_async for generator in node.generators)
+                    and not any(isinstance(part, ast.NamedExpr) for part in ast.walk(node))
+                    and not any(isinstance(part, unsupported) for part in ast.walk(first))
+                    and not any(isinstance(part, ast.keyword) and part.arg is None for part in ast.walk(first))):
+                expression(first)
+            # Do not infer a shape for the comprehension's result. Retain the
+            # existing conservative invalidation of names written inside it.
+            for name in _writes(node):
+                unknown_binding(name, node)
+            return None
+        if isinstance(node, (ast.Await, ast.IfExp, ast.BoolOp,
                              ast.NamedExpr, ast.Subscript)):
             diagnostic('expression-flow-unsupported', node)
             for name in _writes(node):

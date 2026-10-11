@@ -854,7 +854,7 @@ async function requestLlmApiUnlocked(
             model: params.modelName,
             ...buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt),
             stream: false,
-            ...(params.requestContextTokens ? { options: { num_ctx: params.requestContextTokens } } : {}),
+            options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}) },
             ...(expectsJsonObject ? { format: ['review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
         };
     } else if (params.envType === 'custom') {

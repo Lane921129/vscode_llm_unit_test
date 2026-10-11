@@ -885,6 +885,7 @@ export const englishMessages: Record<string, string> = {
     "依剩餘修訂額度重新選擇修復角色": "Select repair role within the remaining revision budget",
     "本候選修訂額度已用完，交上層保留成果或停止": "Candidate revision budget exhausted; retain previous results or stop",
     "局部修復未產生有效變更，在目標總預算內交 Writer 接手一次；保留已通過案例並重新驗證": "Local repair made no effective change; allow one Writer recovery within the target budget, preserving passing cases and revalidating",
+    "執行例外涉及名稱綁定，優先交 Writer 檢查完整測試；保留來源與品質檢查": "An execution exception involves name binding; prefer Writer review of the complete test, retaining source and quality checks",
     "依既有策略降階，交 Writer 重新產生候選": "Fall back according to the existing strategy and ask Writer for a new candidate",
     "已無可降階策略，結束本候選並保留既有成果": "No lower Tier available; stop this candidate and retain previous results",
     "- **修復後續處理**：{0}{1}。\n": "- **Repair follow-up**: {0}{1}.\n",

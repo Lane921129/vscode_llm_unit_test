@@ -8,6 +8,7 @@ import { RepairDiagnostic, RepairResponseError, repairHash, repairReasonCode } f
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import type { CandidateRejectionGate } from './rejectedCandidateStore';
 import { AnalysisStageError, classifyExecutionFailure } from '../utils/executionFailureCategory';
+import { wholeCandidateNameException } from '../validation/unittestException';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -87,6 +88,13 @@ export async function validateTestCandidate(
         return true;
     };
     const attemptedBugFixFailures = new Set<string>();
+    const preferWholeCandidateRepair = (failure: string, attempt: number): boolean => {
+        const exceptionType = wholeCandidateNameException(failure);
+        if (!exceptionType) { return false; }
+        hooks.event('repair-routing', 'selected', { attempt, action: 'writer-name-binding', reasonCode: 'execution-name-binding',
+            exceptionType, previousTestHash: repairHash(code) });
+        return true;
+    };
     for (let attempt = 0; attempt <= revisionLimit; attempt++) {
         hooks.checkCancelled();
         currentTargetBudget()?.consumeCandidateAttempt();
@@ -113,7 +121,9 @@ export async function validateTestCandidate(
                 ? (toolRepairAttempts++, await hooks.repairExpectations(code, lastFailure)) : undefined;
             executionFailure = false;
             hooks.checkCancelled();
-            if (!arithmetic && role === 'bug-fixer') { role = hooks.repairRole?.(code, lastFailure) || role; }
+            if (!arithmetic && role === 'bug-fixer') {
+                role = preferWholeCandidateRepair(lastFailure, attempt) ? 'writer' : hooks.repairRole?.(code, lastFailure) || role;
+            }
             if (!arithmetic && role === 'bug-fixer') {
                 const failureKey = repairFailureKey(lastFailure);
                 if (attemptedBugFixFailures.has(failureKey)) {
@@ -268,7 +278,8 @@ export async function validateTestCandidate(
         executionFailure = true;
         if (writerRecoveryAttempt) { break; }
         // A module/fixture failure is not a failed test-method replacement.
-        role = /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
+        role = preferWholeCandidateRepair(execution.out, attempt)
+            || /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }
     const reason = localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure);

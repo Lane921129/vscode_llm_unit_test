@@ -48,6 +48,80 @@ class DependencyFixtureContractTests(unittest.TestCase):
         self.assertFalse(contract['assertionOracle'])
         self.assertFalse(contract['patchAuthorization'])
 
+    def test_comprehension_first_iterable_keeps_the_injected_receiver(self):
+        for returned in ('[row[1] for row in cur.fetchall()]',
+                         '{row[1] for row in cur.fetchall()}',
+                         '{row[0]: row[1] for row in cur.fetchall()}',
+                         '(row[1] for row in cur.fetchall())'):
+            with self.subTest(returned=returned):
+                contract = self.contract('cur.execute("query")\nreturn ' + returned, parameters='cur')
+                self.assertEqual([flow['method'] for flow in contract['flows']], ['execute', 'fetchall'])
+                self.assertTrue(all(flow['root'] == {'kind': 'parameter', 'name': 'cur'}
+                                    and flow['steps'] == [] for flow in contract['flows']))
+                self.assertEqual(contract['flows'][1]['line'], 3)
+                self.assertEqual(contract['status'], 'partial')
+                self.assertEqual([item['code'] for item in contract['diagnostics']], ['expression-flow-unsupported'])
+                self.assertFalse(contract['assertionOracle'])
+                self.assertFalse(contract['patchAuthorization'])
+                self.assertNotIn('query', json.dumps(contract))
+
+    def test_comprehension_shadow_does_not_change_first_iterable_scope(self):
+        contract = self.contract('return [cur.consume() for cur in cur.fetchall()]', parameters='cur')
+        self.assertEqual([flow['method'] for flow in contract['flows']], ['fetchall'])
+        self.assertEqual(contract['flows'][0]['root'], {'kind': 'parameter', 'name': 'cur'})
+        self.assertEqual(contract['flows'][0]['steps'], [])
+        self.assertEqual(contract['status'], 'partial')
+
+    def test_comprehension_elements_filters_and_later_iterables_stay_unknown(self):
+        contract = self.contract('return [row.consume() if flag else other() '
+                                 'for row in cur.fetchall() if keep(row) '
+                                 'for item in factory().hidden()]', parameters='cur, flag, other, keep')
+        self.assertEqual([flow['method'] for flow in contract['flows']], ['fetchall'])
+        self.assertEqual(contract['status'], 'partial')
+        nested = self.contract('return [[item.consume() for item in factory().hidden()] '
+                               'for row in cur.fetchall()]', parameters='cur')
+        self.assertEqual([flow['method'] for flow in nested['flows']], ['fetchall'])
+        self.assertEqual(nested['status'], 'partial')
+
+    def test_comprehension_dynamic_first_iterables_do_not_grant_receiver_facts(self):
+        bodies = [
+            'return [row for row in (cur.fetchall() if flag else other.fetchall())]',
+            'return [row for row in (flag and cur.fetchall())]',
+            'return [row for row in (cur := other).fetchall()]',
+            'return [(cur := other) for row in cur.fetchall()]',
+            'return [row for row in cur.fetchmany(flag if flag else 1)]',
+            'return [row for row in cur.fetchmany([factory() for _ in values])]',
+            'return [row for row in cur.fetchmany(*values)]',
+            'return [row for row in cur.fetchmany(**values)]',
+            'return [row for row in unknown.fetchall()]',
+            'return [row for row in cur[0].fetchall()]',
+            'return [row for row in getattr(cur, flag)()]',
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                contract = self.contract(body, parameters='cur, other, flag, values')
+                self.assertEqual(contract['flows'], [])
+                self.assertEqual(contract['status'], 'partial')
+
+    def test_async_comprehension_and_awaited_iterables_remain_unknown(self):
+        for expression in ('[row async for row in cur.fetchall()]',
+                           '[row for row in await cur.fetchall()]',
+                           '[row for row in cur.fetchall() async for item in other]'):
+            with self.subTest(expression=expression):
+                source = 'async def target(cur, other):\n    return ' + expression + '\n'
+                result = build_dependency_fixture_contract(ast.parse(source).body[0], source, 'target')
+                self.assertEqual(result['flows'], [])
+                self.assertEqual(result['status'], 'partial')
+
+    def test_comprehension_keeps_real_chained_calls_and_does_not_propagate_result_shape(self):
+        contract = self.contract('rows = [row for row in cur.execute("query").fetchall()]\n'
+                                 'rows.consume()', parameters='cur')
+        self.assertEqual([flow['method'] for flow in contract['flows']], ['execute', 'fetchall'])
+        self.assertEqual(contract['flows'][1]['steps'],
+                         [{'kind': 'member', 'name': 'execute'}, {'kind': 'return_value'}])
+        self.assertFalse(any('resultBinding' in flow for flow in contract['flows']))
+        self.assertEqual(contract['status'], 'partial')
+
     def test_context_entry_only_exists_when_explicit_with_occurs(self):
         contract = self.contract('with factory() as conn:\n    cur = conn.cursor()\n    cur.fetchall()')
         self.assertEqual([flow['method'] for flow in contract['flows']], [None, '__enter__', 'cursor', 'fetchall'])

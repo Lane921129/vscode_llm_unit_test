@@ -42,6 +42,8 @@ test('formal requests bind context, qualification and whole-file settings to one
             return new Response('fixed transport stop', { status: 400 });
         }
         const request = readOllamaRoleRequest(body);
+        assert.equal(request.options.temperature, 0,
+            'local sampling stays aligned with probes across run snapshots and context changes');
         const role = request.roleInstructions.includes('dependency_behaviors') ? 'analyst' : 'writer';
         requests.push({ role, numCtx: request.options.num_ctx });
         if (changeDuringRequest) { setting = 16384; changeDuringRequest = false; }

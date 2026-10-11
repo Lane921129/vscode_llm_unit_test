@@ -265,7 +265,10 @@ export const TEST_RULE_LIBRARY: TestGenerationRuleCard[] = [
         rules: [
             'TIME CONTROL:',
             '  - Patch the time provider at its point of use; do not depend on the real clock.',
-            '  - Use a fixed date or time and assert the exact observable output.',
+            '  - For source `from datetime import datetime` calling `datetime.now()`, replace `owning_module.datetime` with a mock and set `clock.now.return_value = fixed`. Use the actual source alias when present.',
+            '  - For source `import datetime` calling `datetime.datetime.now()`, replace the owning module\'s `datetime` binding and set `clock.datetime.now.return_value = fixed`; the extra receiver belongs only to this import form.',
+            '  - Build `fixed` first from an explicitly imported real datetime class. Never patch `datetime.datetime.now` or `owning_module.datetime.now`: the built-in datetime class is immutable. Keep the real target function.',
+            '  - Derive assertions from the controlled fixed input and source-supported formatting; never copy uncontrolled-ambient-read observations or call the real clock to compute expected values.',
             '  - Cover timezone or formatting boundaries only when the source code handles them.',
         ]
     },

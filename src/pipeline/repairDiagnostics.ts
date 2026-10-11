@@ -56,6 +56,7 @@ export function formatRepairRouting(detail: unknown): string {
         'continue-repair': localize("依剩餘修訂額度重新選擇修復角色"),
         'stop-revisions': localize("本候選修訂額度已用完，交上層保留成果或停止"),
         'writer-recovery': localize("局部修復未產生有效變更，在目標總預算內交 Writer 接手一次；保留已通過案例並重新驗證"),
+        'writer-name-binding': localize("執行例外涉及名稱綁定，優先交 Writer 檢查完整測試；保留來源與品質檢查"),
         'tier-fallback': localize("依既有策略降階，交 Writer 重新產生候選"),
         'stop-tier-fallback': localize("已無可降階策略，結束本候選並保留既有成果")
     };
