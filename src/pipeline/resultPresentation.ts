@@ -1,4 +1,5 @@
 import { localize } from '../i18n/core';
+import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 export interface OutcomeEvidence {
     terminalStatus?: unknown;
     failureCategory?: unknown;
@@ -67,6 +68,22 @@ export function stageLabel(status: string): string {
 
 /** Human progress messages never turn intermediate acceptance into certification. */
 export function describeStageEvent(stage: string, status: string, detail: unknown, mode: 'full' | 'execution' = 'full'): string {
+    if (stage === 'model-runtime' && ['context-grown', 'context-growth-requested'].includes(status)) {
+        const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
+            ? detail as Record<string, unknown> : {};
+        if (['previousContextWindow', 'contextWindow', 'modelContextLimit'].every(key =>
+            Number.isSafeInteger(metrics[key]) && Number(metrics[key]) > 0)) {
+            return status === 'context-grown'
+                ? localize('本次容量由 {0} 增加至 {1}（上限 {2}）；新容量角色已驗證，已儲存選擇保留。',
+                    metrics.previousContextWindow, metrics.contextWindow, metrics.modelContextLimit)
+                : localize('完整提示超額，準備將本次容量由 {0} 增加至 {1}（上限 {2}），先重驗角色。',
+                    metrics.previousContextWindow, metrics.contextWindow, metrics.modelContextLimit);
+        }
+    }
+    if (stage === 'model-request' && status === 'timing') {
+        const timing = formatModelRequestTiming(detail);
+        if (timing) { return timing; }
+    }
     if (stage === 'model-request' && status === 'budget-exceeded') {
         const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
             ? detail as Record<string, unknown> : {};
@@ -95,6 +112,10 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
     const diagnostics = Array.isArray(value?.diagnostics)
         ? value.diagnostics.filter(item => typeof item === 'string' && /^[a-z0-9-]+$/.test(item)).join(', ') : '';
     const labels: Record<string, string> = {
+        'model-runtime:context-growth-blocked': localize('容量無法增加：上限未知、已到頂或完整提示仍無法容納；證據保留，未送出正式請求。'),
+        'model-runtime:qualification-failed': localize('容量增加後的角色資格未通過；未沿用舊容量認證。'),
+        'context-qualification:requested': localize('正在重新驗證新容量的角色能力；尚未執行正式測試。'),
+        'context-qualification:completed': localize('新容量角色探針已回覆；仍須檢查資格契約。'),
         'mutation-engine:selected': localize("已選定突變引擎，等待量測"),
         'mutation-engine:failed': localize("突變引擎預檢失敗：{0}；已停止，未更換引擎", reason || localize("請查看報告中的拒絕原因")),
         'mutation:started': localize("正在隔離執行突變；完成後才能判定分數"),

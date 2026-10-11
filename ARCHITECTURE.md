@@ -1,5 +1,23 @@
 # 專案閱讀入口
 
+## 超額時增加本次容量（2026-10-12）
+
+`contextGrowth.ts` 接收完整最終提示估量、補正預留、實際角色輸出 cap 與已核實模型上限，只在超額時規劃足量容量，加128 tokens輸入餘裕並向上對齊1024，最後仍不得越過上限。設定未知、到頂仍不足或非法資料保持受阻；小提示不降低已成長容量。`requestBudgeted` 是所有正式角色的最終共用 gate，Reviewer 不再於進入該 gate 前以舊容量拒絕。
+
+`localRuntimeRequalification.ts` 重跑現有公開固定角色探針與安全隔離執行，不自行連線或寫入設定。主流程以新 `num_ctx` 傳送每個探針；Writer／full Reviewer及當次Bug Fixer資格通過後，才更新本次 active profile，重新核對完整角色預算並發正式請求。保存容量前後、上限、資格與耗時；已儲存選擇保持原值。探針、HTTP回退與正式請求共用原 deadline／target budget，增容不等於實際 GPU 分配或品質通過。
+
+## Analyst 格式、短計畫與模型耗時（2026-10-12）
+
+`modelQualification.ts` 不再以 Writer 的純 Python 生成資格推定 Analyst 格式。Analyst 使用 `semanticAnalyzer.ts` 的共用短計畫 schema：必要的 `test_strategy` 提供一個可操作起始情境，最多兩個 input hints、三個 key rules；相依、不可達路徑及 mock 摘要是有界的可選欄位。新回覆控制文字與筆數，舊完整計畫仍相容讀取；完整來源、setup 和執行證據不截斷，具體策略與目標參數 gate 保留。
+
+Local `/api/generate.format` 帶此 schema；Custom 保留 JSON mode，Cloud 共用 schema。Cloud 的 OpenAPI `responseSchema` 傳輸投影只移除 schema 節點不支援的 `additionalProperties`，保留合法同名資料欄位、長度／數量與必要欄位限制，不改寫共用 schema 或本地語意 gate。Writer 仍生成 Python。Analyst 的無效回覆只交 `semanticWithContractRepair` 補正一次，沒有額外的隱藏文字重問；明確服務格式拒絕仍可在同一次 deadline 內移除格式參數，但提示文字保持完全相同。
+
+`requestTiming.ts` 預先分配至多兩個 Analyst 單次額度，例如設定60秒時，階段最多120秒、每次最多60秒，且受目標剩餘時間限制。HTTP 重試、格式／思考量回退及排隊共享各自邏輯請求期限。其他角色維持原有政策；傳輸超時、取消與證據漂移不能觸發格式補問。
+
+本機短計畫輸出 cap 為1,024 tokens，不高於原輸出預留；輸入預算與實際 wire `num_predict` 成對。已儲存的手動容量保持原值；完整提示超額時，僅本次執行可依上述流程增容。`model-request-timing-v1` 分開保存 queue／transport 事件及 Ollama 的數值 timing／token metadata，未知為null。`modelRequestTimingPresentation.ts` 將同次紀錄呈現在日誌、逐輪與失敗流程表；HTTP 等待可能包含服務推論，不能稱為網路延遲或GPU耗時。完整 provider 回覆不持久保存。
+
+車輛 `_connect` 真實實跑的修訂提示為6,125 tokens，完整候選僅160 tokens；原修訂輸入額度5,734而初次seed可用6,656。`roleRequestBudget.ts` 對有明確完整候選的 local/full Writer 修訂，輸出 cap 採 `max(1536, ceil(候選估量 × 1.25) + 256)`，只有低於原預留量才調整輸入／wire；大候選、未知候選、execution及遠端維持原政策。各修訂入口明傳自己正在修的候選，不猜checkpoint或從prompt擷取。結構／Trace修訂亦正確標為writer-revision；分區已有的完整baseline及擴充指引保留。後續擴充的結構／Trace重試可能只收到短的無效片段，但修訂仍須輸出完整基線，因此沿用原預留量，不按片段縮限。預算調整不截斷來源、setup、資源或測試，也不保證模型能完成；長度中止與所有執行／審查gate仍保留。
+
 ## Schema、角色契約與冷啟動修復（2026-10-10）
 
 `initializationPlanning.ts` 在既有規劃閉包上呼叫 `schemaPlanning.ts`／`sqlite_schema_plan.py`。後者只做有界 AST 與 literal DDL 解析，沿可證明的本機 connection helper／cursor 鏈定位 `CREATE TABLE IF NOT EXISTS` 與保真的新增欄位遷移；不 import 應用、不 eval、不讀取資料庫。來源宣告的 ConfigParser fallback 只有在同一預覽明列空白設定 fixture 時才可使用；既有非空設定不覆蓋。TypeScript 核對來源摘要及精確 SQLite 地址，可將新 DB 資源、資料表、設定 fixture 與目錄／入口提案合併為一次預覽。已有 schema／seed 保留，衝突、未知路徑與無獨立來源證據的共享資源只列診斷。`sourceDependencies` 將跨檔證據納入 plan 身分，Python worker 重新驗證，`pythonSourceMode` 禁止 frozen 程序沿用原始碼路徑證明。`isolated_resources.py` 從驗證後結構建立每程序新資料庫，支援 literal default、UNIQUE 與 AUTOINCREMENT，從不直接執行來源 SQL。
@@ -336,7 +354,7 @@ Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀
 
 Writer 在選擇 optional 材料前，先預扣相同的初始化與資源語境；Reviewer 初步預算也包含它，最終傳輸 gate 再核對全部文字。角色事件保存估計 input、格式修正預留量、實際 context 設定、耗時與安全失敗分類；HTTP 狀態只採 transport 階段持有的數值，不由訊息文字猜測，也不保存 provider 本文。這些估量和基本資格探針不能證明完整小模型批次通過。
 
-`llmUnitTest.runtimeContextTokens` 預設 `0`；正值為全域明確覆寫，其次為端點／模型的手動保存值。未手動指定且模型上限已核實時，自動選擇上限的一半（向下取整、至少 1），16,384 因而選 8,192；舊 captured-runtime 值與舊角色資格不能壓回 4,096。側欄刷新自動保存值，但串行寫入不得覆蓋稍後的手動選擇；保存 0 撤回手動值並重選。上限未知時才重用自動保存／合法資格容量、同模型 `/api/ps` 的 `context_length`、`/api/show` 的 `num_ctx`，最後使用 4,096 fallback。角色探針與正式 wire `num_ctx` 使用同值。一般輸入仍保留約 30% 給輸出；local full 初次 Writer seed 為單測試生成，輸出保留量上限為 1,536 tokens（小容量不超過原三成保留量），輸入採 `num_ctx` 減該值，wire 同步設定 `num_predict`。擴充、修訂及其他角色維持原政策；長度中止不算完整回覆。容量變更使舊資格不適用。自動選擇為請求設定，不冒稱當下實際分配。`ollamaRuntime.ts` 分開核驗模型上限、Modelfile 配置與實際 allocation；後兩者不證明上限，未知／多筆匹配不借用其他模型資料。分析啟動時固定完整偏好快照，執行中設定變更不改當次請求。
+`llmUnitTest.runtimeContextTokens` 預設 `0`；正值為全域明確覆寫，其次為端點／模型的手動保存值。未手動指定且模型上限已核實時，自動選擇上限的一半（向下取整、至少 1），16,384 因而選 8,192；舊 captured-runtime 值與舊角色資格不能壓回 4,096。側欄刷新自動保存值，但串行寫入不得覆蓋稍後的手動選擇；保存 0 撤回手動值並重選。上限未知時才重用自動保存／合法資格容量、同模型 `/api/ps` 的 `context_length`、`/api/show` 的 `num_ctx`，最後使用 4,096 fallback。角色探針與正式 wire `num_ctx` 使用同值。一般輸入仍保留約 30% 給輸出；local full 初次 Writer seed 為單測試生成，輸出保留量上限為 1,536 tokens（小容量不超過原三成保留量），輸入採 `num_ctx` 減該值，wire 同步設定 `num_predict`。local Analyst 初次短計畫與一次格式補正則採最多 1,024 tokens，與 Writer 資格分開；Writer 修訂在明傳完整候選且可保留足夠輸出時依前述公式分配；其餘擴充與角色維持原政策。長度中止不算完整回覆。容量變更使舊資格不適用。自動選擇為請求設定，不冒稱當下實際分配。`ollamaRuntime.ts` 分開核驗模型上限、Modelfile 配置與實際 allocation；後兩者不證明上限，未知／多筆匹配不借用其他模型資料。分析啟動時固定完整偏好快照，執行中設定變更不改當次請求。
 
 本機角色資格另外綁定 `ollama-context-v1` 與實際請求的 `numCtx`；provider、端點、模型及探針版本仍須一致。舊 profile 保留 metadata，但撤回缺少容量綁定的資格；測試連線中的三角色採同一設定快照，中途修改則提示重驗。正式執行的單檔／全檔／批次在 `ExecutionContext` 固定設定，Auto 不借用其他容量的角色結果。手動 Tier 仍可試跑，所有後續驗證不變。非法本機設定在模型請求前保存 `model-runtime/rejected` 與原因碼；Cloud／Custom 不受本機設定影響。
 

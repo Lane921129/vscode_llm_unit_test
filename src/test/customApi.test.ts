@@ -28,9 +28,8 @@ test('provides schema contracts for semantic analysis, review, and mutant triage
     const repair = responseSchemaForOutputFormat('test-method-json');
     const triage = responseSchemaForOutputFormat('mutant-triage-json');
 
-    assert.deepStrictEqual((semantic as { required: string[] }).required, [
-        'dependency_behaviors', 'unreachable_paths', 'mock_required_for', 'test_strategy'
-    ]);
+    assert.deepStrictEqual((semantic as { required: string[] }).required, ['test_strategy']);
+    assert.strictEqual((semantic as any).properties.test_strategy.properties.input_hints.maxItems, 2);
     assert.deepStrictEqual((review as { required: string[] }).required, ['findings']);
     assert.strictEqual((review as any).properties.findings.maxItems, 5);
     assert.strictEqual((review as any).properties.findings.items.properties.test_line.pattern, '^L[1-9][0-9]*$');
@@ -71,7 +70,8 @@ test('semantic response schema defines every nested object and array element bef
             assert.ok(node.properties && typeof node.properties === 'object', `${path} requires properties`);
             const properties = node.properties as Record<string, unknown>;
             assert.ok(Object.keys(properties).length > 0, `${path} must not be an untyped object`);
-            assert.deepStrictEqual([...(node.required as string[])].sort(), Object.keys(properties).sort(), path);
+            assert.deepStrictEqual([...(node.required as string[])].sort(),
+                path === '' ? ['test_strategy'] : Object.keys(properties).sort(), path);
             for (const [name, property] of Object.entries(properties)) {
                 inspect(property, path ? `${path}.${name}` : name);
             }
@@ -106,13 +106,19 @@ test('semantic response schema defines every nested object and array element bef
     assert.deepStrictEqual(assertionStyle.enum, ['assertEqual', 'assertRaises', 'mixed']);
 });
 
-test('Cloud semantic requests retain the complete schema and keep server failures outside format fallback', () => {
+test('Cloud semantic requests retain supported schema constraints and keep server failures outside format fallback', () => {
     const schema = responseSchemaForOutputFormat('semantic-json');
     const request = buildGoogleGenerateContentRequest('neutral-model', 'test-key', 'Analyse the selected target.', {
         responseMimeType: 'application/json', responseSchema: schema
     });
     const wire = JSON.parse(JSON.stringify(request.body));
-    assert.deepStrictEqual(wire.generationConfig.responseSchema, schema);
+    const cloudSchema = wire.generationConfig.responseSchema;
+    assert.strictEqual(Object.hasOwn(cloudSchema, 'additionalProperties'), false);
+    assert.strictEqual(schema!.additionalProperties, false, 'the shared local contract is unchanged');
+    assert.deepStrictEqual(cloudSchema.required, schema!.required);
+    assert.deepStrictEqual(Object.keys(cloudSchema.properties), Object.keys(schema!.properties as object));
+    assert.deepStrictEqual(cloudSchema.properties.test_strategy.properties.approach,
+        (schema!.properties as any).test_strategy.properties.approach);
     assert.strictEqual(wire.generationConfig.responseMimeType, 'application/json');
     assert.strictEqual(wire.generationConfig.responseSchema.properties.test_strategy
         .properties.input_hints.items.properties.boundary_inputs.items.type, 'string');

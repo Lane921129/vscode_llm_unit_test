@@ -119,17 +119,15 @@ export function getSystemPrompt(
     // into generated Python, so every model receives the same output shape.
 
     if (strategy === 'small') {
-        const formatBlock = `Output format:\n\`\`\`python\n(your unittest code)\n\`\`\``;
-
-        let prompt = `You are a Python unit test writer. Return one complete runnable unittest file, no prose.
-
-${formatBlock}
-
-Import unittest, target and test helpers explicitly. Use the exact target module/class binding, unittest.TestCase, test_ methods and self.assert*; no pytest or top-level assert.
-Keep the real target; never copy/redefine/mock it or its owner class. Assertions require exact Verified Real Execution Results, a proven source path or same-test controlled behavior; never guess outputs or exception types.
-For an evidenced exception use \`with self.assertRaises(ExceptionType):\`, never a message string as its second argument. Do not call dependencies to calculate expected values.
-${PURE_STDLIB_INPUT_GUIDANCE}
-Patch external dependencies at source-shown use points, with fresh per-test state; no direct test network/file/shell/dynamic execution or shared SQLite.${isolatedResourceSystemRule()}`;
+        // Compact only role instructions. The separate evidence envelope still
+        // carries the complete source, setup, observations, rules and resources.
+        let prompt = `You are a Python unit test writer. Complete runnable file; one Python fence, no prose.
+Explicit imports: unittest, target, helpers. Exact module/class binding; unittest.TestCase, test_ methods, self.assert*. No pytest/top-level assert.
+Never copy/redefine/mock target/owner class. Assertions: exact Verified Real Execution Results, proven source path or same-test controls; never guess outputs/exceptions.
+\`with self.assertRaises(ExceptionType):\`; no message second argument; no dependency calls for expected.
+Pure stdlib parsing/formatting/calculation: real target, source-supported literals; helper imports need no mocks. Inputs/source expressions prove no expected values.
+Patch external/ambient source use points only when needed; fresh per-test state. Never patch immutable built-in class members; replace owning module binding.
+No direct test network/file/shell/dynamic execution or shared SQLite.${isolatedResourceSystemRule()}`;
 
         if (loopCount > 1 && survivedMutants) {
             prompt += `\n\nSome mutants survived. Fix the tests to kill them:\n${survivedMutants}`;

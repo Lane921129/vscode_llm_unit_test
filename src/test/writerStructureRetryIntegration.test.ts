@@ -9,6 +9,10 @@ import { evidenceHash } from '../pipeline/analysisJournal';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { validateUnittestStructure } from '../validation/generatedTestValidator';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { contextInputBudget, estimatePromptTokens, promptFits } from '../prompts/promptBudget';
+import { roleRequestBudget } from '../prompts/roleRequestBudget';
+import { buildWriterRevisionRequest } from '../roles/roleContracts';
+import { buildWriterExpansionPrompt } from '../roles/writerPhases';
 
 const fence = (code: string) => '```python\n' + code + '\n```';
 const candidate = (importTarget: boolean) => `import unittest
@@ -38,6 +42,29 @@ function assertRepairPrompt(prompt: string, previous: string, finding: string, m
     assert.match(prompt, /never patch the target itself/);
 }
 
+test('a short expansion fragment keeps the full long baseline and the original output reserve', () => {
+    const baseline = candidate(true) + '\n# ' + 'existing baseline fixture '.repeat(260);
+    const fragment = candidate(false);
+    assert.ok(estimatePromptTokens(baseline) > 1536);
+    assert.ok(estimatePromptTokens(fragment) < 200);
+    const evidence = 'Target source: def _read(value): return value + 1\n'
+        + 'Setup: from sample import _read\nVerified observation: _read(2) returned 3';
+    const request = buildWriterExpansionPrompt(buildWriterRevisionRequest({ code: fragment,
+        findings: 'The target import is missing.', moduleName: 'sample', functionName: '_read', evidence }),
+    baseline, 'Retain the executed baseline while correcting the target binding.');
+    assert.ok(request.includes(fence(fragment)));
+    assert.ok(request.includes(fence(baseline)));
+    assert.equal(request.split(baseline).length - 1, 1);
+    assert.ok(request.includes(evidence));
+    const originalInput = contextInputBudget('', 8192);
+    const budget = roleRequestBudget({ envType: 'local', mode: 'full', role: 'writer-revision',
+        seedPending: false, contextWindow: 8192, inputBudget: originalInput, revisionCurrentCode: undefined });
+    assert.equal(budget.inputBudget, originalInput);
+    assert.equal(budget.reservedOutputTokens, 2458);
+    assert.equal(budget.requestOutputTokens, undefined);
+    assert.ok(promptFits('', request, budget.inputBudget));
+});
+
 test('formal Writer structure retries retain the rejected file, evidence scope and original request bounds', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-retry-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
@@ -64,14 +91,15 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
     const source = path.join(directory, 'sample.py');
     fs.writeFileSync(source, 'def _read(value):\n    return value + 1\n');
     const bad = candidate(false), good = candidate(true);
-    const requests: Array<{ role: string; prompt: string }> = [];
+    const requests: Array<{ role: string; prompt: string; options: { num_ctx?: number; num_predict?: number } }> = [];
     let respondToWriter = (_prompt: string) => good;
     globalThis.fetch = async (_url, options) => {
-        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        const body = JSON.parse(String(options?.body));
+        const request = readOllamaRoleRequest(body);
         const role = request.roleInstructions.includes('dependency_behaviors') ? 'analyst'
             : request.roleInstructions.includes('You are the test Reviewer') ? 'reviewer'
                 : request.roleInstructions.includes('Analyst after successful') ? 'quality' : 'writer';
-        requests.push({ role, prompt: request.prompt });
+        requests.push({ role, prompt: request.prompt, options: body.options });
         const response = role === 'analyst' ? JSON.stringify({ dependency_behaviors: [],
             test_strategy: { approach: 'Exercise the real selected target and use only verified observations for assertions.' } })
             : role === 'reviewer' ? '{"findings":[]}' : role === 'quality' ? '{"tasks":[]}'
@@ -100,7 +128,7 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
                 if (++writers === 1) { return bad; }
                 assert.equal(writers, 2);
                 assertRepairPrompt(prompt, bad, validateUnittestStructure(bad, '_read', 'sample').reason!);
-                assert.match(prompt, /WRITER_SEED_V1/);
+                assert.doesNotMatch(prompt, /WRITER_SEED_V1/);
                 return good;
             };
             const outputPath = path.join(directory, 'corrected');
@@ -172,7 +200,7 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
             const result = readRun(outputPath);
             assert.equal(requests.filter(request => request.role === 'writer').length, 1);
             assert.ok(result.events.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'
-                && event.detail.role === 'writer' && event.detail.estimatedInputTokens > event.detail.inputBudget));
+                && event.detail.role === 'writer-revision' && event.detail.estimatedInputTokens > event.detail.inputBudget));
             assert.ok(!result.events.some(event => event.stage === 'tier' && event.status === 'fallback'));
             assert.equal(result.knowledge.failureStage, 'prompt-budget');
             const rejected = result.events.find(event => event.stage === 'candidate-artifact' && event.status === 'rejected');
@@ -223,6 +251,10 @@ ${includeImport ? 'from partition_sample import _read\n' : ''}class Test_read(un
                     'a repair never includes another partition rejected candidate');
                 assert.match(prompt, /WRITER_EXPANSION_V2/);
                 assert.ok(prompt.includes(partitionCode('alpha', true)), 'the executed baseline remains complete');
+                const wire = requests.at(-1)!;
+                assert.equal(wire.options.num_ctx, 8572);
+                assert.equal(wire.options.num_predict, undefined,
+                    'a short partition fragment cannot size the output that must also preserve the complete baseline');
                 return partitionCode(which, true);
             };
             const outputPath = path.join(directory, 'partition');
@@ -233,6 +265,12 @@ ${includeImport ? 'from partition_sample import _read\n' : ''}class Test_read(un
                 && event.status === 'measured' && event.detail.score === 100));
             assert.ok(result.events.some(event => event.loop === 2 && event.stage === 'caller-partition'
                 && event.status === 'planned' && event.detail.mode === 'partitioned'));
+            const revisions = result.events.filter(event => event.loop === 2 && event.stage === 'model-request'
+                && event.status === 'requested' && event.detail.role === 'writer-revision');
+            assert.equal(revisions.length, 2);
+            assert.ok(revisions.every(event => event.detail.reservedOutputTokens === 2572
+                && event.detail.requestOutputTokens === undefined && event.detail.inputBudget === 6000),
+            'both expansion repairs retain the original reserve instead of sizing it from the rejected fragment');
             assert.equal(result.knowledge.terminalStatus, 'passed', JSON.stringify(result.knowledge.lastFailure));
             assert.ok(result.events.some(event => event.loop === 2 && event.stage === 'reviewer' && event.status === 'approved'));
             assert.ok(result.events.some(event => event.loop === 2 && event.stage === 'mutation'

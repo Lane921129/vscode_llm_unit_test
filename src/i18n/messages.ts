@@ -1,5 +1,17 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    'Writer 使用純 Python；Analyst 使用獨立的 JSON 計畫契約。': 'Writer uses plain Python; Analyst uses an independent JSON plan contract.',
+    '新容量無法容納完整角色探針；未沿用舊容量認證。': 'The new context cannot fit the complete role probe; qualification from the old capacity was not reused.',
+    '本次容量由 {0} 增加至 {1}（上限 {2}）；新容量角色已驗證，已儲存選擇保留。': 'Run context increased from {0} to {1} (limit {2}); roles verified at the new capacity, saved choice preserved.',
+    '完整提示超額，準備將本次容量由 {0} 增加至 {1}（上限 {2}），先重驗角色。': 'The complete prompt exceeds the budget; preparing to increase run context from {0} to {1} (limit {2}) and revalidate roles first.',
+    '容量無法增加：上限未知、已到頂或完整提示仍無法容納；證據保留，未送出正式請求。': 'Context cannot grow: the limit is unknown or reached, or the complete prompt still cannot fit; evidence retained, formal request not sent.',
+    '容量增加後的角色資格未通過；未沿用舊容量認證。': 'Role qualification failed at the increased context; qualification from the old capacity was not reused.',
+    '正在重新驗證新容量的角色能力；尚未執行正式測試。': 'Revalidating role capabilities at the new context; formal testing has not started.',
+    '新容量角色探針已回覆；仍須檢查資格契約。': 'The new-context role probe replied; its qualification contract still needs checking.',
+    '[容量調整] 完整提示超額，num_ctx 由 {0} 提高至 {1}；上限 {2}，已重驗角色，保留已儲存選擇。': '[Context growth] Complete prompt exceeded the budget; num_ctx increased from {0} to {1} (limit {2}), roles revalidated, saved choice preserved.',
+    '模型排隊等待：{0}，{1}。': 'Model queue wait: {0}, {1}.',
+    '模型請求耗時：{0}，HTTP 第 {1} 次，{2}；總耗時 {3}，HTTP 回應等待 {4}，讀取回覆 {5}。': 'Model request timing: {0}, HTTP attempt {1}, {2}; elapsed {3}, wait for HTTP response {4}, response read {5}.',
+    'Ollama 載入 {0}，提示處理 {1}，生成 {2}；輸入 {3}、輸出 {4} tokens。缺值為未知，不能推定 GPU 耗時。': 'Ollama load {0}, prompt evaluation {1}, generation {2}; input {3}, output {4} tokens. Missing values are unknown and cannot establish GPU time.',
     '模型回覆達到輸出上限而未完成；未保存或執行截斷內容。': 'The model response reached its output limit before completion; truncated content was neither saved nor executed.',
     'Context 必須為 0（自動）或正整數。': 'Context must be 0 (automatic) or a positive integer.',
     '無法確認模型的 Context 上限，不能使用明確指定的 Context。': 'The model context limit could not be verified, so an explicit context cannot be used.',

@@ -4,6 +4,22 @@
 
 ## 2026-10-12
 
+### Analyst 獨立短計畫、補正額度與耗時證據
+
+- 最終提交副本 E 相關回歸26檔213／213通過（約158.3秒），含完整來源增容、新容量公開角色探針、Reviewer資格失敗禁止沿用舊資格、同候選審查與真實builtin突變100%、原deadline及wire預算、短計畫、長修訂、分區保留及Cloud schema傳輸投影。首輪212／213的唯一失敗是新增Custom回歸仍期待Google保留不支援的schema鍵，改為核对支援限制與共用schema未被修改後全過；Cloud／Custom另定向24／24通過。TypeScript、lint、生產建置、Webview語法、密鑰與可達歷史掃描、差異檢查通過。依使用者可執行版本優先指示，本次不重跑全套Python或CI。
+- 修復後 exact staged D 真實 Qwen3B／8192／full／Tier2／builtin 小批次177.3秒，18／18API完成、3／3Analyst初次解析成功，沒有API超時、提示超額或環境阻擋。`_now_text` 完成同候選執行、Reviewer及builtin-ast-v2突變，行覆蓋1／1、突變3／3 KILLED；同版來源、測試及批准雜湊已核對。`get_app_dir`仍有Path局部遮蔽／Mock斷言與重複候選，`_connect`仍有未定義helper及Mock參數斷言；本輪1／3完整通過，另外兩筆無突變分數。修訂6038～6321 tokens皆真正送出，原阻擋已解除。真實批次所有提示已fit，沒有觸發增容；增容與資格失敗停止由上述固定回覆整合回歸驗證。來源、相依、設定、SecretStorage及原資料庫不改寫，owned暫存資源核對回收；此結果不代替實驗室13B或212目標驗收。
+- 依使用者確認，超额可動態提高本次 Ollama `num_ctx`：以完整提示、補正及實際輸出預留規劃足量容量，加128 tokens餘裕、向上對齊1024，不超過同端點／模型已核實上限、不改已儲存選擇。新容量重跑公開固定 Writer／Reviewer與必要Fixer資格，真正隔離執行且不沿用舊容量認證；資格失敗或到頂仍超額保持受阻。Reviewer亦經共用最終gate，不被舊容量提前擋下。資格、正式請求與回退共用原deadline及target計數；事件、日誌及失敗報告記錄容量與耗時。
+- 修訂預算修復後的 exact staged C 真實Qwen3B／8192三目標實跑169.8秒，15／15API完成、3／3Analyst初次解析成功；`_connect`四次修訂已送出但未定義helper重複，`get_app_dir`有測試側Path遮蔽與斷言問題，`_now_text`必要Writer提示6792超6656、尚未送出，本輪0／3通過且無突變。觀測皆有完整診斷；時鐘值與一次Trace timeout使必要提示增大，不刪除案例、不把環境值當oracle。針對提示超額精簡small Writer與seed重複建構指令，保留全部來源、setup、資源、規則及觀測。
+
+- Analyst 不再由 Writer 的純 Python 生成資格決定輸出格式；Local 使用共用短 JSON schema，Cloud 共用 schema，Custom 保留 JSON mode。必要策略只規劃一個起始情境，最多兩個參數提示、三個規則；相依／不可達／Mock 摘要改為有界可選欄位。完整來源、setup、觀測與具體策略 gate 保留，舊計畫仍可讀取。角色契約記為 `semantic-plan-v3`，正規化證據仍為 `semantic-plan-v2`。
+- Cloud 的 OpenAPI `responseSchema` 不直接帶新共用 JSON Schema 的 `additionalProperties`：依[官方 Schema 欄位](https://ai.google.dev/api/generate-content#Schema)建立獨立傳輸投影，只移除各 schema 節點的此鍵，保留合法同名資料欄位、完整長度／數量／required限制、來源schema與本地gate，避免此不相容鍵造成不必要的文字回退。本次只驗證請求包裝，未用SecretStorage金鑰呼叫真實雲端，不將此問題當成已證實的Gemma HTTP500原因。
+- Local Analyst 的輸出保留量最多 1,024 tokens，不超過原保留量，輸入額度與 wire `num_predict` 同步。無效分析只交角色契約補正一次，不再增加隱藏文字重問；服務明確拒絕格式時仍可移除格式參數，提示文字及單次期限保持相同。輸出長度中止仍拒絕。
+- 分析開始時預先分配兩次單次請求額度，例如60秒設定為階段最多120秒、每次最多60秒，仍受原目標期限限制。HTTP 重試、格式／思考量回退與排隊不取得新額度；傳輸超時、取消、預算或來源失敗不觸發格式補問。
+- `model-request-timing-v1` 分開保存排隊、各次 HTTP、回覆讀取與 Ollama 載入／提示處理／生成及 token 數，未知值保留 null；日誌、逐輪及失敗報告顯示安全數字。HTTP 等待可能包含服務推論，不推定 GPU 或網路延遲。HTTP 200 非 JSON 回覆另記 `response-error`／`model-format`，不誤報網路錯誤，不保存完整 provider 回覆。
+- 真實 `_connect` 的 6,125-token 修訂提示比原 5,734 額度多 391，560 字元候選僅 160 tokens；不是必要來源重複或模型容量不足。local/full Writer 修訂依顯式完整候選採 `max(1536, ceil(估量 × 1.25) + 256)`，只在低於原預留時調整輸入／wire；本例可用 6,656 並保留全部證據。大候選、未知、execution及遠端不變。結構／Trace修訂正確標為 writer-revision，不當新seed；分區基線保持完整。後續擴充的結構／Trace重試沿用原輸出預留，避免只按短的無效片段縮限、容不下提示要求保存的完整基線。長度中止仍拒絕。
+- 修訂預算改動前，真實本機 Qwen 3B／8,192 context／full／Tier 2／builtin 三目標實跑約 128.7 秒，12／12 API 完成、3／3 Analyst 初次解析成功，沒有 API 超時或 Analyst 提示／格式阻擋。`_now_text` 通過執行、同候選 Reviewer 及 builtin-ast-v2 突變，行覆蓋 1／1、突變 3／3 KILLED。`get_app_dir` 仍有名稱綁定／斷言與重複候選，`_connect` 首次實跑失敗後修訂提示超額；兩筆沒有突變分數，不能把三目標宣稱全通。來源、依賴與隔離資源已核對，本次未修改原車輛程式或歷史結果。
+- Codellama 13B 位於實驗室 RDP；本機沒有該模型或可連線端點。上述真實小模型及固定回覆整合回歸不代替13B／212目標驗收；提交後須在實驗室依相同來源及full小批次重測，不因失敗換模型或放寬驗證 gate。
+
 ### 結果刪除捷徑與車輛三批分析
 
 - 覆蓋率儀表板在「全選」旁新增「刪除所選」，保留底部按鈕；兩者共用同一處理程序，只移除勾選的頁內結果、重設全選並刷新，不刪除磁碟報告。沿用中英文文案，控制列允許窄側欄換行。

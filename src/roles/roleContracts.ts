@@ -3,6 +3,7 @@ import { EVIDENCE_CONTRACT_VERSIONS } from '../pipeline/evidenceContracts';
 
 export const ROLE_CONTRACT_VERSIONS = {
     ...EVIDENCE_CONTRACT_VERSIONS,
+    semanticPlan: 'semantic-plan-v3',
     reviewer: 'review-v7',
     qualityAnalyst: 'quality-task-v3',
     writerRevision: 'writer-revision-v2',

@@ -6,6 +6,7 @@ import { evidenceHash } from './analysisJournal';
 import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 import { presentOutcome, presentSummaryOutcome, withOutcomeHeader } from './resultPresentation';
 import { formatTierHistory } from './tierHistory';
+import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../mutation/mutationResult';
 
 export interface ReportIdentity {
@@ -250,10 +251,12 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
     return [localize('### 完整流程（依事件順序）'), '', localize('| 序號 | 時間 | 輪次 | 階段 | 狀態 | 摘要 |'),
         '| --- | --- | --- | --- | --- | --- |', ...events.map(event => {
             const detail = event.detail || {};
-            const summary = ['role', 'category', 'reason', 'reasonCode', 'gate', 'phase', 'tier', 'withheldReason', 'action', 'elapsedMs', 'attempt', 'score', 'testFile', 'reviewStatus', 'codeHash', 'requested', 'actual', 'engine', 'operatorSetVersion', 'workers']
+            const summary = ['role', 'category', 'reason', 'reasonCode', 'gate', 'phase', 'tier', 'withheldReason', 'action', 'elapsedMs', 'attempt', 'attemptAllowanceMs', 'remainingStageMs', 'score', 'testFile', 'reviewStatus', 'codeHash', 'requested', 'actual', 'engine', 'operatorSetVersion', 'workers']
                 .filter(key => typeof detail[key] === 'string' || typeof detail[key] === 'number')
                 .map(key => `${key}: ${String(detail[key]).slice(0, 600)}`).join('; ')
-                + (Array.isArray(detail.diagnostics) ? '; ' + detail.diagnostics.filter((v: unknown) => typeof v === 'string').join(', ') : '');
+                + (Array.isArray(detail.diagnostics) ? '; ' + detail.diagnostics.filter((v: unknown) => typeof v === 'string').join(', ') : '')
+                + (event.stage === 'model-request' && event.status === 'timing'
+                    ? '; ' + (formatModelRequestTiming(detail) || localize('未知')) : '');
             return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)}${rejectedCandidateLink(directory, detail, runId, sourceHash, loop)} |`;
         }), '', `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
 }

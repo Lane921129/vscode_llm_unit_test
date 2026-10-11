@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, GoogleThinkingSession, normalizeGoogleModelName, resolveGoogleApiKey } from '../llm/cloudApi';
+import { responseSchemaForOutputFormat } from '../llm/customApi';
+import { SEMANTIC_PLAN_LIMITS, SEMANTIC_PLAN_RESPONSE_SCHEMA } from '../roles/semanticAnalyzer';
 
 test('buildGoogleGenerateContentRequest uses the selected model and a key header', () => {
     const request = buildGoogleGenerateContentRequest('gemma-4-31b-it', 'test-key', 'hello');
@@ -44,6 +46,99 @@ test('buildGoogleGenerateContentRequest supports responseSchema without response
     assert.deepStrictEqual(request.body.generationConfig, {
         responseSchema: { type: 'object' }
     });
+});
+
+test('the complete Analyst schema reaches Cloud with supported size and structure constraints intact', () => {
+    const shared = responseSchemaForOutputFormat('semantic-json')!;
+    const before = JSON.stringify(shared);
+    const request = buildGoogleGenerateContentRequest('neutral-model', 'test-key', 'complete analyst evidence', {
+        responseMimeType: 'application/json', responseSchema: shared
+    });
+    const wire = JSON.parse(JSON.stringify(request.body)).generationConfig;
+    assert.strictEqual(wire.responseMimeType, 'application/json');
+    assert.strictEqual(wire.responseJsonSchema, undefined, 'the existing OpenAPI transport is retained');
+    const schema = wire.responseSchema;
+    const inspectSchema = (node: any): void => {
+        assert.ok(!Object.hasOwn(node, 'additionalProperties'), 'unknown OpenAPI Schema fields cannot reach the API');
+        for (const child of Object.values(node.properties || {})) { inspectSchema(child); }
+        if (node.items) { inspectSchema(node.items); }
+        for (const child of node.anyOf || []) { inspectSchema(child); }
+    };
+    inspectSchema(schema);
+    assert.deepStrictEqual(schema.required, ['test_strategy']);
+    assert.deepStrictEqual(Object.keys(schema.properties), ['test_strategy', 'dependency_behaviors', 'unreachable_paths', 'mock_required_for']);
+    const strategy = schema.properties.test_strategy;
+    assert.deepStrictEqual(strategy.required, ['approach', 'input_hints', 'assertion_style', 'mock_needed', 'key_rules']);
+    assert.deepStrictEqual(strategy.properties.approach, { type: 'string', minLength: 1, maxLength: SEMANTIC_PLAN_LIMITS.approachCharacters });
+    assert.strictEqual(strategy.properties.input_hints.maxItems, SEMANTIC_PLAN_LIMITS.inputHints);
+    const hint = strategy.properties.input_hints.items;
+    assert.deepStrictEqual(hint.required, ['param_name', 'strategy', 'boundary_inputs', 'invalid_inputs', 'notes']);
+    for (const kind of ['boundary_inputs', 'invalid_inputs']) {
+        assert.strictEqual(hint.properties[kind].maxItems, SEMANTIC_PLAN_LIMITS.scalarInputsPerKind);
+        assert.strictEqual(hint.properties[kind].items.maxLength, SEMANTIC_PLAN_LIMITS.scalarCharacters);
+    }
+    assert.strictEqual(hint.properties.notes.minLength, 0);
+    assert.strictEqual(strategy.properties.key_rules.maxItems, SEMANTIC_PLAN_LIMITS.keyRules);
+    assert.deepStrictEqual(strategy.properties.assertion_style.enum, ['assertEqual', 'assertRaises', 'mixed']);
+    assert.strictEqual(strategy.properties.mock_needed.type, 'boolean');
+    assert.strictEqual(schema.properties.dependency_behaviors.maxItems, SEMANTIC_PLAN_LIMITS.dependencyBehaviors);
+    assert.strictEqual(schema.properties.unreachable_paths.maxItems, SEMANTIC_PLAN_LIMITS.unreachablePaths);
+    assert.strictEqual(schema.properties.mock_required_for.maxItems, SEMANTIC_PLAN_LIMITS.mockUsePoints);
+    assert.strictEqual(JSON.stringify(shared), before);
+    assert.strictEqual(shared, SEMANTIC_PLAN_RESPONSE_SCHEMA, 'local transport keeps the original shared schema');
+    assert.strictEqual(shared.additionalProperties, false);
+    assert.strictEqual((shared.properties as any).test_strategy.additionalProperties, false);
+});
+
+test('Cloud projection handles frozen nested schemas without modifying the caller contract', () => {
+    const original = { type: 'object', additionalProperties: false, required: ['values'], properties: {
+        values: { type: 'array', maxItems: 2, items: { anyOf: [
+            { type: 'object', additionalProperties: false, required: ['label'], properties: {
+                label: { type: 'string', minLength: 1, maxLength: 80, pattern: '^verified-' }
+            } },
+            { type: 'string', minLength: 0, maxLength: 20 }
+        ] } }
+    } };
+    const freeze = (value: unknown): void => {
+        if (value && typeof value === 'object') {
+            for (const child of Object.values(value)) { freeze(child); }
+            Object.freeze(value);
+        }
+    };
+    freeze(original);
+    const before = JSON.stringify(original);
+    const schema = buildGoogleGenerateContentRequest('neutral-model', 'test-key', 'evidence', {
+        responseMimeType: 'application/json', responseSchema: original
+    }).body.generationConfig!.responseSchema as any;
+    assert.strictEqual(Object.hasOwn(schema, 'additionalProperties'), false);
+    assert.strictEqual(Object.hasOwn(schema.properties.values.items.anyOf[0], 'additionalProperties'), false);
+    assert.deepStrictEqual(schema.properties.values.items.anyOf[0].properties.label,
+        { type: 'string', minLength: 1, maxLength: 80, pattern: '^verified-' });
+    assert.deepStrictEqual(schema.properties.values.items.anyOf[1], { type: 'string', minLength: 0, maxLength: 20 });
+    assert.strictEqual(schema.properties.values.maxItems, 2);
+    assert.strictEqual(JSON.stringify(original), before);
+    assert.notStrictEqual(schema, original);
+    assert.notStrictEqual(schema.properties.values.items.anyOf, original.properties.values.items.anyOf);
+});
+
+test('a data property named additionalProperties survives provider schema projection', () => {
+    const original = { type: 'object', additionalProperties: false, required: ['additionalProperties'], properties: {
+        additionalProperties: { type: 'object', additionalProperties: false, required: ['value'], properties: {
+            value: { type: 'string', minLength: 1, maxLength: 12 }
+        } }
+    }, default: { additionalProperties: 'example data' } };
+    const schema = buildGoogleGenerateContentRequest('neutral-model', 'test-key', 'evidence', {
+        responseSchema: original
+    }).body.generationConfig!.responseSchema as any;
+    assert.strictEqual(Object.hasOwn(schema, 'additionalProperties'), false);
+    assert.ok(Object.hasOwn(schema.properties, 'additionalProperties'));
+    assert.deepStrictEqual(schema.required, ['additionalProperties']);
+    assert.strictEqual(Object.hasOwn(schema.properties.additionalProperties, 'additionalProperties'), false);
+    assert.deepStrictEqual(schema.properties.additionalProperties.properties.value,
+        { type: 'string', minLength: 1, maxLength: 12 });
+    assert.deepStrictEqual(schema.default, { additionalProperties: 'example data' }, 'data literals are not schema nodes');
+    assert.strictEqual(original.additionalProperties, false);
+    assert.strictEqual(original.properties.additionalProperties.additionalProperties, false);
 });
 
 test('buildGoogleGenerateContentRequest supports a deterministic connection-probe temperature', () => {

@@ -103,11 +103,15 @@ import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
 import { roleRequestBudget } from './prompts/roleRequestBudget';
+import { planContextGrowth } from './prompts/contextGrowth';
+import { requalifyLocalRuntime } from './llm/localRuntimeRequalification';
+import { runIsolatedProbe } from './llm/modelProbeExecution';
 import { getCompletedOllamaText } from './llm/ollamaResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
+import { boundedRoleStageDeadline, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent } from './llm/requestTiming';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
 import { planCallerPartitions } from './tier/callerPartitionPlan';
@@ -825,6 +829,8 @@ function mergeBehaviorProbeResults(
 // 所有角色共用同一條請求佇列；即使呼叫端誤觸並行，小模型仍只處理一個提示詞。
 // Every role shares one request queue so a small model receives one prompt at a time.
 const llmRequestQueue = new SerialRequestQueue();
+type RequestTelemetry = RequestTimingEvent & { format?: CustomOutputFormat };
+interface RequestTimingState { transportAttempt: number; queueWaitMs: number | null }
 
 async function requestLlmApi(
     params: AnalysisParams,
@@ -832,12 +838,17 @@ async function requestLlmApi(
     userPrompt: string,
     log: (text: string) => void,
     outputFormat: CustomOutputFormat = 'text',
-    sharedDeadlineAt?: number
+    sharedDeadlineAt?: number,
+    onTiming?: (event: RequestTelemetry) => void
 ): Promise<string> {
-    return llmRequestQueue.run(() => requestLlmApiUnlocked(
-            params, systemPrompt, userPrompt, log, outputFormat,
-            sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(params.timeoutSeconds)
-        ));
+    const queuedAt = Date.now();
+    const deadlineAt = sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(params.timeoutSeconds, queuedAt);
+    return llmRequestQueue.run(() => {
+        const queueTiming = createRequestQueueTiming(queuedAt, Date.now());
+        onTiming?.({ ...queueTiming, format: outputFormat });
+        return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, outputFormat, deadlineAt,
+            onTiming, { transportAttempt: 0, queueWaitMs: queueTiming.queueWaitMs });
+    });
 }
 
 async function requestLlmApiUnlocked(
@@ -847,11 +858,14 @@ async function requestLlmApiUnlocked(
     log: (text: string) => void,
     outputFormat: CustomOutputFormat = 'text',
     /** Structured-output fallback must consume the original request allowance. */
-    deadlineAt = deadlineAtFromTimeoutSeconds(params.timeoutSeconds)
+    deadlineAt = deadlineAtFromTimeoutSeconds(params.timeoutSeconds),
+    onTiming?: (event: RequestTelemetry) => void,
+    timingState: RequestTimingState = { transportAttempt: 0, queueWaitMs: null }
 ): Promise<string> {
     const remainingTimeoutMs = remainingDeadlineMs(deadlineAt);
     if (remainingTimeoutMs <= 0) {
-        throw new Error(localize("API 請求已超過 {0} 秒總時限。", params.timeoutSeconds));
+        throw new AnalysisStageError('timeout', 'model-request', localize("API 請求已超過 {0} 秒總時限。", params.timeoutSeconds),
+            { cause: 'deadline', phase: 'queue', queueWaitMs: timingState.queueWaitMs });
     }
     let apiUrl = "";
     let bodyData = {};
@@ -875,7 +889,7 @@ async function requestLlmApiUnlocked(
             stream: false,
             options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
                 ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}) },
-            ...(expectsJsonObject ? { format: ['review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
+            ...(expectsJsonObject ? { format: ['semantic-json', 'review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
         };
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
@@ -906,6 +920,15 @@ async function requestLlmApiUnlocked(
     throwIfExecutionCancelled();
     const controller = new AbortController();
     let deadlineExpired = false;
+    let requestPhase: 'http-wait' | 'response-read' | 'backoff' = 'http-wait';
+    let attemptTiming: { transportAttempt: number; startedAt: number; headersAt?: number;
+        responseReadStartedAt?: number; responseReadFinishedAt?: number; httpStatus?: number } | undefined;
+    const reportTiming = (outcome: 'completed' | 'http-error' | 'network-error' | 'response-error' | 'timeout' | 'cancelled', ollamaPayload?: unknown) => {
+        if (!attemptTiming) { return; }
+        onTiming?.({ ...createTransportAttemptTiming({ ...attemptTiming, outcome, finishedAt: Date.now(),
+            queueWaitMs: timingState.queueWaitMs, ...(params.envType === 'local' ? { ollamaPayload } : {}) }), format: outputFormat });
+        attemptTiming = undefined;
+    };
     const release = currentExecution()?.onCancel(() => controller.abort());
     const timeoutId = setTimeout(() => {
         deadlineExpired = true;
@@ -914,22 +937,35 @@ async function requestLlmApiUnlocked(
     }, remainingTimeoutMs);
     try {
         const send = (request?: GoogleGenerateContentRequest) => retryTransientProviderRequest(
-            () => {
+            async () => {
                 currentTargetBudget()?.consumeTransportAttempt(estimateTokens(contractedSystemPrompt + '\n' + userPrompt));
-                return fetch(request?.url || apiUrl, {
-                method: 'POST', headers: request?.headers || headers,
-                body: JSON.stringify(request?.body || bodyData), signal: controller.signal
-                });
+                throwIfExecutionCancelled();
+                requestPhase = 'http-wait';
+                attemptTiming = { transportAttempt: ++timingState.transportAttempt, startedAt: Date.now() };
+                try {
+                    const response = await fetch(request?.url || apiUrl, {
+                        method: 'POST', headers: request?.headers || headers,
+                        body: JSON.stringify(request?.body || bodyData), signal: controller.signal
+                    });
+                    attemptTiming.headersAt = Date.now();
+                    attemptTiming.httpStatus = response.status;
+                    if (!response.ok) { reportTiming('http-error'); }
+                    return response;
+                } catch (error) {
+                    reportTiming(isExecutionCancelled() ? 'cancelled'
+                        : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 ? 'timeout' : 'network-error');
+                    throw error;
+                }
             },
             {
                 maxAttempts: GENERATION_RETRY_MAX_ATTEMPTS,
                 isCancelled: () => controller.signal.aborted
                     || isExecutionCancelled()
                     || remainingDeadlineMs(deadlineAt) <= 0,
-                onRetry: event => log(
+                onRetry: event => { requestPhase = 'backoff'; log(
                     localize("[供應商重試] {0}；等待 {1}ms 後重試 ", event.reason, event.delayMs)
                     + `(${event.retryAttempt}/${event.maxAttempts})。`
-                )
+                ); }
             }
         );
         const response = cloudRequest ? await googleThinkingSession.send(cloudRequest, send,
@@ -939,13 +975,17 @@ async function requestLlmApiUnlocked(
             await response.body?.cancel();
             if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
                 log(localize("[格式回退] 供應商拒絕結構化輸出（HTTP {0}），沿原時限改用一般文字輸出。", response.status));
-                return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
+                return requestLlmApiUnlocked(params, contractedSystemPrompt, userPrompt, log, 'text', deadlineAt, onTiming, timingState);
             }
             throw new AnalysisStageError('model-api', 'model-request',
                 localize("API 伺服器錯誤 (HTTP {0})；未記錄供應商回應內容。", response.status), { httpStatus: response.status });
         }
 
+        requestPhase = 'response-read';
+        if (attemptTiming) { attemptTiming.responseReadStartedAt = Date.now(); }
         const resJson = await response.json() as Record<string, unknown>;
+        if (attemptTiming) { attemptTiming.responseReadFinishedAt = Date.now(); }
+        reportTiming('completed', resJson);
 
         let responseText: string;
         if (params.envType === 'local') {
@@ -976,19 +1016,33 @@ async function requestLlmApiUnlocked(
             throw new AnalysisStageError('validation', 'sensitive-output',
                 localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
         }
-        if (!['review-json', 'quality-json'].includes(outputFormat) && !isStructuredResponseUsable(responseText, outputFormat)) {
+        if (!['semantic-json', 'review-json', 'quality-json'].includes(outputFormat) && !isStructuredResponseUsable(responseText, outputFormat)) {
             log(localize("[格式回退] 模型回傳了不完整的結構化內容，改用一般文字輸出重試。"));
-            return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, 'text', deadlineAt);
+            return requestLlmApiUnlocked(params, contractedSystemPrompt, userPrompt, log, 'text', deadlineAt, onTiming, timingState);
         }
         throwIfExecutionCancelled();
         return responseText;
     } catch (error) {
+        const invalidProviderJson = requestPhase === 'response-read' && error instanceof SyntaxError;
+        if (requestPhase === 'response-read' && attemptTiming?.responseReadStartedAt !== undefined
+            && attemptTiming.responseReadFinishedAt === undefined) {
+            attemptTiming.responseReadFinishedAt = Date.now();
+        }
+        reportTiming(isExecutionCancelled() ? 'cancelled'
+            : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 ? 'timeout'
+                : invalidProviderJson ? 'response-error' : 'network-error');
         throwIfExecutionCancelled();
         if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) {
             throw new AnalysisStageError('timeout', 'model-request', localize("API 請求超時 (超過 {0} 秒總時限)", params.timeoutSeconds),
-                { cause: 'deadline', outputFormat, deadlineAt });
+                { cause: 'deadline', outputFormat, deadlineAt, phase: requestPhase,
+                    requestAllowanceMs: remainingTimeoutMs, queueWaitMs: timingState.queueWaitMs });
         }
         if (error instanceof AnalysisStageError) { throw error; }
+        if (invalidProviderJson) {
+            throw new AnalysisStageError('model-format', 'model-response',
+                localize("無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。"),
+                { reasonCode: 'invalid-provider-json', phase: 'response-read' });
+        }
         throw new AnalysisStageError('model-api', 'model-request', localize("API 連線或回應讀取失敗；未記錄供應商回應內容。"));
     } finally {
         clearTimeout(timeoutId);
@@ -1390,7 +1444,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         qualificationRuntime: selectedModelProfile.qualificationRuntime,
         effectiveRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens
     }) : undefined;
-    const requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
+    let requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
         : runtimeContextWindow(selectedModelProfile.paramSize, selectedModelProfile.contextLength);
     const activeModelProfile = { ...selectedModelProfile,
         // Both automatic and explicit requests must use the budget resolved
@@ -1407,7 +1461,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         : modelSnapshot.current.testGenerationReady !== undefined ? false : undefined;
     const currentQualification = !(localRuntime && !localRuntime.ok)
         && qualificationAppliesToRequest(activeModelProfile, qualificationRequest);
-    const roleQualification = currentQualification ? activeModelProfile.roleQualification : undefined;
+    let roleQualification = currentQualification ? activeModelProfile.roleQualification : undefined;
     const writerReady = qualifiedForSelectedModel === true
         ? qualifiedRole('writer', roleQualification, currentQualification, true) : qualifiedForSelectedModel;
     const reviewerReady = qualifiedRole('reviewer', roleQualification, currentQualification);
@@ -1416,11 +1470,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
     let seedPending = mayUseModelAuthoredTests && mode === 'full';
     const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
-    const mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
+    let mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
-        log(localize("[模型能力] 此模型已驗證純 Python unittest 輸出；正式測試、語意分析與突變分流將不強制供應商 JSON schema。"));
+        log(localize('Writer 使用純 Python；Analyst 使用獨立的 JSON 計畫契約。'));
     }
     if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
@@ -1579,7 +1633,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         requestParams: AnalysisParams, system: string, prompt: string,
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
-        sharedDeadlineAt?: number, reservedInputTokens = 0
+        sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string
     ): Promise<string> => {
         if (role === 'writer' && mode === 'full') {
             prompt = seedPending ? buildWriterSeedPrompt(prompt)
@@ -1592,9 +1646,87 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         prompt += importResourcePrompt();
         const contractedSystem = addOutputContract(system, format);
+        const deadline = Math.min(sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(requestParams.timeoutSeconds),
+            currentTargetBudget()?.deadlineAt ?? Infinity);
+        if (requestParams.envType === 'local'
+            && !promptFits(contractedSystem, prompt, roleRequestBudget({ envType: requestParams.envType, mode,
+                role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
+                revisionCurrentCode }).inputBudget, reservedInputTokens)) {
+            // Budget the output cap that the larger request will actually use.
+            // Never grow using an old, smaller seed cap and then send a larger one.
+            const limitBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
+                contextWindow: activeModelProfile.contextLength,
+                inputBudget: contextInputBudget(activeModelProfile.paramSize, activeModelProfile.contextLength),
+                revisionCurrentCode });
+            const growth = planContextGrowth({ currentContextTokens: requestContextWindow,
+                modelContextLimit: activeModelProfile.contextLength,
+                modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
+                estimatedPromptTokens: estimatePromptTokens(contractedSystem + '\n' + prompt),
+                reservedInputTokens, requestOutputTokens: limitBudget.requestOutputTokens });
+            if (growth.status === 'grown') {
+                const previousContextWindow = requestContextWindow;
+                const qualificationStartedAt = Date.now();
+                recordRole('model-runtime', 'context-growth-requested', { role, previousContextWindow,
+                    contextWindow: growth.contextTokens, modelContextLimit: growth.modelContextLimit,
+                    estimatedInputTokens: growth.requiredInputTokens, savedChoicePreserved: true });
+                const requalified = await requalifyLocalRuntime({ numCtx: growth.contextTokens,
+                    includeBugFixer: role === 'bug-fixer' || roleQualification?.bugFixer.state === 'verified',
+                    request: async (probeRole, probeSystem, probePrompt, probeFormat) => {
+                        throwIfExecutionCancelled();
+                        currentTargetBudget()?.assertRemaining();
+                        const probeOutputTokens = Math.min(1024, Math.max(1, Math.ceil(growth.contextTokens * 0.3)));
+                        if (!promptFits(addOutputContract(probeSystem, probeFormat), probePrompt,
+                            growth.contextTokens - probeOutputTokens)) {
+                            throw new AnalysisStageError('validation', 'role-qualification',
+                                localize('新容量無法容納完整角色探針；未沿用舊容量認證。'));
+                        }
+                        currentTargetBudget()?.consumeModelRequest();
+                        recordRole('context-qualification', 'requested', { role: probeRole, contextWindow: growth.contextTokens });
+                        const response = await requestLlmApi({ ...requestParams, requestContextTokens: growth.contextTokens,
+                            requestOutputTokens: probeOutputTokens }, probeSystem, probePrompt, requestLog, probeFormat, deadline,
+                            timing => recordRole('model-request', 'timing', { role: probeRole, phase: 'context-qualification', ...timing }));
+                        if (containsCredential(response, knownSecrets)) {
+                            throw new AnalysisStageError('validation', 'sensitive-output',
+                                localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
+                        }
+                        recordRole('context-qualification', 'completed', { role: probeRole, contextWindow: growth.contextTokens });
+                        return response;
+                    },
+                    executor: code => runIsolatedProbe(code, Math.min(10000, Math.max(1, deadline - Date.now())), pythonExecutable)
+                });
+                throwIfExecutionCancelled();
+                currentTargetBudget()?.assertRemaining();
+                const usable = requalified.roleQualification.writer.state === 'verified'
+                    && (mode !== 'full' || requalified.roleQualification.reviewer.state === 'verified')
+                    && (role !== 'bug-fixer' || requalified.roleQualification.bugFixer.state === 'verified');
+                if (!usable) {
+                    recordRole('model-runtime', 'qualification-failed', { contextWindow: growth.contextTokens,
+                        elapsedMs: Date.now() - qualificationStartedAt,
+                        writer: requalified.roleQualification.writer.state, reviewer: requalified.roleQualification.reviewer.state,
+                        bugFixer: requalified.roleQualification.bugFixer.state });
+                    throw new AnalysisStageError('validation', 'role-qualification',
+                        localize('容量增加後的角色資格未通過；未沿用舊容量認證。'));
+                }
+                requestContextWindow = growth.contextTokens;
+                activeModelProfile.budgetTokens = contextInputBudget(activeModelProfile.paramSize, requestContextWindow);
+                Object.assign(activeModelProfile, requalified);
+                roleQualification = requalified.roleQualification;
+                mayUseModelAuthoredRepair = qualifiedRole('bugFixer', roleQualification, true);
+                journal.knowledge({ roleQualification, runtimeContextTokens: requestContextWindow });
+                recordRole('model-runtime', 'context-grown', { role, previousContextWindow,
+                    contextWindow: requestContextWindow, modelContextLimit: growth.modelContextLimit,
+                    elapsedMs: Date.now() - qualificationStartedAt,
+                    qualificationRuntime: requalified.qualificationRuntime, savedChoicePreserved: true });
+                log(localize('[容量調整] 完整提示超額，num_ctx 由 {0} 提高至 {1}；上限 {2}，已重驗角色，保留已儲存選擇。',
+                    previousContextWindow, requestContextWindow, growth.modelContextLimit));
+            } else {
+                recordRole('model-runtime', 'context-growth-blocked', { role, contextWindow: requestContextWindow,
+                    reasonCode: growth.status === 'blocked' ? growth.reasonCode : 'role-budget-still-exceeded' });
+            }
+        }
         const contextWindow = requestContextWindow;
         const roleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
-            contextWindow, inputBudget: activeModelProfile.budgetTokens });
+            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode });
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
             ...roleBudget, reservedInputTokens,
             contextWindow,
@@ -1609,10 +1741,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         currentTargetBudget()?.consumeModelRequest();
         recordRole('model-request', 'requested', metrics);
         try {
-            const deadline = Math.min(sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(requestParams.timeoutSeconds),
-                currentTargetBudget()?.deadlineAt ?? Infinity);
             const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow,
-                requestOutputTokens: roleBudget.requestOutputTokens }, system, prompt, requestLog, format, deadline);
+                requestOutputTokens: roleBudget.requestOutputTokens }, system, prompt, requestLog, format, deadline,
+                timing => recordRole('model-request', 'timing', { role, ...timing }));
             if (containsCredential(response, knownSecrets)) {
                 throw new AnalysisStageError('validation', 'sensitive-output',
                     localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
@@ -1776,7 +1907,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         : getExecutionWriterPrompt(evidence, code, failure)) + '\n' + (repairEvidence || '');
                     const raw = await requestBudgeted(params, system, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
-                        role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision');
+                        role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision', undefined, 0,
+                        role === 'writer' ? code : undefined);
                     if (role !== 'bug-fixer') { return sanitizeLlmResponse(raw); }
                     const merged = mergeBugFixReplacementDetailed(raw, code, failure);
                     if (merged.diagnostic) {
@@ -1989,7 +2121,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             );
             const parsedSemResult = await semanticWithContractRepair({ prompt: semUsr,
                 targetParameters: Array.isArray(astContext.args) ? astContext.args : undefined,
-                deadlineAt: Math.min(deadlineAtFromTimeoutSeconds(params.timeoutSeconds), currentTargetBudget()?.deadlineAt ?? Infinity),
+                deadlineAt: boundedRoleStageDeadline(params.timeoutSeconds, 2, currentTargetBudget()?.deadlineAt),
+                attemptTimeoutSeconds: params.timeoutSeconds,
                 request: (prompt, deadline, reserve) => requestBudgeted(params, semSys, prompt, log,
                     analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning', deadline, reserve),
                 checkCurrent: () => {
@@ -2323,9 +2456,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
 
                     let subRaw = "";
                     let subGenerationPrompt = subUserPrompt;
+                    let subRevisionCode: string | undefined;
                     for (let retry = 0; retry < 2; retry++) {
                         try {
-                            subRaw = await requestBudgeted(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat);
+                            // An expansion repair must also return the executed baseline;
+                            // its short rejected partition cannot size that full output.
+                            subRaw = await requestBudgeted(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat,
+                                subRevisionCode === undefined ? 'writer' : 'writer-revision', undefined, 0,
+                                seedPending ? subRevisionCode : undefined);
                             const subClean = sanitizeLlmResponse(subRaw);
                             if (subClean) {
                                 const subValidation = await validateGeneratedTestCode(
@@ -2358,6 +2496,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                         moduleName: targetImportModule, functionName: targetFuncName,
                                         evidence: subUserPrompt
                                     });
+                                    if (!seedPending && mode === 'full') {
+                                        subGenerationPrompt = buildWriterExpansionPrompt(subGenerationPrompt,
+                                            checkpoints.executable?.code || bestCode || '', analystTasks);
+                                    }
+                                    subRevisionCode = subClean;
                                 } else {
                                     log(localize("[警告] 呼叫點 {0} 子回覆連續未通過格式／行為觀測證據驗證：{1}", cIdx + 1, subReason));
                                 }
@@ -2392,10 +2535,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             // 若非分治合流模式，或分治合流未取得結果，走標準 Single-Pass 流程
             if (!sanitizedCode) {
                 let generationPrompt = userPrompt;
+                let generationRevisionCode: string | undefined;
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
                     if (llmRetry === 0) {log(localize("[LLM] 正在呼叫模型推論中... (模型: {0})", params.modelName));}
                     try {
-                        rawCode = await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat);
+                        // Expansion repairs retain the full checkpoint as well as this
+                        // candidate, so only a pending seed can size a bounded output.
+                        rawCode = await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat,
+                            generationRevisionCode === undefined ? 'writer' : 'writer-revision', undefined, 0,
+                            seedPending ? generationRevisionCode : undefined);
                     } catch (err: any) {
                         if (err instanceof AnalysisStageError) { throw err; }
                         if (llmRetry === 0) {
@@ -2478,6 +2626,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                     evidence: writerEvidenceBundle
                                 }) : userPrompt
                             });
+                            if (!seedPending && mode === 'full') {
+                                generationPrompt = buildWriterExpansionPrompt(generationPrompt,
+                                    checkpoints.executable?.code || bestCode || '', analystTasks);
+                            }
+                            generationRevisionCode = sanitizedCode;
                             sanitizedCode = '';
                             continue;
                         }
@@ -2616,12 +2769,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     throwIfExecutionCancelled();
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true, facts },
                         Number.MAX_SAFE_INTEGER);
-                    const completeReviewPrompt = prompt && prompt + importResourcePrompt();
-                    if (!completeReviewPrompt || !promptFits(addOutputContract(sys, 'review-json'), completeReviewPrompt, activeModelProfile.budgetTokens)) {
+                    // The shared final gate owns growth and includes all resources,
+                    // corrections and quality evidence before any wire request.
+                    if (!prompt) {
                         recordRole('reviewer', 'budget-exceeded', {
                             role: 'reviewer', inputBudget: activeModelProfile.budgetTokens,
                             contextWindow: requestContextWindow,
-                            estimatedInputTokens: completeReviewPrompt ? estimateTokens(addOutputContract(sys, 'review-json') + '\n' + completeReviewPrompt) : null,
+                            estimatedInputTokens: null,
                             reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
                         return undefined;
                     }
@@ -2668,7 +2822,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
-                        role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision'
+                        role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision', undefined, 0,
+                        role === 'writer' ? code : undefined
                     );
                     if (role === 'bug-fixer') {
                         const merged = mergeBugFixReplacementDetailed(raw, code, failure);

@@ -4,9 +4,12 @@
 
 ## 目前驗收優先順序
 
+- 依使用者 2026-10-12 確認，完整本機角色提示超額時，可在同一執行中動態提高 `num_ctx`，只依該端點／模型已核實的容量上限；未超額不調整，未知上限或到頂後仍無法容納則保存診斷並停止。保留完整來源、候選、觀測、補正與輸出預留，不截斷必要證據。這是下文固定起始容量的窄例外：已儲存選擇與設定快照不改写，本次實際容量另記錄。
+- 新容量不得沿用舊 `num_ctx` 的角色資格；重新執行既有固定公開 Writer／Reviewer 探針及隔離驗證，需用 Bug Fixer 時也核驗該角色。full 必須由新容量 verified Writer／Reviewer 接續，當次 Fixer 也必須 verified；未通過不發正式請求、不借用舊審查。所有資格探針、回退、重試與正式請求共享原邏輯請求／階段／目標期限與計數，不因增容重置。容量與探針耗時只記安全數字，不推定 GPU 記憶體或實際分配。
+
 - 靜態 SQLite schema 提案只接受可保真轉成宣告資源的 literal `CREATE TABLE IF NOT EXISTS`，綁定來源摘要、DDL／連線位置及精確資料庫地址；已有資源可補 schema，來源可證明的新資料庫亦可列入同一批准預覽。不可執行來源 SQL、匯入應用或複製正式資料來補 schema；動態路徑、不支援約束、衝突或跨來源證據不足須列診斷。各 worker 只在批准後建立新資料庫。
 - 靜態路徑可追蹤有界的本機 connection helper 與來源宣告的 ConfigParser fallback；若需空白設定才能選用 fallback，必須把空白設定 fixture 一併列入預覽，不能假設原設定不存在或讀取原設定。已批准的非空設定不被覆蓋。跨來源依據保存 `sourceDependencies` 並納入 plan 身分，每個 worker 再核對；依賴漂移或 frozen 程序不符 `pythonSourceMode` 即拒絕。可保真的明確新增欄位遷移須保留，未知 SQL 不猜。突變若改動設定依賴而無法重綁，維持 ERROR／未評分。
-- 宣告 schema 支援 literal default、欄位／複合 UNIQUE、INTEGER PRIMARY KEY AUTOINCREMENT；禁止丟棄來源約束以求建表成功。Writer 的修訂保留完整目標、setup、觀測及候選，只去除完整且相同的重複片段；超預算記為 prompt-budget 並停止，不因此降低 Tier。Analyst 格式失敗最多補正一次，沿用原期限與證據；傳輸失敗不觸發格式重問。
+- 宣告 schema 支援 literal default、欄位／複合 UNIQUE、INTEGER PRIMARY KEY AUTOINCREMENT；禁止丟棄來源約束以求建表成功。Writer 的修訂保留完整目標、setup、觀測及候選，只去除完整且相同的重複片段；超預算記為 prompt-budget 並停止，不因此降低 Tier。Analyst 格式失敗最多補正一次，沿用起始時分配的分析階段／目標總期限與相同證據；初問與補正各受單次請求額度限制，傳輸失敗不觸發格式重問。
 - 突變 baseline 冷啟動上限為 `max(20 秒, 設定的 mutant 上限)`。只有成功 baseline 才以 `max(設定值, baseline 實測秒數 × 2 + 1 秒)` 校準單 mutant 上限；序列／並行共用相同政策，實際分配仍不超過階段剩餘時間。保存設定值、校準值、每筆分配及耗時；timeout／error 不算 killed 或有效分數。
 - Writer 只接收目標與必要 setup 使用的 import，未知／wildcard 綁定保守保留；重複規則只呈現一次，optional 範例不能填滿輸入預算。完整目標、來源身分、必要 setup、觀測與修訂候選不截斷。AST `dependency-fixture-contract-v1` 只描述來源實際消費的 receiver／return value／context-manager 形狀，不授予 patch 權限、不提供 expected；重綁與未知控制流須保留診斷。初次生成可因預算省略整份形狀圖與圖例，明示仍須讀完整來源；修訂保留整份契約，不切部分路徑或隱藏 unknown。
 - Reviewer 的「Unbound import/name」、「已有 mock assertion 卻指稱缺失」及「替換成完全相同斷言」只在同候選執行與 AST 事實足以反證時標為無效契約；多餘語意主張與新情境需求不由字串規則否定。仍只允許一次契約重審，不刪 finding 冒充批准。
@@ -58,14 +61,17 @@
 - Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；模型不再負責選取技能 ID，舊 required_skills 僅保留讀取相容性；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
 - 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕。正式 full 的初始 Analyst 未回覆或無法通過本地 parser 時停止，不以 AST 技能卡代替 AI 分析後直接進 Writer；AST 仍保留為診斷與技能選擇依據。
 - 供應商支援 JSON Schema 時，Semantic Analyzer 與 mutant triage 必須帶最小任務 schema；供應商 schema 只提供傳輸層結構保證，所有回覆仍需通過本地語意／分流 parser 和 execution quality gates。不得因 schema 成功就把模型候選升格為事實。
-- 已驗證僅支援純 Python unittest 的模型，正式 Writer、Semantic Analyzer 與 mutation triage 都不得再強制供應商 JSON mode／schema；分析與分流仍須以 prompt 的 JSON 契約及本地 schema parser 驗證，不得放寬資料品質 gate。
+- Writer 一律生成純 Python；其資格不決定 Analyst 的 JSON 能力。Analyst 使用獨立的短計畫 JSON 契約，本機 Ollama 帶共用 schema，Custom 保留相容 JSON mode，Cloud 使用共用 schema；明確格式拒絕才可移除服務格式參數，保留相同提示、證據與當次 deadline。HTTP 成功但計畫無效只由 Analyst 補正一次，不暗中改文字再問；本地語義與品質 gate 不放寬。
 - Semantic Analyzer 必須收到受預算限制的目標模組 imports、引用 globals、class bases 與 `__init__` 簽名／賦值；這些只可用於 import、constructor、dependency injection 與 Mock 策略，不能作為回傳值、例外或外部 side effect 的 assertion 事實。
 - AST 提供的 imports、相依與引用 globals 必須遵守所選函式的 Python lexical scope；參數、區域重綁定、巢狀 callable、`nonlocal` 與 comprehension target 不得誤認為模組常數或模組 import 相依。只有可靜態證明未遭 shadow 的模組 binding 才可進入 Prompt。
 - 來源碼中的 `return` 表達式只可提示可能的結果形狀與路徑；除非測試輸入可明確到達 literal return，否則不得把 `return helper(value)`、attribute 或運算式直接轉化為 expected value。精確 assertion 仍須來自可 assertion Dynamic Trace 或同測試控制的 mock side effect。
 - Prompt 詳細程度與 Tier 2 分治策略必須依已探測的參數量、Context 與已解析 Tier 決定；不得以供應商、模型品牌或名稱片段建立白名單／黑名單。
 - 本機輸入預算必須使用當次 wire `num_ctx`，不得按 2B／3B／13B 等參數量另設小上限。明確設定及真正手動保存值優先；自動模式在模型上限已核實時選其一半（向下取整且至少 1），不把舊自動捕捉值或舊資格容量當作手動選擇。上限未知時才沿用保存／合格容量、同模型實際分配／Modelfile `num_ctx` 或保守 fallback。自動選擇是請求設定，不冒稱實際 allocation；兩者與模型上限分開顯示。連線探針與生成請求使用同一選擇，容量變更須重驗各角色，批次維持啟動時快照。使用者可手動修改或保存 0 清除；未知上限不能由 fallback 證明手填值可用。
 - 相同請求內可引用完全相同且完整的 source／setup 欄位，引用位置必須唯一；各相依身分、來源雜湊與觀測不得合併。structured small／large Writer 使用相同完整必要證據投影。初次 seed 可選完整、可重播且無同呼叫衝突的一案，原證據產物保留；結構重試與修訂必須恢復全部原觀測及完整候選，超額仍在傳輸前停止。
-- 本機 full 初次 Writer seed 只生成一個測試，可將輸出保留量上限設為 1,536 tokens（小容量仍保留原約三成）；輸入上限為同一 `num_ctx` 減該保留量，wire 必須同時設定相符 `num_predict`。不增加使用者容量、不按模型名稱特化；其他角色、擴充及修訂保留原政策。輸出因長度中止不可當作完整候選。相同呼叫站 setup 可群組但保留全部位置；相同完整資源 schema 可引用但每個資源保留自己的來源、種子與狀態，不代表共用資料庫或 assertion oracle。
+- 本機初始 Analyst 短計畫輸出上限為 1,024 tokens，full 初次 Writer 單測試 seed 上限為 1,536 tokens；小容量均不超過原三成預留，輸入上限採同一 `num_ctx` 減輸出預留，wire 同步設定 `num_predict`。不增加使用者容量、不按模型名稱特化；其他角色與擴充保留原政策。輸出因長度中止不可當作完整回覆。相同呼叫站 setup 可群組但保留全部位置；相同完整資源 schema 可引用但每個資源保留自己的來源、種子與狀態，不代表共用資料庫或 assertion oracle。
+- local/full Writer 修訂只有顯式提供當次完整候選時，才以 `max(1536, ceil(候選 token 估量 × 1.25) + 256)` 分配輸出 cap；僅低於原預留量時調整輸入及 wire `num_predict`。大候選、未知候選、execution與遠端維持原政策，不從 prompt 或其他checkpoint猜候選。結構及Trace失敗的修訂須正確標為writer-revision，不重新包成初次seed；分區基線與passing案例保持完整。後續擴充的結構／Trace重試另要求保留完整基線，不能只依無效片段縮限輸出，這兩條重試沿用原預留量。這是有界估量，非完成保證，長度中止及全部驗證gate不放寬。
+- Analyst 的初問與最多一次格式補正預先保留兩個使用者單次 API 額度；每次邏輯請求仍不超過該額度，整個階段受啟動時固定的階段／target deadline 限制。HTTP 重試、格式／思考量回退與排隊不得重新取得額度，傳輸失敗或取消不啟動格式補正。舊直接呼叫未指定單次額度仍共用原 deadline。
+- 耗時紀錄只保存固定欄位與安全數值：排隊、每次 HTTP 等待／讀取／總耗時、狀態，以及 Ollama 回報的 load／prompt_eval／eval／total duration、token 數與完成原因。缺值為 unknown／null，不把客戶端等待推定為網路或 GPU 耗時，不保存 provider 原文、憑證或端點；逐輪與失敗報告呈現同次事件。
 - Writer 的輸出契約必須對所有 provider、模型與 Tier 使用相同的純 Python code fence；包括 Tier 3 Scaffold、Tier 4 與 Self-repair。不得依模型名稱插入或移除 `<thinking>` 等分析標籤，以免分析文字混入可執行測試。
 - 產生測試前必須保留必要的語境：目標函式、imports、引用的模組常數、類別與 `__init__`、相依函式、呼叫站與動態追蹤結果。
 - AST 已取得的目標與建構子參數型別註記必須以「輸入形狀提示」完整傳給 Writer、Semantic Analyzer 與 Reviewer；型別註記不得單獨推導回傳值、例外或 assertion oracle。

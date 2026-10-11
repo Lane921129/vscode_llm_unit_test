@@ -39,7 +39,7 @@ test('formal seed wire uses the logged reserve and never validates an output-lim
         requests.push(request);
         assert.equal(request.options.num_ctx, 8192, 'explicit run capacity stays unchanged');
         if (request.roleInstructions.includes('dependency_behaviors')) {
-            assert.equal(request.options.num_predict, undefined, 'Analyst keeps its existing output policy');
+            assert.equal(request.options.num_predict, 1024, 'Analyst uses its own short-plan output cap');
             return new Response(JSON.stringify({ response: JSON.stringify({ dependency_behaviors: [],
                 test_strategy: { approach: 'Exercise increment with the exact verified observed input and result.' } }),
                 done: true, done_reason: 'stop' }), { status: 200 });

@@ -71,6 +71,26 @@ export function normalizeGoogleModelName(modelName: string): string {
     return modelName.trim().replace(/^models\//i, '');
 }
 
+/** responseSchema uses Google's OpenAPI Schema message, which does not accept
+ * JSON Schema's additionalProperties. Keep this projection at the provider
+ * boundary; local schemas and response validation retain their own contract. */
+function googleResponseSchema(schema: Record<string, unknown>): Record<string, unknown> {
+    const isSchema = (value: unknown): value is Record<string, unknown> =>
+        value !== null && typeof value === 'object' && !Array.isArray(value);
+    const projected = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'additionalProperties'));
+    if (isSchema(schema.properties)) {
+        // Property names are application data, including a property literally
+        // named additionalProperties. Only each child schema is projected.
+        projected.properties = Object.fromEntries(Object.entries(schema.properties)
+            .map(([key, value]) => [key, isSchema(value) ? googleResponseSchema(value) : value]));
+    }
+    if (isSchema(schema.items)) { projected.items = googleResponseSchema(schema.items); }
+    if (Array.isArray(schema.anyOf)) {
+        projected.anyOf = schema.anyOf.map(value => isSchema(value) ? googleResponseSchema(value) : value);
+    }
+    return projected;
+}
+
 /**
  * Creates a Gemini API request without putting the API key in the URL.
  * Keeping the key in a header prevents it from appearing in proxy, error, and
@@ -103,7 +123,7 @@ export function buildGoogleGenerateContentRequest(
             ...(options?.responseMimeType || options?.responseSchema || options?.temperature !== undefined || options?.thinkingMode === 'minimal' ? {
                 generationConfig: {
                     ...(options?.responseMimeType ? { responseMimeType: options.responseMimeType } : {}),
-                    ...(options?.responseSchema ? { responseSchema: options.responseSchema } : {}),
+                    ...(options?.responseSchema ? { responseSchema: googleResponseSchema(options.responseSchema) } : {}),
                     ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
                     ...(options?.thinkingMode === 'minimal' ? { thinkingConfig: { thinkingLevel: 'MINIMAL' as const } } : {})
                 }

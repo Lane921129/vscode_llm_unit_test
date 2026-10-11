@@ -35,13 +35,24 @@ test('low-capacity seeds retain their original thirty-percent output allowance',
 });
 
 test('other roles, revisions, expansion, execution and remote providers keep the existing allowance', () => {
-    const roles: BudgetedModelRole[] = ['writer-revision', 'reviewer', 'bug-fixer', 'analyst-planning', 'analyst-quality'];
+    const roles: BudgetedModelRole[] = ['writer-revision', 'reviewer', 'bug-fixer', 'analyst-quality'];
     const cases = [ ...roles.map(role => ({ ...seed, role })), { ...seed, seedPending: false },
         { ...seed, mode: 'execution' as const }, { ...seed, envType: 'cloud' as const },
         { ...seed, envType: 'custom' as const } ];
     for (const input of cases) {
         assert.deepEqual(roleRequestBudget(input), { inputBudget: 5734, reservedOutputTokens: 2458 });
     }
+});
+
+test('Analyst short-plan output cap is independent of Writer phase and model size', () => {
+    for (const seedPending of [true, false]) {
+        assert.deepEqual(roleRequestBudget({ ...seed, role: 'analyst-planning', seedPending }),
+            { inputBudget: 7168, reservedOutputTokens: 1024, requestOutputTokens: 1024 });
+    }
+    assert.deepEqual(roleRequestBudget({ ...seed, role: 'analyst-planning', contextWindow: 2048, inputBudget: 1433 }),
+        { inputBudget: 1433, reservedOutputTokens: 615, requestOutputTokens: 615 });
+    assert.deepEqual(roleRequestBudget({ ...seed, role: 'analyst-planning', envType: 'cloud' }),
+        { inputBudget: 5734, reservedOutputTokens: 2458 });
 });
 
 test('length completion rejects a valid Python prefix without exposing provider content', () => {

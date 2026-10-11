@@ -1,11 +1,10 @@
 /** Instructions are additive to the existing evidence and Python output contract. */
 export function buildWriterSeedPrompt(evidencePrompt: string): string {
     return `${evidencePrompt}\n\nWRITER_SEED_V1\n`
-        + 'Create the smallest complete runnable unittest file: exactly one test method for one evidence-supported case. '
-        + 'Call the real selected target and assert its observed return, exception, or explicitly controlled dependency behavior. '
-        + 'Include every required import and fixture. Prefer one exact verified observation; do not invent an expected value or exception. '
-        + 'Do not enumerate rule names as tests, add speculative edge cases, copy the implementation, or mock the target. '
-        + 'The host must execute this seed successfully before asking for expansion. Return the complete Python test file using the existing output contract.';
+        + 'One verified case, exactly one test method; imports/fixtures; real target call. '
+        + 'Assert observed return/exception or explicitly controlled dependency behavior; do not invent an expected value or exception. '
+        + 'No rule-name/speculative tests, copied source or target mocks. '
+        + 'Host must execute this seed successfully before expansion; existing output contract.';
 }
 
 export function buildWriterExpansionPrompt(evidencePrompt: string, baselineCode: string, gap: string): string {

@@ -118,12 +118,14 @@ test('appends the fixed-fixture probe reply only when qualification fails', () =
     assert.ok(!passed.includes('this reply must not be logged after success'));
 });
 
-test('selectAnalysisResponseFormat handles legacy and normalized python mode identifiers', () => {
+test('Analyst JSON selection is independent of every Writer mode and qualification result', () => {
     const { selectAnalysisResponseFormat, TEST_GEN_MODE_PYTHON, TEST_GEN_MODE_JSON } = require('../llm/modelQualification');
-    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON }), 'text');
-    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'plain-python' }), 'text');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON }), 'json');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'plain-python' }), 'json');
     assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_JSON }), 'json');
     assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: false, testGenerationMode: TEST_GEN_MODE_PYTHON }), 'json');
+    assert.strictEqual(selectAnalysisResponseFormat({}), 'json');
+    assert.strictEqual(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'python' }), 'json');
 });
 
 test('qualifies Reviewer JSON and Bug Fixer method replacement independently', () => {

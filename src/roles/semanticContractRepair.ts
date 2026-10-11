@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { boundedRoleAttemptDeadline } from '../llm/requestTiming';
 import { currentTargetBudget } from '../pipeline/targetBudget';
 import { estimatePromptTokens } from '../prompts/promptBudget';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
@@ -38,7 +39,11 @@ export const SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE = Math.max(estimatePromptTok
 
 interface SemanticContractOptions {
     prompt: string;
+    /** Whole planning stage, including at most one format correction. */
     deadlineAt: number;
+    /** Fresh per-logical-request allowance, always bounded by the original stage
+     * and target deadlines. Omitted for legacy callers with one shared deadline. */
+    attemptTimeoutSeconds?: number;
     targetParameters?: readonly string[];
     request(prompt: string, deadlineAt: number, reservedInputTokens: number): Promise<string>;
     checkCurrent(): void;
@@ -46,11 +51,17 @@ interface SemanticContractOptions {
     now?: () => number;
 }
 
-/** Repair only a returned format failure, keeping the same evidence and absolute deadline. */
+/** Repair only a returned format failure. Evidence and stage/target deadlines
+ * stay fixed; a bounded correction does not inherit the first request's spent
+ * time when the caller has explicitly reserved a two-attempt stage. */
 export async function semanticWithContractRepair(options: SemanticContractOptions): Promise<SemanticAnalysis | undefined> {
     if (!Number.isFinite(options.deadlineAt)) { throw new TypeError('Semantic deadline must be finite'); }
     const deadlineAt = Math.min(options.deadlineAt, currentTargetBudget()?.deadlineAt ?? Infinity);
     const now = options.now || Date.now;
+    if (options.attemptTimeoutSeconds !== undefined) {
+        // Validate before starting any model transport, including expired stages.
+        boundedRoleAttemptDeadline(deadlineAt, options.attemptTimeoutSeconds, now());
+    }
     const check = () => {
         options.checkCurrent();
         currentTargetBudget()?.assertRemaining();
@@ -62,8 +73,12 @@ export async function semanticWithContractRepair(options: SemanticContractOption
     let previousResponseHash: string | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
         check();
+        const requestStartedAt = now();
+        const requestDeadlineAt = options.attemptTimeoutSeconds === undefined ? deadlineAt
+            : boundedRoleAttemptDeadline(deadlineAt, options.attemptTimeoutSeconds, requestStartedAt);
+        const attemptAllowanceMs = Math.max(0, requestDeadlineAt - requestStartedAt);
         // Transport, cancellation and prompt-budget errors propagate; no repair request follows them.
-        const raw = await options.request(prompt, deadlineAt, attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0);
+        const raw = await options.request(prompt, requestDeadlineAt, attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0);
         check();
         const { analysis: normalized, diagnostic } = parseSemanticAnalysisDetailed(raw);
         const scoped = normalized && restrictSemanticInputHintsToTargetParameters(normalized, options.targetParameters);
@@ -72,6 +87,7 @@ export async function semanticWithContractRepair(options: SemanticContractOption
         const responseHash = createHash('sha256').update(raw).digest('hex');
         options.event(parsed ? 'parsed' : 'invalid-response', {
             contractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan, attempt,
+            attemptAllowanceMs, remainingStageMs: Math.max(0, deadlineAt - now()),
             responseHash, responseCharacters: raw.length,
             diagnosticVersion: diagnostic.version, reasonCode, responseShape: diagnostic.responseShape,
             sameResponseAsPrevious: responseHash === previousResponseHash,
@@ -81,7 +97,12 @@ export async function semanticWithContractRepair(options: SemanticContractOption
         previousResponseHash = responseHash;
         if (parsed) { return parsed; }
         if (attempt === 0) {
-            options.event('repair-requested', { contractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan, attempt: 1, reasonCode });
+            const repairStartedAt = now();
+            const repairDeadlineAt = options.attemptTimeoutSeconds === undefined ? deadlineAt
+                : boundedRoleAttemptDeadline(deadlineAt, options.attemptTimeoutSeconds, repairStartedAt);
+            options.event('repair-requested', { contractVersion: ROLE_CONTRACT_VERSIONS.semanticPlan, attempt: 1, reasonCode,
+                attemptAllowanceMs: Math.max(0, repairDeadlineAt - repairStartedAt),
+                remainingStageMs: Math.max(0, deadlineAt - repairStartedAt) });
             prompt = options.prompt + buildSemanticContractRepairSuffix(reasonCode as SemanticAnalysisRejectionCode);
         }
     }

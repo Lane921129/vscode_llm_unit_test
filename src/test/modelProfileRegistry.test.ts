@@ -136,7 +136,7 @@ test('always requests complete unittest files as plain Python across model capab
     assert.strictEqual(selectAnalysisResponseFormat({
         testGenerationReady: true,
         testGenerationMode: '純 Python unittest'
-    }), 'text');
+    }), 'json');
     assert.strictEqual(selectAnalysisResponseFormat({
         testGenerationReady: true,
         testGenerationMode: '結構化 JSON unittest'

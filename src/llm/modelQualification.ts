@@ -80,21 +80,14 @@ export const TEST_GEN_MODE_PYTHON = '純 Python unittest';
 export const TEST_GEN_MODE_JSON = '結構化 JSON unittest';
 
 /**
- * Analyzer and mutant-triage prompts still demand JSON text, but they do not
- * need a provider-level JSON mode.  A model that passed only the plain-Python
- * probe has already shown that its structured request contract is unsuitable,
- * so avoid the guaranteed failed request and let the schema parser validate
- * its ordinary-text reply instead.
+ * Analyst structure is independent of Writer's Python qualification. Only an
+ * explicit provider format rejection establishes that the transport needs a
+ * text fallback; a Writer probe cannot establish that JSON is unsupported.
  */
 export function selectAnalysisResponseFormat(
-    profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
+    _profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
 ): AnalysisResponseFormat {
-    const isPythonOnly = profile.testGenerationMode === TEST_GEN_MODE_PYTHON
-        || profile.testGenerationMode === 'plain-python'
-        || profile.testGenerationMode === 'python';
-    return profile.testGenerationReady === true && isPythonOnly
-        ? 'text'
-        : 'json';
+    return 'json';
 }
 
 function compactLogValue(value: string | undefined, fallback: string): string {

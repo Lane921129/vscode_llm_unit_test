@@ -53,6 +53,90 @@ export interface SemanticAnalysis {
     test_strategy: TestStrategy;     // AI-derived test data strategy for this specific function
 }
 
+/** A short initial test plan, not an exhaustive analysis of every source path.
+ * Limits constrain new transport output; legacy plans remain readable without
+ * truncating source, observations, Python repr or already-recorded guidance. */
+export const SEMANTIC_PLAN_LIMITS = Object.freeze({
+    approachCharacters: 240,
+    inputHints: 2,
+    strategyCharacters: 160,
+    notesCharacters: 120,
+    scalarInputsPerKind: 2,
+    scalarCharacters: 80,
+    keyRules: 3,
+    ruleCharacters: 160,
+    dependencyBehaviors: 1,
+    unreachablePaths: 1,
+    mockUsePoints: 2,
+    detailCharacters: 160
+});
+
+const planText = (maxLength: number, minLength = 1) => ({ type: 'string', minLength, maxLength });
+
+/** Shared by local Ollama and compatible providers; semantic validation is
+ * still performed after decoding and source-bound parameter filtering. */
+export const SEMANTIC_PLAN_RESPONSE_SCHEMA: Record<string, unknown> = {
+    type: 'object', additionalProperties: false, required: ['test_strategy'],
+    properties: {
+        test_strategy: {
+            type: 'object', additionalProperties: false,
+            required: ['approach', 'input_hints', 'assertion_style', 'mock_needed', 'key_rules'],
+            properties: {
+                approach: planText(SEMANTIC_PLAN_LIMITS.approachCharacters),
+                input_hints: {
+                    type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.inputHints,
+                    items: {
+                        type: 'object', additionalProperties: false,
+                        required: ['param_name', 'strategy', 'boundary_inputs', 'invalid_inputs', 'notes'],
+                        properties: {
+                            param_name: planText(160),
+                            strategy: planText(SEMANTIC_PLAN_LIMITS.strategyCharacters),
+                            boundary_inputs: { type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.scalarInputsPerKind,
+                                items: planText(SEMANTIC_PLAN_LIMITS.scalarCharacters) },
+                            invalid_inputs: { type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.scalarInputsPerKind,
+                                items: planText(SEMANTIC_PLAN_LIMITS.scalarCharacters) },
+                            notes: planText(SEMANTIC_PLAN_LIMITS.notesCharacters, 0)
+                        }
+                    }
+                },
+                assertion_style: { type: 'string', enum: ['assertEqual', 'assertRaises', 'mixed'] },
+                mock_needed: { type: 'boolean' },
+                key_rules: { type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.keyRules,
+                    items: planText(SEMANTIC_PLAN_LIMITS.ruleCharacters) }
+            }
+        },
+        dependency_behaviors: {
+            type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.dependencyBehaviors,
+            items: {
+                type: 'object', additionalProperties: false,
+                required: ['name', 'when_caller_passes', 'always_returns', 'can_raise'],
+                properties: {
+                    name: planText(160),
+                    when_caller_passes: planText(SEMANTIC_PLAN_LIMITS.detailCharacters),
+                    always_returns: planText(SEMANTIC_PLAN_LIMITS.detailCharacters),
+                    can_raise: { type: 'array', maxItems: 2, items: planText(160) }
+                }
+            }
+        },
+        unreachable_paths: {
+            type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.unreachablePaths,
+            items: {
+                type: 'object', additionalProperties: false, required: ['condition', 'reason'],
+                properties: { condition: planText(SEMANTIC_PLAN_LIMITS.detailCharacters),
+                    reason: planText(SEMANTIC_PLAN_LIMITS.detailCharacters) }
+            }
+        },
+        mock_required_for: {
+            type: 'array', maxItems: SEMANTIC_PLAN_LIMITS.mockUsePoints,
+            items: {
+                type: 'object', additionalProperties: false, required: ['path', 'mock_target', 'example'],
+                properties: { path: planText(SEMANTIC_PLAN_LIMITS.detailCharacters), mock_target: planText(160),
+                    example: planText(SEMANTIC_PLAN_LIMITS.detailCharacters) }
+            }
+        }
+    }
+};
+
 export interface DependencyEvidenceForPrompt {
     name: string;
     code: string;
@@ -216,16 +300,16 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
 // === System Prompt ===
 
 export function getSemanticAnalyzerSystemPrompt(_legacyRuleSummary?: string): string {
-    return `You are a Python code analyst. Propose source-specific unittest scenarios; the runner selects rules and executes probes. Do not write tests or classify equivalent mutants.
-Return one JSON object. Field contract (descriptions are not response content):
-test_strategy: object with approach (source-specific string), input_hints (array), assertion_style (assertEqual, assertRaises or mixed), mock_needed (boolean), key_rules (source-specific string array).
-Top-level arrays: dependency_behaviors, unreachable_paths, mock_required_for. Keep unsupported arrays empty.
-Array item fields:
-dependency_behaviors: name, when_caller_passes, always_returns (verified Python repr), can_raise (string array).
-unreachable_paths: condition, reason (strings).
-mock_required_for: path, mock_target (source use-point), example (strings).
-input_hints: param_name (selected target parameter), strategy (concrete string), boundary_inputs and invalid_inputs (Python literal string arrays), notes (string).
-A meaningful test_strategy is required, including for zero-parameter functions. Write actual source-specific content, never placeholders or copies of these field descriptions.
+    return `You are a Python code analyst. Plan one initial unittest scenario; the runner selects rules and executes probes. Do not write tests or classify equivalent mutants.
+Return one JSON object. A meaningful test_strategy is required, including for zero-parameter functions, with approach and these fields:
+- approach: one source-specific action, at most ${SEMANTIC_PLAN_LIMITS.approachCharacters} characters.
+- input_hints: at most ${SEMANTIC_PLAN_LIMITS.inputHints} selected-target parameter hints. Each has param_name, strategy (at most ${SEMANTIC_PLAN_LIMITS.strategyCharacters} characters), boundary_inputs and invalid_inputs (each at most ${SEMANTIC_PLAN_LIMITS.scalarInputsPerKind} scalar Python literal strings, each at most ${SEMANTIC_PLAN_LIMITS.scalarCharacters} characters), notes (at most ${SEMANTIC_PLAN_LIMITS.notesCharacters} characters; empty when unnecessary).
+- assertion_style: assertEqual, assertRaises or mixed; mock_needed: boolean; key_rules: at most ${SEMANTIC_PLAN_LIMITS.keyRules} concrete actions, each at most ${SEMANTIC_PLAN_LIMITS.ruleCharacters} characters.
+Optional arrays: dependency_behaviors (at most ${SEMANTIC_PLAN_LIMITS.dependencyBehaviors}), unreachable_paths (at most ${SEMANTIC_PLAN_LIMITS.unreachablePaths}), mock_required_for (at most ${SEMANTIC_PLAN_LIMITS.mockUsePoints}). Omit unnecessary arrays or keep them empty.
+dependency_behaviors items: name, when_caller_passes, always_returns (exact verified Python repr), can_raise (at most 2 exact names).
+unreachable_paths items: condition, reason. mock_required_for items: path, mock_target (source use-point), example (a short action, not code).
+Optional item text is at most ${SEMANTIC_PLAN_LIMITS.detailCharacters} characters per field. If an exact repr or literal cannot fit, omit that suggestion; never truncate or alter evidence.
+Use concrete source-specific actions, never placeholders or copies of field descriptions. Later scenarios belong to the measured quality loop.
 Evidence rules:
 - Source, annotations, setup and caller sites guide bindings and inputs, not output/exception proof. Input hints use only selected target parameters; never name dependency parameters or dependency return keys.
 - Controlled observations support only their exact call and constructor/setup. Preserve Python repr. Blocked/load-error, mutated, truncated, incomplete or unassertable records are diagnostics, not target exceptions or expected values; snapshots stay artifact-only.
@@ -277,7 +361,7 @@ export function getSemanticAnalyzerUserPrompt(
         prompt += '\n';
     }
 
-    prompt += 'Analyze this evidence using the role contract.';
+    prompt += 'Analyze this evidence using the role contract. Keep the plan short: select one useful initial scenario; do not repeat source code, observations or the schema in your reply.';
 
     return prompt;
 }

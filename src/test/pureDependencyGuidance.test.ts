@@ -6,14 +6,23 @@ import { getTestRuleCards, inferTestRuleIdsFromCode } from '../prompts/testRuleL
 for (const strategy of ['small', 'large'] as const) {
     test(`full ${strategy} Writer prefers real pure-library inputs without weakening evidence or boundary isolation`, () => {
         const prompt = getSystemPrompt(1, strategy);
-        assert.match(prompt, /pure standard-library parsing, formatting or calculation, prefer real target calls/);
-        assert.match(prompt, /Imported helpers alone do not require mocks/);
-        assert.match(prompt, /Mock only source-shown external or ambient boundaries when control is needed/);
-        assert.match(prompt, /Never patch immutable built-in class members; replace the owning module binding if necessary/);
-        assert.match(prompt, /Inputs and source expressions do not prove expected values/);
-        assert.match(prompt, /verified-observation or explicit same-test evidence requirements/);
+        if (strategy === 'small') {
+            assert.match(prompt, /Pure stdlib parsing\/formatting\/calculation: real target, source-supported literals/);
+            assert.match(prompt, /helper imports need no mocks/);
+            assert.match(prompt, /Patch external\/ambient source use points only when needed/);
+            assert.match(prompt, /Never patch immutable built-in class members; replace owning module binding/);
+            assert.match(prompt, /Inputs\/source expressions prove no expected values/);
+            assert.match(prompt, /exact Verified Real Execution Results, proven source path or same-test controls/);
+        } else {
+            assert.match(prompt, /pure standard-library parsing, formatting or calculation, prefer real target calls/);
+            assert.match(prompt, /Imported helpers alone do not require mocks/);
+            assert.match(prompt, /Mock only source-shown external or ambient boundaries when control is needed/);
+            assert.match(prompt, /Never patch immutable built-in class members; replace the owning module binding if necessary/);
+            assert.match(prompt, /Inputs and source expressions do not prove expected values/);
+            assert.match(prompt, /verified-observation or explicit same-test evidence requirements/);
+        }
         assert.match(prompt, /Verified Real Execution Results/);
-        assert.match(prompt, strategy === 'small' ? /no direct test network\/file\/shell\/dynamic execution/ : /Use unittest\.mock.*external dependencies/);
+        assert.match(prompt, strategy === 'small' ? /No direct test network\/file\/shell\/dynamic execution/ : /Use unittest\.mock.*external dependencies/);
     });
 }
 

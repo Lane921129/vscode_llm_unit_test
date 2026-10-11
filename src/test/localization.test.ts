@@ -96,7 +96,7 @@ test('English stage, rejection, fallback and repair messages preserve non-passin
             previousTestHash: 'hash', previousTestUnchanged: true };
         assert.doesNotMatch(formatRepairDiagnostic(1, { attempt: 1, diagnostic }), /\p{Script=Han}/u);
         assert.notEqual(presentOutcome({ terminalStatus: 'execution-passed-review-incomplete' }).kind, 'passed');
-        assert.equal(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'plain-python' }), 'text');
+        assert.equal(selectAnalysisResponseFormat({ testGenerationReady: true, testGenerationMode: 'plain-python' }), 'json');
         assert.doesNotMatch(formatModelQualificationLog({ envType: 'local', modelName: 'fixture',
             testGenerationReady: true, testGenerationMode: '純 Python unittest', qualificationVersion: QUALIFICATION_VERSION }), /\p{Script=Han}/u);
         for (const [source, expected] of [['模型產生的程式碼內容為空 (已重試失敗)', 'model-format'],
