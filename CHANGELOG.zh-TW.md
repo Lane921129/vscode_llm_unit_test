@@ -4,6 +4,14 @@
 
 ## 2026-10-11
 
+### CI 後續短路徑與外部引擎相依矩陣補驗
+
+- 推送後的 CI 揭露 Python 3.12／3.13 按 requirements 不安裝 Mutatest，但隔離 seed 回歸仍無條件要求 Mutatest 執行。將內建與外部引擎驗證分為獨立案例，缺少可選引擎時明確略過外部案例，內建隔離驗證照常執行；失敗訊息補上工具擁有的固定診斷欄位。
+- 新增 Ubuntu／Windows 的 Python 3.11 專用工作，依 requirements 正常安裝相依，先強制核驗真實 Mutatest 3.1.0 適配器，再執行外部引擎與隔離資源測試；不以全部略過代表外部引擎通過，也不以 `--no-deps` 繞過相依解析。
+- Python 結果布局原以 `resolve() != absolute()` 判斷連結，誤拒合法 Windows 8.3 名稱，連帶使生成結果未被 caller 掃描排除、匯出與 scorecard 失敗。改以逐層 `lstat` 檢查連結／junction，並在讀 manifest 前拒絕；保留 basename、版本、檔案與來源證據核對。caller 與 scorecard 本體不改。
+- 初始化、突變副本與跨磁碟建議的回歸 fixture 仍使用舊短路徑期待或 mock key，改成已存在來源的真實身分，補確實命中拒絕分支的斷言。角色整合缺少 baseline 時輸出安全的 stage／status 摘要，避免只看到 ENOENT。
+- 真實 Windows 8.3 TEMP 補驗：初始化 Node 22／22；Python 路徑 fixture 27／27、結果布局與 caller／scorecard 27 通過／1 因 symlink 權限略過（真短路徑、junction 與 manifest 讀取前拒絕均實際通過）。可選 Mutatest pipeline 本機 21／21 通過，包含真實外部引擎。主工作區與隔離提交版本的角色完整整合各 1／1 通過；遠端矩陣結果另行核對。
+
 ### CI 路徑一致性、Analyst 模板回聲與角色提示預算
 
 - GitHub 四組 CI 的 Node 階段確實失敗：Windows 的 Node／Python 對既存來源之 8.3 短路徑解析不同，造成執行、突變、品質與初始化證據誤拒；Ubuntu 的歷史 coverage 相容解析則把 Windows 路徑當作一般檔名。新增既存檔案的 native 實體身分工具，跨語言只對已批准來源建立別名；歷史 coverage 只在相容解析處統一分隔符號，不放寬目前執行的來源、摘要或 runId 驗證。

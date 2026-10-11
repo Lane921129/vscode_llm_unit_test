@@ -46,10 +46,12 @@ test('setup results require completed matching checks and propagate batch cancel
         inspectProjectImports: async (scanRoot: string, python: string, selected: ImportCheckTarget[], directory: string,
             rules: ImportFixtureRule[], _log: unknown, boundRoot: string) => {
             scans++;
-            const check: ImportCheck = { root: fs.realpathSync(scanRoot), python, directory,
+            // Real scans report native canonical identities, including Windows 8.3 aliases.
+            const canonicalRoot = fs.realpathSync.native(scanRoot);
+            const check: ImportCheck = { root: canonicalRoot, python, directory,
                 fixtureId: createImportFixturePlan(scanRoot, rules, boundRoot)?.id || null,
                 rows: [...new Set(selected.map(target => target.file))].map(file => ({
-                    file: path.relative(scanRoot, file).replace(/\\/g, '/'), status: 'loaded' })),
+                    file: path.relative(canonicalRoot, fs.realpathSync.native(file)).replace(/\\/g, '/'), status: 'loaded' })),
                 proposedRules: structuredClone(rules), proposedPlan: null, proposals: [] };
             if (propose && scans === 1) {
                 check.proposedRules = [{ file: 'sample.py', mkdir: true }];
@@ -97,7 +99,7 @@ test('setup results require completed matching checks and propagate batch cancel
             const result = await run(controller);
             assert.equal(result.status, 'ready'); assert.equal(result.python, 'fixture-python');
             assert.equal(result.fixtureId, createImportFixturePlan(root, settings.importFixtures, root)!.id);
-            assert.deepEqual(result.targets, targets.map(target => ({ ...target, file: fs.realpathSync(target.file) })));
+            assert.deepEqual(result.targets, targets.map(target => ({ ...target, file: fs.realpathSync.native(target.file) })));
             assert.deepEqual(result.rows, [{ file: 'sample.py', status: 'loaded' }, { file: 'second.py', status: 'loaded' }]);
             assert.equal(reportStatus(result), 'ready'); assert.equal(scans, 1); assert.equal(updates, 0);
         });

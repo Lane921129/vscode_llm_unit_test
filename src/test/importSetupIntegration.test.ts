@@ -65,7 +65,7 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
         assert.equal(updates, 2);
         assert.deepEqual((settings.importFixtures as any[])[0].resources, [{ path: 'must_not_exist', kind: 'directory' }]);
         assert.match((settings.importFixtures as any[])[0].resourceSourceHash, /^[a-f0-9]{64}$/);
-        assert.equal(settings.importFixtureRoot, fs.realpathSync(root));
+        assert.equal(settings.importFixtureRoot, fs.realpathSync.native(root));
         assert.equal(modelCalls, 0);
         assert.equal(fs.readFileSync(file, 'utf8'), source);
         assert.equal(fs.existsSync(path.join(root, 'must_not_exist')), false);

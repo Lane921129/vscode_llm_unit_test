@@ -2,6 +2,20 @@
 import json
 from pathlib import Path
 import re
+import stat
+
+
+def _unlinked_existing_path(path):
+    """Reject traversed links, not legitimate Windows short/long path spellings."""
+    absolute = path.absolute()
+    if '..' in absolute.parts:
+        return False
+    for entry in (*reversed(absolute.parents), absolute):
+        details = entry.lstat()
+        if (stat.S_ISLNK(details.st_mode)
+                or getattr(details, 'st_file_attributes', 0) & 0x400):
+            return False
+    return True
 
 
 def data_directory(root):
@@ -11,8 +25,9 @@ def data_directory(root):
         if (root / 'loop').exists():
             raise ValueError('missing result layout')
         return root
-    if (json.loads((data / 'layout.json').read_text(encoding='utf-8')).get('schemaVersion') != 'function-loops-v1'
-            or data.resolve() != data.absolute()):
+    layout = data / 'layout.json'
+    if (not _unlinked_existing_path(layout)
+            or json.loads(layout.read_text(encoding='utf-8')).get('schemaVersion') != 'function-loops-v1'):
         raise ValueError('invalid result layout')
     return data
 
@@ -35,6 +50,6 @@ def local_artifact(directory, name):
         loop = re.match(r'^loop([1-9]\d*)_', name)
         if loop or re.fullmatch(r'(?:exec\d+_test\.py|(?:invocation|isolation|arithmetic)_\d+\.jsonl?)', name):
             file = root / 'loop' / (loop[1] if loop else '1') / name
-    if file.exists() and (file.resolve() != file.absolute() or not file.is_file()):
+    if file.exists() and (not _unlinked_existing_path(file) or not file.is_file()):
         raise ValueError('invalid artifact path')
     return file

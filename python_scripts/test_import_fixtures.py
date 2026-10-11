@@ -367,7 +367,21 @@ class ResourcePipelineTests(unittest.TestCase):
         self.assertFalse((self.root / 'data').exists(), 'application resources must not be created in the original project')
         return result
 
-    def test_seed_is_fresh_for_preflight_trace_suite_and_both_mutation_engines(self):
+    def test_seed_is_fresh_for_preflight_trace_suite_and_builtin_mutation(self):
+        self._assert_seed_is_fresh_across_pipeline('basic_mutation_runner.py', [])
+
+    def test_seed_is_fresh_for_preflight_trace_suite_and_optional_mutatest(self):
+        checked = self.run_tool('external_mutation_runner.py', ['--probe', 'mutatest'])
+        probe = json.loads(checked.stdout)
+        diagnostic = {key: probe[key] for key in ('error', 'diagnosticCode', 'engine') if key in probe}
+        self.assertEqual(checked.returncode, 0, diagnostic)
+        if not probe.get('supported') and probe.get('diagnosticCode') == 'package-missing':
+            self.skipTest('optional mutatest 3.1.0 is not installed; builtin pipeline is tested independently')
+        self.assertTrue(probe.get('supported'), diagnostic)
+        self.assertEqual(probe.get('engineVersion'), '3.1.0')
+        self._assert_seed_is_fresh_across_pipeline('external_mutation_runner.py', ['mutatest'])
+
+    def _assert_seed_is_fresh_across_pipeline(self, tool, prefix):
         original = self.file.read_bytes()
         loaded = json.loads(self.run_tool('module_preflight.py', payload={
             'file': str(self.file), 'module': 'sample', 'sourceRoot': str(self.root),
@@ -386,18 +400,17 @@ class ResourcePipelineTests(unittest.TestCase):
         result = json.loads(report.read_text(encoding='utf-8'))
         self.assertEqual(result['testsRun'], 2)
         self.assertEqual(result['importFixtures']['resources']['scope'], 'fresh-process')
-        for tool, prefix in [('basic_mutation_runner.py', []), ('external_mutation_runner.py', ['mutatest'])]:
-            with self.subTest(engine=tool):
-                mutated = self.run_tool(tool, [*prefix, self.file, self.tests, 3, 10, 'increment'])
-                self.assertEqual(mutated.returncode, 0, mutated.stderr)
-                result = json.loads(mutated.stdout)
-                self.assertTrue(result['baseline_passed'], result)
-                self.assertGreater(result['counts']['killed'], 0, result)
-                self.assertEqual(result['counts']['error'], 0, result)
-                self.assertEqual(result['baselineImportFixtures']['resources']['planId'], self.plan['id'])
-                for mutant in result['mutants']:
-                    if mutant['status'] in ('KILLED', 'SURVIVED'):
-                        self.assertEqual(mutant['importFixtures']['id'], self.plan['id'])
+        mutated = self.run_tool(tool, [*prefix, self.file, self.tests, 3, 10, 'increment'])
+        result = json.loads(mutated.stdout)
+        diagnostic = {key: result[key] for key in ('error', 'diagnosticCode', 'engine') if key in result}
+        self.assertEqual(mutated.returncode, 0, diagnostic)
+        self.assertTrue(result['baseline_passed'], result)
+        self.assertGreater(result['counts']['killed'], 0, result)
+        self.assertEqual(result['counts']['error'], 0, result)
+        self.assertEqual(result['baselineImportFixtures']['resources']['planId'], self.plan['id'])
+        for mutant in result['mutants']:
+            if mutant['status'] in ('KILLED', 'SURVIVED'):
+                self.assertEqual(mutant['importFixtures']['id'], self.plan['id'])
         self.assertEqual(self.file.read_bytes(), original)
 
     def test_generated_test_direct_resource_access_stays_blocked(self):

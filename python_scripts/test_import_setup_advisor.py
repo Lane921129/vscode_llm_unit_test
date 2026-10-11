@@ -96,11 +96,15 @@ class ImportSetupAdvisorTests(unittest.TestCase):
         source = 'from pathlib import Path\nPath("must_not_exist").mkdir(exist_ok=True)\ndef target(): return 4\n'
         file = self.root / 'cross_drive_candidate_probe.py'
         file.write_text(source, encoding='utf-8')
-        receiver = os.path.normcase(str(self.root / 'must_not_exist'))
+        # Resolve the owned source anchor only. The guarded worker uses its
+        # canonical root even when TEMP contains a Windows 8.3 spelling.
+        receiver = os.path.normcase(str(self.root.resolve() / 'must_not_exist'))
         original_relpath = os.path.relpath
+        intercepted = []
 
         def relative_or_cross_drive(value, anchor=None):
             if os.path.normcase(os.fspath(value)) == receiver:
+                intercepted.append(True)
                 raise ValueError('path is on another drive')
             return original_relpath(value, anchor)
 
@@ -121,6 +125,7 @@ class ImportSetupAdvisorTests(unittest.TestCase):
             self.assertEqual(candidate['file'], file.name)
             self.assertEqual(candidate['line'], 2)
             self.assertEqual(candidate['sourceHash'], hashlib.sha256(file.read_bytes()).hexdigest())
+            self.assertTrue(intercepted, 'the unavailable path conversion must actually be exercised')
             self.assertNotIn('resourcePath', candidate)
             self.assertNotIn('resourceScope', candidate)
             self.assertFalse((self.root / 'must_not_exist').exists())

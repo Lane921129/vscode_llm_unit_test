@@ -298,6 +298,13 @@ class Cases(unittest.TestCase):
                 maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: changedRoot });
             const changedOutput = outputFor(changedRoot);
             const changedKnowledge = JSON.parse(fs.readFileSync(path.join(changedOutput, 'function_knowledge.json'), 'utf8'));
+            assert.ok(fs.existsSync(path.join(changedOutput, 'executable_baseline.json')), JSON.stringify({
+                scenario: changed, terminalStatus: changedKnowledge.terminalStatus,
+                failureStage: changedKnowledge.failureStage, failureCategory: changedKnowledge.failureCategory,
+                stages: fs.readFileSync(path.join(changedOutput, 'role_events.jsonl'), 'utf8').trim().split('\n')
+                    .map(line => JSON.parse(line)).map(event => ({ stage: event.stage, status: event.status,
+                        role: event.detail?.role, category: event.detail?.category }))
+            }));
             const saved = JSON.parse(fs.readFileSync(path.join(changedOutput, 'executable_baseline.json'), 'utf8'));
             assert.equal(changedKnowledge.mutationScore, null);
             assert.equal(fs.existsSync(path.join(changedOutput, 'quality_baseline.json')), false);

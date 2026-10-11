@@ -205,7 +205,7 @@ class MutationImportLayoutTests(unittest.TestCase):
             environment = trial_environment(trial, self.source, copied_test)
         canonical = trial / 'container' / 'project' / 'app.py'
         rebased = json.loads(environment['LLM_UNIT_TEST_IMPORT_FIXTURES'])
-        self.assertEqual([Path(rule['resolvedFile']) for rule in rebased['rules'] if rule.get('resolvedFile')], [canonical])
+        self.assertEqual([Path(rule['resolvedFile']) for rule in rebased['rules'] if rule.get('resolvedFile')], [canonical.resolve()])
         self.tool('generated_test_runner.py', [copied_test.stem], cwd=trial, environment=environment)
         canonical.write_text(self.source_text.replace('return amount + len(INTERNAL) + len(EXTERNAL)',
                                                       'return None'), encoding='utf-8')
@@ -286,8 +286,8 @@ class MutationImportLayoutTests(unittest.TestCase):
                     trial_env = trial_environment(trial, source, copied_test)
                 canonical = trial / 'outer' / 'middle' / 'pkg' / 'app.py'
                 self.assertFalse((trial / 'app.py').exists())
-                self.assertEqual(trial_env['PYTHONPATH'].split(os.pathsep)[:4], [str(trial),
-                    str(canonical.parent), str(canonical.parent.parent), str(canonical.parent.parent.parent)])
+                self.assertEqual(trial_env['PYTHONPATH'].split(os.pathsep)[:4], [str(trial.resolve()),
+                    str(canonical.parent.resolve()), str(canonical.parent.parent.resolve()), str(canonical.parent.parent.parent.resolve())])
                 self.tool('generated_test_runner.py', [copied_test.stem], cwd=trial, environment=trial_env)
                 canonical.write_text(source_text.replace('value + 1', 'value - 1'), encoding='utf-8')
                 completed = subprocess.run([sys.executable, '-B', str(TOOLS / 'generated_test_runner.py'), copied_test.stem],
@@ -365,7 +365,7 @@ class MutationImportLayoutTests(unittest.TestCase):
             environment = trial_environment(trial, self.source, copied_test)
             rebased = json.loads(environment['LLM_UNIT_TEST_IMPORT_FIXTURES'])
             copied_dependency = trial / 'container' / 'project' / 'settings.py'
-            self.assertIn(str(copied_dependency), [rule.get('resolvedFile') for rule in rebased['rules']])
+            self.assertIn(str(copied_dependency.resolve()), [rule.get('resolvedFile') for rule in rebased['rules']])
             copied_dependency.write_text('VALUE = 3\n', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'Mutation fixture dependency changed'):
                 trial_environment(trial, self.source, copied_test)
