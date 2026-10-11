@@ -4,6 +4,14 @@
 
 ## 2026-10-12
 
+### 結果刪除捷徑與車輛三批分析
+
+- 覆蓋率儀表板在「全選」旁新增「刪除所選」，保留底部按鈕；兩者共用同一處理程序，只移除勾選的頁內結果、重設全選並刷新，不刪除磁碟報告。沿用中英文文案，控制列允許窄側欄換行。
+- `vehicle_manageme_2026_10_12_01_00` 為 Codellama 13B、8,192 context 的已取消批次：212 目標中 7 timeout、3 Analyst 格式失敗、1 Writer 結構失敗、1 取消、200 未開始。`_table_columns` 的兩次 Tier 2 回覆使用缺少例外證據的泛用 `assertRaises(Exception)`；兩次 Tier 1 回覆替換受測目標，皆正確拒絕。沒有完成候選執行、Reviewer 或突變量測。
+- `01_13` 在確認來源／目標前約 2.4 秒取消，預期目標為 0，不能當作模型或生成失敗。`01_14` 為 2 Analyst 格式失敗、1 Writer 取消、209 未開始；`_now_text` 的 Writer 提示 6,130／6,656 已送出，約 14.2 秒後取消，沒有回覆，不能指稱 1,536 輸出 cap 截斷。
+- 本次結果環境均未顯示受阻；瓶頸轉為 Analyst 格式、60 秒共用分析與格式補正期限，以及 Writer 的目標 Mock／例外證據。現行 `selectAnalysisResponseFormat` 由 Writer 的純 Python 探針推定 Analyst 使用一般文字，仍要求合法 JSON，角色能力推論需獨立核驗；本次只完成介面改動與根因分析，尚未修訂 Analyst 傳輸、時限或驗證 gate。
+- 驗證：中英文介面及實際 Webview 腳本定向回歸 14／14、TypeScript、lint、生產建置、Webview 語法及差異檢查通過；保存的實驗室報告未修改，未重跑完整 Python／CI／真實模型整批。
+
 ### 車輛批次 Writer 預算與可選屬性 Mock 修復
 
 - `vehicle_manageme_2026_10_11_23_44` 已採 8,192 context，11 次模型請求全部完成；212 目標中 3 失敗、1 取消、208 未開始，沒有完成 Reviewer／突變量測。`_connect`、`_now_text` 的 Analyst 已完成，Writer 的完整提示仍為 6,907／6,714，超過固定 5,734 輸入預算；不是這兩筆模型請求超時，因為 Writer 尚未發送。

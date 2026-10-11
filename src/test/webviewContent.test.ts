@@ -1,7 +1,51 @@
 import * as assert from 'assert';
 import { test } from 'node:test';
+import * as vm from 'node:vm';
 import { getWebviewContent } from '../ui/webviewContent';
 import { setLanguage, t } from '../i18n/core';
+
+test('both result deletion buttons remove only checked dashboard cards in either language', () => {
+    try {
+        for (const language of ['en', 'zh-tw']) {
+            setLanguage(language);
+            const html = getWebviewContent(t);
+            const controls = html.slice(html.indexOf('id="select-all"'), html.indexOf('id="results-count"'));
+            assert.ok(controls.includes('id="btn-delete-selected-top"'));
+            assert.ok(controls.includes(t('ui.batchDeleteSelected')));
+            assert.equal((html.match(/id="btn-delete-selected-top"/g) || []).length, 1);
+            assert.equal((html.match(/id="btn-delete-selected"/g) || []).length, 1);
+            const elements = new Map<string, any>();
+            const handlers = new Map<string, () => void>();
+            const messages: unknown[] = [];
+            for (const match of html.matchAll(/<(?:input|select|button|textarea|p|span)[^>]*\bid="([^"]+)"[^>]*>/g)) {
+                const id = match[1];
+                elements.set(id, { value: '', style: {}, checked: false,
+                    addEventListener: (event: string, handler: () => void) => handlers.set(id + ':' + event, handler) });
+            }
+            elements.get('validation-mode').value = 'full';
+            const context = vm.createContext({ document: { getElementById: (id: string) => elements.get(id) },
+                window: { addEventListener() {} }, acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) }) });
+            vm.runInContext(html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/)![1], context);
+            vm.runInContext('let dashboardRefreshes = 0; renderDashboard = () => dashboardRefreshes++;', context);
+            messages.length = 0;
+            for (const id of ['btn-delete-selected-top', 'btn-delete-selected']) {
+                vm.runInContext('resultsMap.clear(); resultsMap.set("checked", {checked: true}); resultsMap.set("kept", {checked: false});', context);
+                elements.get('select-all').checked = true;
+                const refreshes = vm.runInContext('dashboardRefreshes', context);
+                handlers.get(id + ':click')!();
+                assert.equal(vm.runInContext('resultsMap.has("checked")', context), false);
+                assert.equal(vm.runInContext('resultsMap.has("kept")', context), true);
+                assert.equal(vm.runInContext('resultsMap.size', context), 1);
+                assert.equal(elements.get('select-all').checked, false);
+                assert.equal(vm.runInContext('dashboardRefreshes', context), refreshes + 1);
+                handlers.get(id + ':click')!();
+                assert.equal(vm.runInContext('resultsMap.size', context), 1);
+            }
+            // Deletion stays inside the dashboard; no request to remove saved reports.
+            assert.deepEqual(messages, []);
+        }
+    } finally { setLanguage('zh-tw'); }
+});
 
 test('cloud credential editor has separate name, model, and key inputs and clears them after saving', () => {
     const html = getWebviewContent(key => key);

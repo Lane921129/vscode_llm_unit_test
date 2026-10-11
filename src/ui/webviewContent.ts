@@ -354,10 +354,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             </div>
 
             <!-- ${t('ui.selectAll')}與控制列 -->
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
-                <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
-                    <input type="checkbox" id="select-all" style="margin:0; width:auto;"> ${t('ui.selectAll')}
-                </label>
+            <div style="display:flex; flex-wrap:wrap; gap:4px; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
+                        <input type="checkbox" id="select-all" style="margin:0; width:auto;"> ${t('ui.selectAll')}
+                    </label>
+                    <button type="button" id="btn-delete-selected-top" style="margin:0; width:auto; padding:3px 7px; font-size:11px; background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
+                </div>
                 <span id="results-count" style="font-size:11px; opacity:0.75;">${t('ui.resultCount', 0)}</span>
             </div>
 
@@ -579,7 +582,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             renderDashboard();
         });
 
-        document.getElementById('btn-delete-selected').addEventListener('click', () => {
+        function deleteSelectedResults() {
             const toDelete = [];
             resultsMap.forEach((item, id) => {
                 if (item.checked) toDelete.push(id);
@@ -587,7 +590,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             toDelete.forEach(id => resultsMap.delete(id));
             document.getElementById('select-all').checked = false;
             renderDashboard();
-        });
+        }
+        document.getElementById('btn-delete-selected').addEventListener('click', deleteSelectedResults);
+        document.getElementById('btn-delete-selected-top').addEventListener('click', deleteSelectedResults);
 
 
         window.addEventListener('message', event => {
