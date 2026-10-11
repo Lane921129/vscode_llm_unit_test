@@ -92,7 +92,10 @@ test('formal requests bind context, qualification and whole-file settings to one
         assert.equal(requests.filter(row => row.role === 'writer').length, 2);
         assert.ok(requests.length >= 4 && requests.every(row => row.numCtx === 8192));
         const initialMetrics = events(initial).filter(row => row.stage === 'model-request' && row.status === 'requested');
-        assert.ok(initialMetrics.length >= 4 && initialMetrics.every(row => row.detail.inputBudget === 5734));
+        assert.ok(initialMetrics.length >= 4 && initialMetrics.every(row => row.detail.inputBudget
+            === (row.detail.role === 'writer' ? 6656 : 5734)));
+        assert.ok(initialMetrics.filter(row => row.detail.role === 'writer')
+            .every(row => row.detail.requestOutputTokens === 1536 && row.detail.reservedOutputTokens === 1536));
         assert.equal(setting, 16384);
 
         requests.length = 0;
@@ -115,7 +118,7 @@ test('formal requests bind context, qualification and whole-file settings to one
         await run({ ...params, outputPath: rebound });
         assert.ok(requests.length >= 2 && requests.every(row => row.numCtx === 16384));
         assert.ok(events(rebound).filter(row => row.stage === 'model-request' && row.status === 'requested')
-            .every(row => row.detail.inputBudget === 11468));
+            .every(row => row.detail.inputBudget === (row.detail.role === 'writer' ? 14848 : 11468)));
         requests.length = 0;
 
         for (const [value, known, reason] of [[32769, true, 'runtime-context-exceeds-model-limit'],

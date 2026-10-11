@@ -178,5 +178,28 @@ function renderResourceContext(plan: ImportFixturePlan | undefined, rules: Impor
             records[index] = full;
         }
     }
-    return { context: header + records.join('\n') + suffix, omitted };
+    // References only replace byte-identical complete table schemas after the
+    // row/schema selection and privacy checks. Every resource keeps its own
+    // identity; shared declarations do not mean shared runtime databases.
+    const tables = new Map<string, string>();
+    let reused = false;
+    const rendered = preserveSchemas ? records.map((record, resourceIndex) => {
+        const declaration = JSON.parse(record);
+        if (!Array.isArray(declaration.tables)) { return record; }
+        declaration.tables = declaration.tables.map((table: Record<string, unknown>, tableIndex: number) => {
+            const { rows, rowCount, rowsStatus, ...schema } = table;
+            const serialized = JSON.stringify(schema);
+            const previous = tables.get(serialized);
+            const reference = { name: table.name, same_complete_schema_as: previous,
+                rowCount, rowsStatus, ...(rows !== undefined ? { rows } : {}) };
+            if (previous && JSON.stringify(reference).length < JSON.stringify(table).length) {
+                reused = true; return reference;
+            }
+            tables.set(serialized, `resource[${resourceIndex + 1}].tables[${tableIndex}]`);
+            return table;
+        });
+        return JSON.stringify(declaration);
+    }) : records;
+    const referenceNote = reused ? '\nsame_complete_schema_as reuses name/columns/constraints at the earlier resource number (1-based) and table index (0-based). Keep each record\'s own rows/status; resources remain separate and fresh. Setup is not an output oracle.\n' : '';
+    return { context: header + rendered.join('\n') + referenceNote + suffix, omitted };
 }

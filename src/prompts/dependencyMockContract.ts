@@ -8,6 +8,14 @@ export const TEST_IMPORT_GUIDANCE = 'Import test helpers (patch/Mock aliases) in
     + 'Use explicit target imports, never wildcard imports: underscore-prefixed targets are not imported by *. '
     + 'Patch the binding read by the target, preserving import aliases; never patch the selected target or its owner class.';
 
+/** Conditional setup guidance, not evidence that an arbitrary attribute exists or may be patched. */
+export const OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE = "For a source-proven optional getattr(owner, 'name', default), the attribute may be absent. "
+    + "Use scoped patch.object(actual_owner, 'name', controlled_value, create=True) only for that exact non-target use point; "
+    + 'retain the absent/default case and restore the original owner and attribute existence/value. '
+    + 'Do not invent APIs, patch the target/class, hide target AttributeError, or infer expected outputs from this setup. '
+    + 'Source-location names such as __file__ belong to the target module, not the generated test. '
+    + 'Control source-shown path conversions at their exact use points with explicit mocks; never run test-side Path.resolve() or file operations to compute expected values.';
+
 const TOPOLOGY_LEGEND = 'sourceConsumption steps: return_value = preceding call result; member = attribute; context-enter = source-proven with only. '
     + 'Keep each recorded receiver; never add a return_value or __enter__ layer. Unknown steps remain unknown.';
 
@@ -66,6 +74,12 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + 'patching target_module.<parameter>. An independent source-proven global lookup may justify a module patch. '
         + 'Do not infer fixture shapes or expected outputs from parameter names.\n' : '';
     if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return parameterSetup; }
+    // Conservative prompt relevance only; identifiers in source strings can
+    // retain extra guidance but never authorize a patch or an assertion.
+    const setupSource = [context?.code || '', JSON.stringify(context?.class_context || null),
+        JSON.stringify(context?.referenced_globals || []), ...calls].join('\n').normalize('NFKC');
+    const optionalGuidance = /\b(?:getattr|hasattr|__file__)\b/u.test(setupSource)
+        ? OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE + ' ' : '';
     return parameterSetup + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
         + JSON.stringify({ targetModule: module, imports: bindings, sourceCalls: calls,
             ...(topology ? { sourceConsumption: topology } : {}),
@@ -75,6 +89,7 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + (allowedMockTargets ? 'Supplied use points are setup hints, not an exhaustive whitelist; verify every patch against the source binding. ' : 'No patch list was supplied; source imports alone do not prove a patch is allowed. ')
         + (topology ? TOPOLOGY_LEGEND + ' '
             : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
+        + optionalGuidance
         + 'A configured mock alone is not an assertion: assert the real target result or the source-shown dependency call with controlled arguments.';
 }
 

@@ -1,5 +1,6 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '模型回覆達到輸出上限而未完成；未保存或執行截斷內容。': 'The model response reached its output limit before completion; truncated content was neither saved nor executed.',
     'Context 必須為 0（自動）或正整數。': 'Context must be 0 (automatic) or a positive integer.',
     '無法確認模型的 Context 上限，不能使用明確指定的 Context。': 'The model context limit could not be verified, so an explicit context cannot be used.',
     '指定的 Context 超過模型回報的上限。': 'The requested context exceeds the limit reported by the model.',

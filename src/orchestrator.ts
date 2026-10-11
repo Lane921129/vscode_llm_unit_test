@@ -102,6 +102,8 @@ import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
+import { roleRequestBudget } from './prompts/roleRequestBudget';
+import { getCompletedOllamaText } from './llm/ollamaResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
@@ -332,6 +334,8 @@ interface AnalysisParams {
     pythonExecutable?: string;
     /** Effective runner-owned context resolved from the immutable run snapshot. */
     requestContextTokens?: number;
+    /** Role-owned output cap paired with the final input budget; local transport only. */
+    requestOutputTokens?: number;
     /** Internal batch inventory; never serialized with provider credentials. */
     batchJournal?: BatchJournal;
     batchTargetId?: number;
@@ -869,7 +873,8 @@ async function requestLlmApiUnlocked(
             model: params.modelName,
             ...buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt),
             stream: false,
-            options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}) },
+            options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
+                ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}) },
             ...(expectsJsonObject ? { format: ['review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
         };
     } else if (params.envType === 'custom') {
@@ -944,7 +949,7 @@ async function requestLlmApiUnlocked(
 
         let responseText: string;
         if (params.envType === 'local') {
-            responseText = (resJson as { response?: string }).response || "";
+            responseText = getCompletedOllamaText(resJson, params.requestOutputTokens);
         } else if (params.envType === 'custom') {
             const customText = getCustomChatCompletionText(resJson);
             if (customText) {
@@ -1588,12 +1593,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         prompt += importResourcePrompt();
         const contractedSystem = addOutputContract(system, format);
         const contextWindow = requestContextWindow;
+        const roleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
+            contextWindow, inputBudget: activeModelProfile.budgetTokens });
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
-            inputBudget: activeModelProfile.budgetTokens, reservedInputTokens,
+            ...roleBudget, reservedInputTokens,
             contextWindow,
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
-        if (!promptFits(contractedSystem, prompt, activeModelProfile.budgetTokens, reservedInputTokens)) {
+        if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, reservedInputTokens)) {
             recordRole('model-request', 'budget-exceeded', metrics);
             throw new AnalysisStageError('validation', 'prompt-budget',
                 localize("完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。"), metrics);
@@ -1604,7 +1611,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         try {
             const deadline = Math.min(sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(requestParams.timeoutSeconds),
                 currentTargetBudget()?.deadlineAt ?? Infinity);
-            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow }, system, prompt, requestLog, format, deadline);
+            const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow,
+                requestOutputTokens: roleBudget.requestOutputTokens }, system, prompt, requestLog, format, deadline);
             if (containsCredential(response, knownSecrets)) {
                 throw new AnalysisStageError('validation', 'sensitive-output',
                     localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
@@ -2171,7 +2179,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const focusContext = '';
         const phasePrompt = seedPending ? buildWriterSeedPrompt('')
             : buildWriterExpansionPrompt('', checkpoints.executable?.code || bestCode || '', analystTasks);
-        const generationBudget = Math.max(1, activeModelProfile.budgetTokens
+        const generationRoleBudget = roleRequestBudget({ envType: params.envType, mode, role: 'writer', seedPending,
+            contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens });
+        const generationBudget = Math.max(1, generationRoleBudget.inputBudget
             - estimateTokens(addOutputContract(systemPrompt, testGenerationResponseFormat))
             - estimateTokens(phasePrompt) - estimateTokens(qualityObservationEvidence)
             - estimateTokens(numericEvidencePrompt()) - estimateTokens(importResourcePrompt()));
@@ -2195,7 +2205,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             writerEvidenceBundle
         );
         const estimatedTokens = estimateTokens(systemPrompt + userPrompt);
-        log(localize("[Budget] Prompt 估算：{0} / {1} tokens (模型: {2}, Context: {3})", estimatedTokens.toLocaleString(), activeModelProfile.budgetTokens.toLocaleString(), activeModelProfile.paramSize, requestContextWindow.toLocaleString()));
+        log(localize("[Budget] Prompt 估算：{0} / {1} tokens (模型: {2}, Context: {3})", estimatedTokens.toLocaleString(), generationRoleBudget.inputBudget.toLocaleString(), activeModelProfile.paramSize, requestContextWindow.toLocaleString()));
 
 
         let rawCode = ""; // 宣告在外層 try 前面，讓 catch 也能存取

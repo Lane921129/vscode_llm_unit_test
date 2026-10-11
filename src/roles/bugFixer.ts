@@ -7,7 +7,7 @@ import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } from '../pipeline/repairDiagnostics';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, missingNameRepairGuidance, relevantSourceImports, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, missingNameRepairGuidance, OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE, relevantSourceImports, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { callerForPrompt } from '../pipeline/probeInputs';
 import { createPromptContextReferences } from '../prompts/compactWriterContext';
 
@@ -34,6 +34,7 @@ CONTRACT:${isolatedResourceSystemRule()}
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
 - ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
 - ${TEST_IMPORT_GUIDANCE}
+- ${OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE}
 - For async with client.method(...), use MagicMock for the unawaited method returning a context manager, and AsyncMock for __aenter__/__aexit__ or awaited resource methods. Configuring __aenter__ on an AsyncMock return_value does not fix calling that AsyncMock: the call still returns a coroutine.
 - Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. For a failed assertion, check the concrete inputs, units, arithmetic, rounding and returned fields against that evidence. Correct unsupported expectations; actual output alone is not proof of correctness. Never call the target to compute the expected value or duplicate its implementation as an oracle.
 - Make a substantive change to the failing method. Do not return it unchanged or weaken/remove assertions, use skip/expectedFailure, swallow exceptions, or mock the target to make it pass. If evidence does not justify a change, do not invent one.

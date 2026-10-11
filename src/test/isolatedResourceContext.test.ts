@@ -221,7 +221,18 @@ function projectedFixture(operation: (value: { root: string; plan: ImportFixture
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-const resourceRecords = (context: string) => context.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+const resourceRecords = (context: string) => {
+    const records = context.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+    return records.map(record => ({ ...record, ...(Array.isArray(record.tables) ? { tables: record.tables.map((table: any) => {
+        if (!table.same_complete_schema_as) { return table; }
+        const match = /^resource\[(\d+)\]\.tables\[(\d+)\]$/.exec(table.same_complete_schema_as)!;
+        const referenced = records[Number(match[1]) - 1].tables[Number(match[2])];
+        assert.equal(referenced.same_complete_schema_as, undefined);
+        const { rows: _rows, rowCount: _count, rowsStatus: _status, ...schema } = referenced;
+        const { same_complete_schema_as: _reference, ...local } = table;
+        return { ...schema, ...local };
+    }) } : {}) }));
+};
 
 test('verified loaded origins project whole related schema without changing the approved runtime plan', () => projectedFixture(({ plan, evidence }) => {
     const before = JSON.stringify(plan);

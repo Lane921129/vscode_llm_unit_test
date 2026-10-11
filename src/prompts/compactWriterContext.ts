@@ -69,6 +69,9 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
     const dependencies: any[] = context.dependencyContexts || [];
     const scenario = selectWriterScenario(context.traceResult, input.scenarioCaseIds);
     const references = createPromptContextReferences();
+    const callers = groupCallerSetupsForPrompt(context.callerContexts);
+    const callerNote = callers.some(caller => Array.isArray(caller.call_sites))
+        ? '; call_sites share identical projected setup, not execution results' : '';
     const sections = [
         (revision ? 'writer-revision-context-v1' : COMPACT_WRITER_VERSION) + ' (metadata, never an import)',
         '=== WRITER EVIDENCE BUNDLE V3 ===',
@@ -79,10 +82,10 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + `Deterministically selected test rules: ${input.evidence.ruleSelection.ids.join(', ') || 'none'}\n`
             + 'Test-generation rules constrain test construction. They are not evidence of a return value or exception.',
         `TARGET SOURCE (read-only, not an output oracle):\n\`\`\`python\n${input.source}\n\`\`\``,
-        'SETUP FACTS (source only; caller values are input candidates, not expected outputs):\n' + JSON.stringify(references.setup({
+        `SETUP FACTS (source only; caller values are input candidates, not expected outputs${callerNote}):\n` + JSON.stringify(references.setup({
             constructor: context.class_context || null, property: context.property_context || null,
             globals: context.referenced_globals || [],
-            callers: (context.callerContexts || []).map(callerForPrompt), conditions: context.condition_facts || []
+            callers, conditions: context.condition_facts || []
         }, 'SETUP FACTS')),
         'FIXTURE CHECK: Import unittest and test helpers explicitly in test scope; never use wildcard target imports. '
             + 'Arrange constructor inputs and per-case state. Dependency returns are not target returns.',
@@ -146,6 +149,24 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
         append('OPTIONAL ANALYST HYPOTHESES (unverified; never an assertion oracle):\n' + JSON.stringify(input.evidence.semanticPlan.hypotheses));
     }
     return sections.join('\n\n');
+}
+
+/** Share identical projected input/setup facts, retaining every source site.
+ * This is transport grouping, not proof of equivalent calls or an oracle. */
+export function groupCallerSetupsForPrompt(callers: any[] = []): Record<string, unknown>[] {
+    const projected = callers.map(callerForPrompt);
+    const groups = new Map<string, { facts: Record<string, unknown>; sites: Record<string, unknown>[] }>();
+    for (const caller of projected) {
+        const { caller_file, caller_func, line, ...facts } = caller;
+        const site = Object.fromEntries(Object.entries({ caller_file, caller_func, line })
+            .filter(([, value]) => value !== undefined));
+        const key = JSON.stringify(facts);
+        const group = groups.get(key);
+        if (group) { group.sites.push(site); }
+        else { groups.set(key, { facts, sites: [site] }); }
+    }
+    if (groups.size === projected.length) { return projected; }
+    return [...groups.values()].map(({ facts, sites }) => ({ ...facts, call_sites: sites }));
 }
 
 /** Preserve every selected constraint, but do not repeat identical guidance. */
