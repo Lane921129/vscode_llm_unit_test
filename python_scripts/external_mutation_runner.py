@@ -18,7 +18,7 @@ from basic_mutation_runner import find_target_scope, mutation_code_change, run_m
 
 
 VERIFIED_MUTATEST_VERSION = '3.1.0'
-MUTATEST_OPERATOR_VERSION = 'mutatest-ast-3.1.0-v1'
+MUTATEST_OPERATOR_VERSION = 'mutatest-ast-3.1.0-v2'
 PROBE_SCHEMA_VERSION = 'external-mutation-probe-v1'
 
 
@@ -62,7 +62,31 @@ def mutatest_candidates(tree, scope, source_hash, scope_name, scope_version):
     if scope is None or (not function_scope and scope is not tree):
         raise AdapterUnavailable('invalid-target-scope')
 
-    class BodyTransformer(external_transformer):
+    class ModernIndex(ast.AST):
+        """Temporary pre-3.9 Index shape consumed only by Mutatest's visitor."""
+        _fields = ('value',)
+        _attributes = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
+
+        def __init__(self, value):
+            self.value = value
+
+    class CompatibleTransformer(external_transformer):
+        def visit_Subscript(self, node):
+            # Python 3.9 removed Index wrappers. Reuse Mutatest's actual
+            # discovery/replacement rules rather than inventing another engine.
+            value = node.slice
+            integer = isinstance(value, ast.Constant) and type(value.value) is int
+            negative = (isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.USub)
+                        and isinstance(value.operand, ast.Constant)
+                        and type(value.operand.value) is int)
+            if integer or negative:
+                legacy_index = ast.copy_location(ModernIndex(value), value)
+                replacement = external_transformer.visit_Index(self, legacy_index)
+                if replacement is not legacy_index:
+                    node.slice = replacement
+            return super().visit_Subscript(node)
+
+    class BodyTransformer(CompatibleTransformer):
         def visit_FunctionDef(self, node):
             return node
 
@@ -70,7 +94,7 @@ def mutatest_candidates(tree, scope, source_hash, scope_name, scope_version):
         visit_ClassDef = visit_FunctionDef
         visit_Lambda = visit_FunctionDef
 
-    transformer_type = BodyTransformer if function_scope else external_transformer
+    transformer_type = BodyTransformer if function_scope else CompatibleTransformer
     body_tree = ast.Module(body=copy.deepcopy(scope.body), type_ignores=[]) if function_scope else copy.deepcopy(tree)
     collector = transformer_type(readonly=True)
     collector.visit(copy.deepcopy(body_tree))
@@ -165,6 +189,18 @@ def probe_engine(engine):
         records = [record for record, _ in output['candidates']]
         if (len(records) != 6 or {r['to'] for r in records} != {'Sub', 'Mult', 'Div', 'FloorDiv', 'Mod', 'Pow'}
                 or len({r['id'] for r in records}) != 6):
+            raise AdapterUnavailable('self-check-failed')
+        source = 'def index_probe(values):\n    return values[0], values[2], values[-1]\n'
+        tree = ast.parse(source)
+        output = mutatest_candidates(tree, tree.body[0], hashlib.sha256(source.encode()).hexdigest(),
+                                     'index_probe', 'selected-function-body-v1')
+        index_records = [record for record, _ in output['candidates']]
+        expected = {('Index_NumZero', 'Index_NumPos'), ('Index_NumZero', 'Index_NumNeg'),
+                    ('Index_NumPos', 'Index_NumZero'), ('Index_NumPos', 'Index_NumNeg'),
+                    ('Index_NumNeg', 'Index_NumZero'), ('Index_NumNeg', 'Index_NumPos')}
+        if (len(index_records) != 6 or any(r['kind'] != 'Index' for r in index_records)
+                or {(r['from'], r['to']) for r in index_records} != expected
+                or len({r['id'] for r in index_records}) != 6):
             raise AdapterUnavailable('self-check-failed')
     except AdapterUnavailable as error:
         result['diagnosticCode'] = error.code

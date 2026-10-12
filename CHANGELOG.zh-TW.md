@@ -4,6 +4,19 @@
 
 ## 2026-10-12
 
+### 車輛增容政策、批次資格重用、Writer 恢復與 Mutatest 索引適配
+
+- 五批實驗室結果分流：`all_test_03_55` 與 `vehicle_04_00` 停在不同根的初始化；`import_check_20-01` 最後仍有 WebSpider notifier 網路初始化阻擋，`import_check_20-04` 的內層車輛根7模組全載入。`vehicle_04_04` 的212目標全結束但0完整通過；不能把模組 ready、批次 completed 或保存基線當通過。
+- 04_04 的86次增容都取得 Writer verified、Reviewer unverified；初始手動 Tier 2 允許嘗試，增容卻對所有角色硬套 verified Reviewer，造成決策不一致。修正為 Auto/full 保持新 Writer／Reviewer verified，手動 Tier 只依當次角色與原嘗試政策；正式候選的同雜湊審查、工具執行與品質門檻不變。
+- `RuntimeQualificationSession`／`batchRuntimeQualification.ts` 在同 execution 重用同端點、模型、容量、資格版本、Python、來源集合與 fixture 的完整資格判定，下一目標可沿用本批次容量，不寫回偏好、不跨批次。来源、已載入相依或 Python／venv 設定漂移清除；新的成功預檢也不能覆寫舊相依摘要、復活過期資格。timeout／取消／環境不可用不快取為模型能力失敗。資格請求納入批次總數，分列 formal／qualification／transport。
+- Reviewer 公開資格探針使用正式 `review-v7` schema／`review-json`，資格版本升為 `python-unittest-v8`；診斷只保存固定原因及結構統計。真隔離探針分開 passed／failed／unavailable，最多30秒且共用原期限。錯誤的既有 unittest harness 指控只有在同候選 AST 與真執行足以反證時才要求一次重審，不刪 finding 冒充批准。
+- 04_04 的38筆 Writer 長度中止不是 API timeout。Local Writer／完整修訂只學習當次確切輸出 cap，最多重送同完整提示一次；output reserve／wire 成對，必要時依已核實上限增容，原 deadline／target counters 不重置，截斷前綴不保存或執行。
+- Trace 預檢成功耗時由宿主量測，預先分配 planning／第一次案例重載及 cleanup，上限60秒且受原目標剩餘限制；未知保持原5／12／20秒，重試不續期限。現代 Python 整數 subscript 由 Mutatest 原生 Index 算子產生，版本 `mutatest-ast-3.1.0-v2`；算術及索引自檢皆通過才允許執行，歷史v1仍可讀，零候選仍不是100%。
+- 真實本機 Qwen 3B 初輪三目標：正式HTTP28／28、增容資格4／4完成，沒有timeout／length；初始公開資格另外3次。`_now_text` 真增容8,192→10,240→11,264，新容量 Writer／Reviewer皆verified，執行、正式審查及兩次builtin突變均完成；保留候選行覆蓋100%、突變1／3（33.33%），低於80%。get_app_dir仍有Mock／Path遮蔽與重複候選；_connect仍有connect參數斷言／修復包裝與重複。初輪0／3完整達標，來源、相依、設定及SecretStorage不變、owned資源回收；不沿用上次1／3，也不代表實驗室13B或212目標驗收。
+- `_now_text` 的兩個格式字串突變存活，原因是測試把整個 `Mock.strftime` 回傳固定為日期字串。依AST證明的 clock receiver chain 加入具體 datetime/date fixture 指引，保留真正 formatter 執行；不 patch 不可變成員或目標。中性真builtin回歸比較同一來源，固定formatter Mock時兩筆string mutants存活，具體datetime fixture時三筆皆被實際測試殺死。此證據不等於應用整批已通過。
+- 最終 formatter 版本另建新目錄 WyiE0n，真實 Qwen 3B／8,192／full Tier 2 單目標 `_now_text` 完整通過：行覆蓋1／1、builtin突變3／3 KILLED，第一候選執行、Reviewer、突變即完成；正式3／3 HTTP200，沒有超時、補正或拒絕候選。目標流程38.864秒；包含fresh公開資格及等待總102.484秒。保留候選使用真datetime，沒有Mock formatter固定回傳；6份測試及5份來源摘要與正式批准核驗一致，來源／相依／編譯副本不變，SecretStorage及設定寫入0、暫存已回收。這是最終版單項1／1，不改寫前述初輪0／3；get_app_dir、_connect及實驗室Codellama13B／212目標尚未重新驗收。
+- 待提交獨立副本主要定向Node回歸137／137；最後新增相依重載漂移及formatter實測後，受影響5檔41／41通過（含新增2案例、測試連線12案例；主要去重總151）。相關Python五suite58／58；TypeScript、lint、生產建置、Webview語法、秘密與可達歷史掃描、差異格式檢查通過。測試連線fixture改為核對正式review-json schema／完整wire，保留原容量及資格斷言。原17檔未提交修改保留並排除於本次提交。依可執行版本優先政策未跑全套Python／CI，固定回覆回歸不代替真模型驗收。
+
 ### Analyst 獨立短計畫、補正額度與耗時證據
 
 - 最終提交副本 E 相關回歸26檔213／213通過（約158.3秒），含完整來源增容、新容量公開角色探針、Reviewer資格失敗禁止沿用舊資格、同候選審查與真實builtin突變100%、原deadline及wire預算、短計畫、長修訂、分區保留及Cloud schema傳輸投影。首輪212／213的唯一失敗是新增Custom回歸仍期待Google保留不支援的schema鍵，改為核对支援限制與共用schema未被修改後全過；Cloud／Custom另定向24／24通過。TypeScript、lint、生產建置、Webview語法、密鑰與可達歷史掃描、差異檢查通過。依使用者可執行版本優先指示，本次不重跑全套Python或CI。

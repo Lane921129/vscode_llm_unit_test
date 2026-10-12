@@ -6,6 +6,8 @@ import { BUG_FIXER_QUALIFICATION_PROMPT, REVIEWER_QUALIFICATION_PROMPT } from '.
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { getRuntimeContextPreference, RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
+import { buildOllamaRoleQualificationProbe } from '../llm/ollamaCapability';
+import { responseSchemaForOutputFormat } from '../llm/customApi';
 
 const writerResponse = `import unittest
 class TestCases(unittest.TestCase):
@@ -72,8 +74,11 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
                     assert.equal(body.format, undefined);
                     onWriter?.();
                     response = writerResponse;
-                } else if (body.prompt === '\n' + REVIEWER_QUALIFICATION_PROMPT) {
-                    assert.equal(body.format, 'json'); response = '{"findings":[]}';
+                } else if (body.prompt.endsWith(REVIEWER_QUALIFICATION_PROMPT)) {
+                    assert.deepEqual(body.format, responseSchemaForOutputFormat('review-json'));
+                    assert.deepEqual(body, buildOllamaRoleQualificationProbe('neutral-model', REVIEWER_QUALIFICATION_PROMPT,
+                        'review-json', body.options.num_ctx));
+                    response = '{"findings":[]}';
                 } else {
                     assert.equal(body.prompt, '\n' + BUG_FIXER_QUALIFICATION_PROMPT);
                     assert.equal(body.format, undefined); response = fixerResponse;

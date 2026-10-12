@@ -8,6 +8,43 @@ export type RoleQualificationState = 'verified' | 'unverified' | 'not-run';
 export interface RoleQualificationStatus {
     state: RoleQualificationState;
     reason: string;
+    /** Codes and counts only; never retain model replies or generated source. */
+    diagnostics?: RoleQualificationDiagnostics;
+}
+
+export interface RoleQualificationResponseShape {
+    characters: number;
+    pythonFenceCount: number;
+    jsonObject: boolean;
+    findingsCount?: number;
+    legacyBlockingCount?: number;
+    legacyQualityCount?: number;
+}
+
+export interface RoleQualificationDiagnostics {
+    contractVersion: 'writer-probe-v8' | 'review-v7' | 'bug-fixer-probe-v8';
+    reasonCode: string;
+    reasonCodes: string[];
+    failureKind: 'none' | 'contract' | 'execution' | 'unavailable';
+    executionState: 'passed' | 'failed' | 'not-run' | 'unavailable';
+    responseShape: RoleQualificationResponseShape;
+}
+
+/** Only structural counts of a public fixture response are diagnostic evidence. */
+export function qualificationResponseShape(response: string | undefined): RoleQualificationResponseShape {
+    const shape: RoleQualificationResponseShape = { characters: response?.length ?? 0,
+        pythonFenceCount: (response?.match(/```(?:python|py)\b/gi) ?? []).length, jsonObject: false };
+    try {
+        const value: unknown = JSON.parse(response ?? '');
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            shape.jsonObject = true;
+            const record = value as Record<string, unknown>;
+            if (Array.isArray(record.findings)) { shape.findingsCount = record.findings.length; }
+            if (Array.isArray(record.blocking)) { shape.legacyBlockingCount = record.blocking.length; }
+            if (Array.isArray(record.quality)) { shape.legacyQualityCount = record.quality.length; }
+        }
+    } catch { /* No reply contents are copied into diagnostics. */ }
+    return shape;
 }
 
 export interface RoleQualificationProfile {
@@ -23,7 +60,7 @@ export function qualifiedRole(role: keyof RoleQualificationProfile, profile: Rol
     return profile ? profile[role]?.state === 'verified' : role === 'writer' && legacyWriterReady === true;
 }
 
-export type RoleQualificationRequester = (prompt: string, format: 'json' | 'text') => Promise<string | undefined>;
+export type RoleQualificationRequester = (prompt: string, format: 'review-json' | 'text') => Promise<string | undefined>;
 
 export const ROLE_QUALIFICATION_TEST_FILE = `import unittest
 from fixture_module import increment
@@ -59,17 +96,21 @@ ${ROLE_QUALIFICATION_FAILURE}
 TEST_FILE:
 ${BUG_FIXER_QUALIFICATION_TEST_FILE}`;
 
-function status(state: RoleQualificationState, reason: string): RoleQualificationStatus {
-    return { state, reason };
+function status(state: RoleQualificationState, reason: string,
+    diagnostics?: RoleQualificationDiagnostics): RoleQualificationStatus {
+    return { state, reason, ...(diagnostics ? { diagnostics } : {}) };
 }
 
 export function assessReviewerQualification(response: string | undefined): RoleQualificationStatus {
-    if (!response?.trim()) { return status('unverified', localize("Reviewer 沒有回傳 JSON。")); }
-    const parsed = parseTestReviewDetailed(response, ROLE_QUALIFICATION_TEST_FILE, true,
-        { target: 'increment', methodKind: 'module' }).review;
-    return parsed
-        ? status('verified', localize("Reviewer 已通過 review-v7 分類、行號引用與欄位契約。"))
-        : status('unverified', localize("Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。"));
+    const parsed = parseTestReviewDetailed(response ?? '', ROLE_QUALIFICATION_TEST_FILE, true,
+        { target: 'increment', methodKind: 'module' });
+    const reasonCodes = parsed.review ? ['review-contract-verified'] : parsed.diagnostics;
+    const diagnostics: RoleQualificationDiagnostics = { contractVersion: 'review-v7',
+        reasonCode: reasonCodes[0], reasonCodes, failureKind: parsed.review ? 'none' : 'contract',
+        executionState: 'not-run', responseShape: qualificationResponseShape(response) };
+    return parsed.review
+        ? status('verified', localize("Reviewer 已通過 review-v7 分類、行號引用與欄位契約。"), diagnostics)
+        : status('unverified', localize("Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。"), diagnostics);
 }
 
 function bugFixerProbeCode(response: string | undefined): string | undefined {
@@ -85,16 +126,25 @@ function bugFixerProbeCode(response: string | undefined): string | undefined {
 }
 
 export function assessBugFixerQualification(response: string | undefined, executionPassed = false): RoleQualificationStatus {
-    if (!response?.trim()) { return status('unverified', localize("Bug Fixer 沒有回傳 Python 單方法替換。")); }
+    const diagnostic = (reasonCode: string, failureKind: RoleQualificationDiagnostics['failureKind'],
+        executionState: RoleQualificationDiagnostics['executionState']): RoleQualificationDiagnostics => ({
+            contractVersion: 'bug-fixer-probe-v8', reasonCode, reasonCodes: [reasonCode], failureKind,
+            executionState, responseShape: qualificationResponseShape(response) });
+    if (!response?.trim()) { return status('unverified', localize("Bug Fixer 沒有回傳 Python 單方法替換。"),
+        diagnostic('bug-fixer-empty-response', 'contract', 'not-run')); }
     if (!canRepairTestMethod(BUG_FIXER_QUALIFICATION_TEST_FILE, ROLE_QUALIFICATION_FAILURE)) {
-        return status('unverified', localize("資格 fixture 沒有可唯一定位的失敗方法。"));
+        return status('unverified', localize("資格 fixture 沒有可唯一定位的失敗方法。"),
+            diagnostic('bug-fixer-fixture-unavailable', 'unavailable', 'not-run'));
     }
     if (!bugFixerProbeCode(response)) {
-        return status('unverified', localize("Bug Fixer 未正確修正固定案例的預期值，或修改了輸入、斷言／方法範圍。"));
+        return status('unverified', localize("Bug Fixer 未正確修正固定案例的預期值，或修改了輸入、斷言／方法範圍。"),
+            diagnostic('bug-fixer-replacement-contract', 'contract', 'not-run'));
     }
     return executionPassed
-        ? status('verified', localize("Bug Fixer 已修正固定案例的錯誤預期值，並在隔離 Python 中保留另一通過案例。"))
-        : status('unverified', localize("Bug Fixer 固定案例修正格式符合；尚未通過隔離執行。"));
+        ? status('verified', localize("Bug Fixer 已修正固定案例的錯誤預期值，並在隔離 Python 中保留另一通過案例。"),
+            diagnostic('bug-fixer-probe-passed', 'none', 'passed'))
+        : status('unverified', localize("Bug Fixer 固定案例修正格式符合；尚未通過隔離執行。"),
+            diagnostic('bug-fixer-execution-unavailable', 'unavailable', 'unavailable'));
 }
 
 export function buildRoleQualificationProfile(
@@ -117,13 +167,25 @@ export async function runRoleQualificationProbes(
 ): Promise<RoleQualificationProfile> {
     let reviewer: string | undefined;
     let bugFixer: string | undefined;
-    try { reviewer = await request(REVIEWER_QUALIFICATION_PROMPT, 'json'); } catch { reviewer = undefined; }
-    try { bugFixer = await request(BUG_FIXER_QUALIFICATION_PROMPT, 'text'); } catch { bugFixer = undefined; }
+    let reviewerUnavailable = false;
+    let bugFixerUnavailable = false;
+    try { reviewer = await request(REVIEWER_QUALIFICATION_PROMPT, 'review-json'); } catch { reviewerUnavailable = true; }
+    try { bugFixer = await request(BUG_FIXER_QUALIFICATION_PROMPT, 'text'); } catch { bugFixerUnavailable = true; }
     const profile = buildRoleQualificationProfile(writer, reviewer, bugFixer);
+    for (const role of ['reviewer', 'bugFixer'] as const) {
+        if (role === 'reviewer' ? reviewerUnavailable : bugFixerUnavailable) {
+            profile[role].state = 'not-run';
+            profile[role].diagnostics!.reasonCode = 'probe-request-unavailable';
+            profile[role].diagnostics!.reasonCodes = ['probe-request-unavailable'];
+            profile[role].diagnostics!.failureKind = 'unavailable';
+        }
+    }
     const code = bugFixerProbeCode(bugFixer);
     if (code) {
         try { profile.bugFixer = assessBugFixerQualification(bugFixer, await executor(code)); }
-        catch { profile.bugFixer = status('unverified', localize("Bug Fixer 固定案例的隔離執行未完成。")); }
+        catch { profile.bugFixer = status('not-run', localize("Bug Fixer 固定案例的隔離執行未完成。"),
+            { ...profile.bugFixer.diagnostics!, reasonCode: 'probe-execution-unavailable',
+                reasonCodes: ['probe-execution-unavailable'], failureKind: 'unavailable', executionState: 'unavailable' }); }
     }
     return profile;
 }

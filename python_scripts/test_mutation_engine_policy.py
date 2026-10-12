@@ -27,12 +27,13 @@ class MutationEnginePolicyTests(unittest.TestCase):
         historical, identity = evidence('builtin', 'builtin-ast-v1')
         del historical['executionBackend']
         del historical['mutants'][0]['killedBy']
-        for run in [historical, evidence()[0], evidence('mutatest', 'mutatest-ast-3.1.0-v1')[0]]:
+        for run in [historical, evidence()[0], evidence('mutatest', 'mutatest-ast-3.1.0-v1')[0],
+                    evidence('mutatest', 'mutatest-ast-3.1.0-v2')[0]]:
             with self.subTest(version=run['operatorSetVersion']):
                 self.assertTrue(read_stored_mutation_run(run, identity)['ok'])
 
     def test_version_engine_and_execution_backend_cannot_be_forged(self):
-        base, identity = evidence('mutatest', 'mutatest-ast-3.1.0-v1')
+        base, identity = evidence('mutatest', 'mutatest-ast-3.1.0-v2')
         for patch in [{'engine': 'unknown'}, {'engine': ['mutatest']}, {'engine': 'mutmut'},
                       {'engineVersion': '9.0.0'}, {'engineVersion': None},
                       {'operatorSetVersion': 'builtin-ast-v2'}, {'operatorSetVersion': 'mutatest-ast-3.2.0-v1'},
@@ -45,7 +46,8 @@ class MutationEnginePolicyTests(unittest.TestCase):
             self.assertFalse(read_stored_mutation_run(builtin, identity)['ok'])
 
     def test_v2_and_external_kills_require_nonempty_unique_real_test_ids(self):
-        for engine, version in [('builtin', 'builtin-ast-v2'), ('mutatest', 'mutatest-ast-3.1.0-v1')]:
+        for engine, version in [('builtin', 'builtin-ast-v2'), ('mutatest', 'mutatest-ast-3.1.0-v1'),
+                                ('mutatest', 'mutatest-ast-3.1.0-v2')]:
             for attribution in [None, [], ['x', 'x'], [''], ['x\ny'], ['x\0y'], ['x' * 1025], [1], 'test_sample.Cases.test_sum']:
                 run, identity = evidence(engine, version)
                 if attribution is None:

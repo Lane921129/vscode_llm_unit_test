@@ -70,6 +70,7 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
                 + 'verified observed values must not be replaced by guessed calculations; exact string equality must not become string ordering or loose membership. '
                 + 'Verified canonical imports are legitimate bindings; dependency mock call assertions must not be replaced solely for checking calls rather than return values. '
                 + 'A passed top-level import needs no installation; a from-module function needs no module object. AST-proven harness identifiers are valid; used harness/target imports are not unused. Wildcard export identities remain unknown. '
+                + 'An AST-resolved unittest TestCase/IsolatedAsyncioTestCase that ran this same candidate is a valid harness; unittest.mock supplies mocks, not a replacement test framework. Do not demand a framework replacement solely because that verified import is claimed invalid. '
                 + 'Reassess the same TEST_FILE and evidence. Cite only VALID_TEST_LINE_IDS that demonstrate the claimed defect. '
                 + 'Do not invent import/runtime failures after successful isolated execution, request target implementation edits, or mock the selected target. '
                 + 'Return the existing findings JSON contract only. Omit unsupported claims; use {"findings":[]} only when no concrete defect is demonstrated. '

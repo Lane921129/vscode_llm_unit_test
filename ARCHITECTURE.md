@@ -1,10 +1,24 @@
 # 專案閱讀入口
 
+## 批次資格重用、輸出恢復與冷啟動（2026-10-12）
+
+`batchRuntimeQualification.ts` 以同一頂層 `ExecutionContext` 持有 `RuntimeQualificationSession`，核對確認的來源集合、實體路徑、Python 與 venv 設定、已載入相依及 fixture 身分。只重用同端點、模型、容量及資格版本的完整能力判定；傳輸／執行不可用不形成負面能力快取。後續目標可沿用本批次已核驗的較大容量，偏好與跨批次儲存不變，所有實際候選仍重新執行與審查。
+
+增容時 Auto/full 要求新 Writer／Reviewer verified；手動 Tier 依原本的當次角色嘗試政策繼續，Reviewer 探針失敗不封鎖 Analyst／Writer。`roleQualification.ts` 的 Reviewer 探針使用正式 `review-v7` schema 與獨立 `review-json` 傳輸，資格版本為 `python-unittest-v8`。安全診斷只保存固定原因碼、字數與結構統計，不保存 provider 原文。未取得同候選審查批准仍不得突變。
+
+`writerOutputBudget.ts` 在一目標內記錄已確定耗盡的輸出 cap。`requestBudgeted` 對 Local Writer／完整修訂至多重送一次相同完整證據；較大輸出保留量與 wire `num_predict` 成對，必要時依已核實上限增容。截斷前綴完全丟棄，原邏輯請求期限與 target counters 不重設。
+
+`modulePreflight.ts` 的成功 `elapsedMs` 由宿主量測；`traceStartupBudget.ts` 在原剩餘時間內預分規劃、第一次案例重載與清理。Trace 外層最多60秒，未知時保留原5／12／20秒政策；Python 的 planning/case/total progress 保存實際分配。新的額度不增加既有 target deadline，也不把載入或規劃當成觀測。
+
+`external_mutation_runner.py` 的 v2 適配補上現代 Python 整數 subscript 的 AST 差異，呼叫 Mutatest 原生 Index walker 與候選算子。probe 同時檢查算術與索引，TypeScript selector 只接受自檢通過的目前 v2；歷史 v1 報告仍可讀。基線、隔離、來源／測試摘要與零候選未評分規則保留。
+
+`dependencyMockContract.ts` 只依現有 AST 的 receiver/use-point/完整 chain 給不可變時鐘 owner 指引；若來源證明時計回傳值再交 `strftime`，使用獨立 test-local alias 建立具體 datetime/date fixture，讓真 formatter 執行。將 formatter 整個Mock成固定expected會吞掉格式字串突變，不能以高行覆蓋當充分行為驗證。未知chain不猜用途，規則不代替當前需求 oracle。
+
 ## 超額時增加本次容量（2026-10-12）
 
 `contextGrowth.ts` 接收完整最終提示估量、補正預留、實際角色輸出 cap 與已核實模型上限，只在超額時規劃足量容量，加128 tokens輸入餘裕並向上對齊1024，最後仍不得越過上限。設定未知、到頂仍不足或非法資料保持受阻；小提示不降低已成長容量。`requestBudgeted` 是所有正式角色的最終共用 gate，Reviewer 不再於進入該 gate 前以舊容量拒絕。
 
-`localRuntimeRequalification.ts` 重跑現有公開固定角色探針與安全隔離執行，不自行連線或寫入設定。主流程以新 `num_ctx` 傳送每個探針；Writer／full Reviewer及當次Bug Fixer資格通過後，才更新本次 active profile，重新核對完整角色預算並發正式請求。保存容量前後、上限、資格與耗時；已儲存選擇保持原值。探針、HTTP回退與正式請求共用原 deadline／target budget，增容不等於實際 GPU 分配或品質通過。
+`localRuntimeRequalification.ts` 重跑公開固定角色探針與安全隔離執行，不自行連線或寫入設定。主流程以新 `num_ctx` 傳送每個探針，依上述 Auto／手動政策核驗當次角色，再更新 active profile 並重新核對完整角色預算。保存容量前後、上限、各角色診斷及耗時；已儲存選擇保持原值。探針、HTTP回退與正式請求共用原 deadline／target budget，增容不等於實際 GPU 分配或品質通過。
 
 ## Analyst 格式、短計畫與模型耗時（2026-10-12）
 

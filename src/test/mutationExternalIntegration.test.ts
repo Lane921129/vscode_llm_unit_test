@@ -104,13 +104,13 @@ test('full orchestrator uses real Mutatest and retains rejected source/test iden
                 assert.equal(knowledge.coverage.assessment.targetFullyCovered, true);
                 assert.equal(mutation.engine, 'mutatest');
                 assert.equal(mutation.engineVersion, '3.1.0');
-                assert.equal(mutation.operatorSetVersion, 'mutatest-ast-3.1.0-v1');
+                assert.equal(mutation.operatorSetVersion, 'mutatest-ast-3.1.0-v2');
                 assert.equal(mutation.executionBackend, 'isolated-unittest-v1');
                 assert.equal(mutation.counts.available, 6); assert.equal(mutation.counts.killed, 6);
                 assert.ok(mutation.mutants.every((item: any) => item.killedBy.length > 0));
                 assert.ok(events.find(e => e.stage === 'mutation-engine').sequence < events.find(e => e.stage === 'model-request').sequence);
                 assert.match(report, /Final outcome: Fully passed/);
-                assert.match(report, /mutatest.*mutatest-ast-3.1.0-v1/);
+                assert.match(report, /mutatest.*mutatest-ast-3.1.0-v2/);
                 assert.match(report, /Mutation execution diagnostics/);
             } else {
                 assert.notEqual(knowledge.terminalStatus, 'passed');

@@ -5,7 +5,12 @@
 ## 目前驗收優先順序
 
 - 依使用者 2026-10-12 確認，完整本機角色提示超額時，可在同一執行中動態提高 `num_ctx`，只依該端點／模型已核實的容量上限；未超額不調整，未知上限或到頂後仍無法容納則保存診斷並停止。保留完整來源、候選、觀測、補正與輸出預留，不截斷必要證據。這是下文固定起始容量的窄例外：已儲存選擇與設定快照不改写，本次實際容量另記錄。
-- 新容量不得沿用舊 `num_ctx` 的角色資格；重新執行既有固定公開 Writer／Reviewer 探針及隔離驗證，需用 Bug Fixer 時也核驗該角色。full 必須由新容量 verified Writer／Reviewer 接續，當次 Fixer 也必須 verified；未通過不發正式請求、不借用舊審查。所有資格探針、回退、重試與正式請求共享原邏輯請求／階段／目標期限與計數，不因增容重置。容量與探針耗時只記安全數字，不推定 GPU 記憶體或實際分配。
+- 新容量不得沿用舊 `num_ctx` 的角色資格；重新執行固定公開 Writer／Reviewer 探針及隔離驗證，需用 Bug Fixer 時也核驗該角色。Auto/full 必須由新容量 verified Writer／Reviewer 接續；手動 Tier 保留起始時的嘗試政策，只依當次角色判斷，不因尚未通過 Reviewer 探針阻止 Writer／Analyst。探針不可執行或傳輸不可用不當作能力失敗；正式候選仍必須通過工具執行、同來源與完整測試雜湊的 Reviewer 核准才能突變，不借舊審查。所有探針、回退、重試與正式請求共享原期限與計數，不因增容重置。
+- 同一批次可重用完整已完成的同端點／模型／`num_ctx`／資格版本／Python／來源範圍／fixture 身分的角色判定，並讓後續目標使用本批次已核驗的容量；不寫回使用者偏好、不跨批次。來源、相依、Python 或 fixture 漂移撤回重用；timeout、取消與環境不可用不快取為負面能力。只重用資格與額度，不重用測试執行、Trace、資源或審查批准。
+- Local Writer／完整修訂若以 `done_reason=length` 中止，只以確切輸出 cap 學習本目標需求，最多重送同一完整提示一次；增輸出保留量與 `num_predict` 必須成對，必要時再核實增容，上限未知或仍不足即停止。截斷回覆不保存、不執行；原期限、角色與目標計數不更新。
+- Trace 依成功受控模組預檢的宿主實測耗時預先分配規劃及第一次案例冷載入額度，未知時仍為 planning 5 秒／total 12 秒；外層最多60秒且受原目標剩餘時間限制，重試共用當次 Trace 期限。成功預檢或規劃不是案例觀測，也不是 oracle。
+- Mutatest 3.1.0 的目前適配算子為 `mutatest-ast-3.1.0-v2`，現代 Python 的 literal 整數 subscript 用外部引擎原生 Index 算子產生候選；先通過算術及索引 AST probe。不得冒充 builtin 或將零候選計為完整通過；歷史 v1 保留讀取。
+- 若現有AST證明時鐘回傳值交給 `strftime`，使用獨立test-local alias建立具體datetime/date fixture並保留真formatter，不以固定Mock formatter回傳遮蔽格式行為。未知receiver chain不猜；fixture控制與格式實跑也不能代替獨立需求 oracle。
 
 - 靜態 SQLite schema 提案只接受可保真轉成宣告資源的 literal `CREATE TABLE IF NOT EXISTS`，綁定來源摘要、DDL／連線位置及精確資料庫地址；已有資源可補 schema，來源可證明的新資料庫亦可列入同一批准預覽。不可執行來源 SQL、匯入應用或複製正式資料來補 schema；動態路徑、不支援約束、衝突或跨來源證據不足須列診斷。各 worker 只在批准後建立新資料庫。
 - 靜態路徑可追蹤有界的本機 connection helper 與來源宣告的 ConfigParser fallback；若需空白設定才能選用 fallback，必須把空白設定 fixture 一併列入預覽，不能假設原設定不存在或讀取原設定。已批准的非空設定不被覆蓋。跨來源依據保存 `sourceDependencies` 並納入 plan 身分，每個 worker 再核對；依賴漂移或 frozen 程序不符 `pythonSourceMode` 即拒絕。可保真的明確新增欄位遷移須保留，未知 SQL 不猜。突變若改動設定依賴而無法重綁，維持 ERROR／未評分。

@@ -43,7 +43,7 @@ export async function selectMutationEngine(engine: unknown, workers: unknown,
             localize(reason || '外部突變引擎預檢失敗，請核對所選 Python、套件版本與平台。'),
             { requested, reasonCode: reason ? value.diagnosticCode : 'invalid-probe' });
     }
-    if (requested !== 'mutatest' || value.operatorSetVersion !== 'mutatest-ast-3.1.0-v1'
+    if (requested !== 'mutatest' || value.operatorSetVersion !== 'mutatest-ast-3.1.0-v2'
         || value.engineVersion !== '3.1.0') {
         throw new AnalysisStageError('environment', 'mutation-preflight', localize('外部引擎版本不相容；目前 Mutatest 支援 3.1.0。'));
     }

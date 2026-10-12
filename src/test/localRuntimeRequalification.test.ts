@@ -1,7 +1,8 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as path from 'node:path';
-import { requalifyLocalRuntime, LocalRequalificationRole } from '../llm/localRuntimeRequalification';
+import { requalifyLocalRuntime, LocalRequalificationRole, runLocalRuntimeQualificationProbe,
+    runtimeQualificationExecutionBudget } from '../llm/localRuntimeRequalification';
 import { LOCAL_RUNTIME_QUALIFICATION_VERSION, QUALIFICATION_VERSION, qualificationAppliesToRequest } from '../llm/modelQualification';
 import { runIsolatedProbe } from '../llm/modelProbeExecution';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -27,7 +28,7 @@ test('new runtime qualifications require independent Writer and Reviewer probes 
             return responseFor(role);
         }, executor: async code => { executions++; return runIsolatedProbe(code, 5000, python); }
     });
-    assert.deepEqual(calls, [{ role: 'writer', format: 'text' }, { role: 'reviewer', format: 'json' },
+    assert.deepEqual(calls, [{ role: 'writer', format: 'text' }, { role: 'reviewer', format: 'review-json' },
         { role: 'bug-fixer', format: 'text' }]);
     assert.equal(executions, 2);
     assert.deepEqual(profile.qualificationRuntime, { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 16384 });
@@ -60,7 +61,7 @@ test('invalid or non-executable Writer replies and invalid Reviewer contracts ca
             request: async role => role === 'writer' ? reply : '{"findings":[]}',
             executor: async () => { executions++; return executionPassed; } });
         assert.equal(profile.testGenerationReady, false);
-        assert.equal(profile.roleQualification.writer.state, 'unverified');
+        assert.equal(profile.roleQualification.writer.state, reply === writer && !executionPassed ? 'not-run' : 'unverified');
         assert.equal(executions, reply === writer ? 1 : 0);
     }
     const profile = await requalifyLocalRuntime({ numCtx: 16384,
@@ -98,5 +99,39 @@ test('invalid runtime capacities fail before any model request or Python executi
         await assert.rejects(requalifyLocalRuntime({ numCtx,
             request: async () => { assert.fail('invalid capacity must not request a model'); },
             executor: async () => { assert.fail('invalid capacity must not execute code'); } }), /invalid-runtime-context/);
+    }
+});
+
+test('runtime probe execution gets 30 seconds or original deadline remaining, never a renewed allowance', () => {
+    assert.equal(runtimeQualificationExecutionBudget(100000, 1000), 30000);
+    assert.equal(runtimeQualificationExecutionBudget(100000, 85000), 15000);
+    assert.equal(runtimeQualificationExecutionBudget(100000, 100001), 0);
+    assert.equal(runtimeQualificationExecutionBudget(Number.NaN), 0);
+    assert.equal(runtimeQualificationExecutionBudget(Infinity, 1000), 30000);
+});
+
+test('real isolated runtime probe distinguishes passed, completed failed, missing interpreter and exhausted deadline', async () => {
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    assert.deepEqual(await runLocalRuntimeQualificationProbe(writer, 5000, python),
+        { state: 'passed', reasonCode: 'probe-passed' });
+    assert.deepEqual(await runLocalRuntimeQualificationProbe(writer.replace('increment(1), 2', 'increment(1), 0'), 5000, python),
+        { state: 'failed', reasonCode: 'probe-execution-failed' });
+    assert.deepEqual(await runLocalRuntimeQualificationProbe(writer, 5000, path.join(__dirname, 'missing-python-executable')),
+        { state: 'unavailable', reasonCode: 'probe-environment-unavailable' });
+    assert.deepEqual(await runLocalRuntimeQualificationProbe(writer, 0, python),
+        { state: 'unavailable', reasonCode: 'probe-timeout' });
+});
+
+test('Writer renewal reports safe contract/safety codes and counts without retaining arbitrary provider replies', async () => {
+    const rawMarker = 'private-provider-response-marker';
+    for (const response of [rawMarker, writer + '\nopen("' + rawMarker + '", "w")']) {
+        const result = await requalifyLocalRuntime({ numCtx: 9216,
+            request: async role => role === 'reviewer' ? '{"findings":[]}' : response,
+            executor: async () => { assert.fail('invalid or unsafe fixed probes must not execute'); } });
+        assert.equal(result.roleQualification.writer.state, 'unverified');
+        assert.equal(result.roleQualification.writer.diagnostics?.failureKind, 'contract');
+        assert.equal(result.roleQualification.writer.diagnostics?.responseShape.characters, response.length);
+        assert.equal(result.roleQualification.writer.diagnostics?.contractVersion, 'writer-probe-v8');
+        assert.equal(JSON.stringify(result).includes(rawMarker), false);
     }
 });

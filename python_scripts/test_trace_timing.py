@@ -13,6 +13,53 @@ from trace_value_codec import snapshot_value
 
 
 class TraceTimingTests(unittest.TestCase):
+    def test_slow_initialization_uses_separate_planning_allowance_through_real_cli(self):
+        with tempfile.TemporaryDirectory(prefix='neutral-trace-cold-plan-') as directory:
+            source = Path(directory) / 'sample.py'
+            original = 'import time\ntime.sleep(5.2)\ndef target(value):\n    return value\n'
+            source.write_text(original, encoding='utf-8')
+            progress = Path(directory) / 'progress.jsonl'
+            completed = subprocess.run([sys.executable, '-B', dynamic_tracer.__file__, str(source), 'target',
+                json.dumps([[7]]), json.dumps({'planning_timeout_seconds': 8,
+                    'case_timeout_seconds': 0.5, 'total_timeout_seconds': 16,
+                    'progress_path': str(progress)})], capture_output=True, encoding='utf-8',
+                timeout=20, check=True)
+            result = json.loads(completed.stdout)
+            events = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
+            self.assertEqual(source.read_text(encoding='utf-8'), original)
+        self.assertEqual(result['planning']['status'], 'completed')
+        self.assertGreaterEqual(result['planning']['duration_ms'], 5000)
+        self.assertEqual(result['planning']['configured_timeout_seconds'], 8)
+        self.assertLessEqual(result['planning']['allocated_timeout_seconds'], 8)
+        self.assertEqual([row['status'] for row in result['cases']], ['returned'])
+        self.assertEqual(result['examples'][0]['result'], '7')
+        self.assertTrue(result['complete'])
+        self.assertEqual(next(row for row in events if row['event'] == 'planning_completed')['planning'], result['planning'])
+
+    def test_planning_allowance_is_bounded_and_never_extends_original_total_deadline(self):
+        for requested, configured in ((20, 20), (1000, 300), (True, 5), (float('nan'), 5), (-1, 5)):
+            with self.subTest(requested=requested):
+                clock = [0.0]
+                calls = []
+
+                def worker(payload, timeout):
+                    calls.append((payload['mode'], timeout))
+                    clock[0] += timeout
+                    raise subprocess.TimeoutExpired('neutral planning', timeout)
+
+                with patch.object(dynamic_tracer.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(dynamic_tracer, '_worker_result', side_effect=worker):
+                    result = dynamic_tracer.trace_function('neutral.py', 'target', [[1]],
+                        planning_timeout_seconds=requested, case_timeout_seconds=0.25, total_timeout_seconds=3)
+                self.assertEqual(calls, [('plan', 3.0)])
+                self.assertEqual(result['planning']['configured_timeout_seconds'], configured)
+                self.assertEqual(result['planning']['allocated_timeout_seconds'], 3)
+                self.assertEqual(result['planning']['status'], 'timeout')
+                self.assertEqual(result['examples'], [])
+                self.assertEqual(result['errors'], [])
+                self.assertEqual(result['cases'][0]['status'], 'not_started')
+                self.assertFalse(result['complete'])
+
     def test_slow_import_fast_target_observes_fresh_state_per_case_and_records_allocation(self):
         with tempfile.TemporaryDirectory(prefix='neutral-trace-timing-') as directory:
             source = Path(directory) / 'sample.py'

@@ -1124,7 +1124,7 @@ def _candidate_context(candidate):
 
 def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
                    case_timeout_seconds=2.0, total_timeout_seconds=12.0,
-                   progress_path=None) -> dict:
+                   planning_timeout_seconds=5.0, progress_path=None) -> dict:
     """Plan in one guarded worker, then execute each case in a fresh process.
 
     Inputs may be the legacy Python list or a probe-inputs-v1 typed envelope.
@@ -1138,6 +1138,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
 
     case_timeout = positive_timeout(case_timeout_seconds, 2.0)
     total_timeout = positive_timeout(total_timeout_seconds, 12.0)
+    planning_timeout = positive_timeout(planning_timeout_seconds, 5.0)
     started = time.monotonic()
     deadline = started + total_timeout
     result = {
@@ -1202,12 +1203,14 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         append_case(case)
 
     plan_started = time.monotonic()
+    planning_allocated = 0.0
     try:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise subprocess.TimeoutExpired('trace planning', total_timeout)
+        planning_allocated = min(planning_timeout, remaining)
         planned = _worker_result({'mode': 'plan', 'file_path': file_path, 'func_name': func_name,
-                                  'inputs': valid_supplied}, min(5.0, remaining))
+                                  'inputs': valid_supplied}, planning_allocated)
         result['args'] = planned.get('args', [])
         if planned.get('importFixtures'):
             result['importFixtures'] = planned['importFixtures']
@@ -1225,6 +1228,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         result['load_error'] = f'Trace planning failed: {type(error).__name__}'
         result['planning'] = {'status': 'worker_error'}
     result['planning']['duration_ms'] = round((time.monotonic() - plan_started) * 1000, 3)
+    result['planning']['configured_timeout_seconds'] = planning_timeout
+    result['planning']['allocated_timeout_seconds'] = planning_allocated
     # Every case repeats process startup and guarded import. A successful plan
     # measures a conservative allowance for that work (including planning),
     # not the target's runtime. Keep the original total deadline unchanged.
@@ -1317,7 +1322,8 @@ if __name__ == '__main__':
             supplied_options = json.loads(sys.argv[4])
             if type(supplied_options) is dict:
                 options = {name: supplied_options[name] for name in (
-                    'case_timeout_seconds', 'total_timeout_seconds', 'progress_path') if name in supplied_options}
+                    'case_timeout_seconds', 'total_timeout_seconds', 'planning_timeout_seconds',
+                    'progress_path') if name in supplied_options}
         except (ValueError, TypeError):
             pass
     output = trace_function(file_path, func_name, test_inputs, **options)

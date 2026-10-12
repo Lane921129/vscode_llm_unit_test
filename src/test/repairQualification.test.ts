@@ -7,7 +7,7 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 const reply = (body: string) => '```python\ndef test_increment(self):\n    ' + body + '\n```';
 const qualify = (raw: string, executor: (code: string) => Promise<boolean>) => runRoleQualificationProbes(
-    { state: 'verified', reason: 'fixture' }, async (_prompt, format) => format === 'json' ? '{"findings":[]}' : raw, executor);
+    { state: 'verified', reason: 'fixture' }, async (_prompt, format) => format === 'review-json' ? '{"findings":[]}' : raw, executor);
 
 test('repair qualification requires the actual corrected case to execute in the selected Python', async () => {
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));

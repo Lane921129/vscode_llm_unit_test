@@ -159,7 +159,7 @@ test('role qualification runs Reviewer and Bug Fixer probes independently', asyn
             return true;
         }
     );
-    assert.deepStrictEqual(formats, ['json', 'text']);
+    assert.deepStrictEqual(formats, ['review-json', 'text']);
     assert.deepStrictEqual(prompts.map(prompt => prompt.includes('ONE findings array')), [true, false]);
     assert.deepStrictEqual(
         [profile.writer.state, profile.reviewer.state, profile.bugFixer.state],

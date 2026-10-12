@@ -70,7 +70,7 @@ import { SerialRequestQueue } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { findModelProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
-import { selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, qualificationAppliesToRequest, qualificationForRequest, type ModelQualificationProfile } from './llm/modelQualification';
+import { QUALIFICATION_VERSION, selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, qualificationAppliesToRequest, qualificationForRequest, type ModelQualificationProfile } from './llm/modelQualification';
 import { RoleQualificationProfile, qualifiedRole } from './llm/roleQualification';
 import { ReviewSession, ReviewStatus } from './roles/reviewSession';
 import { canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
@@ -104,8 +104,11 @@ import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
 import { roleRequestBudget } from './prompts/roleRequestBudget';
 import { planContextGrowth } from './prompts/contextGrowth';
-import { requalifyLocalRuntime } from './llm/localRuntimeRequalification';
-import { runIsolatedProbe } from './llm/modelProbeExecution';
+import { requalifyLocalRuntime, runLocalRuntimeQualificationProbe, runtimeQualificationExecutionBudget } from './llm/localRuntimeRequalification';
+import { runtimeRoleAuthorization } from './llm/runtimeQualificationSession';
+import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification } from './pipeline/batchRuntimeQualification';
+import { WriterOutputBudget } from './prompts/writerOutputBudget';
+import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText } from './llm/ollamaResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -523,6 +526,7 @@ export function activate(context: vscode.ExtensionContext) {
                     batch.selectScope(scope);
                     const continuity = captureBatchSetupScope(scope, runParams.pythonExecutable);
                     files = scope.selectedFiles.map(file => path.join(scope.root, file));
+                    initializeBatchRuntimeQualification(scope.root, files, runParams.pythonExecutable);
                     const tasks: Array<() => Promise<void>> = [];
                     const importTargets: ImportCheckTarget[] = [];
                     for (const file of files) {
@@ -768,6 +772,13 @@ type BehaviorProbeResult = BehaviorObservations;
  * 執行受控行為探測：呼叫既有 Python 探測器取得有界的 input→output 觀測
  * callerArgs: 從呼叫站語境中提取的已知真實參數（可選）
  */
+const tracePreflightTimes = new WeakMap<object, Map<string, number>>();
+function rememberTracePreflight(file: string, elapsedMs: number | undefined): void {
+    const owner = currentExecution();
+    if (!owner || typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs) || elapsedMs < 0) { return; }
+    const timings = tracePreflightTimes.get(owner) || new Map<string, number>();
+    timings.set(path.resolve(file), elapsedMs); tracePreflightTimes.set(owner, timings);
+}
 async function runBehaviorProbe(
     filePath: string,
     funcName: string,
@@ -781,14 +792,25 @@ async function runBehaviorProbe(
     const baseArgs = [pythonScript, filePath, funcName];
     const suppliedInputs = skillInputs || buildProbeInputs(callerArgs || [], supplementalInputs);
     try {
+        currentTargetBudget()?.assertRemaining();
+        const owner = currentExecution();
+        const preflightElapsedMs = owner && tracePreflightTimes.get(owner)?.get(path.resolve(filePath));
+        const startupBudget = planTraceStartupBudget(preflightElapsedMs, currentTargetBudget()?.remainingMs() ?? 60000);
+        const probeDeadlineAt = Math.min(Date.now() + startupBudget.outerTimeoutMs, currentTargetBudget()?.deadlineAt ?? Infinity);
         const runProbe = async (inputs: TypedProbeInputsV1 | null = null): Promise<BehaviorProbeResult> => {
+            currentTargetBudget()?.assertRemaining();
+            const remainingMs = remainingDeadlineMs(probeDeadlineAt);
+            if (remainingMs <= 0) { throw new AnalysisStageError('ast-trace', 'trace', 'Trace planning allowance exhausted.'); }
+            const totalTimeoutSeconds = Math.min(startupBudget.totalTimeoutSeconds, remainingMs / 1000);
             const [progressPath] = reserveArtifactFiles(progressDirectory || os.tmpdir(), ['trace'], 'jsonl');
             const args = [...baseArgs, JSON.stringify(inputs), JSON.stringify({
-                total_timeout_seconds: 12, case_timeout_seconds: 2, progress_path: progressPath
+                planning_timeout_seconds: Math.min(startupBudget.planningTimeoutSeconds, totalTimeoutSeconds),
+                total_timeout_seconds: totalTimeoutSeconds, case_timeout_seconds: startupBudget.caseTimeoutSeconds,
+                progress_path: progressPath
             })];
             try {
                 const run = await runSpawn(pythonExecutable, args, {
-                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 20000
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: remainingMs
                 });
                 if (run.code !== 0) { throw new Error('Trace worker process failed'); }
                 return parseBehaviorObservations(run.stdout.trim(), funcName);
@@ -1290,6 +1312,7 @@ async function resolveAstAndDependencies(
     }
     log(localize("[AST] 解析完成！已擷取函式特徵與依賴。"));
     const environment = await beforeBehavior(astContext);
+    rememberTracePreflight(filePath, environment.elapsedMs);
     astContext.dependencyResolution = environment.dependencies || [];
     astContext.dependencyContexts = [...(astContext.localDependencyContexts || [])];
     astContext.sourceVersions = environment.sourceVersions.map(item => ({ ...item }));
@@ -1452,6 +1475,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         budgetTokens: localRuntime?.ok ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
     const qualificationRequest = { envType: params.envType, modelName: params.modelName,
         endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow };
+    const runtimeQualifications = currentBatchRuntimeQualification(projectRoot, params.filePath, pythonExecutable);
+    const runtimeIdentity = (numCtx: number) => runtimeQualifications.identity({ endpointKey: selectedEndpointKey,
+        modelName: params.modelName, numCtx, qualificationVersion: QUALIFICATION_VERSION }, currentImportFixtures()?.id);
+    let batchContextReused = false;
+    const preferredContext = params.envType === 'local' && localRuntime?.ok
+        && activeModelProfile.contextLengthKnown === true ? runtimeQualifications.preferredContext(runtimeIdentity(requestContextWindow)) : undefined;
+    if (preferredContext && preferredContext > requestContextWindow && preferredContext <= activeModelProfile.contextLength) {
+        const cached = runtimeQualifications.session.get(runtimeIdentity(preferredContext));
+        if (cached) {
+            requestContextWindow = preferredContext;
+            qualificationRequest.runtimeContextTokens = preferredContext;
+            Object.assign(activeModelProfile, cached);
+            activeModelProfile.budgetTokens = contextInputBudget(activeModelProfile.paramSize, preferredContext);
+            batchContextReused = true;
+        }
+    }
     const modelParamBillion = parseFloat(activeModelProfile.paramSize);
     // When another model has already been probed in this session but the
     // selected one has no saved entry, retain the conservative Tier-1 gate.
@@ -1471,6 +1510,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let seedPending = mayUseModelAuthoredTests && mode === 'full';
     const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
     let mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
+    const writerOutputBudget = new WriterOutputBudget();
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
@@ -1648,16 +1688,24 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const contractedSystem = addOutputContract(system, format);
         const deadline = Math.min(sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(requestParams.timeoutSeconds),
             currentTargetBudget()?.deadlineAt ?? Infinity);
+        // A length retry keeps this exact complete prompt, original deadline and target counters.
+        for (let outputAttempt = 0; outputAttempt < 2; outputAttempt++) {
+        throwIfExecutionCancelled();
+        currentTargetBudget()?.assertRemaining();
+        if (!runtimeQualifications.current()) {
+            throw new AnalysisStageError('validation', 'source-changed', localize('來源或相依版本改變，停止保存舊執行證據。'));
+        }
+        const minimumOutputTokens = writerOutputBudget.minimumTokens;
         if (requestParams.envType === 'local'
             && !promptFits(contractedSystem, prompt, roleRequestBudget({ envType: requestParams.envType, mode,
                 role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
-                revisionCurrentCode }).inputBudget, reservedInputTokens)) {
+                revisionCurrentCode, minimumOutputTokens }).inputBudget, reservedInputTokens)) {
             // Budget the output cap that the larger request will actually use.
             // Never grow using an old, smaller seed cap and then send a larger one.
             const limitBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
                 contextWindow: activeModelProfile.contextLength,
                 inputBudget: contextInputBudget(activeModelProfile.paramSize, activeModelProfile.contextLength),
-                revisionCurrentCode });
+                revisionCurrentCode, minimumOutputTokens });
             const growth = planContextGrowth({ currentContextTokens: requestContextWindow,
                 modelContextLimit: activeModelProfile.contextLength,
                 modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
@@ -1669,8 +1717,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 recordRole('model-runtime', 'context-growth-requested', { role, previousContextWindow,
                     contextWindow: growth.contextTokens, modelContextLimit: growth.modelContextLimit,
                     estimatedInputTokens: growth.requiredInputTokens, savedChoicePreserved: true });
-                const requalified = await requalifyLocalRuntime({ numCtx: growth.contextTokens,
-                    includeBugFixer: role === 'bug-fixer' || roleQualification?.bugFixer.state === 'verified',
+                const identity = runtimeIdentity(growth.contextTokens);
+                const includeBugFixer = role === 'bug-fixer' || roleQualification?.bugFixer.state === 'verified';
+                const cached = runtimeQualifications.session.get(identity, includeBugFixer);
+                if (cached) {
+                    recordRole('context-qualification', 'cache-hit', { role, contextWindow: growth.contextTokens,
+                        roleQualification: cached.roleQualification, qualificationVersion: cached.qualificationVersion });
+                }
+                const requalified = cached || await requalifyLocalRuntime({ numCtx: growth.contextTokens, includeBugFixer,
                     request: async (probeRole, probeSystem, probePrompt, probeFormat) => {
                         throwIfExecutionCancelled();
                         currentTargetBudget()?.assertRemaining();
@@ -1681,7 +1735,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 localize('新容量無法容納完整角色探針；未沿用舊容量認證。'));
                         }
                         currentTargetBudget()?.consumeModelRequest();
-                        recordRole('context-qualification', 'requested', { role: probeRole, contextWindow: growth.contextTokens });
+                        recordRole('context-qualification', 'requested', { role: probeRole, contextWindow: growth.contextTokens, deadlineAt: deadline });
+                        recordRole('model-request', 'requested', { role: probeRole, phase: 'context-qualification',
+                            contextWindow: growth.contextTokens, deadlineAt: deadline });
                         const response = await requestLlmApi({ ...requestParams, requestContextTokens: growth.contextTokens,
                             requestOutputTokens: probeOutputTokens }, probeSystem, probePrompt, requestLog, probeFormat, deadline,
                             timing => recordRole('model-request', 'timing', { role: probeRole, phase: 'context-qualification', ...timing }));
@@ -1692,18 +1748,24 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRole('context-qualification', 'completed', { role: probeRole, contextWindow: growth.contextTokens });
                         return response;
                     },
-                    executor: code => runIsolatedProbe(code, Math.min(10000, Math.max(1, deadline - Date.now())), pythonExecutable)
+                    executor: code => runLocalRuntimeQualificationProbe(code, runtimeQualificationExecutionBudget(deadline), pythonExecutable)
                 });
                 throwIfExecutionCancelled();
                 currentTargetBudget()?.assertRemaining();
-                const usable = requalified.roleQualification.writer.state === 'verified'
-                    && (mode !== 'full' || requalified.roleQualification.reviewer.state === 'verified')
-                    && (role !== 'bug-fixer' || requalified.roleQualification.bugFixer.state === 'verified');
+                if (!runtimeQualifications.current()) { throw new AnalysisStageError('validation', 'source-changed', 'Runtime qualification scope changed.'); }
+                if (!cached) { runtimeQualifications.session.set(identity, requalified); }
+                const requestedRole = role === 'reviewer' ? 'reviewer' : role === 'bug-fixer' ? 'bugFixer' : 'writer';
+                const authorization = runtimeRoleAuthorization({ policy: userTierSetting === 'auto' ? 'auto' : 'manual',
+                    role: requestedRole, qualification: requalified.roleQualification, currentIdentity: true });
+                const usable = authorization.allowed && (userTierSetting !== 'auto'
+                    || requalified.roleQualification.writer.state === 'verified'
+                    && (mode !== 'full' || requalified.roleQualification.reviewer.state === 'verified'));
                 if (!usable) {
                     recordRole('model-runtime', 'qualification-failed', { contextWindow: growth.contextTokens,
                         elapsedMs: Date.now() - qualificationStartedAt,
                         writer: requalified.roleQualification.writer.state, reviewer: requalified.roleQualification.reviewer.state,
-                        bugFixer: requalified.roleQualification.bugFixer.state });
+                        bugFixer: requalified.roleQualification.bugFixer.state,
+                        authorization, roleQualification: requalified.roleQualification });
                     throw new AnalysisStageError('validation', 'role-qualification',
                         localize('容量增加後的角色資格未通過；未沿用舊容量認證。'));
                 }
@@ -1711,12 +1773,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 activeModelProfile.budgetTokens = contextInputBudget(activeModelProfile.paramSize, requestContextWindow);
                 Object.assign(activeModelProfile, requalified);
                 roleQualification = requalified.roleQualification;
-                mayUseModelAuthoredRepair = qualifiedRole('bugFixer', roleQualification, true);
+                mayUseModelAuthoredRepair = runtimeRoleAuthorization({ policy: userTierSetting === 'auto' ? 'auto' : 'manual',
+                    role: 'bugFixer', qualification: roleQualification, currentIdentity: true }).allowed;
+                runtimeQualifications.rememberContext(identity);
                 journal.knowledge({ roleQualification, runtimeContextTokens: requestContextWindow });
                 recordRole('model-runtime', 'context-grown', { role, previousContextWindow,
                     contextWindow: requestContextWindow, modelContextLimit: growth.modelContextLimit,
                     elapsedMs: Date.now() - qualificationStartedAt,
-                    qualificationRuntime: requalified.qualificationRuntime, savedChoicePreserved: true });
+                    qualificationRuntime: requalified.qualificationRuntime, roleQualification, authorization,
+                    qualificationCacheHit: !!cached, savedChoicePreserved: true });
                 log(localize('[容量調整] 完整提示超額，num_ctx 由 {0} 提高至 {1}；上限 {2}，已重驗角色，保留已儲存選擇。',
                     previousContextWindow, requestContextWindow, growth.modelContextLimit));
             } else {
@@ -1726,10 +1791,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         const contextWindow = requestContextWindow;
         const roleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
-            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode });
+            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, minimumOutputTokens });
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
             ...roleBudget, reservedInputTokens,
-            contextWindow,
+            contextWindow, deadlineAt: deadline, outputAttempt,
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
         if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, reservedInputTokens)) {
@@ -1751,12 +1816,29 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
             return response;
         } catch (error) {
+            const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
+                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown } : undefined;
             recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
                 category: error instanceof AnalysisStageError ? error.category : 'unknown',
+                ...(diagnostic?.reasonCode === 'output-token-limit'
+                    ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit } : {}),
                 ...(modelRequestHttpStatus(error) !== undefined ? { httpStatus: modelRequestHttpStatus(error) } : {}),
                 reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
+            if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
+                && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
+                && activeModelProfile.contextLengthKnown === true && remainingDeadlineMs(deadline) > 0) {
+                const nextOutputTokens = writerOutputBudget.grow(diagnostic.outputTokenLimit, activeModelProfile.contextLength);
+                if (nextOutputTokens) {
+                    recordRole('model-request', 'output-budget-grown', { role,
+                        previousOutputTokens: diagnostic.outputTokenLimit, requestOutputTokens: nextOutputTokens,
+                        retry: 1, deadlinePreserved: true, deadlineAt: deadline });
+                    continue;
+                }
+            }
             throw error;
         }
+        }
+        throw new AnalysisStageError('model-format', 'model-request', 'Writer output recovery exhausted.');
     };
     const recordRejected = (code: string, attempt: number, gate: CandidateRejectionGate, reasonCode: string) => {
         const artifact = rejectedCandidates.record({ code, phase: seedPending ? 'seed' : currentLoop > 1 ? 'expand' : 'generation',
@@ -1764,6 +1846,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         recordRole('candidate-artifact', 'rejected', { ...artifact, category: 'validation', gate, reason: reasonCode });
     };
     finalReportMarkdown += localize("- **執行識別**: {0}\n- **來源版本**: {1}\n\n", journal.runId, journal.sourceHash);
+    if (batchContextReused) {
+        recordRole('model-runtime', 'batch-context-reused', { contextWindow: requestContextWindow, savedChoicePreserved: true });
+        recordRole('context-qualification', 'cache-hit', { contextWindow: requestContextWindow,
+            roleQualification, qualificationVersion: QUALIFICATION_VERSION });
+    }
     recordRole('pipeline', 'running', { target: params.funcName });
     const releaseResourceObserver = currentExecution()?.subscribeResourceLifecycle(event => {
         journal.record(currentLoop, 'isolated-resources', event.cleaned ? 'cleaned' : 'failed', event);
@@ -1795,12 +1882,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         preflight = await preflightTargetModule(pythonExecutable, params.filePath, module,
             [targetDir, path.dirname(targetDir), path.dirname(path.dirname(targetDir)), projectRoot, sessionDir], sessionDir,
             context?.dependencies || [], projectRoot);
+        runtimeQualifications.bindDependencies(preflight.sourceVersions);
+        rememberTracePreflight(params.filePath, preflight.elapsedMs);
         resourceProjectionEvidence = preflight.resourceScope?.eligible ? {
             version: SOURCE_VERSIONS_VERSION,
             target: { file: params.filePath, hash: journal.sourceHash },
             sources: preflight.sourceVersions
         } : undefined;
-        recordRole('environment', 'passed', { module: preflight.module, importFixtures: preflight.importFixtures });
+        recordRole('environment', 'passed', { module: preflight.module, importFixtures: preflight.importFixtures,
+            elapsedMs: preflight.elapsedMs,
+            traceStartupBudget: planTraceStartupBudget(preflight.elapsedMs, currentTargetBudget()?.remainingMs() ?? 60000) });
         return preflight;
     };
     if (params.funcName) {
@@ -2061,6 +2152,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         } catch { return false; }
     };
     const invalidateSourceEvidence = () => {
+        runtimeQualifications.clear();
         const retained = checkpoints.quality || checkpoints.executable;
         journal.knowledge({ terminalStatus: 'source-changed', evidenceValid: false,
             mutationScore: null, mutationStatus: 'invalidated', coverage: null, retainedScore: null, qualityAssessment: null,

@@ -7,6 +7,7 @@ import { currentExecution, ExecutionContext, throwIfExecutionCancelled } from '.
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { canonicalExistingPath } from '../utils/fileIdentity';
 import { currentImportFixtures } from './importFixtures';
 import { SourceVersion, SOURCE_VERSIONS_VERSION, validSourceVersions } from './sourceVersions';
@@ -56,6 +57,8 @@ function toolFailure(reasonCode: PreflightToolReason, details: Partial<Pick<Pref
 
 export interface PreflightResult {
     ok: true;
+    /** Host-observed lifetime of this successful guarded worker; not an oracle. */
+    elapsedMs: number;
     module: string;
     importPaths: string[];
     sourceVersionsVersion: typeof SOURCE_VERSIONS_VERSION;
@@ -157,10 +160,12 @@ async function executePreflight(python: string, file: string, module: string, im
     key: string, cache?: PreflightCache, dependencies: Array<{ module: string; name: string; level?: number }> = [],
     sourceRoot?: string): Promise<PreflightResult> {
     try {
+        const startedAt = performance.now();
         const result = await runSpawn(python, ['-B', pythonToolPath('preflight')], {
             cwd, env: buildGeneratedTestEnvironment(process.env, importPaths), timeout: 15000,
             input: JSON.stringify({ file, module, importPaths, dependencies, sourceRoot })
         });
+        const elapsedMs = Math.max(0, performance.now() - startedAt);
         throwIfExecutionCancelled();
         if (result.code !== 0) {
             throw toolFailure('process-failed', { exitCode: result.code });
@@ -190,7 +195,7 @@ async function executePreflight(python: string, file: string, module: string, im
         // Keep the successful import; the caller must retain all resources.
         const resourceScope = parsePreflightResourceScope(value.resourceScope, value.sourceVersions);
         const { resourceScope: _untrustedResourceScope, ...preflight } = value;
-        return { ...preflight, ...(resourceScope ? { resourceScope } : {}) } as PreflightResult;
+        return { ...preflight, elapsedMs, ...(resourceScope ? { resourceScope } : {}) } as PreflightResult;
     } catch (error) {
         throwIfExecutionCancelled();
         const stageError = error instanceof AnalysisStageError ? error

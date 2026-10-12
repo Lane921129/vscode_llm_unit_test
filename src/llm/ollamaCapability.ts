@@ -4,16 +4,21 @@ import {
     TEST_GENERATION_PROBE_PROMPT
 } from './testGenerationQualification';
 import { buildOllamaPromptEnvelope } from './ollamaPrompt';
+import { addOutputContract, responseSchemaForOutputFormat } from './customApi';
 
 /** All connection roles must use the same validated local runtime setting. */
-export function buildOllamaRoleQualificationProbe(model: string, prompt: string, format: 'json' | 'text', numCtx: number) {
+export function buildOllamaRoleQualificationProbe(model: string, prompt: string, format: 'json' | 'review-json' | 'text', numCtx: number): {
+    model: string; system: string; prompt: string; stream: boolean;
+    format?: string | Record<string, unknown>;
+    options: { temperature: number; num_ctx: number; num_predict?: number };
+} {
     if (!Number.isSafeInteger(numCtx) || numCtx <= 0) { throw new Error('invalid-runtime-context'); }
     return {
         model,
-        ...buildOllamaPromptEnvelope('', prompt),
+        ...buildOllamaPromptEnvelope(format === 'review-json' ? addOutputContract('', format) : '', prompt),
         stream: false,
-        ...(format === 'json' ? { format: 'json' } : {}),
-        options: { temperature: 0, num_ctx: numCtx }
+        ...(format === 'json' ? { format: 'json' } : format === 'review-json' ? { format: responseSchemaForOutputFormat(format) } : {}),
+        options: { temperature: 0, num_ctx: numCtx, ...(format === 'review-json' ? { num_predict: 1024 } : {}) }
     };
 }
 

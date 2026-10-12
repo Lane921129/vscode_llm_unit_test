@@ -60,6 +60,16 @@ class ExternalProbeTests(unittest.TestCase):
                 patch.object(adapter, 'mutatest_candidates', return_value={'candidates': []}):
             self.assertEqual(adapter.probe_engine('mutatest')['diagnosticCode'], 'self-check-failed')
 
+    def test_arithmetic_only_self_check_cannot_certify_modern_index_support(self):
+        arithmetic = {'candidates': [({'to': name, 'id': name}, '') for name in
+                      ('Sub', 'Mult', 'Div', 'FloorDiv', 'Mod', 'Pow')]}
+        with patch.object(adapter.importlib.metadata, 'version', return_value='3.1.0'), \
+                patch.object(adapter, 'mutatest_candidates', side_effect=[arithmetic, {'candidates': []}]):
+            result = adapter.probe_engine('mutatest')
+        self.assertFalse(result['supported'])
+        self.assertEqual(result['diagnosticCode'], 'self-check-failed')
+        self.assertIsNone(result['operatorSetVersion'])
+
     def test_probe_cli_has_machine_readable_unknown_engine(self):
         completed = subprocess.run([sys.executable, '-B', adapter.__file__, '--probe', 'unknown'],
                                    capture_output=True, encoding='utf-8', timeout=10, check=True)
@@ -92,7 +102,7 @@ class RealMutatestTests(unittest.TestCase):
         source = 'def combine(a, b):\n    return a + b\n'
         first, second = collect(source), collect(source)
         self.assertEqual(first['engine'], 'mutatest')
-        self.assertEqual(first['operatorSetVersion'], 'mutatest-ast-3.1.0-v1')
+        self.assertEqual(first['operatorSetVersion'], 'mutatest-ast-3.1.0-v2')
         self.assertEqual(first, second)
         records = [record for record, _ in first['candidates']]
         self.assertEqual(len(records), 6)
@@ -103,6 +113,46 @@ class RealMutatestTests(unittest.TestCase):
     def test_discovery_never_executes_source(self):
         result = collect('raise RuntimeError("must never execute")\ndef combine(a, b):\n    return a + b\n')
         self.assertEqual(len(result['candidates']), 6)
+
+    def test_modern_integer_indices_use_external_engine_rules_and_compile(self):
+        source = 'def combine(values):\n    return values[0], values[2], values[-1]\n'
+        original = ast.parse(source)
+        result = collect(source)
+        records = [record for record, _ in result['candidates']]
+        self.assertEqual(result['engine'], 'mutatest')
+        self.assertEqual(result['operatorSetVersion'], 'mutatest-ast-3.1.0-v2')
+        self.assertEqual(len(records), 6)
+        self.assertEqual({record['kind'] for record in records}, {'Index'})
+        self.assertEqual({(record['from'], record['to']) for record in records}, {
+            ('Index_NumZero', 'Index_NumPos'), ('Index_NumZero', 'Index_NumNeg'),
+            ('Index_NumPos', 'Index_NumZero'), ('Index_NumPos', 'Index_NumNeg'),
+            ('Index_NumNeg', 'Index_NumZero'), ('Index_NumNeg', 'Index_NumPos')})
+        for _, mutated in result['candidates']:
+            variant = ast.parse(mutated)
+            compile(variant, '<test>', 'exec')
+            before_indices = [ast.dump(node.slice) for node in ast.walk(original) if isinstance(node, ast.Subscript)]
+            after_indices = [ast.dump(node.slice) for node in ast.walk(variant) if isinstance(node, ast.Subscript)]
+            self.assertEqual(sum(before != after for before, after in zip(before_indices, after_indices)), 1)
+        self.assertEqual(result, collect(source))
+
+    def test_index_bridge_does_not_treat_boolean_float_name_or_slice_as_integer_index(self):
+        source = 'def combine(values, key):\n    return values[True], values[1.5], values[key], values[1:3]\n'
+        self.assertFalse(any(record['kind'] == 'Index' for record, _ in collect(source)['candidates']))
+
+    def test_index_comprehension_keeps_qualified_scope_and_excludes_nested_defaults(self):
+        source = ('DEFAULT = [1, 2][0]\n'
+                  'def combine(rows, default=DEFAULT):\n'
+                  '    def nested():\n        return rows[0]\n'
+                  '    return {row[0]: row[1] for row in rows}\n')
+        result = collect(source)
+        self.assertEqual(len(result['candidates']), 4)
+        original = ast.parse(source)
+        for record, mutated in result['candidates']:
+            self.assertEqual(record['line'], 5)
+            variant = ast.parse(mutated)
+            self.assertEqual(ast.dump(variant.body[0]), ast.dump(original.body[0]))
+            self.assertEqual(ast.dump(variant.body[1].args), ast.dump(original.body[1].args))
+            self.assertEqual(ast.dump(variant.body[1].body[0]), ast.dump(original.body[1].body[0]))
 
     def test_scope_excludes_other_functions_defaults_decorators_and_nested_callables(self):
         source = ('DEFAULT = 4 + 5\n'
@@ -165,6 +215,33 @@ class RealMutatestTests(unittest.TestCase):
             self.assertEqual(result['counts']['executed'], 6)
             self.assertEqual(result['counts']['killed'], 6)
             self.assertTrue(all(m.get('codeChange') for m in result['mutants']))
+            self.assertEqual(source.read_text(encoding='utf-8'), original)
+
+    def test_modern_index_trials_keep_actual_external_identity_and_killed_survived_results(self):
+        with tempfile.TemporaryDirectory(prefix='neutral-mutatest-index-') as temporary:
+            root = Path(temporary)
+            source, tests = root / 'sample.py', root / 'test_sample.py'
+            original = 'def combine(values):\n    return values[0]\n'
+            source.write_text(original, encoding='utf-8')
+            tests.write_text('import unittest\nfrom sample import combine\n'
+                             'class TestCombine(unittest.TestCase):\n'
+                             '    def test_index(self):\n        self.assertEqual(combine([10, 10, 30]), 10)\n',
+                             encoding='utf-8')
+            completed = subprocess.run([sys.executable, '-B', adapter.__file__, 'mutatest', str(source), str(tests),
+                                        '0', '5', 'combine', '', '30', '2'], capture_output=True,
+                                       encoding='utf-8', timeout=40, check=True)
+            result = json.loads(completed.stdout)
+            self.assertEqual(result['engine'], 'mutatest')
+            self.assertEqual(result['engineVersion'], '3.1.0')
+            self.assertEqual(result['operatorSetVersion'], 'mutatest-ast-3.1.0-v2')
+            self.assertEqual(result['executionBackend'], 'isolated-unittest-v1')
+            self.assertEqual(result['status'], 'complete')
+            self.assertTrue(result['baseline_passed'])
+            self.assertEqual(result['counts']['available'], 2)
+            self.assertEqual(result['counts']['executed'], 2)
+            self.assertEqual(result['counts']['killed'], 1)
+            self.assertEqual(result['counts']['survived'], 1)
+            self.assertTrue(all(row['kind'] == 'Index' and row.get('codeChange') for row in result['mutants']))
             self.assertEqual(source.read_text(encoding='utf-8'), original)
 
 

@@ -5,7 +5,7 @@ import { selectMutationEngine, mutationArguments } from '../mutation/mutationSel
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 const validProbe = { schemaVersion: 'external-mutation-probe-v1', engine: 'mutatest', supported: true,
-    engineVersion: '3.1.0', operatorSetVersion: 'mutatest-ast-3.1.0-v1', platform: 'Windows', diagnosticCode: null };
+    engineVersion: '3.1.0', operatorSetVersion: 'mutatest-ast-3.1.0-v2', platform: 'Windows', diagnosticCode: null };
 
 test('builtin selection is explicit and does not launch an external probe', async () => {
     const selected = await selectMutationEngine(undefined, undefined, async () => { throw Error('unexpected probe'); });
@@ -23,6 +23,7 @@ test('external selection retains requested engine and builds the real adapter co
     });
     assert.equal(selected.requested, 'mutatest'); assert.equal(selected.actual, 'mutatest');
     assert.equal(selected.engineVersion, '3.1.0');
+    assert.equal(selected.operatorSetVersion, 'mutatest-ast-3.1.0-v2');
     const args = mutationArguments(selected, 'source.py', 'test_source.py', 'compute', '', 3);
     assert.deepEqual([path.basename(args[0]), ...args.slice(1)], ['external_mutation_runner.py', 'mutatest',
         'source.py', 'test_source.py', '0', '3', 'compute', '', '3', '4']);
@@ -53,7 +54,9 @@ test('malformed wrong-engine and unverified-version probes cannot authorize exec
         { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'builtin' }) },
         { code: 0, stdout: JSON.stringify({ ...validProbe, supported: 'true' }) },
         { code: 0, stdout: JSON.stringify({ ...validProbe, engineVersion: '3.2.0' }) },
-        { code: 0, stdout: JSON.stringify({ ...validProbe, operatorSetVersion: 'builtin-ast-v2' }) }
+        { code: 0, stdout: JSON.stringify({ ...validProbe, operatorSetVersion: 'builtin-ast-v2' }) },
+        // A historical arithmetic-only probe cannot authorize today's adapter.
+        { code: 0, stdout: JSON.stringify({ ...validProbe, operatorSetVersion: 'mutatest-ast-3.1.0-v1' }) }
     ];
     for (const probe of probes) {
         await assert.rejects(selectMutationEngine('mutatest', 2, async () => probe), (error: unknown) =>

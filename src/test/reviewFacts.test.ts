@@ -112,6 +112,64 @@ test('wrong numeric evidence identity and credentials are rejected before the AS
     await assert.rejects(buildReviewFacts({ ...options, code: code + '\n# confidential-test-value', knownSecrets: ['confidential-test-value'] }), /bound to this candidate/);
 });
 
+test('an executed AST-resolved harness rejects the actual framework hallucination with bounded reasons and actions', async () => {
+    const current = await facts();
+    assert.ok(current.imports[0].harnessUseLines?.length);
+    const bad = response(1, 'setup-error', 'Import unittest is not a valid test harness.',
+        'Replace unittest with a valid test harness, such as unittest.mock or pytest.');
+    assert.deepEqual(parseTestReviewDetailed(bad, code, true, constraints(current)).diagnostics,
+        ['existing-harness-contradiction']);
+    for (const unproven of [
+        { ...current, executionVerified: false },
+        { ...current, imports: current.imports.map(item => ({ ...item, harnessUseLines: undefined })) }
+    ]) {
+        assert.ok(parseTestReviewDetailed(bad, code, true, constraints(unproven)).review);
+    }
+    for (const [reason, action] of [
+        ['Import unittest is not a valid test harness because the fixture overrides discovery.', 'Replace unittest with a valid test harness, such as pytest.'],
+        ['Import unittest is not a valid test harness.', 'Add a separate pytest integration for the documented framework contract.'],
+        ['Import unittest is not a valid test harness.', 'Replace unittest with a valid test harness, such as pytest because the custom fixture requires its plugin.'],
+        ['Import another_harness is not a valid test harness.', 'Replace another_harness with a valid test harness, such as pytest.'],
+        ['The fixture can skip the target even though unittest executes.', 'Remove the source-proven fixture bypass.'],
+        ['The setup changes shared external state after import.', 'Use a scoped dependency mock and restore shared state.']
+    ]) {
+        assert.ok(parseTestReviewDetailed(response(1, 'setup-error', reason, action), code, true, constraints(current)).review,
+            'execution is not a blanket veto of genuine or unknown semantic findings');
+    }
+    const aliases = code.replace('import unittest', 'from unittest import TestCase as Harness').replace('unittest.TestCase', 'Harness');
+    const aliasFacts = await mechanicalFacts(aliases);
+    assert.deepEqual(parseTestReviewDetailed(response(1, 'setup-error', 'Import Harness is not a valid test framework.',
+        'Replace Harness with a valid test framework, such as pytest.'), aliases, true, constraints(aliasFacts)).diagnostics,
+    ['existing-harness-contradiction']);
+});
+
+test('a harness contradiction rejects the complete assessment and rechecks once under the original deadline', async () => {
+    const current = await facts();
+    const malformed = JSON.stringify({ findings: [
+        { category: 'setup-error', test_line: 'L1', reason: 'Import unittest is not a valid test harness.',
+            action: 'Replace unittest with a valid test harness, such as unittest.mock or pytest.' },
+        { category: 'missing-scenario', test_line: 'L8', reason: 'The adjacent input boundary still needs a scenario.',
+            action: 'Add the adjacent input and verify its observed output.' }
+    ] });
+    const corrected = response(8, 'missing-scenario', 'The adjacent input boundary still needs a scenario.',
+        'Add the adjacent input and verify its observed output.');
+    const requests: Array<{ prompt: string; deadline: number }> = [];
+    const review = await reviewWithContractRepair({ tests: code, prompt: 'complete same-candidate facts', constraints: constraints(current),
+        deadlineAt: 1000, now: () => 1, checkCancelled: () => {}, event: () => {},
+        request: async (prompt, deadline) => { requests.push({ prompt, deadline }); return requests.length === 1 ? malformed : corrected; } });
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map(item => item.deadline), [1000, 1000]);
+    assert.match(requests[1].prompt, /existing-harness-contradiction/);
+    assert.match(requests[1].prompt, /unittest\.mock supplies mocks/);
+    assert.equal(review?.issues.length, 1);
+    assert.equal(review?.issues[0].category, 'missing-scenario', 'the host cannot strip contradictions into an empty approval');
+    let calls = 0;
+    assert.equal(await reviewWithContractRepair({ tests: code, prompt: 'complete same-candidate facts', constraints: constraints(current),
+        deadlineAt: 1000, now: () => 1, checkCancelled: () => {}, event: () => {},
+        request: async () => { calls++; return malformed; } }), undefined);
+    assert.equal(calls, 2, 'a repeated contradiction remains unavailable, without a third request or implicit approval');
+});
+
 test('only completed same-identity assertable Trace outcomes protect an expected value', async () => {
     const call = scalarProbeInput({ args: [100, 180], kwargs: {} }).input;
     const fields = typedCallFields(call)!;

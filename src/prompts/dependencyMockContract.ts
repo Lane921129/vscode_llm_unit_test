@@ -6,7 +6,8 @@ export const DEPENDENCY_MOCK_SHAPE_GUIDANCE = 'Mock only source-shown receivers:
 
 export const TEST_IMPORT_GUIDANCE = 'Import test helpers (patch/Mock aliases) in test scope; target or other-method imports do not bind them. '
     + 'Use explicit target imports, never wildcard imports: underscore-prefixed targets are not imported by *. '
-    + 'Patch the binding read by the target, preserving import aliases; never patch the selected target or its owner class.';
+    + 'Patch the binding read by the target, preserving import aliases; never patch the selected target or its owner class. '
+    + 'Do not patch immutable built-in type members; replace the source module dependency binding with a scoped stand-in instead.';
 
 /** Conditional setup guidance, not evidence that an arbitrary attribute exists or may be patched. */
 export const OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE = "For a source-proven optional getattr(owner, 'name', default), the attribute may be absent. "
@@ -80,6 +81,7 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         JSON.stringify(context?.referenced_globals || []), ...calls].join('\n').normalize('NFKC');
     const optionalGuidance = /\b(?:getattr|hasattr|__file__)\b/u.test(setupSource)
         ? OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE + ' ' : '';
+    const clockGuidance = immutableClockSetupGuidance(module, context, imports, context?.dependency_fixture_contract);
     return parameterSetup + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
         + JSON.stringify({ targetModule: module, imports: bindings, sourceCalls: calls,
             ...(topology ? { sourceConsumption: topology } : {}),
@@ -90,7 +92,51 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + (topology ? TOPOLOGY_LEGEND + ' '
             : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
         + optionalGuidance
+        + clockGuidance
         + 'A configured mock alone is not an assertion: assert the real target result or the source-shown dependency call with controlled arguments.';
+}
+
+/** Only existing lexical receiver facts select these setup examples. No source is
+ * executed, and the controlled values are inputs, never inferred target outputs. */
+function immutableClockSetupGuidance(module: string, context: any, imports: any[], topology: any): string {
+    const identifier = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
+    if (!module.split('.').every(part => identifier.test(part))
+        || topology?.schemaVersion !== 'dependency-fixture-contract-v1'
+        || !['complete', 'partial'].includes(topology.status) || !Array.isArray(topology.flows)) { return ''; }
+    const guidance: string[] = [];
+    for (const item of imports) {
+        if (item.module !== 'datetime' || item.level > 0) { continue; }
+        const binding = item.bound_name || item.alias || item.name || 'datetime';
+        if (typeof binding !== 'string' || !identifier.test(binding)
+            || binding === context?.name?.split('.')[0]) { continue; }
+        const fromType = (item.kind === 'from' || typeof item.name === 'string')
+            && ['datetime', 'date'].includes(item.name);
+        const moduleImport = item.kind !== 'from' && typeof item.name !== 'string';
+        if (!fromType && !moduleImport) { continue; }
+        for (const flow of topology.flows) {
+            if (flow.root?.kind !== 'use-point' || flow.root.name !== binding || !Array.isArray(flow.steps)
+                || !['now', 'utcnow', 'today'].includes(flow.method)) { continue; }
+            const prefix = moduleImport ? flow.steps[0]?.name : '';
+            if (fromType && flow.steps.length !== 0 || moduleImport && (flow.steps.length !== 1
+                || flow.steps[0]?.kind !== 'member' || !['datetime', 'date'].includes(prefix))) { continue; }
+            if ((moduleImport ? prefix : item.name) === 'date' && flow.method !== 'today') { continue; }
+            const clockMember = (prefix ? prefix + '.' : '') + flow.method;
+            const returned = [...flow.steps, { kind: 'member', name: flow.method }, { kind: 'return_value' }];
+            const formatsText = topology.flows.some((next: any) => next.root?.kind === 'use-point'
+                && next.root.name === binding && next.method === 'strftime'
+                && Array.isArray(next.steps) && next.steps.length === returned.length
+                && next.steps.every((step: any, index: number) => step.kind === returned[index].kind
+                    && step.name === (returned[index] as { name?: string }).name));
+            const assignment = `clock_stub.${clockMember}.return_value = controlled_clock_value`;
+            const realFormatter = formatsText ? ` Use a concrete real ${moduleImport ? prefix : item.name} fixture imported through a separate test-local alias as controlled_clock_value, leaving its real strftime to execute. `
+                + 'Never mock strftime or configure its return_value from expected text: that hides changes to the target format argument.' : '';
+            guidance.push(`For the recorded ${binding}.${clockMember} call, use with patch('${module}.${binding}') as clock_stub; ${assignment}.${realFormatter}`);
+        }
+    }
+    if (!guidance.length) { return ''; }
+    return 'IMMUTABLE CLOCK SETUP (recorded receiver shape only): ' + [...new Set(guidance)].join(' ')
+        + ' Define controlled values in test scope. Replace only the target module dependency binding, leaving the original datetime/date type and selected target callable intact; never patch datetime.datetime.now or a built-in type member. '
+        + 'Restore the binding after each case; do not add return_value/strftime layers absent from the recorded path. Execute the real target under this exact mock before relying on its result; this setup is not an observed assertion oracle. ';
 }
 
 /** This optional generation block is indivisible: identity, all flows/diagnostics and their legend travel together. */

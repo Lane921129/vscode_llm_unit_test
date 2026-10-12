@@ -19,7 +19,7 @@ interface BatchTarget {
     id: number; file: string; target: string;
     state: 'pending' | 'running' | 'finished';
     terminalStatus?: string; category?: string; stage?: string; reportDirectory?: string;
-    modelRequests?: number; environment?: EnvironmentIssue;
+    modelRequests?: number; qualificationRequests?: number; formalRequests?: number; transportAttempts?: number; environment?: EnvironmentIssue;
 }
 interface EnvironmentIssue {
     kind: 'missing-dependency' | 'import-side-effect' | 'dependency-api' | 'module-resolution' | 'other';
@@ -207,6 +207,12 @@ export class BatchJournal {
                     throw Error('incomplete-provenance');
                 }
                 target.modelRequests = events.filter(event => event.stage === 'model-request' && event.status === 'requested').length;
+                target.qualificationRequests = events.filter(event => event.stage === 'model-request' && event.status === 'requested'
+                    && event.detail?.phase === 'context-qualification').length;
+                target.formalRequests = target.modelRequests! - target.qualificationRequests!;
+                const transports = events.filter(event => event.stage === 'model-request' && event.status === 'timing'
+                    && event.detail?.version === 'model-request-timing-v1' && event.detail?.kind === 'transport');
+                target.transportAttempts = transports.length || undefined;
                 this.reportSummaries.set(id, summarizeTarget(directory, knowledge, {
                     schemaVersion: 'target-report-v1', sourcePath: path.resolve(this.sourceRoot, target.file),
                     sourceFile: target.file, target: target.target, modelIdentity: this.identity.model, requestedTier: ''

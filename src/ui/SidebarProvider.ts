@@ -19,7 +19,7 @@ import { getOllamaAllocationObservation, OLLAMA_ALLOCATION_OBSERVATIONS_KEY, ups
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
-import { buildCustomChatCompletionBody, getCustomChatCompletionText } from '../llm/customApi';
+import { buildCustomChatCompletionBody, getCustomChatCompletionText, responseSchemaForOutputFormat } from '../llm/customApi';
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, retryTransientProviderRequest } from '../llm/connectionTimeout';
 import { configuredPythonForResource } from '../environment/pythonEnvironmentController';
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
@@ -742,7 +742,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 }
                                 const connectionMetadata = getGoogleModelConnectionMetadata(listedModels as any[], credential.model);
                                 
-                                const cloudProbe = async (prompt: string, json = false) => {
+                                const cloudProbe = async (prompt: string, format: 'text' | 'review-json' = 'text') => {
                                     const controller = new AbortController();
                                     const timer = setTimeout(() => controller.abort(), MODEL_QUALIFICATION_TIMEOUT_MS);
                                     try {
@@ -750,7 +750,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             temperature: 0,
                                             thinkingMode: vscode.workspace.getConfiguration('llmUnitTest').get('cloudThinkingMode', 'minimal') === 'minimal'
                                                 ? 'minimal' : 'provider-default',
-                                            ...(json ? { responseMimeType: 'application/json' as const } : {})
+                                            ...(format === 'review-json' ? { responseMimeType: 'application/json' as const,
+                                                responseSchema: responseSchemaForOutputFormat(format) } : {})
                                         });
                                         const response = await googleThinkingSession.send(request, next => retryTransientProviderRequest(
                                             () => fetch(next.url, { method: 'POST', headers: next.headers,
@@ -767,7 +768,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 );
                                 const roleQualification = await runRoleQualificationProbes(
                                     { state: capability.capability, reason: capability.reason },
-                                    (prompt, format) => cloudProbe(prompt, format === 'json'), isolatedProbeExecutor
+                                    (prompt, format) => cloudProbe(prompt, format), isolatedProbeExecutor
                                 );
                                 const profile = {
                                     paramSize: connectionMetadata.paramSize,
