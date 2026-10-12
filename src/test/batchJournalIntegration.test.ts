@@ -73,29 +73,50 @@ test('real batch command records grouped failures and cancellation, then passes 
         assert.equal(first.manifest.expectedTargets, 6);
         assert.equal(first.manifest.finishedTargets, 6);
         assert.equal(first.manifest.allTargetsPassed, false);
-        assert.deepEqual(first.manifest.statusCounts, { failed: 4, 'dummy-skipped': 1, 'stub-smoke-generated': 1 });
+        assert.deepEqual(first.manifest.statusCounts, { 'environment-blocked': 4, 'dummy-skipped': 1, 'stub-smoke-generated': 1 });
+        assert.equal(first.manifest.complete, false, 'discovery failures still prevent complete batch certification');
+        assert.equal(first.manifest.preflightBlockedTargets, 4); assert.equal(first.manifest.attemptedTargets, 2);
         assert.deepEqual(first.manifest.discoveryFailures, [{ file: 'broken.py', stage: 'ast-discovery' }]);
         assert.deepEqual(first.manifest.environmentIssues.map((item: any) => [item.kind, item.issue, item.affectedTargets]), [
             ['missing-dependency', 'fixture_dependency_not_installed', 2],
             ['import-side-effect', 'os.mkdir (setup_state.py:2)', 2]
         ]);
         assert.ok(first.manifest.targets.every((item: any) => !item.modelRequests));
+        const preflightBlocked = first.manifest.targets.filter((item: any) => item.terminalStatus === 'environment-blocked');
+        assert.equal(preflightBlocked.length, 4);
+        assert.ok(preflightBlocked.every((item: any) => item.state === 'finished' && item.category === 'environment'
+            && item.preflightReason === 'module-blocked' && !item.reportDirectory
+            && item.preflightReport === 'preflight/final_import_check.md'
+            && fs.existsSync(path.join(first.directory, item.preflightReport))));
+        const finalImports = JSON.parse(fs.readFileSync(path.join(first.directory, 'preflight', 'final_import_check.json'), 'utf8'));
+        assert.equal(finalImports.actualImports, true);
+        assert.deepEqual(finalImports.rows.map((item: any) => [item.file, item.status]),
+            [['a_missing.py', 'blocked'], ['b_boundary.py', 'blocked'], ['c_skipped.py', 'loaded']]);
+        assert.equal(finalImports.rows[0].issue.kind, 'missing-dependency');
+        assert.equal(finalImports.rows[1].issue.kind, 'import-side-effect');
         assert.equal(fs.existsSync(path.join(root, 'must_not_exist')), false);
         const firstBytes = fs.readFileSync(path.join(first.directory, 'batch_manifest.json'), 'utf8');
         fs.writeFileSync(broken, '# corrected syntax, no functions\n');
         await run(params);
         assert.equal(fs.readFileSync(path.join(first.directory, 'batch_manifest.json'), 'utf8'), firstBytes);
         const second = manifests().find(item => item.manifest.batchId !== first.manifest.batchId)!;
-        assert.equal(second.manifest.status, 'completed');
-        assert.equal(second.manifest.complete, true);
+        assert.equal(second.manifest.status, 'partial', 'ready sources finish while blocked dependents retain their separate environment outcomes');
+        assert.equal(second.manifest.complete, false);
         assert.equal(second.manifest.allTargetsPassed, false);
         assert.equal(second.manifest.expectedTargets, 6, 'nested output folder must not be discovered as source');
+        assert.equal(second.manifest.finishedTargets, 6);
+        assert.equal(second.manifest.preflightBlockedTargets, 4); assert.equal(second.manifest.attemptedTargets, 2);
+        assert.deepEqual(second.manifest.statusCounts, first.manifest.statusCounts);
+        assert.deepEqual(second.manifest.discoveryFailures, []);
         cancelFirstTarget = true;
         await run(params);
         const cancelled = manifests().find(item => item.manifest.status === 'cancelled')!;
         assert.ok(cancelled);
         assert.equal(cancelled.manifest.complete, false);
-        assert.equal(cancelled.manifest.statusCounts.pending, 5);
+        assert.equal(cancelled.manifest.preflightBlockedTargets, 4);
+        assert.equal(cancelled.manifest.finishedTargets, 4, 'known import blockers remain terminal when the ready work is cancelled');
+        assert.equal(cancelled.manifest.attemptedTargets, 1);
+        assert.equal(cancelled.manifest.statusCounts.pending, 1);
         await run({ ...params, batchPath: path.join(root, 'missing-folder') });
         const unreadable = manifests().find(item => item.manifest.status === 'failed')!;
         assert.equal(unreadable.manifest.complete, false);
@@ -120,7 +141,9 @@ class Cases(unittest.TestCase):
 `;
         const roles: string[] = [];
         globalThis.fetch = async (_url, options) => {
-            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+            const body = JSON.parse(String(options?.body));
+            assert.equal(body.options.num_ctx, 16384, 'the declared known fixture capacity drives the actual wire request');
+            const request = readOllamaRoleRequest(body);
             let response: string;
             if (request.roleInstructions.includes('You are the test Reviewer')) {
                 roles.push('reviewer'); response = '{"findings":[]}';
@@ -138,7 +161,7 @@ class Cases(unittest.TestCase):
         utilities.detectMutationEngine = () => null;
         // This fixture exercises execution/report provenance, not unknown-context fallback.
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture',
-            paramSize: '13B', contextLength: 32768 });
+            paramSize: '13B', contextLength: 32768, contextLengthKnown: true });
         await run({ ...params, batchPath: clockRoot });
         const clockRun = manifests().find(item => item.manifest.targets[0]?.file === 'clock_sample.py')!;
         assert.ok(clockRun);

@@ -49,7 +49,10 @@ test('AST no-method-change uses the same recovery while other scope violations n
         if (reasonCode === 'no-method-change') {
             assert.equal((await validateTestCandidate('initial', context.hooks)).code, 'corrected');
         } else {
-            await assert.rejects(validateTestCandidate('initial', context.hooks), /修訂上限/);
+            await assert.rejects(validateTestCandidate('initial', context.hooks), reasonCode === 'scope-tool-error' ? /修訂驗證工具無法完成/ : /修訂上限/);
+            if (reasonCode === 'scope-tool-error') {
+                assert.equal(context.events.filter(e => e.stage === 'revision-validation' && e.status === 'tool-failed').length, 1);
+            }
             assert.equal(context.events.some(e => e.detail?.action === 'writer-recovery'), false);
         }
     }

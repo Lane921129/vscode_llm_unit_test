@@ -1,4 +1,8 @@
+import type { InputPlanSummary } from './inputPlanning';
+import type { TraceStartupBudget } from './traceStartupBudget';
+
 export const EVIDENCE_CONTRACT_VERSIONS = {
+    typeShape: 'type-shape-v1', inputPlan: 'input-plan-v1',
     behaviorObservations: 'behavior-observations-v2',
     analystEvidence: 'analysis-evidence-v2',
     semanticPlan: 'semantic-plan-v2',
@@ -17,12 +21,14 @@ export interface TraceInputSnapshot {
 export interface ObservationOrigin {
     kind: 'caller_literals' | 'source_guided' | 'semantic_guided' | 'unknown';
     file?: string; caller?: string; line?: number; detail?: string; requestId?: string;
+    generator_version?: 'input-plan-v1'; parameter?: string; reason?: string; intent?: 'valid' | 'negative';
 }
 export interface ProbeCaseObservation {
     case_id: string;
     case_index?: number;
     status: 'returned' | 'raised' | 'blocked' | 'setup_error' | 'timeout' | 'not_started' | 'worker_error';
     source: ObservationOrigin;
+    source_sites?: ObservationOrigin[];
     input_before: TraceInputSnapshot;
     input_after: TraceInputSnapshot | null;
     inputs_mutated?: boolean;
@@ -36,6 +42,7 @@ export interface ProbeCaseObservation {
 export interface BehaviorObservation {
     case_id?: string;
     source?: ObservationOrigin;
+    source_sites?: ObservationOrigin[];
     input_before?: TraceInputSnapshot;
     input_after?: TraceInputSnapshot | null;
     inputs_mutated?: boolean;
@@ -67,7 +74,11 @@ export interface BehaviorObservations {
     isolation?: 'fresh-process-per-case';
     complete?: boolean;
     duration_ms?: number;
+    trace_timing?: TraceStartupBudget;
     planning?: { status: 'completed' | 'failed' | 'timeout' | 'worker_error'; duration_ms?: number };
+    input_plan?: InputPlanSummary;
+    input_deduplication?: { schema_version: 'probe-case-deduplication-v1'; planned_count: number;
+        unique_count: number; duplicate_count: number; source_count: number };
     recovery_reason?: string;
     func_name: string;
     args: string[];
@@ -76,7 +87,7 @@ export interface BehaviorObservations {
     load_error: string | null;
     load_diagnostic?: { stage: string; exception_type: string; message: string; missing_module: string | null; traceback: string };
     blocked_operations?: string[];
-    input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry' | 'semantic_guided';
+    input_source?: 'caller_literals' | 'source_guided' | 'source_guided_retry' | 'semantic_guided' | 'user_fixture';
 }
 
 export interface SelectedTestRule {
@@ -146,6 +157,8 @@ export function observationsForPrompt(observations?: BehaviorObservations): unkn
     const caseStatuses: Record<string, number> = {};
     for (const item of observations.cases || []) { caseStatuses[item.status] = (caseStatuses[item.status] || 0) + 1; }
     return { func_name: observations.func_name, args: observations.args, examples: project(observations.examples),
+        ...(observations.input_plan ? { inputPlanning: { status: observations.input_plan.status,
+            diagnostics: observations.input_plan.diagnostics } } : {}),
         errors: project(observations.errors || []), load_error: observations.load_error,
         blocked_operations: observations.blocked_operations, complete: observations.complete,
         caseStatuses, snapshotDetails: 'artifact-only; not state assertions' };

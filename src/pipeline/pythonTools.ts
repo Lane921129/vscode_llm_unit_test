@@ -7,6 +7,7 @@ export const PYTHON_TOOLS = {
     ast: 'ast_extractor.py',
     callers: 'ast_caller_finder.py',
     trace: 'dynamic_tracer.py',
+    probeFixtureBuilder: 'probe_fixture_builder.py',
     preflight: 'module_preflight.py',
     initializationPlan: 'plan_import_initialization.py',
     sqliteSchemaPlan: 'sqlite_schema_plan.py',

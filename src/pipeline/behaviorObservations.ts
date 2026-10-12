@@ -1,14 +1,25 @@
 import { BehaviorObservation, BehaviorObservations, ProbeCaseObservation } from './evidenceContracts';
 import { validTraceInputSnapshot as validInput } from './traceValues';
+import { validInputPlan } from './inputPlanning';
 
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
 const statuses = new Set(['returned', 'raised', 'blocked', 'setup_error', 'timeout', 'not_started', 'worker_error']);
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 1024;
+const validOrigin = (value: unknown): boolean => object(value)
+    && ['caller_literals', 'source_guided', 'semantic_guided', 'unknown'].includes(value.kind);
+const validSourceSites = (value: unknown): boolean => value === undefined
+    || Array.isArray(value) && value.length > 0 && value.length <= 10000 && value.every(validOrigin);
+function validDeduplication(value: unknown): boolean {
+    return object(value) && value.schema_version === 'probe-case-deduplication-v1'
+        && ['planned_count', 'unique_count', 'duplicate_count', 'source_count'].every(key => Number.isSafeInteger(value[key])
+            && value[key] >= 0 && value[key] <= 10000)
+        && value.unique_count + value.duplicate_count === value.planned_count && value.source_count === value.planned_count;
+}
 
 function validCase(value: unknown): value is ProbeCaseObservation {
     return object(value) && identifier(value.case_id) && statuses.has(value.status)
-        && object(value.source) && ['caller_literals', 'source_guided', 'semantic_guided', 'unknown'].includes(value.source.kind)
+        && validOrigin(value.source) && validSourceSites(value.source_sites)
         && validInput(value.input_before, !['returned', 'raised'].includes(value.status))
         && (value.input_after === null ? !['returned', 'raised'].includes(value.status) : validInput(value.input_after))
         && typeof value.duration_ms === 'number' && Number.isFinite(value.duration_ms) && value.duration_ms >= 0;
@@ -16,6 +27,7 @@ function validCase(value: unknown): value is ProbeCaseObservation {
 
 function validObservation(value: unknown): value is BehaviorObservation {
     return object(value) && identifier(value.case_id) && strings(value.args)
+        && validSourceSites(value.source_sites)
         && (value.kwargs === undefined || object(value.kwargs) && Object.values(value.kwargs).every(item => typeof item === 'string'))
         && (value.constructor_args === undefined || strings(value.constructor_args))
         && (value.constructor_kwargs === undefined || object(value.constructor_kwargs)
@@ -34,6 +46,12 @@ export function parseBehaviorObservations(raw: string | unknown, target: string)
         || !(value.load_error === null || typeof value.load_error === 'string')
         || value.isolation !== 'fresh-process-per-case' || typeof value.complete !== 'boolean') {
         throw new Error('Invalid controlled observation contract');
+    }
+    if (value.input_plan !== undefined && !validInputPlan(value.input_plan)) {
+        throw new Error('Invalid input planning contract');
+    }
+    if (value.input_deduplication !== undefined && !validDeduplication(value.input_deduplication)) {
+        throw new Error('Invalid probe case planning contract');
     }
     const cases = new Map(value.cases.map((item: ProbeCaseObservation) => [item.case_id, item]));
     if (cases.size !== value.cases.length) { throw new Error('Duplicate controlled observation case identity'); }
@@ -88,6 +106,14 @@ export function recoverBehaviorProgress(text: string, target: string, reason: st
             if (event.event === 'planning_completed') {
                 if (!strings(event.args) || !(event.load_error === null || typeof event.load_error === 'string')) { return undefined; }
                 result.args = event.args; result.load_error = event.load_error; result.planning = event.planning;
+                if (event.input_deduplication !== undefined && event.input_deduplication !== null) {
+                    if (!validDeduplication(event.input_deduplication)) { return undefined; }
+                    result.input_deduplication = event.input_deduplication;
+                }
+                if (event.input_plan !== undefined && event.input_plan !== null) {
+                    if (!validInputPlan(event.input_plan)) { return undefined; }
+                    result.input_plan = event.input_plan;
+                }
                 if (strings(event.blocked_operations)) { result.blocked_operations = event.blocked_operations; }
                 if (Array.isArray(event.planned_cases)) {
                     for (const item of event.planned_cases) {

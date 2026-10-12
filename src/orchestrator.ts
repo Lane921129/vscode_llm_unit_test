@@ -1,4 +1,6 @@
 import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
+import { loadTargetProbeFixtures, ProbeFixtureIdentity } from './pipeline/probeInputFixtures';
+import { traceTimingPreferences } from './pipeline/traceStartupBudget';
 import { localize, withLanguage } from './i18n/core';
 import { initI18n } from './i18n';
 import * as vscode from 'vscode';
@@ -39,8 +41,11 @@ import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
+import { partitionBatchPreflight, BatchPreflightTarget, BatchPreflightRow } from './pipeline/batchPreflightPartition';
+import { writeBatchPreflightSnapshot } from './pipeline/batchPreflightSnapshot';
 import { presentOutcome, presentSummaryOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
 import { TierHistory } from './pipeline/tierHistory';
+import { mayFallbackTier, selectCandidateRepairRole } from './tier/tierFailurePolicy';
 import { ReportIdentity, writeTargetReports, renderMutationBaselineTiming } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
 import { deduplicateTargets } from './pipeline/batchScope';
@@ -87,6 +92,7 @@ import { configuredPythonForResource, PythonEnvironmentController } from './envi
 import { ImportSetupController } from './environment/importSetupController';
 import { configureTestResources } from './environment/resourceSetupController';
 import { inspectProjectImports, ImportCheckTarget } from './environment/projectImportCheck';
+import { verifyInitializationSources } from './environment/initializationPlanning';
 import { ImportFixtureRule } from './pipeline/importFixtures';
 import { buildTargetIsolatedResourceContext, type IsolatedResourceSourceEvidence } from './prompts/isolatedResourceContext';
 import { readResourceSetupFailure } from './pipeline/resourceSetupFailure';
@@ -123,6 +129,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
 import { runSpawn } from './utils/processRunner';
+import { existingRealPath } from './utils/fileIdentity';
 import { ExecutionManager, currentExecution, runInExecution, isExecutionCancelled, throwIfExecutionCancelled } from './pipeline/executionContext';
 
 
@@ -366,11 +373,14 @@ interface CallerContext {
 
 interface AstContext {
     name: string;
+    probeInputFixture?: ProbeFixtureIdentity;
+    source_setup_call_contract?: unknown;
     /** Python AST uses null for module-level functions without an owning class. */
     class_name?: string | null;
     target_import_module?: string;
     args: string[];
-    signature?: Array<{ name: string; kind: 'positional_only' | 'positional_or_keyword' | 'keyword_only' | 'var_positional' | 'var_keyword'; annotation: string | null; default: string | null; required: boolean }>;
+    type_shape_version?: 'type-shape-v1';
+    signature?: Array<{ name: string; kind: 'positional_only' | 'positional_or_keyword' | 'keyword_only' | 'var_positional' | 'var_keyword'; annotation: string | null; default: string | null; required: boolean; type_shape?: import('./pipeline/inputPlanning').TypeShape }>;
     required_args?: string[];
     docstring: string;
     calls: string[];
@@ -528,6 +538,7 @@ export function activate(context: vscode.ExtensionContext) {
                     files = scope.selectedFiles.map(file => path.join(scope.root, file));
                     initializeBatchRuntimeQualification(scope.root, files, runParams.pythonExecutable);
                     const tasks: Array<() => Promise<void>> = [];
+                    const taskSources: BatchPreflightTarget[] = [];
                     const importTargets: ImportCheckTarget[] = [];
                     for (const file of files) {
                         throwIfExecutionCancelled();
@@ -547,6 +558,7 @@ export function activate(context: vscode.ExtensionContext) {
                         if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
                         for (const target of targets) {
                             const id = tasks.length;
+                            taskSources.push({ id, file: path.relative(existingRealPath(scope.root), existingRealPath(file)).replace(/\\/g, '/'), target });
                             tasks.push(async () => {
                                 throwIfExecutionCancelled();
                                 batch.begin(id);
@@ -580,13 +592,19 @@ export function activate(context: vscode.ExtensionContext) {
                         return check;
                     };
                     const importCheck = await inspect();
+                    let finalRows: BatchPreflightRow[] = importCheck.rows;
+                    let actualImports = !importCheck.planningSources;
+                    let finalFixtureId = importCheck.fixtureId ?? readPlan().plan?.id ?? null;
+                    const snapshotPreflight = () => writeBatchPreflightSnapshot(batchDirectory, { rows: finalRows, actualImports,
+                        fixtureId: finalFixtureId, knownSecrets: [runParams.cloudKey, runParams.customKey].filter((key): key is string => Boolean(key)) });
+                    snapshotPreflight();
                     const blockedModules = importCheck.rows.filter(row => row.status === 'blocked').length;
                     batch.preflight(blockedModules);
                     if (blockedModules) {
                         const report = path.join(importCheck.directory, 'import_check.md');
                         await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(report), { preview: true });
                         const choice = importCheck.planningSources ? localize('處理初始化設定') : await vscode.window.showWarningMessage(
-                            localize("{0} 個模組載入受阻；尚未呼叫模型。處理初始化設定後，重檢就緒會接續本批次；仍受阻則停止。也可明確選擇僅繼續記錄失敗。", blockedModules),
+                            localize("{0} 個模組載入受阻；尚未呼叫模型。處理初始化後，已確認可載入的來源會接續測試；受阻來源另列原因。也可直接繼續已就緒目標。", blockedModules),
                             { modal: true }, localize("處理初始化設定"), localize("繼續測試並記錄失敗"));
                         throwIfExecutionCancelled();
                         const decision = choice === localize('處理初始化設定') ? 'prepare'
@@ -609,13 +627,17 @@ export function activate(context: vscode.ExtensionContext) {
                                 blockedModules: setup.rows.filter(row => row.status === 'blocked').length,
                                 ...(setup.status === 'ready' ? { resourceCount: readPlan().plan?.rules.reduce((count, rule) => count + (rule.resources?.length || 0), 0) || 0 } : {}),
                                 ...(setup.directory ? { report: path.join(setup.directory, 'import_setup.md') } : {}) });
-                            if (setup.status !== 'ready') {
+                            finalRows = setup.rows;
+                            actualImports = setup.actualImports === true;
+                            finalFixtureId = setup.fixtureId;
+                            snapshotPreflight();
+                            if (!['ready', 'blocked'].includes(setup.status) || setup.actualImports !== true) {
                                 outcome = ['cancelled', 'declined'].includes(setup.status) ? 'cancelled' : 'environment-blocked';
                                 log(localize('[系統] 初始化未就緒（{0}）；本批次停止，未開始的目標保持未完成。請查看初始化報告。', setup.status));
                                 return;
                             }
                             try {
-                                continuity.verify(setup, importTargets, configuredPythonForResource(runParams.batchPath, runParams.batchPath));
+                                continuity.verify(setup, importTargets, configuredPythonForResource(runParams.batchPath, runParams.batchPath), { allowBlocked: true });
                                 if ((readPlan().plan?.id || null) !== setup.fixtureId) {
                                     throw new Error(localize('初始化設定在預檢期間改變，批次已停止；請重新開始。'));
                                 }
@@ -628,13 +650,30 @@ export function activate(context: vscode.ExtensionContext) {
                             // Setup uses its own execution cache. Refresh this original analysis too,
                             // including repairs that leave the fixture ID unchanged (e.g. imports).
                             invalidateCurrentPreflightFailures();
-                            batch.preflight(0);
-                            batch.preflightEvidence({ phase: 'decision', status: 'resumed', fixtureId: setup.fixtureId });
-                            log(localize('[系統] 初始化重檢已就緒，繼續同一批次的 {0} 個目標。', tasks.length));
+                            finalRows = setup.rows;
+                            actualImports = true;
+                            finalFixtureId = setup.fixtureId;
+                            batch.preflightEvidence({ phase: 'decision', status: setup.status === 'ready' ? 'resumed' : 'resumed-partially', fixtureId: setup.fixtureId });
                         }
                     }
-                    log(localize("[系統] 批次掃描完成：{0} 個函式，將逐一分析與測試。", tasks.length));
-                    await runSequentially(tasks, log);
+                    continuity.verifySources(configuredPythonForResource(runParams.batchPath, runParams.batchPath));
+                    if (importCheck.initializationSources) { verifyInitializationSources(importCheck.root, importCheck.initializationSources); }
+                    if ((readPlan().plan?.id || null) !== finalFixtureId) {
+                        throw new Error(localize('初始化設定在預檢期間改變，批次已停止；請重新開始。'));
+                    }
+                    const finalPreflightReport = snapshotPreflight();
+                    const partition = partitionBatchPreflight(taskSources, finalRows, { actualImports, identityValid: true });
+                    if (partition.status === 'invalid') {
+                        outcome = 'environment-blocked';
+                        batch.preflightEvidence({ phase: 'decision', status: 'continuation-invalidated', report: finalPreflightReport });
+                        return;
+                    }
+                    batch.blockPreflightTargets(partition.blocked, finalPreflightReport);
+                    batch.preflight(finalRows.filter(row => row.status !== 'loaded').length);
+                    batch.preflightEvidence({ phase: 'decision', status: partition.status, fixtureId: finalFixtureId,
+                        blockedModules: finalRows.filter(row => row.status !== 'loaded').length, report: finalPreflightReport });
+                    log(localize('[系統] 批次有 {0} 個可執行目標、{1} 個環境受阻目標；受阻者不計為測試通過。', partition.runnableIds.length, partition.blocked.length));
+                    await runSequentially(partition.runnableIds.map(id => tasks[id]), log);
                     outcome = 'completed';
                 } finally {
                     batch.finish(isExecutionCancelled() ? 'cancelled' : outcome);
@@ -786,7 +825,8 @@ async function runBehaviorProbe(
     pythonExecutable: string = 'python',
     supplementalInputs: SupplementalProbeInput[] = [],
     progressDirectory?: string,
-    skillInputs?: TypedProbeInputsV1
+    skillInputs?: TypedProbeInputsV1,
+    userFixture = false
 ): Promise<BehaviorProbeResult | null> {
     const pythonScript = pythonToolPath('trace');
     const baseArgs = [pythonScript, filePath, funcName];
@@ -795,7 +835,10 @@ async function runBehaviorProbe(
         currentTargetBudget()?.assertRemaining();
         const owner = currentExecution();
         const preflightElapsedMs = owner && tracePreflightTimes.get(owner)?.get(path.resolve(filePath));
-        const startupBudget = planTraceStartupBudget(preflightElapsedMs, currentTargetBudget()?.remainingMs() ?? 60000);
+        const timingConfig = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri?.file?.(filePath));
+        const preferences = traceTimingPreferences(timingConfig.get<unknown>('traceTimeoutSeconds', 60),
+            timingConfig.get<unknown>('tracePlanningTimeoutSeconds', 15), timingConfig.get<unknown>('traceCaseTimeoutSeconds', 5));
+        const startupBudget = planTraceStartupBudget(preflightElapsedMs, currentTargetBudget()?.remainingMs() ?? 300000, preferences);
         const probeDeadlineAt = Math.min(Date.now() + startupBudget.outerTimeoutMs, currentTargetBudget()?.deadlineAt ?? Infinity);
         const runProbe = async (inputs: TypedProbeInputsV1 | null = null): Promise<BehaviorProbeResult> => {
             currentTargetBudget()?.assertRemaining();
@@ -803,34 +846,34 @@ async function runBehaviorProbe(
             if (remainingMs <= 0) { throw new AnalysisStageError('ast-trace', 'trace', 'Trace planning allowance exhausted.'); }
             const totalTimeoutSeconds = Math.min(startupBudget.totalTimeoutSeconds, remainingMs / 1000);
             const [progressPath] = reserveArtifactFiles(progressDirectory || os.tmpdir(), ['trace'], 'jsonl');
-            const args = [...baseArgs, JSON.stringify(inputs), JSON.stringify({
+            const args = [...baseArgs, '-', JSON.stringify({
                 planning_timeout_seconds: Math.min(startupBudget.planningTimeoutSeconds, totalTimeoutSeconds),
                 total_timeout_seconds: totalTimeoutSeconds, case_timeout_seconds: startupBudget.caseTimeoutSeconds,
                 progress_path: progressPath
             })];
             try {
                 const run = await runSpawn(pythonExecutable, args, {
-                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: remainingMs
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: JSON.stringify(inputs), timeout: remainingMs
                 });
                 if (run.code !== 0) { throw new Error('Trace worker process failed'); }
-                return parseBehaviorObservations(run.stdout.trim(), funcName);
+                return { ...parseBehaviorObservations(run.stdout.trim(), funcName), trace_timing: startupBudget };
             } catch (error) {
                 const recovered = fs.existsSync(progressPath) ? recoverBehaviorProgress(fs.readFileSync(progressPath, 'utf8'),
                     funcName, error instanceof Error ? error.message : 'Trace interrupted') : undefined;
-                if (recovered) { return recovered; }
+                if (recovered) { return { ...recovered, trace_timing: startupBudget }; }
                 throw error;
             } finally {
                 if (!progressDirectory && fs.existsSync(progressPath)) { fs.unlinkSync(progressPath); }
             }
         };
         const initial = await runProbe(suppliedInputs);
-        if (shouldRetryTraceWithoutCallerInputs(initial, suppliedInputs?.cases.length || 0)) {
+        if (!userFixture && shouldRetryTraceWithoutCallerInputs(initial, suppliedInputs?.cases.length || 0)) {
             const retry = await runProbe();
             return { ...mergeBehaviorObservations(initial, retry), input_source: 'source_guided_retry' };
         }
         return {
             ...initial,
-            input_source: skillInputs || supplementalInputs.length > 0
+            input_source: userFixture ? 'user_fixture' : skillInputs || supplementalInputs.length > 0
                 ? 'semantic_guided'
                 : suppliedInputs?.cases.length ? 'caller_literals' : 'source_guided'
         };
@@ -1108,8 +1151,8 @@ async function validateGeneratedTestCode(
     allowedExceptionNames?: string[],
     targetClassName?: string | null,
     pythonExecutable: string = 'python',
-    bindingContext?: { module: string; target: string; className?: string | null; source?: string; dependencies: Record<string, string> }
-): Promise<{ valid: boolean; reason?: string }> {
+    bindingContext?: { module: string; target: string; className?: string | null; source?: string; moduleSource?: string; dependencies: Record<string, string> }
+): Promise<{ valid: boolean; reason?: string; reasonCode?: string; repairRole?: 'writer' }> {
     const structure = validateUnittestStructure(
         code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName, Boolean(bindingContext)
     );
@@ -1130,10 +1173,15 @@ async function validateGeneratedTestCode(
                 } }) : code, timeout: 5000 }
         );
         if (parsed.code !== 0) {
-            return { valid: false, reason: localize("Python AST 無法解析：{0}", (parsed.stderr || parsed.stdout).trim().slice(0, 300)) };
+            if (!bindingContext) { return { valid: false, reason: localize("生成測試未通過 Python 語法解析。") }; }
+            throw new AnalysisStageError('validation', 'static-analysis', localize("Python AST 驗證工具執行失敗；未交給 Writer 修復或降級 Tier。"),
+                { reasonCode: 'bindings-tool-failed' });
         }
         if (bindingContext) {
-            const bindings = JSON.parse(parsed.stdout) as { valid: boolean; reason?: string };
+            const bindings = JSON.parse(parsed.stdout) as { valid: boolean; reason?: string; reasonCode?: string; repairRole?: 'writer' };
+            if (!bindings || typeof bindings.valid !== 'boolean') {
+                throw new AnalysisStageError('validation', 'static-analysis', 'Invalid binding validator contract.', { reasonCode: 'bindings-contract-invalid' });
+            }
             if (!bindings.valid) { return bindings; }
         }
         if (targetCallable && targetUsage === 'call' && Array.isArray(targetSignature)) {
@@ -1144,23 +1192,24 @@ async function validateGeneratedTestCode(
                 { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
             );
             if (compatibility.code !== 0) {
-                return {
-                    valid: false,
-                    reason: localize("目標函式簽名驗證無法執行：{0}", (compatibility.stderr || compatibility.stdout).trim().slice(0, 300))
-                };
+                throw new AnalysisStageError('validation', 'static-analysis', 'Target call validator failed.', { reasonCode: 'target-calls-tool-failed' });
             }
             try {
                 const callValidation = JSON.parse(compatibility.stdout) as { valid?: boolean; reason?: string };
+                if (!callValidation || typeof callValidation.valid !== 'boolean') { throw new Error('Invalid target call contract'); }
                 if (!callValidation.valid) {
                     return { valid: false, reason: callValidation.reason || localize("呼叫不符合被測函式簽名") };
                 }
             } catch {
-                return { valid: false, reason: localize("目標函式簽名驗證回傳了無法解析的內容") };
+                throw new AnalysisStageError('validation', 'static-analysis', 'Invalid target call validator contract.', { reasonCode: 'target-calls-contract-invalid' });
             }
         }
         return { valid: true };
     } catch (error: any) {
-        return { valid: false, reason: localize("Python AST 驗證無法執行：{0}", error.message || error) };
+        if (error instanceof AnalysisStageError) { throw error; }
+        throwIfExecutionCancelled();
+        throw new AnalysisStageError('validation', 'static-analysis', localize("Python AST 驗證工具無法完成；未交給 Writer 修復或降級 Tier。"),
+            { reasonCode: 'bindings-tool-unavailable' });
     }
 }
 
@@ -1248,6 +1297,14 @@ function buildAstMarkdownReport(astContext: AstContext): string {
     let astReport = localize("### AST 靜態解析結果\n");
     astReport += localize("- 函式名稱: `{0}`\n", astContext.name);
     astReport += localize("- 參數列表: `{0}`\n", astContext.args.join(', ') || localize("無"));
+    const plan = astContext.traceResult?.input_plan;
+    if (plan) {
+        const labels = { ready: localize('已準備測資'), partial: localize('已準備部分測資'), 'needs-input': localize('需要補充輸入或 fixture') };
+        astReport += localize('- 輸入規劃：{0}；產生 {1} 個候選（{2}）\n', labels[plan.status], plan.generated_cases, plan.schema_version);
+        for (const diagnostic of plan.diagnostics) {
+            astReport += `  - ${diagnostic.parameter || localize('初始化')}：${diagnostic.code}（${diagnostic.reason}）\n`;
+        }
+    }
     astReport += localize("- 相依呼叫: `{0}`\n", astContext.calls.join(', ') || localize("無"));
     if (astContext.docstring) {
         astReport += localize("- 文件註解: `{0}`\n", astContext.docstring.trim().replace(/\n/g, ' '));
@@ -1303,7 +1360,8 @@ async function resolveAstAndDependencies(
     log: (text: string) => void,
     beforeBehavior: (context: AstContext) => Promise<PreflightResult>,
     progressDirectory?: string,
-    probeBehavior = true
+    probeBehavior = true,
+    knownSecrets: readonly string[] = []
 ): Promise<AstContext | null> {
     log(localize("[AST] 正在解析函式 `{0}` 的結構與依賴...", funcName));
     const astContext = await extractAstContext(filePath, funcName, pythonExecutable);
@@ -1362,7 +1420,16 @@ async function resolveAstAndDependencies(
 
     if (!probeBehavior) { return astContext; }
     log(localize("[行為探測] 正在受控執行函式以取得輸入輸出觀測..."));
-    const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable, [], progressDirectory);
+    const fixtureFile = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri?.file?.(filePath)).get<string>('probeInputFile', '');
+    const fixture = loadTargetProbeFixtures({ root: projectRoot, file: filePath, target: funcName,
+        sourceHash: evidenceHash(fs.readFileSync(filePath, 'utf8')), fixtureFile, knownSecrets });
+    if (fixture.status === 'rejected') {
+        throw new AnalysisStageError('ast-trace', 'trace', localize("來源綁定的 Trace 測資無效；請修正測資檔後重試。"),
+            { reasonCode: 'probe-input-fixture-rejected', diagnostics: fixture.diagnostics });
+    }
+    astContext.probeInputFixture = fixture.identity;
+    const traceResult = await runBehaviorProbe(filePath, funcName, astContext.callerContexts, pythonExecutable, [], progressDirectory,
+        fixture.inputs, fixture.status === 'loaded');
     if (traceResult) { astContext.traceResult = traceResult; }
     if (traceResult && !traceResult.load_error) {
         astContext.traceResult = traceResult;
@@ -1903,7 +1970,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             log,
             checkEnvironment,
             sessionDir,
-            mode === 'full'
+            mode === 'full',
+            knownSecrets
         );
         if (astContext && !astContext.error) {
             targetFuncName = astContext.name || targetFuncName;
@@ -1918,6 +1986,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         target: targetFuncName,
         className: astContext?.class_name,
         source: astContext?.code,
+        moduleSource: initialSource,
         dependencies: Object.fromEntries((astContext?.file_imports || [])
             .filter((item: any) => item.kind === 'from' && item.name && item.name !== '*'
                 && (astContext?.calls || []).includes(item.alias || item.bound_name || item.name))
@@ -1927,7 +1996,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         astContext.target_import_module = targetImportModule;
     }
     journal.knowledge({ sourceStructure: astContext?.code || null, sourceContext: astContext,
-        initialTargetObservations: astContext?.traceResult || null, importContract: testBindingContext,
+        initialTargetObservations: astContext?.traceResult || null,
+        importContract: { ...testBindingContext, moduleSource: undefined, moduleSourceHash: evidenceHash(initialSource) },
         roleQualification: roleQualification || null });
     if (!preflight) { await checkEnvironment(astContext); }
     journal.knowledge({ dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
@@ -2580,7 +2650,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 }
                                 const subReason = subGate.reason || localize("不明驗證錯誤");
                                 recordRejected(subClean, retry, subValidation.valid ? 'assertion-evidence' : 'unittest-structure',
-                                    subValidation.valid ? 'trace-evidence-rejected' : 'candidate-structure-rejected');
+                                    subValidation.valid ? 'trace-evidence-rejected' : subValidation.reasonCode || 'candidate-structure-rejected');
                                 if (retry === 0) {
                                     log(localize("[分治合流] 呼叫點 {0} 子回覆未通過格式／行為觀測證據驗證：{1}；將重試此子任務。", cIdx + 1, subReason));
                                     subGenerationPrompt = buildWriterRevisionRequest({
@@ -2654,7 +2724,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             log(localize("[警告] 模型回傳程式碼為空或包含無效標籤，嘗試自動重試..."));
                             continue;
                         } else {
-                            throw new Error(localize("模型產生的程式碼內容為空 (已重試失敗)"));
+                            throw new CandidateValidationError(localize("模型產生的程式碼內容為空 (已重試失敗)"));
                         }
                     }
 
@@ -2667,7 +2737,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             log(localize("[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試..."));
                             continue;
                         } else {
-                            throw new Error(localize("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試"));
+                            throw new CandidateValidationError(localize("AI 連續兩次輸出了原始碼而非測試碼，無法產生有效測試"));
                         }
                     }
 
@@ -2681,7 +2751,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 log(localize("[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求..."));
                                 continue;
                             } else {
-                                throw new Error(localize("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）"));
+                                throw new CandidateValidationError(localize("AI 輸出格式連續兩次無法解析為有效測試（無任何 assert 或可用語句）"));
                             }
                         }
                         log(localize("[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。"));
@@ -2706,7 +2776,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (!candidateValidation.valid || !traceEvidenceValidation.valid) {
                         const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
                         recordRejected(sanitizedCode, llmRetry, candidateValidation.valid ? 'assertion-evidence' : 'unittest-structure',
-                            candidateValidation.valid ? 'trace-evidence-rejected' : 'candidate-structure-rejected');
+                            candidateValidation.valid ? 'trace-evidence-rejected' : candidateValidation.reasonCode || 'candidate-structure-rejected');
                         if (llmRetry === 0) {
                             log(localize("[警告] 模型輸出未通過證據／Python unittest 驗證：{0}；將以嚴格格式要求重試。", validationReason));
                             generationPrompt = buildWriterRevisionRequest({
@@ -2726,7 +2796,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             sanitizedCode = '';
                             continue;
                         }
-                        throw new Error(localize("模型連續兩次未通過證據／Python unittest 驗證：{0}", validationReason));
+                        throw new CandidateValidationError(localize("模型連續兩次未通過證據／Python unittest 驗證：{0}", validationReason));
                     }
 
                     break; // 成功跳出 retry
@@ -2765,7 +2835,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const result = await runSpawn(pythonExecutable,
                         ['-B', pythonToolPath('scenarios')],
                         { input: code, timeout: 5000, env: testExecutionEnv });
-                    if (result.code !== 0) { throw new Error(localize("無法建立測試情境識別：") + result.stderr); }
+                    if (result.code !== 0) { throw new AnalysisStageError('validation', 'scenario-inventory', localize("無法建立測試情境識別；工具未完成，未採用候選。")); }
                     inventories.set(hash, JSON.parse(result.stdout));
                 }
                 return inventories.get(hash)!;
@@ -2840,8 +2910,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
                         exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
                     if (!structural.valid) {
+                        recordRole('structure', 'rejected', { reasonCode: structural.reasonCode || 'candidate-structure-rejected',
+                            repairRole: 'writer' });
                         return { reason: structural.reason || 'Structure validation failed',
-                            gate: 'unittest-structure', reasonCode: 'candidate-structure-rejected' };
+                            gate: 'unittest-structure', reasonCode: structural.reasonCode || 'candidate-structure-rejected' };
                     }
                     const trace = await validateTraceEvidence(code, targetFuncName, astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name);
                     return !trace.valid ? { reason: trace.reason || 'Validation failed',
@@ -2873,7 +2945,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     }
                     return reviewSession.review(evidenceHash(sys + '\n' + prompt + '\n' + (importFixtures?.id || '')), async () => {
                         try {
-                            return await reviewWithContractRepair({ tests: code, prompt,
+                            return await reviewWithContractRepair({ tests: code, prompt, knownSecrets,
                                 constraints: { target: params.funcName || targetFuncName, facts, identity,
                                     methodKind: astContext?.method_kind || (astContext?.class_name ? 'instance' : 'module'),
                                     module: targetImportModule,
@@ -2891,10 +2963,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }, (status, detail) => recordRole('reviewer', status, detail));
                 },
-                repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
+                repairRole: (code, failure) => selectCandidateRepairRole(mayUseModelAuthoredRepair, canRepairTestMethod(code, failure)),
                 revise: async (code, failure, role, attempt) => {
                     if (role === 'writer' ? !mayUseModelAuthoredTests : !mayUseModelAuthoredRepair) {
-                        throw new Error(localize("Auto 未驗證 {0} 角色不可呼叫該角色修訂。", role));
+                        throw new AnalysisStageError('validation', 'role-qualification', localize("Auto 未驗證 {0} 角色不可呼叫該角色修訂。", role));
                     }
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
@@ -2996,7 +3068,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const coverage = await runSpawn(pythonExecutable, ['-m', 'coverage', 'report', '-m'],
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
                     out += '\n' + coverage.stdout + coverage.stderr;
-                    if (coverage.code !== 0) { throw new Error(localize("Coverage 工具執行失敗：") + out); }
+                    if (coverage.code !== 0) { throw new AnalysisStageError('environment', 'coverage', localize("Coverage 工具執行失敗；未採用候選品質證據。")); }
                     const nativeCoverage = await runSpawn(pythonExecutable, ['-B', pythonToolPath('coverage'),
                         params.filePath, params.funcName || targetFuncName, '--invocation-evidence', invocationFile,
                         '--expected-run-id', testRunId, '--expected-test-hash', testHash],
@@ -3050,7 +3122,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             break; // 預先驗證成功，跳出 Tier 降階迴圈
         } catch (tierErr: any) {
             throwIfExecutionCancelled();
-            if (tierErr instanceof AnalysisStageError) { throw tierErr; }
+            if (!mayFallbackTier(tierErr, currentTier)) { throw tierErr; }
             if (tierErr instanceof RepairResponseError) {
                 recordRole('bug-fixer', 'tier-failed', { tier: currentTier, category: 'model-format',
                     reason: tierErr.message, reasonCodes: tierErr.diagnostic.reasonCodes });

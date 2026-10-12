@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /** Source consumption is setup guidance, never a dependency or target oracle. */
 export const DEPENDENCY_MOCK_SHAPE_GUIDANCE = 'Mock only source-shown receivers: factory(...).finish() needs factory_mock.return_value.finish.return_value; keep its return object. '
     + 'A direct factory(...) uses factory_mock.return_value. Never add layers or infer expected values from this pattern. '
@@ -57,7 +59,7 @@ export function relevantSourceImports(context?: any): any[] {
 
 /** Display existing AST bindings, not guessed patch permissions or return values. */
 export function formatDependencyMockContract(module: string, context?: any, allowedMockTargets?: readonly string[],
-    includeTopology = true): string {
+    includeTopology = true, options: { sourceImportsListed?: boolean } = {}): string {
     const imports = relevantSourceImports(context);
     const calls: string[] = (context?.calls || []).filter((call: unknown): call is string => typeof call === 'string');
     const bindings = imports.map(item => ({
@@ -74,7 +76,8 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + '. Build input values in test scope and pass them to the target; parameter names alone do not authorize '
         + 'patching target_module.<parameter>. An independent source-proven global lookup may justify a module patch. '
         + 'Do not infer fixture shapes or expected outputs from parameter names.\n' : '';
-    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return parameterSetup; }
+    const sourceCalls = sourceSetupCallGuidance(module, context);
+    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return parameterSetup + sourceCalls; }
     // Conservative prompt relevance only; identifiers in source strings can
     // retain extra guidance but never authorize a patch or an assertion.
     const setupSource = [context?.code || '', JSON.stringify(context?.class_context || null),
@@ -82,8 +85,18 @@ export function formatDependencyMockContract(module: string, context?: any, allo
     const optionalGuidance = /\b(?:getattr|hasattr|__file__)\b/u.test(setupSource)
         ? OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE + ' ' : '';
     const clockGuidance = immutableClockSetupGuidance(module, context, imports, context?.dependency_fixture_contract);
-    return parameterSetup + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
-        + JSON.stringify({ targetModule: module, imports: bindings, sourceCalls: calls,
+    const globalsGuidance = context?.referenced_globals?.length
+        ? 'Source globals are not test globals: explicitly import the canonical target module and read its source-shown bindings. ' : '';
+    const conversions = context?.referenced_globals?.length || /\bstr\s*\(/u.test(setupSource)
+        ? 'For dependency call assertions, retain source-shown argument conversions and types: str(path) is not the Path object. ' : '';
+    const observations = [...context?.traceResult?.examples || [], ...context?.traceResult?.errors || []];
+    const diagnosticGuidance = observations.some(item => item.call_assertable === false || item.result_assertable === false
+        || item.oracle_reason || item.result_type === 'non_assertable')
+        ? 'Never use non_assertable diagnostic text or private tool classes as a return fixture or expected type. ' : '';
+    const aliasGuidance = imports.length ? 'Use distinct mock/import names; as Path shadows imported Path. ' : '';
+    return parameterSetup + sourceCalls + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
+        + JSON.stringify({ targetModule: module,
+            imports: options.sourceImportsListed ? { same_complete_setup_as: 'SOURCE SETUP.imports' } : bindings, sourceCalls: calls,
             ...(topology ? { sourceConsumption: topology } : {}),
             ...(allowedMockTargets ? { suppliedUsePoints: allowedMockTargets } : {}) })
         + '\nPatch source-shown use points: from-import alias => target_module.alias; module alias => target_module.alias.member. '
@@ -91,9 +104,53 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + (allowedMockTargets ? 'Supplied use points are setup hints, not an exhaustive whitelist; verify every patch against the source binding. ' : 'No patch list was supplied; source imports alone do not prove a patch is allowed. ')
         + (topology ? TOPOLOGY_LEGEND + ' '
             : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
+        + globalsGuidance + conversions + diagnosticGuidance + aliasGuidance
         + optionalGuidance
         + clockGuidance
         + 'A configured mock alone is not an assertion: assert the real target result or the source-shown dependency call with controlled arguments.';
+}
+
+/** Exact AST spellings reduce setup guesswork, not the execution or assertion gates. */
+function sourceSetupCallGuidance(module: string, context?: any): string {
+    const facts = context?.source_setup_call_contract;
+    const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
+    if (!facts || facts.schemaVersion !== 'source-setup-call-contract-v1' || facts.status !== 'complete'
+        || facts.sourceHashKind !== 'normalized-target-source' || facts.authority !== 'source-spelling-only'
+        || facts.assertionOracle !== false || facts.patchAuthorization !== false || !source
+        || facts.targetSourceHash !== createHash('sha256').update(source).digest('hex')
+        || facts.target !== (context?.class_name ? `${context.class_name}.${context.name}` : context?.name)
+        || !Array.isArray(facts.calls) || !Array.isArray(facts.optionalLookups) || !Array.isArray(facts.sourceLocations)
+        || facts.calls.length + facts.optionalLookups.length > 64 || Buffer.byteLength(JSON.stringify(facts), 'utf8') > 16384) { return ''; }
+    const identifier = (value: unknown): value is string => typeof value === 'string'
+        && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(value.normalize('NFKC'));
+    const spelling = (value: unknown): value is string => typeof value === 'string' && !!value;
+    const argument = (value: any): boolean => !!value && spelling(value.source)
+        && ['module-global', 'parameter', 'literal', 'unknown'].includes(value.scope);
+    if (facts.optionalLookups.some((item: any) => !item || !identifier(item.owner) || !identifier(item.attribute)
+            || item.ownerScope !== 'module-global' || !spelling(item.defaultSource) || !spelling(item.source)
+            || !Number.isSafeInteger(item.line) || item.line <= 0)
+        || facts.calls.some((item: any) => !item || !spelling(item.callee) || !Array.isArray(item.args)
+            || !Array.isArray(item.keywords) || !item.args.every(argument)
+            || item.keywords.some((keyword: any) => !argument(keyword) || keyword.name !== null && !identifier(keyword.name))
+            || !Number.isSafeInteger(item.line) || item.line <= 0)
+        || facts.sourceLocations.some((name: unknown) => name !== '__file__')) { return ''; }
+    if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length) { return ''; }
+    const lines = ['SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts)];
+    for (const lookup of facts.optionalLookups) {
+        lines.push(`Optional source lookup ${lookup.source}: owner is ${module}.${lookup.owner}. `
+            + `For its controlled attribute use patch.object(${module}.${lookup.owner}, ${JSON.stringify(lookup.attribute)}, controlled_value, create=True); `
+            + 'an attribute may be absent. Preserve the source default case and restore attribute existence/value.');
+    }
+    if (facts.calls.some((call: any) => [...call.args, ...call.keywords].some((arg: any) => arg.scope === 'module-global'))) {
+        lines.push('Dependency-call assertions must retain the recorded args/keywords, including conversions. '
+            + `Read each module-global spelling from ${module}.<source spelling>; do not replace it with its upstream input or imported origin. `
+            + 'Parameter/literal inputs are test-controlled; unknown expressions remain unknown. These call spellings do not choose expected target outputs.');
+    }
+    if (facts.sourceLocations.length) {
+        lines.push(`The source __file__ is ${module}.__file__, never the generated test __file__. `
+            + 'Use only source-shown operations and scoped dependency return objects; do not call test-side resolve() or invent os.path operations for expected values.');
+    }
+    return lines.join('\n') + '\n';
 }
 
 /** Only existing lexical receiver facts select these setup examples. No source is

@@ -16,6 +16,7 @@ import { hasDummyFunctionNameMarker } from '../tier/stubClassifier';
 import { importSetupMessage, ImportSetupReason, recheckReason, saveImportSetupSession } from './importSetupSession';
 import { externalExactResourcePaths, projectParentResourcePaths, uncVirtualResourcePaths } from './resourceSetup';
 import { initializationTargetFile, verifyInitializationSources } from './initializationPlanning';
+import { BatchPreflightRow, safeBatchPreflightRows } from '../pipeline/batchPreflightPartition';
 
 export type ImportSetupStatus = 'ready' | 'blocked' | 'cancelled' | 'declined' | 'failed'
     | 'busy' | 'no-targets' | 'untrusted' | 'invalid-root';
@@ -29,7 +30,11 @@ export interface ImportSetupResult {
     root?: string;
     python?: string;
     targets: ImportCheckTarget[];
-    rows: Array<{ file: string; status: 'loaded' | 'blocked' }>;
+    rows: BatchPreflightRow[];
+    /** True only for a source/configuration-validated final real scan, never static planning or a cancelled setup. */
+    actualImports?: boolean;
+    initializationSources?: Array<{ file: string; sourceHash: string }>;
+    finalCheckReport?: string;
     applied: boolean;
     reason?: ImportSetupReason;
 }
@@ -42,7 +47,7 @@ export class ImportSetupController {
 
     async prepare(projectRoot?: string, outputPath?: string, selectedTargets?: readonly ImportCheckTarget[]): Promise<ImportSetupResult> {
         const emptyResult = (status: ImportSetupStatus): ImportSetupResult => ({
-            status, fixtureId: null, targets: [], rows: [], applied: false
+            status, fixtureId: null, targets: [], rows: [], applied: false, actualImports: false
         });
         if (vscode.workspace.isTrusted === false) { await vscode.window.showWarningMessage(localize("請先信任此工作區，再執行隔離匯入預檢。")); return emptyResult('untrusted'); }
         const root = projectRoot || vscode.workspace.getConfiguration('llmUnitTest').get<string>('projectPath', '');
@@ -59,6 +64,7 @@ export class ImportSetupController {
         let applied = false;
         let fixtureId: string | null = null;
         let python: string | undefined;
+        let actualImports = false;
         let validateFinalCheck: (() => void) | undefined;
         const checks: ImportCheck[] = [];
         const targets: ImportCheckTarget[] = [];
@@ -66,6 +72,8 @@ export class ImportSetupController {
         const readyCandidate = () => reason !== 'interrupted' && reason !== 'error' && reason !== 'proposal-declined'
             && !!checks.at(-1)?.rows.length && !checks.at(-1)?.proposedPlan
             && checks.at(-1)!.rows.every(row => row.status === 'loaded');
+        const observedCandidate = () => reason !== 'interrupted' && reason !== 'error' && reason !== 'proposal-declined'
+            && !!checks.at(-1)?.rows.length && !checks.at(-1)?.planningSources;
         this.publish({ command: 'environmentPreparation', busy: true, text: localize("正在檢查模組載入；不會呼叫模型。") });
         try {
             await runInExecution(execution, async () => {
@@ -190,8 +198,9 @@ export class ImportSetupController {
                 }
             });
             execution.throwIfCancelled();
-            if (readyCandidate()) { validateFinalCheck!(); }
+            if (observedCandidate()) { validateFinalCheck!(); actualImports = true; }
         } catch (error) {
+            actualImports = false;
             reason = execution.cancelled ? 'interrupted' : 'error';
             message = execution.cancelled ? localize("已中止模組預檢。") : localize("模組預檢未完成：{0}", error instanceof Error ? error.message : String(error));
             await vscode.window.showWarningMessage(message);
@@ -210,8 +219,9 @@ export class ImportSetupController {
             // must also stop a caller from continuing with stale ready evidence.
             try {
                 execution.throwIfCancelled();
-                if (readyCandidate()) { validateFinalCheck!(); }
+                if (observedCandidate()) { validateFinalCheck!(); actualImports = true; }
             } catch {
+                actualImports = false;
                 reason = execution.cancelled ? 'interrupted' : 'error';
                 message = importSetupMessage(reason);
                 if (directory) {
@@ -231,6 +241,8 @@ export class ImportSetupController {
             : readyCandidate() ? 'ready' : 'blocked';
         return { status: resultStatus(reason), fixtureId, directory, root: latest?.root || root, python,
             targets: targets.map(target => ({ ...target })),
-            rows: latest?.rows.map(row => ({ file: row.file, status: row.status })) || [], applied, reason };
+            rows: safeBatchPreflightRows(latest?.rows || []), applied, reason, actualImports,
+            ...(actualImports && latest ? { finalCheckReport: path.join(latest.directory, 'import_check.md'),
+                ...(latest.initializationSources ? { initializationSources: structuredClone(latest.initializationSources) } : {}) } : {}) };
     }
 }

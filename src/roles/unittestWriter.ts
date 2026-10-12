@@ -13,14 +13,14 @@ const PURE_STDLIB_INPUT_GUIDANCE = 'For pure standard-library parsing, formattin
     + 'Inputs and source expressions do not prove expected values; retain verified-observation or explicit same-test evidence requirements.';
 
 export function getExecutionWriterSystemPrompt(): string {
-    return `EXECUTION_VERIFICATION_V1 Writer: one complete unittest file in one python fence, no prose. Trace/coverage/mutation unavailable.
-Setup: read-only source/imports/signatures/constructors/dependencies. Keep the exact target binding; never copy/redefine/mock the target/class.
-Patch external operations${isolatedResourceSystemRule() ? ' without host-declared resources' : ''} at use points with unittest.mock; configure returns/side effects per test. Assert the real target result, source-supported exception or observed dependency call.
+    return `EXECUTION_VERIFICATION_V1 Writer: complete unittest file; one python fence, no prose. No Trace/coverage/mutation.
+Read-only source/imports/signatures/constructors/dependencies. Exact target binding; never copy/redefine/mock target/class.
+Use unittest.mock at external use points${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}; set returns/side effects per test. Assert real target result/source-supported exception/observed dependency call.
 ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
 ${TEST_IMPORT_GUIDANCE}
-For calculations without external operations, use the real target without mocks. Check inputs, units, arithmetic, rounding and each returned field; thresholds are not expected results.
-Expected values: reachable literals, simple source-supported relationships or test-controlled dependencies; hypotheses until executed. Invent no requirements, APIs, constructors, ambient values or exceptions. Never call/copy the target to compute expected.
-No tautologies, weaker/removed assertions, skip/expectedFailure, swallowed exceptions or unrelated checks. No direct file/network/process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}`;
+For calculations without external operations, use the real target without mocks. Check inputs/units/arithmetic/rounding/every returned field; thresholds are not expected.
+Expected: reachable literals/simple source-supported relationships/test-controlled dependencies; hypotheses until executed. Invent no requirements/APIs/constructors/ambient values/exceptions. Never call/copy target for expected.
+No tautologies/weaker or removed assertions/skip/expectedFailure/swallowed exceptions/unrelated checks. No direct file/network/process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}`;
 }
 
 export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {

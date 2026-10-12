@@ -36,7 +36,7 @@ class AstPipelineTests(unittest.TestCase):
     @staticmethod
     def observation_values(result):
         """Compare behavior while allowing the additive v2 provenance fields."""
-        metadata = {'case_id', 'source', 'input_before', 'input_after', 'inputs_mutated'}
+        metadata = {'case_id', 'source', 'source_sites', 'input_before', 'input_after', 'inputs_mutated'}
         return [{key: value for key, value in record.items() if key not in metadata}
                 for record in result['examples']]
 
@@ -842,7 +842,7 @@ def ignored_same_named_local_base():
         )
 
     def test_mock_scaffold_patches_the_target_module_usage_point_and_supports_async_methods(self):
-        source = '''import transport_lib as transport
+        source = '''import urllib.request as transport
 from helpers import normalize as normalize_value
 
 class Worker:
@@ -850,7 +850,7 @@ class Worker:
         self.config = config
 
     async def process(self, value):
-        response = transport.send(value)
+        response = transport.urlopen(value)
         return await normalize_value(response)
 '''
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -858,17 +858,19 @@ class Worker:
             target.write_text(source, encoding='utf-8')
             result = generate_scaffold(str(target), 'process')
 
-        self.assertEqual(result['patches'], ['worker.transport.send', 'worker.normalize_value'])
-        self.assertEqual(result['mock_names'], ['mock_send', 'mock_normalize_value'])
+        self.assertEqual(result['patches'], ['worker.transport.urlopen'])
+        self.assertEqual(result['mock_names'], ['mock_urlopen'])
+        self.assertEqual(result['unknown_calls'][0]['use_point'], 'worker.normalize_value')
         self.assertTrue(result['is_async'])
         self.assertEqual(result['class_name'], 'Worker')
-        self.assertIn("@patch('worker.normalize_value')\n@patch('worker.transport.send')", result['scaffold'])
-        self.assertIn('async def test_process(self, mock_send, mock_normalize_value):', result['scaffold'])
+        self.assertIn("@patch('worker.transport.urlopen')", result['scaffold'])
+        self.assertNotIn("@patch('worker.normalize_value')", result['scaffold'])
+        self.assertIn('async def test_process(self, mock_urlopen):', result['scaffold'])
         self.assertIn('instance = Worker(...)', result['scaffold'])
         self.assertIn('result = await instance.process(value)', result['scaffold'])
 
     def test_mock_scaffold_uses_the_canonical_module_name_for_patch_paths(self):
-        source = '''from shared import load
+        source = '''from sqlite3 import connect as load
 
 def process(value):
     return load(value)
@@ -967,7 +969,8 @@ def echo(value):
         with tempfile.TemporaryDirectory() as temp_dir:
             target = pathlib.Path(temp_dir) / 'echo.py'
             target.write_text(source, encoding='utf-8')
-            data = self.run_script('dynamic_tracer.py', target, 'echo')
+            # This checks output isolation; a shape-free echo needs caller input.
+            data = self.run_script('dynamic_tracer.py', target, 'echo', '[[1]]')
 
         self.assertIsNone(data['load_error'])
         self.assertTrue(data['examples'])

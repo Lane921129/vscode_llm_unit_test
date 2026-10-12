@@ -2,6 +2,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { AnalysisEnvironmentLease } from '../environment/analysisEnvironmentLease';
 import { PythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
@@ -59,5 +60,37 @@ test('batch continuation requires the original files, target selectors, Python a
         assert.throws(() => guard.verify(result, targets, 'python'), /批次停止/);
         fs.unlinkSync(file);
         assert.throws(() => guard.verify(result, targets, 'python'), /批次停止/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('partial setup continuation keeps the original scope and requires validated actual imports', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-partial-continuity-'));
+    try {
+        const files = ['ready.py', 'blocked.py'].map(name => path.join(root, name));
+        files.forEach(file => fs.writeFileSync(file, 'def target(): return 1\n'));
+        const guard = captureBatchSetupScope(createBatchScopeSelection(root, ['ready.py', 'blocked.py'], ['ready.py', 'blocked.py']), 'python');
+        const targets = files.map(file => ({ file, target: 'target' }));
+        const result: ImportSetupResult = { status: 'blocked', fixtureId: null, root, python: 'python', targets,
+            rows: [{ file: 'ready.py', status: 'loaded' }, { file: 'blocked.py', status: 'blocked' }], applied: true, actualImports: true };
+        assert.throws(() => guard.verify(result, targets, 'python'), /批次停止/);
+        guard.verify(result, targets, 'python', { allowBlocked: true }); guard.verifySources('python');
+        for (const changed of [{ ...result, actualImports: false }, { ...result, actualImports: undefined },
+            { ...result, status: 'cancelled' as const }, { ...result, status: 'declined' as const },
+            { ...result, status: 'failed' as const }, { ...result, root: path.dirname(root) },
+            { ...result, rows: [result.rows[0]] }, { ...result, targets: targets.slice(0, 1) }]) {
+            assert.throws(() => guard.verify(changed, targets, 'python', { allowBlocked: true }), /批次停止/);
+        }
+        assert.throws(() => guard.verifySources('other-python'), /批次停止/);
+        const dependency = path.join(root, 'dependency.py'); fs.writeFileSync(dependency, 'VALUE = 1\n');
+        const boundDependency = { ...result, initializationSources: [{ file: 'dependency.py',
+            sourceHash: createHash('sha256').update(fs.readFileSync(dependency)).digest('hex') }] };
+        guard.verify(boundDependency, targets, 'python', { allowBlocked: true });
+        fs.appendFileSync(dependency, '# dependency drift\n');
+        assert.throws(() => guard.verify(boundDependency, targets, 'python', { allowBlocked: true }), /批次停止/);
+        assert.throws(() => guard.verify({ ...result, initializationSources: [{ file: '../outside.py', sourceHash: 'a'.repeat(64) }] },
+            targets, 'python', { allowBlocked: true }), /批次停止/);
+        fs.appendFileSync(files[1], '# changed\n');
+        assert.throws(() => guard.verify(result, targets, 'python', { allowBlocked: true }), /批次停止/);
+        assert.throws(() => guard.verifySources('python'), /批次停止/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

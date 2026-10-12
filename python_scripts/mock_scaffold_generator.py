@@ -12,21 +12,40 @@ import sys
 import ast
 import json
 import os
+from mock_behavior import imports, dotted
+from ast_extractor import function_scope_bindings, function_scope_usage
+
+
+# These are concrete I/O API use points, not guesses based on a helper name.
+# Other imported calls remain unknown metadata for Writer to inspect in source.
+EXTERNAL_BOUNDARIES = {
+    'sqlite3.connect', 'io.open', 'os.open', 'os.listdir', 'os.scandir',
+    'os.mkdir', 'os.makedirs', 'os.remove', 'os.unlink', 'os.rename', 'os.replace', 'os.rmdir',
+    'shutil.copy', 'shutil.copy2', 'shutil.copyfile', 'shutil.move', 'shutil.rmtree',
+    'socket.socket', 'socket.create_connection', 'urllib.request.urlopen', 'urllib.request.urlretrieve',
+    'subprocess.run', 'subprocess.Popen', 'subprocess.call', 'subprocess.check_call', 'subprocess.check_output',
+}
 
 
 def find_import_bindings(tree):
     """回傳在被測模組命名空間中可被 patch 的匯入綁定名稱。"""
-    bindings = set()
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module:
-            for alias in node.names:
-                if alias.name != '*':
-                    bindings.add(alias.asname if alias.asname else alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                # import package.sub binds ``package`` unless an alias is used.
-                bindings.add(alias.asname if alias.asname else alias.name.split('.')[0])
+    bindings = imports(tree.body)
+    if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == 'open'
+           or isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+               isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store) and child.id == 'open'
+               for child in ast.walk(node)) for node in tree.body):
+        bindings['open'] = ''
     return bindings
+
+
+def boundary_origin(call_path, import_bindings, roots):
+    if not call_path or call_path[0] not in roots:
+        return None
+    if call_path == ['open'] and 'open' not in import_bindings:
+        return 'builtins.open'
+    root = import_bindings.get(call_path[0])
+    origin = '.'.join([root, *call_path[1:]]) if root else ''
+    return origin if origin in EXTERNAL_BOUNDARIES else None
 
 
 def expression_path(node):
@@ -47,38 +66,44 @@ def helper_has_side_effect_boundary(helper_node, import_bindings):
     network, or filesystem even though the target itself has no direct import
     call in its body.
     """
+    _, _, roots = function_scope_usage(helper_node, function_scope_bindings(helper_node))
     for node in ast.walk(helper_node):
         if not isinstance(node, ast.Call):
             continue
         call_path = expression_path(node.func)
-        if call_path and call_path[0] in import_bindings:
-            return True
-        if isinstance(node.func, ast.Name) and node.func.id == 'open':
+        if boundary_origin(call_path, import_bindings, roots):
             return True
     return False
 
 
-def find_external_calls(func_node, import_bindings, target_module, local_helpers=None):
+def find_external_calls(func_node, import_bindings, target_module, local_helpers=None, unknown_calls=None):
     """Find imported calls and side-effecting local helpers to patch at use point."""
     external_calls = []
     seen = set()
     local_helpers = local_helpers or {}
+    _, _, roots = function_scope_usage(func_node, function_scope_bindings(func_node))
     for node in ast.walk(func_node):
         if isinstance(node, ast.Call):
             call_path = expression_path(node.func)
-            if not call_path:
+            if not call_path or call_path[0] not in roots:
                 continue
             # ``open`` is resolved from builtins at runtime but can be patched
             # safely at the target module's use point.  Without this branch a
             # file-I/O Tier 3 scaffold has no patch and may touch real files.
-            if call_path == ['open']:
+            boundary = boundary_origin(call_path, import_bindings, roots)
+            if boundary == 'builtins.open':
                 patch_path = f"{target_module}.open"
-            elif call_path[0] in import_bindings:
+            elif boundary:
                 patch_path = f"{target_module}." + '.'.join(call_path)
             elif (len(call_path) == 1 and call_path[0] in local_helpers
                   and helper_has_side_effect_boundary(local_helpers[call_path[0]], import_bindings)):
                 patch_path = f"{target_module}.{call_path[0]}"
             else:
+                if call_path[0] in import_bindings and unknown_calls is not None:
+                    unknown = {'use_point': f"{target_module}." + '.'.join(call_path),
+                               'line': node.lineno, 'status': 'unknown', 'reason': 'import-does-not-prove-external-boundary'}
+                    if unknown not in unknown_calls:
+                        unknown_calls.append(unknown)
                 continue
             if patch_path in seen:
                 continue
@@ -173,6 +198,30 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
 
     # 找 import 映射
     import_bindings = find_import_bindings(tree)
+    direct_imports = {id(node) for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))}
+    # A write anywhere makes an imported API's boundary identity uncertain.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and id(node) not in direct_imports:
+            for alias in node.names:
+                root = alias.asname or (alias.name.split('.')[0] if isinstance(node, ast.Import) else alias.name)
+                if root == 'open':
+                    import_bindings[root] = ''
+                else:
+                    import_bindings.pop(root, None)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            if node.name == 'open':
+                import_bindings['open'] = ''
+            else:
+                import_bindings.pop(node.name, None)
+        elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            root = dotted(node).split('.')[0]
+            if root == 'open':
+                import_bindings[root] = ''
+            else:
+                import_bindings.pop(root, None)
+        elif isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] in (
+                'globals', 'locals', 'vars', 'eval', 'exec', 'setattr', 'delattr'):
+            import_bindings = {'open': ''}
     target_module = target_module or os.path.splitext(os.path.basename(file_path))[0]
     local_helpers = {
         node.name: node for node in tree.body
@@ -180,7 +229,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     }
 
     # 找外部呼叫
-    external_calls = find_external_calls(target_func, import_bindings, target_module, local_helpers)
+    unknown_calls = []
+    external_calls = find_external_calls(target_func, import_bindings, target_module, local_helpers, unknown_calls)
 
     # 取得函式參數名稱（如果在 class 內，去除 self/cls）
     all_params = [arg.arg for arg in target_func.args.args]
@@ -188,16 +238,16 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
 
     # 建立 patch decorator 列表
     patches = [ec["patch_path"] for ec in external_calls]
-    mock_names = [f"mock_{ec['name']}" for ec in external_calls]
-
-    # 從 trace_result 取得真實回傳值
-    return_value_hints = []
-    if trace_result and trace_result.get("examples"):
-        first_ex = trace_result["examples"][0]
-        return_value_hints.append(f"# Real return: {first_ex['result']}")
+    mock_names = []
+    for ec in external_calls:
+        base = f"mock_{ec['name']}"
+        name, suffix = base, 2
+        while name in mock_names:
+            name, suffix = f'{base}_{suffix}', suffix + 1
+        mock_names.append(name)
 
     # 建立 scaffold 字串
-    lines = []
+    lines = ['# SETUP PLACEHOLDERS ONLY: fill every TODO; this scaffold is not an accepted test.']
 
     # @patch decorators（倒序，因為 Python decorator 執行順序是由內到外）
     for patch_path in reversed(patches):
@@ -237,8 +287,6 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     else:
         lines.append(f"    result = {call_target}")
     lines.append(f"    # TODO: add assertions here")
-    if return_value_hints:
-        lines.append(f"    {return_value_hints[0]}")
     lines.append(f"    # Example: self.assertEqual(result, expected_value)")
 
     scaffold = "\n".join(lines)
@@ -250,7 +298,9 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
         "func_params": func_params,
         "class_name": class_name,
         "method_kind": method_kind,
-        "is_async": isinstance(target_func, ast.AsyncFunctionDef)
+        "is_async": isinstance(target_func, ast.AsyncFunctionDef),
+        "schema_version": "mock-scaffold-v2", "executable": False,
+        "unknown_calls": unknown_calls, "trace_hints": "omitted-setup-is-not-an-oracle"
     }
 
 

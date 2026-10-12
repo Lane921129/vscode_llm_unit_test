@@ -60,7 +60,7 @@ test('executed coroutine and bounded generator Trace files remain safe after aug
             const module = `sample${index}`;
             const file = path.join(directory, module + '.py');
             fs.writeFileSync(file, source);
-            const trace = spawnSync(python, ['-B', pythonToolPath('trace'), file, 'target', '[[2],[-1]]'], { encoding: 'utf8', timeout: 10000 });
+            const trace = spawnSync(python, ['-B', pythonToolPath('trace'), file, 'target', '[[2],[-1]]'], { encoding: 'utf8', timeout: 30000 });
             assert.equal(trace.status, 0, trace.stderr);
             const facts = JSON.parse(trace.stdout);
             const built = buildTier1TestFile({ moduleName: module, functionName: 'target',

@@ -87,8 +87,10 @@ test('Writer retains required helper sources even above budget and reuses setup 
     for (const prompt of [buildCompactWriterContext({ ...input, budgetTokens: 300 }), buildWriterRevisionContext(input)]) {
         assert.ok(prompt.includes(helper));
         assert.equal(prompt.split(helper).length - 1, 1);
-        assert.ok(prompt.includes(JSON.stringify(constructor)));
-        assert.ok(prompt.includes(JSON.stringify(ast.dependencyContexts[2].class_context)), 'different class identity is not collapsed');
+        assert.equal(prompt.split(constructor.init.code).length - 1, 1, 'the complete shared constructor source is printed once');
+        assert.match(prompt, /"name":"Holder"/);
+        assert.match(prompt, /"name":"DifferentHolder"/, 'different class identity is not collapsed');
+        assert.match(prompt, /"code":\{"same_complete_source_as":"SOURCE FRAGMENT/);
         for (const dep of ast.dependencyContexts) { assert.ok(prompt.includes(dep.sourceHash)); }
         assert.match(prompt, /DEPENDENCY_DIAGNOSTIC_0/);
         assert.match(prompt, /DEPENDENCY_DIAGNOSTIC_1/);
@@ -132,7 +134,18 @@ test('Writer and Analyst keep original dependency indices and source identities 
     ];
     for (const { prompt, marker } of prompts) {
         assert.ok(prompt.includes(marker));
-        const projected = JSON.parse(prompt.split(marker)[1].split('\n')[0]);
+        let projected = JSON.parse(prompt.split(marker)[1].split('\n')[0]);
+        if (marker.startsWith('VERIFIED DEPENDENCY')) {
+            const diagnostic = JSON.parse(prompt.split('DIAGNOSTICS (never expected values, expected exceptions, fixture returns or fixture types):\n')[1].split('\n')[0]);
+            projected = projected.map((entry: any, index: number) => {
+                const { observationRunId: _run, ...details } = diagnostic.dependencies[index].diagnostics;
+                assert.equal(diagnostic.dependencies[index].dependencyIndex, entry.dependencyIndex);
+                return { dependencyIndex: entry.dependencyIndex, name: entry.name,
+                    ...(entry.sourceHash ? { sourceHash: entry.sourceHash } : {}),
+                    observations: { ...details, examples: [...entry.observations.examples, ...details.examples],
+                        errors: [...entry.observations.errors, ...details.errors] } };
+            });
+        }
         assert.deepEqual(projected, JSON.parse(JSON.stringify(expected)), 'indices address the original source list, including untraced entries');
         assert.equal(Object.hasOwn(projected[2], 'sourceHash'), false, 'missing identity evidence is never fabricated');
     }

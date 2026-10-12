@@ -9,6 +9,7 @@ json_inputs: 可選，JSON 陣列，每個元素是傳給函式的 args list
 import sys
 import ast
 import json
+from probe_case_plan import deduplicate_planned_calls
 import importlib.util
 import os
 import subprocess
@@ -17,7 +18,6 @@ import inspect
 import itertools
 import io
 import math
-import typing
 import types
 import traceback
 import time
@@ -27,6 +27,8 @@ from pathlib import Path
 from trace_observation_guard import observe_ambient_reads
 from trace_value_codec import snapshot_value, snapshot_call, restore_value, safe_type_name, type_field
 from probe_input_transport import prepare_probe_inputs
+from static_type_shape import TYPE_SHAPE_VERSION, resolve_parameter_shapes
+from input_planner import plan_inputs
 from runtime_policy import POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, block_operation, guarded_runtime
 
 
@@ -82,52 +84,6 @@ def block_trace_side_effects():
         yield violations
 
 
-def _literal_value(node):
-    """Return a safe Python literal used in a source-level condition, if any."""
-    try:
-        value = ast.literal_eval(node)
-        return value if isinstance(value, (str, int, float, bool, type(None))) else None
-    except Exception:
-        return None
-
-
-def _condition_subject(node, parameter_names):
-    """Recognise a direct parameter or len(parameter), never arbitrary calls."""
-    if isinstance(node, ast.Name) and node.id in parameter_names:
-        return node.id, 'value'
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == 'len'
-        and len(node.args) == 1
-        and isinstance(node.args[0], ast.Name)
-        and node.args[0].id in parameter_names
-    ):
-        return node.args[0].id, 'length'
-    return None
-
-
-def _is_scalar_literal_node(node):
-    value = _literal_value(node)
-    return value is not None or (isinstance(node, ast.Constant) and node.value is None)
-
-
-def _reversed_comparison_operator(operator):
-    """Convert literal-first comparisons into an equivalent subject-first form."""
-    reverse = {
-        ast.Lt: ast.Gt,
-        ast.LtE: ast.GtE,
-        ast.Gt: ast.Lt,
-        ast.GtE: ast.LtE,
-        ast.Eq: ast.Eq,
-        ast.NotEq: ast.NotEq,
-        ast.Is: ast.Is,
-        ast.IsNot: ast.IsNot,
-    }
-    operator_type = reverse.get(type(operator))
-    return operator_type() if operator_type else None
-
-
 def find_selected_ast_function(tree, selector):
     """Resolve a module function or an explicit top-level Class.method."""
     if '.' in selector:
@@ -147,362 +103,21 @@ def find_selected_ast_function(tree, selector):
     )
 
 
-def _match_pattern_literals(pattern):
-    """Extract only scalar literals from safe Python structural patterns."""
-    match_value_type = getattr(ast, 'MatchValue', ())
-    match_singleton_type = getattr(ast, 'MatchSingleton', ())
-    match_or_type = getattr(ast, 'MatchOr', ())
-    if match_value_type and isinstance(pattern, match_value_type):
-        value = _literal_value(pattern.value)
-        return [value] if isinstance(value, (str, int, float, bool)) else []
-    if match_singleton_type and isinstance(pattern, match_singleton_type):
-        return [pattern.value]
-    if match_or_type and isinstance(pattern, match_or_type):
-        values = []
-        for nested in pattern.patterns:
-            values.extend(_match_pattern_literals(nested))
-        return values
-    return []
-
-
-def selected_function_scope_nodes(func_node):
-    """Yield target-body nodes without inheriting nested callable conditions."""
-    nodes = []
-
-    def visit(node):
-        if node is not func_node and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
-            return
-        nodes.append(node)
-        for child in ast.iter_child_nodes(node):
-            visit(child)
-
-    for statement in func_node.body:
-        visit(statement)
-    return nodes
-
-
-def literal_annotation_values(annotation):
-    """Extract scalar ``typing.Literal`` values without evaluating source text.
-
-    Literal annotations are an explicit, source-declared finite input domain.
-    They are useful Trace probes but are never an output oracle.  String
-    annotations are parsed as Python syntax only; calls, attributes and other
-    non-literal expressions are deliberately ignored.
-    """
-    values = []
-    origin = typing.get_origin(annotation)
-    if origin is typing.Literal:
-        values = list(typing.get_args(annotation))
-    elif isinstance(annotation, str):
-        try:
-            parsed = ast.parse(annotation, mode='eval').body
-        except (SyntaxError, ValueError, TypeError):
-            return []
-        if not isinstance(parsed, ast.Subscript):
-            return []
-        base = parsed.value
-        is_literal = (
-            isinstance(base, ast.Name) and base.id == 'Literal'
-        ) or (
-            isinstance(base, ast.Attribute) and base.attr == 'Literal'
-        )
-        if not is_literal:
-            return []
-        elements = list(parsed.slice.elts) if isinstance(parsed.slice, ast.Tuple) else [parsed.slice]
-        for element in elements:
-            if not isinstance(element, ast.Constant) or not isinstance(element.value, (str, int, float, bool, type(None))):
-                return []
-            values.append(element.value)
-    else:
-        return []
-
-    unique, seen = [], set()
-    for value in values:
-        if not isinstance(value, (str, int, float, bool, type(None))):
-            return []
-        key = (type(value), repr(value))
-        if key not in seen:
-            seen.add(key)
-            unique.append(value)
-    return unique[:8]
-
-
-def infer_condition_guided_inputs(file_path: str, func_name: str, positional_args: list,
-                                  annotations: dict = None, keyword_only_args: list = None) -> list:
-    """
-    Derive a small set of safe scalar inputs from the target function's own
-    comparisons. This is intentionally syntax-only: it recognises parameter
-    equality, numeric boundaries, length boundaries, and direct annotated
-    boolean truthiness checks, without encoding domain vocabulary or attempting
-    to execute source expressions.
-    """
-    keyword_only_args = keyword_only_args or []
-    parameter_names = set(positional_args + keyword_only_args)
-    if not parameter_names:
-        return []
-
-    try:
-        with open(file_path, encoding='utf-8') as source_file:
-            tree = ast.parse(source_file.read(), filename=file_path)
-    except (OSError, SyntaxError, UnicodeError):
-        return []
-
-    target = find_selected_ast_function(tree, func_name)
+def plan_source_inputs(file_path, selector, method_kind):
+    """Build input candidates from syntax only; annotations are never evaluated."""
+    tree = ast.parse(Path(file_path).read_bytes().decode('utf-8'), filename=file_path)
+    target = find_selected_ast_function(tree, selector)
     if target is None:
-        return []
+        return {'cases': [], 'schema_version': 'input-plan-v1', 'limits': {}, 'stats': {},
+                'parameter_shapes': {}, 'type_shape_version': TYPE_SHAPE_VERSION,
+                'diagnostics': [{'parameter': '', 'code': 'needs-input', 'reason': 'target-ast-unresolved'}]}
+    positional = list(target.args.posonlyargs) + list(target.args.args)
+    excluded = (positional[0].arg,) if positional and method_kind in ('instance', 'class', 'property') else ()
+    shapes = resolve_parameter_shapes(tree, target, excluded_names=excluded)
+    plan = plan_inputs(tree, target, shapes, method_kind=method_kind, excluded_names=excluded)
+    plan.update(parameter_shapes=shapes, type_shape_version=TYPE_SHAPE_VERSION)
+    return plan
 
-    annotations = annotations or {}
-    candidates = {name: [] for name in parameter_names}
-    joint_assignments = []
-
-    def add(name, value):
-        if value not in candidates[name]:
-            candidates[name].append(value)
-
-    def compare_components(node):
-        """Resolve a direct parameter comparison to parameter, kind, op, rhs."""
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
-            return None
-        subject = _condition_subject(node.left, parameter_names)
-        operator = node.ops[0]
-        right = node.comparators[0]
-        if not subject:
-            subject = _condition_subject(right, parameter_names)
-            if not subject or not _is_scalar_literal_node(node.left):
-                return None
-            operator = _reversed_comparison_operator(operator)
-            if operator is None:
-                return None
-            right = node.left
-        return subject[0], subject[1], operator, right
-
-    def satisfying_assignment(node):
-        """Produce one syntax-proven truth input for a direct condition.
-
-        The result is only an execution candidate. It deliberately does not
-        imply the target's output or that a larger boolean expression is
-        reachable in every runtime environment.
-        """
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            subject = _condition_subject(node.operand, parameter_names)
-            if subject and subject[1] == 'value':
-                annotation = str(annotations.get(subject[0], '')).lower()
-                return subject[0], '' if 'str' in annotation else 0
-
-        parts = compare_components(node)
-        if not parts:
-            return None
-        name, subject_kind, operator, right = parts
-        if isinstance(operator, (ast.In, ast.NotIn)) and subject_kind == 'value' and isinstance(right, (ast.List, ast.Tuple, ast.Set)):
-            literals = [_literal_value(item) for item in right.elts]
-            valid = [item for item in literals if item is not None]
-            if not valid:
-                return None
-            if isinstance(operator, ast.In):
-                return name, valid[0]
-            if any(isinstance(item, str) for item in valid):
-                return name, '__other_value__'
-            numeric = [item for item in valid if isinstance(item, (int, float)) and not isinstance(item, bool)]
-            return (name, max(numeric) + 1) if numeric else None
-
-        literal = _literal_value(right)
-        if not _is_scalar_literal_node(right):
-            return None
-        if subject_kind == 'length':
-            if not isinstance(literal, int) or isinstance(literal, bool) or literal < 0:
-                return None
-            if isinstance(operator, (ast.Lt, ast.LtE)):
-                length = max(0, literal - 1) if isinstance(operator, ast.Lt) else literal
-            elif isinstance(operator, (ast.Gt, ast.GtE)):
-                length = literal + 1 if isinstance(operator, ast.Gt) else literal
-            elif isinstance(operator, (ast.Eq, ast.Is)):
-                length = literal
-            elif isinstance(operator, (ast.NotEq, ast.IsNot)):
-                length = literal + 1
-            else:
-                return None
-            return name, 'x' * length
-
-        if isinstance(operator, (ast.Eq, ast.Is)):
-            return name, literal
-        if isinstance(operator, (ast.NotEq, ast.IsNot)):
-            if isinstance(literal, str):
-                return name, '__other_value__'
-            if isinstance(literal, bool):
-                return name, not literal
-            if literal is None:
-                annotation = str(annotations.get(name, '')).lower()
-                return name, '' if 'str' in annotation else 0
-            if isinstance(literal, (int, float)):
-                return name, literal + 1
-            return None
-        if isinstance(literal, (int, float)) and not isinstance(literal, bool):
-            if isinstance(operator, ast.Lt):
-                return name, literal - 1
-            if isinstance(operator, ast.LtE):
-                return name, literal
-            if isinstance(operator, ast.Gt):
-                return name, literal + 1
-            if isinstance(operator, ast.GtE):
-                return name, literal
-        return None
-
-    def flattened_and_terms(node):
-        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
-            terms = []
-            for value in node.values:
-                terms.extend(flattened_and_terms(value))
-            return terms
-        return [node]
-
-    scoped_nodes = selected_function_scope_nodes(target)
-    for node in scoped_nodes:
-        match_type = getattr(ast, 'Match', ())
-        if match_type and isinstance(node, match_type):
-            subject = _condition_subject(node.subject, parameter_names)
-            if subject and subject[1] == 'value':
-                name = subject[0]
-                literals = []
-                for case in node.cases:
-                    if case.guard is None:
-                        literals.extend(_match_pattern_literals(case.pattern))
-                for literal in literals:
-                    add(name, literal)
-                # A synthetic non-match reaches `case _` / the unmatched path
-                # without relying on business vocabulary from the source.
-                if any(isinstance(value, str) for value in literals):
-                    add(name, '__other_value__')
-                elif literals and all(isinstance(value, bool) for value in literals):
-                    add(name, not literals[0])
-                elif any(isinstance(value, (int, float)) and not isinstance(value, bool) for value in literals):
-                    numeric = [value for value in literals if isinstance(value, (int, float)) and not isinstance(value, bool)]
-                    add(name, max(numeric) + 1)
-
-        # Only a direct ``if enabled`` / ``if not enabled`` condition backed
-        # by a bool annotation warrants both boolean probes.  Inferring bool
-        # from an unannotated truthiness check would be a type guess: the
-        # parameter could instead be a string, collection, or custom object.
-        if isinstance(node, (ast.If, ast.While, ast.IfExp)):
-            boolean_parameter = None
-            if isinstance(node.test, ast.Name) and node.test.id in parameter_names:
-                boolean_parameter = node.test.id
-            elif (
-                isinstance(node.test, ast.UnaryOp)
-                and isinstance(node.test.op, ast.Not)
-                and isinstance(node.test.operand, ast.Name)
-                and node.test.operand.id in parameter_names
-            ):
-                boolean_parameter = node.test.operand.id
-            if boolean_parameter and 'bool' in str(annotations.get(boolean_parameter, '')).lower():
-                add(boolean_parameter, True)
-                add(boolean_parameter, False)
-
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            subject = _condition_subject(node.operand, parameter_names)
-            if subject and subject[1] == 'value':
-                annotation = str(annotations.get(subject[0], '')).lower()
-                add(subject[0], '' if 'str' in annotation else 0)
-
-        parts = compare_components(node)
-        if not parts:
-            continue
-        name, subject_kind, operator, right = parts
-
-        if isinstance(operator, (ast.In, ast.NotIn)) and subject_kind == 'value' and isinstance(right, (ast.List, ast.Tuple, ast.Set)):
-            literal_items = [_literal_value(item) for item in right.elts]
-            for item in literal_items:
-                if item is not None:
-                    add(name, item)
-            if any(isinstance(item, str) for item in literal_items):
-                add(name, '__other_value__')
-            continue
-
-        literal = _literal_value(right)
-        if not _is_scalar_literal_node(right):
-            continue
-
-        if subject_kind == 'length':
-            if isinstance(literal, int) and not isinstance(literal, bool) and literal >= 0:
-                for length in (max(0, literal - 1), literal, literal + 1):
-                    add(name, 'x' * length)
-            continue
-
-        add(name, literal)
-        if isinstance(operator, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)):
-            if isinstance(literal, str):
-                add(name, '__other_value__')
-            elif isinstance(literal, bool):
-                add(name, not literal)
-            elif literal is None:
-                annotation = str(annotations.get(name, '')).lower()
-                add(name, '' if 'str' in annotation else 0)
-        elif isinstance(literal, (int, float)) and not isinstance(literal, bool):
-            add(name, literal - 1)
-            add(name, literal + 1)
-
-    # A one-parameter-at-a-time probe cannot reach ``a == X and b == Y`` when
-    # the baseline values satisfy neither side. Build only the jointly true
-    # inputs that direct syntax proves, then let real tracing establish results.
-    for node in scoped_nodes:
-        if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.And):
-            continue
-        assignments = {}
-        for term in flattened_and_terms(node):
-            assignment = satisfying_assignment(term)
-            if assignment is None:
-                assignments = None
-                break
-            name, value = assignment
-            if name in assignments and assignments[name] != value:
-                assignments = None
-                break
-            assignments[name] = value
-        if assignments and len(assignments) >= 2 and assignments not in joint_assignments:
-            joint_assignments.append(assignments)
-
-    if not any(candidates.values()):
-        return []
-
-    def default_value(name):
-        declared_values = literal_annotation_values(annotations.get(name))
-        if declared_values:
-            return declared_values[0]
-        annotation = str(annotations.get(name, '')).lower()
-        if 'bool' in annotation:
-            return True
-        if 'str' in annotation:
-            return 'test_value'
-        if any(number_type in annotation for number_type in ('int', 'float', 'decimal')):
-            return 1
-        return 'test_value'
-
-    def build_input(values):
-        args = [values[name] for name in positional_args]
-        kwargs = {name: values[name] for name in keyword_only_args}
-        return {'args': args, 'kwargs': kwargs} if kwargs else tuple(args)
-
-    baseline = {name: default_value(name) for name in parameter_names}
-    # Keep conjunction candidates first so the bounded probe budget cannot
-    # crowd out a branch that requires multiple parameters to cooperate.
-    results = []
-    for assignment in joint_assignments:
-        values = dict(baseline)
-        values.update(assignment)
-        results.append(build_input(values))
-    for name in positional_args + keyword_only_args:
-        for value in candidates[name]:
-            values = dict(baseline)
-            values[name] = value
-            results.append(build_input(values))
-
-    unique_results = []
-    seen = set()
-    for value in results:
-        serialized = json.dumps(value, sort_keys=True, default=repr)
-        if serialized not in seen:
-            seen.add(serialized)
-            unique_results.append(value)
-    return unique_results[:12]
 
 def package_module_context(file_path: str):
     """Return an importable module name and its package-root search path.
@@ -556,82 +171,6 @@ def load_module_from_file(file_path: str):
         sys.modules.pop(module_name, None)
         raise
     return module
-
-def infer_boundary_inputs(positional_args: list, annotations: dict = None, keyword_only_args: list = None) -> list:
-    """
-    根據參數名稱猜測常見型別，產生通用邊界值組合。
-    目的：快速取得「函式是否可正常執行」的初始 I/O 樣本。
-    注意：函式特定的邊界策略由語意分析師（Semantic Analyzer）的 test_strategy 決定，
-          這裡只做型別推測，不做領域特化。
-    回傳: list of arg-tuples，每個 tuple 是一組呼叫參數
-    """
-    scalar_candidates = [0, 1, -1, 100, -100, 0.5, 10.0]
-    str_candidates = ["", "a", "hello", "test_value", "1234567890"]
-    bool_candidates = [True, False]
-    none_candidate = [None]
-
-    keyword_only_args = keyword_only_args or []
-    all_args = positional_args + keyword_only_args
-    per_arg_candidates = []
-    for arg_name in all_args:
-        raw_annotation = (annotations or {}).get(arg_name, '')
-        declared_values = literal_annotation_values(raw_annotation)
-        if declared_values:
-            per_arg_candidates.append(declared_values)
-            continue
-        annotation = str(raw_annotation).lower()
-        if 'bool' in annotation:
-            per_arg_candidates.append(bool_candidates + none_candidate)
-        elif 'str' in annotation:
-            per_arg_candidates.append(str_candidates + none_candidate)
-        elif any(number_type in annotation for number_type in ('int', 'float', 'decimal')):
-            per_arg_candidates.append(scalar_candidates + none_candidate)
-        else:
-            # Domain-specific inputs belong to the Semantic Analyzer. The generic
-            # tracer intentionally uses only annotation-based or mixed probes.
-            per_arg_candidates.append(str_candidates[:2] + scalar_candidates[:3] + none_candidate)
-
-    def build_input(values):
-        args = list(values[:len(positional_args)])
-        kwargs = {
-            name: values[len(positional_args) + index]
-            for index, name in enumerate(keyword_only_args)
-        }
-        return {'args': args, 'kwargs': kwargs} if kwargs else tuple(args)
-
-    if len(per_arg_candidates) == 0:
-        return [()]
-    if len(per_arg_candidates) == 1:
-        return [build_input((candidate,)) for candidate in per_arg_candidates[0][:8]]
-
-    # zip-style：每個參數取相同 index 的候選值，最多 10 組
-    results = []
-    max_candidates = max(len(c) for c in per_arg_candidates)
-    for i in range(min(max_candidates, 10)):
-        combo = tuple(c[i % len(c)] for c in per_arg_candidates)
-        results.append(build_input(combo))
-
-    # Two independent numeric inputs often need different relative magnitudes
-    # to expose arithmetic or comparison branches. Zip-style probes only use
-    # matching positions (for example 50, 50), which can miss those branches.
-    # Add a tiny fixed set of domain-neutral scale pairs. We do this only when
-    # there are exactly two non-string/non-boolean parameters, so ordinary
-    # string APIs and higher-arity functions do not get an input explosion.
-    def numeric_or_unknown(name):
-        annotation = str((annotations or {}).get(name, '')).lower()
-        return 'str' not in annotation and 'bool' not in annotation
-
-    if len(all_args) == 2 and all(numeric_or_unknown(name) for name in all_args):
-        relative_scale_pairs = [
-            (10, 200),
-            (50, 150),
-            (100, 200),
-            (200, 100),
-        ]
-        results.extend(build_input(pair) for pair in relative_scale_pairs)
-
-    return results
-
 
 def safe_repr(val) -> str:
     """安全地把值轉成 repr，截斷過長的字串"""
@@ -827,77 +366,60 @@ def _trace_function_local(file_path: str, func_name: str, test_inputs: list = No
         result["load_error"] = f"Function '{func_name}' not found or not callable"
         return result
 
-    # 取得參數名稱（class method 去除 self/cls）
+    # Bind the actual callable without rendering/evaluating runtime annotations.
+    # A module parameter named self/cls is an ordinary input, not a receiver.
+    call_signature = None
     try:
-        sig = inspect.signature(func)
-        all_params = list(sig.parameters.values())
-        # 未綁定 method 可能包含 self，將其去除
-        trace_params = [p for p in all_params if p.name not in ('self', 'cls')]
+        sig = inspect.signature(func, eval_str=False)
+        trace_params = list(sig.parameters.values())
+        if (func_is_method or func_is_property) and trace_params:
+            trace_params = trace_params[1:]
+        call_signature = sig.replace(parameters=trace_params)
         result["args"] = [p.name for p in trace_params]
-        annotations = {
-            parameter.name: parameter.annotation
-            for parameter in trace_params
-            if parameter.annotation is not inspect.Parameter.empty
-        }
-        required_positional_args = [
-            parameter.name for parameter in trace_params
-            if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-            and parameter.default is inspect.Parameter.empty
-        ]
-        required_keyword_only_args = [
-            parameter.name for parameter in trace_params
-            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
-            and parameter.default is inspect.Parameter.empty
-        ]
-    except Exception as sig_err:
-        print(f"[dynamic_tracer] warning: could not inspect signature for {func_name!r}: {sig_err}", file=sys.stderr)
+    except (TypeError, ValueError):
+        pass
 
-    # Combine literal call-site facts with generic source-derived coverage.
-    # A real caller example is valuable, but must not suppress other reachable
-    # branches just because the caller happened to use one fixed value.
-    positional = required_positional_args if 'required_positional_args' in locals() else result["args"]
-    keyword_only = required_keyword_only_args if 'required_keyword_only_args' in locals() else []
-    inferred_annotations = annotations if 'annotations' in locals() else {}
-    guided_inputs = [] if exact_inputs else infer_condition_guided_inputs(
-        file_path,
-        func_name,
-        positional,
-        inferred_annotations,
-        keyword_only
-    )
-    # With a known caller, retain that concrete I/O and only add inputs that
-    # exercise source-derived conditions. Generic type boundaries remain useful
-    # when no caller information exists, but would otherwise add noisy samples
-    # without improving a fixed caller trace.
     caller_inputs = list(test_inputs) if test_inputs is not None else []
     constructor_template = None
-    # Call-site AST facts can safely establish how to instantiate the selected
-    # class. Keep them separate from the member arguments: ``Service('x').run
-    # (1)`` means constructor=['x'] and method=[1], never run('x', 1).
     if func_is_method or func_is_property:
         for candidate in caller_inputs:
-            if not isinstance(candidate, dict):
+            if type(candidate) is not dict:
                 continue
             constructor_args = candidate.get('constructor_args')
             constructor_kwargs = candidate.get('constructor_kwargs')
-            if isinstance(constructor_args, (list, tuple)) and isinstance(constructor_kwargs, dict):
-                constructor_template = {
-                    'constructor_args': list(constructor_args),
-                    'constructor_kwargs': dict(constructor_kwargs)
-                }
+            if type(constructor_args) in (list, tuple) and type(constructor_kwargs) is dict:
+                constructor_template = {'constructor_args': list(constructor_args),
+                                        'constructor_kwargs': dict(constructor_kwargs)}
                 break
-    def sourced(candidate, detail):
-        candidate = dict(candidate) if type(candidate) is dict else {'args': list(candidate), 'kwargs': {}}
-        candidate['source'] = {'kind': 'source_guided', 'detail': detail}
-        return candidate
 
-    coverage_inputs = [sourced(candidate, 'condition') for candidate in guided_inputs]
-    if test_inputs is None and not exact_inputs:
-        coverage_inputs.extend(sourced(candidate, 'type_boundary') for candidate in infer_boundary_inputs(
-            positional,
-            inferred_annotations,
-            keyword_only
-        ))
+    coverage_inputs = []
+    if not exact_inputs:
+        selector = f'{method_class_name}.{selected_method_name}' if method_class_name else func_name
+        plan = plan_source_inputs(file_path, selector, method_kind)
+        for planned in plan.pop('cases'):
+            metadata = planned['metadata']
+            # Preserve a known caller and add source conditions, rather than
+            # repeating arbitrary type baselines for that already known call.
+            if test_inputs is not None and metadata['source'] != 'source-condition':
+                continue
+            source = {'kind': 'source_guided', 'detail': metadata['source'],
+                      'generator_version': plan['schema_version'],
+                      'reason': metadata['reason'], 'intent': metadata.get('intent', 'valid')}
+            source.update({key: metadata[key] for key in ('parameter', 'line') if key in metadata})
+            coverage_inputs.append({'args': planned['args'], 'kwargs': planned['kwargs'], 'source': source})
+        if (func_is_method or func_is_property) and not constructor_template:
+            # Unknown required setup is a fixture need, not target exception evidence.
+            try:
+                with block_trace_side_effects():
+                    inspect.signature(getattr(module, method_class_name), eval_str=False).bind()
+            except (TypeError, ValueError, TraceSafetyError):
+                coverage_inputs = []
+                plan['diagnostics'].append({'parameter': '', 'code': 'needs-fixture',
+                                            'reason': 'constructor-input-required'})
+        plan['status'] = ('partial' if plan['diagnostics'] else 'ready') if coverage_inputs or caller_inputs else 'needs-input'
+        plan['generated_cases'] = len(coverage_inputs)
+        result['input_plan'] = plan
+
     if constructor_template:
         enriched_coverage_inputs = []
         for candidate in coverage_inputs:
@@ -955,6 +477,12 @@ def _trace_function_local(file_path: str, func_name: str, test_inputs: list = No
         stage = 'setup'
         setup_callable = getattr(getattr(module, method_class_name), '__init__', None) if method_class_name else None
         try:
+            if call_signature is not None:
+                try:
+                    call_signature.bind(*inp, **kwargs)
+                except TypeError:
+                    case.update(status='not_started', reason='signature-mismatch')
+                    continue
             # Keep stdout/stderr from constructors, target calls and generator
             # materialisation out of the JSON document printed by this script.
             with observe_ambient_reads(observation_root, (func, setup_callable)) as ambient_reads, \
@@ -1164,6 +692,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
     journal('run_started', schema_version=result['schema_version'], func_name=func_name,
             policy_version=POLICY_VERSION, isolation=result['isolation'])
     valid_supplied, invalid_supplied = prepare_probe_inputs(test_inputs)
+    source_sites_by_index = {}
 
     def case_base(encoded, index):
         digest = hashlib.sha256((os.path.abspath(file_path) + '\n' + func_name + '\n' + json.dumps(encoded, sort_keys=True)).encode()).hexdigest()[:20]
@@ -1174,6 +703,7 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         # The digest identifies input content; run/index identifies this actual
         # attempt, including duplicate supplied inputs when planning fails.
         return {'case_id': f'probe-{run_id}-{index}-{digest}', 'case_index': index, 'source': source,
+                **({'source_sites': source_sites_by_index[index]} if index in source_sites_by_index else {}),
                 'input_before': before, 'input_after': None, 'duration_ms': 0,
                 'allocated_timeout_seconds': 0}
 
@@ -1184,6 +714,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         for record in examples + errors:
             record['case_id'] = case['case_id']
             record['source'] = case['source']
+            if case.get('source_sites'):
+                record['source_sites'] = case['source_sites']
             if fixtures:
                 record['importFixtures'] = fixtures
         if fixtures:
@@ -1218,6 +750,8 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         if planned.get('load_diagnostic'):
             result['load_diagnostic'] = planned['load_diagnostic']
         result['blocked_operations'] = planned.get('blocked_operations', [])
+        if 'input_plan' in planned:
+            result['input_plan'] = planned['input_plan']
         result['planning'] = {'status': 'failed' if result['load_error'] else 'completed'}
     except subprocess.TimeoutExpired:
         planned = {}
@@ -1241,10 +775,16 @@ def trace_function(file_path: str, func_name: str, test_inputs: list = None, *,
         'calibration_reason': 'completed-planning-startup' if calibrated else 'planning-unavailable',
     }
     pending = planned.get('planned_inputs', []) if not result['load_error'] else (valid_supplied or [])
+    if not result['load_error']:
+        entries, result['input_deduplication'] = deduplicate_planned_calls(pending, _candidate_context)
+        pending = [entry['input'] for entry in entries]
+        source_sites_by_index = {index + len(invalid_supplied): entry['source_sites'] for index, entry in enumerate(entries)}
     journal('planning_completed', planning=result['planning'], args=result['args'], load_error=result['load_error'],
             case_timing=result['case_timing'],
             **({'importFixtures': result['importFixtures']} if result.get('importFixtures') else {}),
             load_diagnostic=result.get('load_diagnostic'), blocked_operations=result['blocked_operations'],
+            input_plan=result.get('input_plan'),
+            input_deduplication=result.get('input_deduplication'),
             planned_cases=[case_base(encoded, index + len(invalid_supplied)) for index, encoded in enumerate(pending)])
     total_deadline_exhausted = False
     for index, encoded in enumerate(pending):
@@ -1312,7 +852,12 @@ if __name__ == '__main__':
 
     if len(sys.argv) >= 4:
         try:
-            test_inputs = json.loads(sys.argv[3])
+            # The host uses stdin so bounded typed containers cannot exceed the
+            # platform's command-line limit. Keep positional JSON compatibility.
+            serialized = sys.stdin.read(1024 * 1024 + 1) if sys.argv[3] == '-' else sys.argv[3]
+            if len(serialized) > 1024 * 1024:
+                raise ValueError('Probe input transport budget exceeded')
+            test_inputs = json.loads(serialized)
         except (ValueError, TypeError):
             test_inputs = {'schema_version': 'invalid-probe-inputs', 'cases': [{}]}
 

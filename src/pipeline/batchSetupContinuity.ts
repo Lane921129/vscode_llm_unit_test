@@ -17,7 +17,15 @@ export function captureBatchSetupScope(scope: BatchScopeSelection, python: strin
         return { full, real, hash: createHash('sha256').update(fs.readFileSync(full)).digest('hex') };
     });
     return {
-        verify(result: ImportSetupResult, targets: readonly ImportCheckTarget[], currentPython: string): void {
+        verifySources(currentPython: string): void {
+            try {
+                if (canonicalScopeRoot(scope.root) !== root || currentPython !== python
+                    || sources.some(source => existingRealPath(source.full) !== source.real
+                        || createHash('sha256').update(fs.readFileSync(source.full)).digest('hex') !== source.hash)) { throw new Error('changed'); }
+            } catch { throw new Error(localize('初始化前後的來源、選取範圍或 Python 已改變，批次停止；請重新開始。')); }
+        },
+        verify(result: ImportSetupResult, targets: readonly ImportCheckTarget[], currentPython: string,
+            options: { allowBlocked?: boolean } = {}): void {
             const identity = (file: string) => {
                 const real = existingRealPath(file);
                 return process.platform === 'win32' ? real.toLowerCase() : real;
@@ -26,11 +34,26 @@ export function captureBatchSetupScope(scope: BatchScopeSelection, python: strin
             const rows = result.rows.map(row => row.file.replace(/\\/g, '/')).sort();
             try {
                 const expectedRows = [...new Set(targets.map(target => path.relative(root, existingRealPath(target.file)).replace(/\\/g, '/')))].sort();
-                if (result.status !== 'ready' || !result.root || canonicalScopeRoot(result.root) !== root
+                const allowedStatus = result.status === 'ready' || options.allowBlocked && result.status === 'blocked';
+                if (!allowedStatus || options.allowBlocked && result.actualImports !== true
+                    || !result.root || canonicalScopeRoot(result.root) !== root
                     || canonicalScopeRoot(scope.root) !== root || currentPython !== python || result.python !== python
                     || JSON.stringify(targetIds(result.targets)) !== JSON.stringify(targetIds(targets))
                     || JSON.stringify(rows) !== JSON.stringify(expectedRows) || !rows.length
-                    || result.rows.some(row => row.status !== 'loaded')
+                    || result.rows.some(row => options.allowBlocked
+                        ? !['loaded', 'blocked', 'incomplete'].includes(row.status) : row.status !== 'loaded')
+                    || result.initializationSources?.some(source => {
+                        if (!/^[a-f0-9]{64}$/.test(source.sourceHash) || /[:\u0000-\u001f\u007f]|^[\\/]/.test(source.file)
+                            || source.file.split(/[\\/]/).some(part => !part || part === '.' || part === '..')) { return true; }
+                        let current = root;
+                        for (const part of source.file.split(/[\\/]/)) {
+                            current = path.join(current, part);
+                            if (fs.lstatSync(current).isSymbolicLink()) { return true; }
+                        }
+                        const real = existingRealPath(current), relative = path.relative(root, real);
+                        return relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)
+                            || createHash('sha256').update(fs.readFileSync(current)).digest('hex') !== source.sourceHash;
+                    })
                     || sources.some(source => existingRealPath(source.full) !== source.real
                         || createHash('sha256').update(fs.readFileSync(source.full)).digest('hex') !== source.hash)) {
                     throw new Error('changed');

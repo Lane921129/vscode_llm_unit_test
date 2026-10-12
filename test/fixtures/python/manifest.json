@@ -2,6 +2,78 @@
   "schema_version": 2,
   "fixtures": [
     {
+      "id": "tier1-shape-list",
+      "tier": 1,
+      "source": "tier1_shape_list.py",
+      "target": "total_values",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "list-int"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["replacing list[int] inputs with scalar probes", "accepting only failed or empty-container observations"]}
+    },
+    {
+      "id": "tier1-shape-tuple",
+      "tier": 1,
+      "source": "tier1_shape_tuple.py",
+      "target": "combine_pair",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "fixed-tuple"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["changing tuple input into list", "discarding fixed tuple element types"]}
+    },
+    {
+      "id": "tier1-shape-nested-dict",
+      "tier": 1,
+      "source": "tier1_shape_nested_dict.py",
+      "target": "nested_width",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "nested-dict"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["discarding nested list[int] values", "using an empty dictionary as the only successful input"]}
+    },
+    {
+      "id": "tier1-shape-optional",
+      "tier": 1,
+      "source": "tier1_shape_optional.py",
+      "target": "optional_width",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "optional-list"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["using only None to claim Optional container coverage", "counting argument-shape errors as useful oracle coverage"]}
+    },
+    {
+      "id": "tier1-shape-union",
+      "tier": 1,
+      "source": "tier1_shape_union.py",
+      "target": "render_choice",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "scalar-union"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["omitting one declared Union alternative", "substituting None for all declared scalar alternatives"]}
+    },
+    {
+      "id": "tier1-shape-defaults",
+      "tier": 1,
+      "source": "tier1_shape_defaults.py",
+      "target": "format_default",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "omitted-defaults"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["materializing every default instead of preserving omission", "passing a keyword-only argument positionally"]}
+    },
+    {
+      "id": "tier1-shape-length",
+      "tier": 1,
+      "source": "tier1_shape_length.py",
+      "target": "width_band",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "container-length"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["turning len(values) boundary candidates into integer arguments", "omitting the length threshold itself"]}
+    },
+    {
+      "id": "tier1-shape-relation",
+      "tier": 1,
+      "source": "tier1_shape_relation.py",
+      "target": "ordered_span",
+      "context": {"class_name": null, "method_kind": "module"},
+      "expected": {"method_kind": "module", "is_async": false, "rules": [], "trace": "assertable", "type_shape_case": "parameter-relation"},
+      "acceptance": {"min_line_coverage": 100, "min_mutation_score": 90, "forbidden": ["omitting equality or one ordering of the direct parameter relation", "treating a suggested relation as an output oracle"]}
+    },
+    {
       "id": "tier1-typed-caller",
       "tier": 1,
       "source": "tier1_typed_caller.py",

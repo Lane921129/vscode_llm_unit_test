@@ -143,7 +143,10 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
                 assert.deepEqual(manifest.scope.selectedFiles, selectedFiles);
                 assert.deepEqual(manifest.scope.excludedFiles, ['excluded.py', dependency]);
                 assert.deepEqual(inventory(manifest), inventory(beforeApproval));
-                assert.equal(manifest.expectedTargets, 212); assert.equal(manifest.finishedTargets, 0);
+                assert.equal(manifest.expectedTargets, 212);
+                assert.equal(manifest.finishedTargets, scenario === 'new-blocker' ? 106 : 0,
+                    'a final blocked import gives its dependent targets a known environment outcome');
+                assert.equal(manifest.complete, false); assert.equal(manifest.allTargetsPassed, false);
                 assert.deepEqual(manifest.discoveryFailures, []);
                 const expectedImportTargets = selectedFiles.map(file => ({ file: existingRealPath(path.join(root, file)), target: targetNames[0] }));
                 assert.ok(scansWithTargets.every(targets => JSON.stringify(targets.map(target => ({
@@ -157,19 +160,48 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
                 if (scenario === 'ready') {
                     assert.equal(setup.status, 'ready'); assert.equal(setup.blockedModules, 0);
                     assert.equal(manifest.preflightBlockedModules, 0);
-                    assert.equal(manifest.preflightEvents.at(-1).status, 'resumed');
+                    assert.ok(manifest.preflightEvents.some((event: any) => event.status === 'resumed'));
+                    assert.equal(manifest.preflightEvents.at(-1).status, 'ready', 'the final decision is the measured per-source partition');
                     assert.equal(manifest.preflightEvents.at(-1).fixtureId, setup.fixtureId);
+                    assert.equal(manifest.preflightBlockedTargets, 0); assert.equal(manifest.attemptedTargets, 1);
                     assert.equal(startedTargets, 1, 'ready actually schedules the original batch before the test aborts it');
                     assert.equal(manifest.status, 'cancelled', 'the fixture deliberately stops before target execution');
+                    const snapshot = JSON.parse(fs.readFileSync(path.join(path.dirname(created[0]), 'preflight', 'final_import_check.json'), 'utf8'));
+                    assert.equal(snapshot.actualImports, true); assert.equal(snapshot.fixtureId, setup.fixtureId);
+                    assert.deepEqual(snapshot.rows.map((row: any) => [row.file, row.status]), selectedFiles.map(file => [file, 'loaded']));
+                } else if (scenario === 'new-blocker') {
+                    assert.equal(setup.status, 'blocked'); assert.equal(setup.blockedModules, 1);
+                    assert.equal(manifest.preflightBlockedModules, 1, 'latest dynamic blockers replace the initial planning count');
+                    assert.ok(manifest.preflightEvents.some((event: any) => event.status === 'resumed-partially'));
+                    assert.equal(manifest.preflightEvents.at(-1).status, 'partial');
+                    assert.equal(manifest.preflightEvents.at(-1).fixtureId, setup.fixtureId);
+                    assert.equal(startedTargets, 1, 'only the independently loaded source is scheduled before this fixture aborts');
+                    assert.equal(manifest.status, 'cancelled', 'cancellation takes precedence over the partial partition');
+                    assert.equal(manifest.preflightBlockedTargets, 106); assert.equal(manifest.attemptedTargets, 1);
+                    const blocked = manifest.targets.filter((target: any) => target.file === selectedFiles[0]);
+                    assert.equal(blocked.length, 106);
+                    assert.ok(blocked.every((target: any) => target.state === 'finished'
+                        && target.terminalStatus === 'environment-blocked' && target.category === 'environment'
+                        && target.preflightReason === 'module-blocked' && target.environment.issue === 'new-dynamic-operation'
+                        && target.modelRequests === 0 && !target.reportDirectory));
+                    assert.ok(manifest.targets.filter((target: any) => target.file === selectedFiles[1])
+                        .every((target: any) => target.terminalStatus !== 'environment-blocked'));
+                    assert.deepEqual(manifest.environmentIssues.map((issue: any) => [issue.issue, issue.affectedTargets, issue.files]),
+                        [['new-dynamic-operation', 106, [selectedFiles[0]]]]);
+                    const snapshotPath = path.join(path.dirname(created[0]), 'preflight', 'final_import_check.json');
+                    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+                    assert.equal(snapshot.actualImports, true); assert.equal(snapshot.fixtureId, setup.fixtureId);
+                    assert.deepEqual(snapshot.rows.map((row: any) => [row.file, row.status]),
+                        [[selectedFiles[0], 'blocked'], [selectedFiles[1], 'loaded']]);
+                    assert.equal(snapshot.rows[0].issue.issue, 'new-dynamic-operation');
+                    assert.ok(blocked.every((target: any) => target.preflightReport === 'preflight/final_import_check.md'
+                        && fs.existsSync(path.join(path.dirname(created[0]), target.preflightReport))));
                 } else {
                     assert.equal(startedTargets, 0);
-                    assert.ok(!manifest.preflightEvents.some((event: any) => event.status === 'resumed'));
+                    assert.ok(!manifest.preflightEvents.some((event: any) => ['resumed', 'resumed-partially'].includes(event.status)));
                     assert.ok(manifest.targets.every((target: any) => target.state === 'pending'));
-                    assert.equal(manifest.status, scenario === 'new-blocker' ? 'environment-blocked' : 'cancelled');
-                    if (scenario === 'new-blocker') {
-                        assert.equal(setup.status, 'blocked'); assert.equal(setup.blockedModules, 1);
-                        assert.equal(manifest.preflightBlockedModules, 1, 'latest dynamic blockers replace the initial planning count');
-                    }
+                    assert.equal(manifest.status, 'cancelled');
+                    assert.equal(manifest.preflightBlockedTargets, 0); assert.equal(manifest.attemptedTargets, 0);
                 }
                 assert.equal(scans, ['ready', 'new-blocker'].includes(scenario) ? 3 : 2);
                 assert.equal(updates, ['ready', 'new-blocker'].includes(scenario) ? 2 : 0);

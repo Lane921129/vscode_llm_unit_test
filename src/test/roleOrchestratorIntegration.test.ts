@@ -128,8 +128,13 @@ class Cases(unittest.TestCase):
     globalThis.fetch = async (_url, options) => {
         assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
-        assert.deepEqual(request.options, { temperature: 0, num_ctx: 8572 },
+        const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
+        assert.deepEqual(runtimeOptions, { temperature: 0, num_ctx: 8572 },
             'formal local roles use the same sampling and context as qualification probes');
+        if (outputCap !== undefined) {
+            assert.ok(Number.isSafeInteger(outputCap) && outputCap > 0 && outputCap <= Math.ceil(8572 * 0.3),
+                'explicit role output caps stay inside the preserved output reserve');
+        }
         let response: string;
         if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviewerTransport.push({ format: typeof request.format === 'object' ? 'schema' : 'text',
@@ -147,10 +152,15 @@ class Cases(unittest.TestCase):
                 fs.appendFileSync(path.join(directory, 'sample.py'), '\n# source changed between rounds\n');
             }
         } else if (request.roleInstructions.includes('dependency_behaviors')) {
-            roles.push('analyst-planning'); response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
+            assert.equal(outputCap, 1024, 'the short Analyst plan uses its paired output cap');
+            roles.push('analyst-planning'); response = JSON.stringify({ dependency_behaviors: [], test_strategy: {
+                approach: 'Patch sample.read with controlled ready/kind mappings and call target to exercise both conditions.',
+                input_hints: [], assertion_style: 'mixed', mock_needed: true,
+                key_rules: ['Call sample.target unchanged and control only its sample.read dependency.']
+            } });
         } else {
             roles.push('writer'); writers++;
-            assert.match(request.prompt, scaffoldMode ? /Complete Writer evidence/ : /^compact-writer-v1/);
+            assert.match(request.prompt, scaffoldMode ? /Complete Writer evidence/ : /^compact-writer-v2/);
             assert.match(request.prompt, scaffoldMode ? /def read/ : /RETRIEVED DEPENDENCY read/);
             if (writers > 1 && !scaffoldMode) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
             response = '```python\n' + (writers === 1 ? code : stronger) + '\n```';
@@ -194,7 +204,8 @@ class Cases(unittest.TestCase):
         const events = fs.readFileSync(path.join(output, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         const firstStage = (stage: string) => events.findIndex(event => event.stage === stage);
         assert.ok(firstStage('evidence-collection') < firstStage('analyst-planning'));
-        assert.ok(firstStage('analyst-planning') < firstStage('rule-dispatcher'));
+        assert.ok(firstStage('analyst-planning') < firstStage('rule-dispatcher'),
+            JSON.stringify({ stages: events.map(event => ({ stage: event.stage, status: event.status })), roles }));
         assert.ok(firstStage('rule-dispatcher') < firstStage('writer-handoff'));
         assert.ok(firstStage('writer-handoff') < firstStage('writer'));
         assert.equal(events[firstStage('rule-dispatcher')].detail.provenance, 'deterministic');
@@ -204,7 +215,7 @@ class Cases(unittest.TestCase):
         assert.ok(requests.length > 0);
         assert.ok(requests.every(event => event.detail.estimatedInputTokens <= event.detail.inputBudget));
         assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'completed'
-            && event.detail.elapsedMs >= 0 && event.detail.writerContext === 'compact-writer-v1'));
+            && event.detail.elapsedMs >= 0 && event.detail.writerContext === 'compact-writer-v2'));
         assert.equal(rejectedReviewSchema, true);
         assert.deepEqual(reviewerTransport.slice(0, 2), [
             { format: 'schema', temperature: 0, numCtx: 8572 },
@@ -465,8 +476,10 @@ class Cases(unittest.TestCase):
             assert.match(request.prompt, /neutral_items/);
             assert.match(request.prompt, /def target\(\)/, 'complete target source survives optional packing');
             assert.match(request.prompt, /VERIFIED OBSERVATIONS/, 'execution evidence survives optional packing');
-            assert.ok(estimatePromptTokens(request.transmittedPrompt) <= 6000,
-                'the actual role, evidence, setup and resource payload must fit the selected profile');
+            const wire = request.options as { num_ctx: number; num_predict?: number };
+            const inputBudget = wire.num_predict === undefined ? Math.floor(wire.num_ctx * 0.7) : wire.num_ctx - wire.num_predict;
+            assert.ok(estimatePromptTokens(request.transmittedPrompt) <= inputBudget,
+                'the whole role/evidence/setup/resource payload must fit the input budget paired with the actual wire output cap');
             return new Response('NEUTRAL_STOP_AFTER_WIRE_VALIDATION', { status: 400 });
         };
         const resourceBudgetRoot = path.join(directory, 'resource-envelope-budget');
@@ -537,7 +550,8 @@ class Cases(unittest.TestCase):
                 response = '{"findings":[]}';
             } else if (request.roleInstructions.includes('Analyst after successful')) {
                 qualityCalls++;
-                assert.equal(request.format, undefined, 'plain-unittest profiles retain text transport');
+                assert.equal(typeof request.format, 'object', 'quality Analyst uses its own schema independently of the plain Python Writer');
+                assert.equal((request.format as any).properties.tasks.maxItems, 1);
                 const focus = JSON.parse(request.prompt.split('FOCUS\n')[1].split('\n')[0]);
                 response = qualityCalls === 1 ? 'INVALID_PRIVATE_RESPONSE' : JSON.stringify({ tasks: [{
                     evidence_id: focus.id, hypothesis: 'Another controlled input may cover the next branch.',
@@ -566,7 +580,10 @@ class Cases(unittest.TestCase):
         const accepted = partialEvents.filter(event => event.stage === 'baseline' && event.status === 'accepted');
         const covered = [...new Map(partialEvents.filter(event => event.stage === 'coverage' && event.status === 'measured')
             .map(event => [event.loop, event] as const)).values()];
-        assert.equal(accepted.length, 2, JSON.stringify({ failure: partialKnowledge.failure, baseline: accepted }));
+        assert.equal(accepted.length, 2, JSON.stringify({ failureCategory: partialKnowledge.failureCategory,
+            failureStage: partialKnowledge.failureStage, baselines: accepted.map(event => ({ loop: event.loop, score: event.detail.score })),
+            requests: partialEvents.filter(event => event.stage === 'model-request').map(event => ({ status: event.status,
+                role: event.detail.role, category: event.detail.category, httpStatus: event.detail.httpStatus })) }));
         assert.ok(accepted[1].detail.score > accepted[0].detail.score);
         assert.ok(covered[1].detail.missingTargetLines.length < covered[0].detail.missingTargetLines.length);
         assert.ok(covered[1].detail.missingTargetLines.length > 0, 'this is partial improvement, not a full pass');
@@ -606,8 +623,10 @@ class Cases(unittest.TestCase):
             let fixerCalls = 0;
             globalThis.fetch = async (_url, options) => {
                 const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
-                assert.deepEqual(request.options, { temperature: 0, num_ctx: 8572 },
+                const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
+                assert.deepEqual(runtimeOptions, { temperature: 0, num_ctx: 8572 },
                     'Bug Fixer and its surrounding roles retain the qualified local runtime');
+                if (outputCap !== undefined) { assert.ok(Number.isSafeInteger(outputCap) && outputCap > 0 && outputCap <= Math.ceil(8572 * 0.3)); }
                 let response: string;
                 if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
                 else if (request.roleInstructions.includes('Python unittest Bug Fixer')) {

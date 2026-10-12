@@ -28,6 +28,24 @@ const result = (): BehaviorObservations => ({ schema_version: 'behavior-observat
     args: ['value'], examples: [{ case_id: 'a', args: ['1'], result: '2', result_assertable: true }],
     errors: [], cases: [caseRecord('a')], load_error: null, isolation: 'fresh-process-per-case', complete: true });
 
+test('deduplicated Trace planning preserves origin sites and rejects inconsistent counts', () => {
+    const value = result();
+    value.input_deduplication = { schema_version: 'probe-case-deduplication-v1', planned_count: 33,
+        unique_count: 1, duplicate_count: 32, source_count: 33 };
+    value.cases![0].source_sites = Array.from({ length: 33 }, (_, line) => ({ kind: 'caller_literals', line }));
+    assert.equal(parseBehaviorObservations(value, 'target').cases![0].source_sites!.length, 33);
+    const events = [{ event: 'run_started', schema_version: value.schema_version, func_name: 'target' },
+        { event: 'planning_completed', args: value.args, load_error: null,
+            input_deduplication: value.input_deduplication, planned_cases: value.cases }]
+        .map(event => JSON.stringify({ run_id: 'run', ...event })).join('\n');
+    assert.deepEqual(recoverBehaviorProgress(events, 'target', 'interrupted')!.input_deduplication, value.input_deduplication);
+    value.input_deduplication.duplicate_count = 31;
+    assert.throws(() => parseBehaviorObservations(value, 'target'), /planning contract/);
+    value.input_deduplication.duplicate_count = 32;
+    value.cases![0].source_sites = [{ kind: 'fabricated' as any }];
+    assert.throws(() => parseBehaviorObservations(value, 'target'), /observation contract/);
+});
+
 test('live observation parser rejects missing execution identity and non-replayable inputs cannot be oracles', () => {
     const value = result();
     value.examples[0].case_id = 'not-executed';

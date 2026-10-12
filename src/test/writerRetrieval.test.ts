@@ -51,7 +51,7 @@ test('compact Writer preserves full source, class setup, rules, facts and caller
     const evidence = { ...bundle, mergedTargetObservations: { func_name: 'send', args: [],
         examples: [{ args: ['999'], result: 'DO_NOT_LEAK_OTHER_CALLER' }], errors: [], load_error: null } };
     const prompt = getUserPrompt('sample.py', 'send', source, 'small', context, '', 6000, '', evidence);
-    assert.match(prompt, /^compact-writer-v1/);
+    assert.match(prompt, /^compact-writer-v2/);
     assert.ok(prompt.includes(source));
     assert.ok(prompt.includes('from pkg.sample import Sender'));
     assert.ok(prompt.includes('constructor_args'));

@@ -3,6 +3,9 @@ import hashlib
 import json
 import sys
 from dependency_fixture_contract import build_dependency_fixture_contract
+from source_setup_call_contract import build_source_setup_call_contract
+
+from static_type_shape import TYPE_SHAPE_VERSION, resolve_parameter_shapes, unknown
 
 
 def unparse(node):
@@ -230,7 +233,15 @@ def attribute_name(node):
     return unparse(node)
 
 
-def extract_parameters(arguments, excluded_names=None):
+def receiver_exclusions(func_node, class_node):
+    """Only a bound method's first positional argument is an implicit receiver."""
+    if method_kind(func_node, class_node) not in ('instance', 'class', 'property'):
+        return ()
+    positional = list(func_node.args.posonlyargs) + list(func_node.args.args)
+    return (positional[0].arg,) if positional else ()
+
+
+def extract_parameters(arguments, excluded_names=None, tree=None, target_node=None):
     """Preserve required/default/keyword-only information for safe test calls."""
     excluded = set(excluded_names or [])
     parameters = []
@@ -273,10 +284,14 @@ def extract_parameters(arguments, excluded_names=None):
             'default': None,
             'required': False,
         })
+    shapes = resolve_parameter_shapes(tree, target_node, excluded) if tree is not None and target_node is not None else {}
+    for parameter in parameters:
+        parameter['type_shape'] = shapes.get(parameter['name'], unknown(
+            'missing-annotation' if parameter['annotation'] is None else 'missing-scope-context'))
     return parameters
 
 
-def extract_class_context(class_node, lines, local_classes=None):
+def extract_class_context(class_node, lines, local_classes=None, tree=None):
     if class_node is None:
         return None
     attrs, init_assigns, init_params, init_signature = [], [], [], []
@@ -285,7 +300,7 @@ def extract_class_context(class_node, lines, local_classes=None):
             for name in assignment_names(item):
                 attrs.append({'name': name, 'code': source_for(lines, item)})
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == '__init__':
-            init_signature = extract_parameters(item.args, ('self', 'cls'))
+            init_signature = extract_parameters(item.args, receiver_exclusions(item, class_node), tree, item)
             init_params = [param['name'] for param in init_signature]
             def visit_init_statement(node):
                 # A nested helper has its own execution scope. Its assignments
@@ -314,11 +329,11 @@ def extract_class_context(class_node, lines, local_classes=None):
         }
     }
     if local_classes:
-        inherited_context = extract_local_inheritance_context(class_node, local_classes, lines)
+        inherited_context = extract_local_inheritance_context(class_node, local_classes, lines, tree)
         context['inherited_context'] = inherited_context
         effective_init_owner = resolve_effective_local_init_owner(class_node, local_classes)
         if effective_init_owner is not None:
-            owner_context = extract_class_context(effective_init_owner, lines)
+            owner_context = extract_class_context(effective_init_owner, lines, tree=tree)
             context['effective_init'] = {
                 'defined_on': effective_init_owner.name,
                 **owner_context['init'],
@@ -335,7 +350,7 @@ def local_base_classes(class_node, local_classes):
     return bases
 
 
-def extract_local_inheritance_context(class_node, local_classes, lines):
+def extract_local_inheritance_context(class_node, local_classes, lines, tree=None):
     """Expose bounded source setup inherited from classes in the same module.
 
     This is setup context for a model, not proof that a constructor call is
@@ -349,7 +364,7 @@ def extract_local_inheritance_context(class_node, local_classes, lines):
             if base_node.name in seen:
                 continue
             seen.add(base_node.name)
-            base_context = extract_class_context(base_node, lines)
+            base_context = extract_class_context(base_node, lines, tree=tree)
             ancestors.append({
                 'name': base_context['name'],
                 'bases': base_context['bases'],
@@ -412,7 +427,7 @@ def method_kind(func_node, class_node):
     return 'instance'
 
 
-def extract_property_context(class_node, lines, property_name):
+def extract_property_context(class_node, lines, property_name, tree=None):
     """Return accessor relationships for a selected Python descriptor."""
     if class_node is None:
         return None
@@ -438,7 +453,7 @@ def extract_property_context(class_node, lines, property_name):
             continue
         descriptor = accessors.setdefault(name, {'name': name, 'getter': None, 'setter': None, 'deleter': None})
         descriptor[accessor_kind] = {
-            'signature': extract_parameters(item.args, ('self', 'cls')),
+            'signature': extract_parameters(item.args, receiver_exclusions(item, class_node), tree, item),
             'is_async': isinstance(item, ast.AsyncFunctionDef),
             'code': source_for(lines, item),
         }
@@ -772,8 +787,9 @@ def retrieve_local_helpers(tree, target, lines, max_depth=2, max_symbols=6, max_
             contexts.append({'name': name, 'code': code,
                              'sourceHash': hashlib.sha256(code.encode('utf-8')).hexdigest(),
                              'retrieval': {'kind': 'same-module-symbol', 'depth': depth + 1},
-                             'args': [arg['name'] for arg in extract_parameters(helper.args)],
-                             'signature': extract_parameters(helper.args),
+                             'args': [arg['name'] for arg in extract_parameters(helper.args, tree=tree, target_node=helper)],
+                             'signature': extract_parameters(helper.args, tree=tree, target_node=helper),
+                             'type_shape_version': TYPE_SHAPE_VERSION,
                              'referenced_globals': globals_context,
                              'is_async': isinstance(helper, ast.AsyncFunctionDef)})
             queue.append((helper, depth + 1))
@@ -836,7 +852,7 @@ def extract_info(filepath, func_name):
             print(json.dumps({'error': 'Function not found'}, ensure_ascii=False))
             return
 
-        signature = extract_parameters(func_node.args, ('self', 'cls') if class_name is not None else ())
+        signature = extract_parameters(func_node.args, receiver_exclusions(func_node, class_node), tree, func_node)
         args = [param['name'] for param in signature]
         local_bindings = function_scope_bindings(func_node)
         calls, loaded_names, imported_call_roots = function_scope_usage(func_node, local_bindings)
@@ -867,6 +883,7 @@ def extract_info(filepath, func_name):
             'name': func_node.name,
             'args': args,
             'signature': signature,
+            'type_shape_version': TYPE_SHAPE_VERSION,
             'required_args': [param['name'] for param in signature if param['required']],
             'docstring': ast.get_docstring(func_node) or '',
             'calls': unique_calls,
@@ -876,15 +893,16 @@ def extract_info(filepath, func_name):
             'file_imports': file_imports,
             'referenced_globals': referenced_globals,
             'class_name': class_name,
-            'class_context': extract_class_context(class_node, lines, local_classes),
+            'class_context': extract_class_context(class_node, lines, local_classes, tree),
             'method_kind': method_kind(func_node, class_node),
-            'property_context': extract_property_context(class_node, lines, func_node.name),
+            'property_context': extract_property_context(class_node, lines, func_node.name, tree),
             'is_async': isinstance(func_node, ast.AsyncFunctionDef),
             'is_generator': is_generator_function(func_node),
             'executable_lines': executable_body_lines(func_node),
             'raised_exceptions': raised_exception_names(func_node),
             'condition_facts': branch_condition_facts(func_node, set(args)),
             'dependency_fixture_contract': build_dependency_fixture_contract(func_node, target_source, func_name, module_bindings),
+            'source_setup_call_contract': build_source_setup_call_contract(func_node, target_source, func_name, tree),
             'code': target_source
         }, ensure_ascii=False))
     except Exception as error:

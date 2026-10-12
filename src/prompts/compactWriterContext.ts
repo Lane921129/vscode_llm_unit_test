@@ -4,9 +4,9 @@ import { estimatePromptTokens } from './promptBudget';
 import { matchingWriterExamples } from './verifiedWriterExamples';
 import { callerForPrompt, callerMatchesObservation, typedCallFields } from '../pipeline/probeInputs';
 import { validTraceInputSnapshot, validTraceValueSnapshot } from '../pipeline/traceValues';
-import { formatDependencyMockContract, formatDependencyTopology, relevantSourceImports } from './dependencyMockContract';
+import { formatDependencyMockContract, formatDependencyTopology, formatSourceImport, relevantSourceImports } from './dependencyMockContract';
 
-export const COMPACT_WRITER_VERSION = 'compact-writer-v1';
+export const COMPACT_WRITER_VERSION = 'compact-writer-v2';
 
 /** Request-local references only replace complete, byte-identical source/setup
  * fields. They never share observations, identities, unknown fields or tests.
@@ -72,8 +72,41 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
     const callers = groupCallerSetupsForPrompt(context.callerContexts);
     const callerNote = callers.some(caller => Array.isArray(caller.call_sites))
         ? '; call_sites share identical projected setup, not execution results' : '';
+    const sourceReferences = new Map<string, string>([[input.source, 'TARGET SOURCE']]);
+    const fragments: string[] = [];
+    const sourceCode = (code: unknown, location: string): unknown => {
+        if (typeof code !== 'string' || !code.trim()) { return code; }
+        const previous = sourceReferences.get(code);
+        if (previous) { return { same_complete_source_as: previous }; }
+        const label = `SOURCE FRAGMENT ${fragments.length + 1}`;
+        sourceReferences.set(code, label);
+        fragments.push(`${label} (${location}; complete supplied source snippet, scope unchanged):\n\`\`\`python\n${code}\n\`\`\``);
+        return { same_complete_source_as: label };
+    };
+    const setup = references.setup(projectSourceSetup({
+        imports: relevantSourceImports(context).map(item => ({ ...item,
+            ...(formatSourceImport(item) ? { sourceSpelling: formatSourceImport(item) } : {}) })),
+        constructor: context.class_context || null, property: context.property_context || null,
+        globals: context.referenced_globals || [], callers, conditions: context.condition_facts || []
+    }, 'SOURCE SETUP', sourceCode), 'SOURCE SETUP');
+    const dependencyBlocks = dependencies.map((dep, index) => {
+        const location = `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}]`;
+        const facts = references.setup(projectSourceSetup(dependencySetupFacts(dep), location, sourceCode), location);
+        const dependencySource = typeof dep.code === 'string' ? dep.code : '';
+        const previous = dependencySource ? sourceReferences.get(dependencySource) : undefined;
+        const block = `${location} (setup/path context only):\n` + JSON.stringify(facts)
+            + (previous ? `\nComplete source is identical to ${previous} above; reuse that source, not its observations.`
+                : `\n\`\`\`python\n${dependencySource}\n\`\`\``);
+        if (dependencySource && !previous) { sourceReferences.set(dependencySource, location); }
+        return block;
+    });
+    const targetObservations = partitionWriterObservations(scenario.observations);
+    const dependencyObservations = dependencies.flatMap((dep, index) => dep.traceResult ? [{
+        dependencyIndex: index + 1, name: dep.name, sourceHash: dep.sourceHash,
+        ...partitionWriterObservations(dep.traceResult)
+    }] : []);
     const sections = [
-        (revision ? 'writer-revision-context-v1' : COMPACT_WRITER_VERSION) + ' (metadata, never an import)',
+        (revision ? 'writer-revision-context-v2' : COMPACT_WRITER_VERSION) + ' (metadata, never an import)',
         '=== WRITER EVIDENCE BUNDLE V3 ===',
         formatTargetContract(input.module, input.name, context.args || [], context),
         `Source hash: ${input.evidence.sourceHash}`,
@@ -82,23 +115,26 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + `Deterministically selected test rules: ${input.evidence.ruleSelection.ids.join(', ') || 'none'}\n`
             + 'Test-generation rules constrain test construction. They are not evidence of a return value or exception.',
         `TARGET SOURCE (read-only, not an output oracle):\n\`\`\`python\n${input.source}\n\`\`\``,
-        `SETUP FACTS (source only; caller values are input candidates, not expected outputs${callerNote}):\n` + JSON.stringify(references.setup({
-            constructor: context.class_context || null, property: context.property_context || null,
-            globals: context.referenced_globals || [],
-            callers, conditions: context.condition_facts || []
-        }, 'SETUP FACTS')),
+        'SOURCE SETUP (read-only declarations, not evaluated values or expected outputs):\n'
+            + `SETUP FACTS (source only; caller values are input candidates, not expected outputs${callerNote}):\n` + JSON.stringify(setup)
+            + '\nsourceSpelling reproduces AST import syntax, not original formatting. Module globals belong to the canonical target module; do not rename or evaluate their expressions. '
+            + 'same_complete_source_as points to the complete source block named in this request. Constructor snippets are declared assignments/accessors, not proof of a complete constructor body or executed state.\n'
+            + [...fragments, ...dependencyBlocks].join('\n\n'),
         'FIXTURE CHECK: Import unittest and test helpers explicitly in test scope; never use wildcard target imports. '
             + 'Arrange constructor inputs and per-case state. Dependency returns are not target returns.',
-        formatDependencyMockContract(input.module, context, input.allowedMockTargets, revision),
+        formatDependencyMockContract(input.module, context, input.allowedMockTargets, revision, { sourceImportsListed: true }),
         // The caller-partitioned AST trace is authoritative here. Using the
         // bundle's merged trace would leak another caller's assertion oracle.
-        'VERIFIED OBSERVATIONS (exact call/setup only; blocked or unassertable entries are diagnostics):\n'
-            + JSON.stringify(observationsForPrompt(scenario.observations)),
+        'VERIFIED OBSERVATIONS (current controlled behavior for exact call/setup only; not independent requirements):\n'
+            + JSON.stringify(targetObservations.observations),
         ...(scenario.note ? [scenario.note] : []),
-        'uncontrolled-ambient-read observations cannot supply expected values or exceptions. Control clock/entropy at its use point before asserting.',
         'VERIFIED DEPENDENCY OBSERVATIONS (never substitute for target results):\n'
-            + JSON.stringify(dependencies.flatMap((dep, index) => dep.traceResult ? [{ dependencyIndex: index + 1,
-                name: dep.name, sourceHash: dep.sourceHash, observations: observationsForPrompt(dep.traceResult) }] : [])),
+            + JSON.stringify(dependencyObservations.map(({ diagnostics: _diagnostics, ...entry }) => entry)),
+        'DIAGNOSTICS (never expected values, expected exceptions, fixture returns or fixture types):\n'
+            + JSON.stringify({ target: targetObservations.diagnostics,
+                dependencies: dependencyObservations.map(({ observations: _observations, ...entry }) => entry) })
+            + '\nBlocked, non_assertable, incomplete and uncontrolled-ambient-read records are retained only to explain unavailable evidence. '
+            + 'Control clock/entropy at its use point before asserting; private tool representations describe diagnostics, not application return objects.',
         'SELECTED RULES (construction constraints, not output facts):\n'
             + formatUniqueRules(input.evidence),
         ...(input.focus ? ['CURRENT TESTS AND NEXT TASK (preserve passing methods; proposed tasks are hypotheses):\n' + input.focus] : []),
@@ -109,22 +145,6 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + (context.is_async ? 'Use IsolatedAsyncioTestCase and await. ' : '')
             + 'No evidence means omit that assertion, never guess.'
     ];
-    const sourceReferences = new Map<string, string>([[input.source, 'TARGET SOURCE']]);
-    for (const [index, dep] of dependencies.entries()) {
-        // All revision dependency fields remain available. The raw trace is
-        // represented once above with its safety/assertability flags intact.
-        const { code } = dep;
-        const rawFacts = dependencySetupFacts(dep);
-        const facts = references.setup(rawFacts, `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}]`);
-        const dependencySource = typeof code === 'string' ? code : '';
-        const previous = dependencySource ? sourceReferences.get(dependencySource) : undefined;
-        const block = `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}] (setup/path context only):\n`
-            + JSON.stringify(facts)
-            + (previous ? `\nComplete source is identical to ${previous} above; reuse that source, not its observations.`
-                : `\n\`\`\`python\n${dependencySource}\n\`\`\``);
-        sections.push(block);
-        if (dependencySource && !previous) { sourceReferences.set(dependencySource, `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}]`); }
-    }
     if (references.note()) { sections.push(references.note()); }
     if (revision) { return sections.filter(Boolean).join('\n\n'); }
     // Complete dependency source/setup is required in both full Writer sizes.
@@ -195,6 +215,79 @@ function dependencySetupFacts(dep: any): Record<string, unknown> {
     const imports = relevantSourceImports(dep);
     if (imports.length) { facts.imports = imports; }
     return facts;
+}
+
+/** Move only extractor-owned source fields out of JSON escaping; all metadata and unknown fields remain. */
+function projectSourceSetup(fields: Record<string, unknown>, location: string,
+    sourceCode: (code: unknown, location: string) => unknown): Record<string, unknown> {
+    const record = (value: unknown, label: string): unknown => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
+        const item = value as Record<string, unknown>;
+        return Object.hasOwn(item, 'code') ? { ...item, code: sourceCode(item.code, label + '.code') } : item;
+    };
+    const records = (value: unknown, label: string): unknown => Array.isArray(value)
+        ? value.map((item, index) => record(item, `${label}[${index}]`)) : value;
+    const init = (value: unknown, label: string): unknown => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
+        const item = record(value, label) as Record<string, unknown>;
+        return { ...item, ...(Object.hasOwn(item, 'assigns') ? { assigns: records(item.assigns, label + '.assigns') } : {}) };
+    };
+    const constructor = (value: unknown, label: string): unknown => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
+        const item = value as Record<string, unknown>;
+        return { ...item,
+            ...(Object.hasOwn(item, 'class_attrs') ? { class_attrs: records(item.class_attrs, label + '.class_attrs') } : {}),
+            ...(Object.hasOwn(item, 'init') ? { init: init(item.init, label + '.init') } : {}),
+            ...(Object.hasOwn(item, 'effective_init') ? { effective_init: init(item.effective_init, label + '.effective_init') } : {}),
+            ...(Array.isArray(item.inherited_context) ? { inherited_context: item.inherited_context.map((parent, index) =>
+                constructor(parent, `${label}.inherited_context[${index}]`)) } : {}) };
+    };
+    const property = (value: unknown, label: string): unknown => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+            ['getter', 'setter', 'deleter'].includes(key) ? record(item, `${label}.${key}`) : item]));
+    };
+    return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key,
+        ['globals', 'referenced_globals'].includes(key) ? records(value, `${location}.${key}`)
+            : ['constructor', 'class_context'].includes(key) ? constructor(value, `${location}.${key}`)
+                : ['property', 'property_context'].includes(key) ? property(value, `${location}.${key}`) : value]));
+}
+
+/** Lossless placement only. A diagnostic is never upgraded into an assertion or a test-owned return object. */
+export function partitionWriterObservations(observations?: BehaviorObservations): {
+    observations: Record<string, unknown> | null; diagnostics: Record<string, unknown> | null;
+} {
+    const projected = observationsForPrompt(observations) as Record<string, unknown> | null;
+    if (!projected) { return { observations: null, diagnostics: null }; }
+    const { examples = [], errors = [], ...metadata } = projected;
+    const optionalTrue = (flag: unknown) => flag === undefined || flag === true;
+    const optionalFalse = (flag: unknown) => flag === undefined || flag === false;
+    const usable = (fact: Record<string, unknown>, expectedStatus: 'returned' | 'raised') => {
+        if (observations?.complete !== true || observations.load_error || !optionalTrue(fact.call_assertable)
+            || !optionalTrue(fact.result_assertable) || !optionalFalse(fact.result_truncated) || fact.oracle_reason
+            || !optionalFalse(fact.non_assertable) || fact.result_type === 'non_assertable'
+            || fact.non_deterministic_operations !== undefined && (!Array.isArray(fact.non_deterministic_operations)
+                || fact.non_deterministic_operations.length > 0)) { return false; }
+        if (expectedStatus === 'returned' ? typeof fact.result !== 'string' : typeof fact.exception !== 'string') { return false; }
+        if (observations.cases?.length) {
+            const ids = fact.case_ids;
+            if (!Array.isArray(ids) || !ids.length || ids.some(id => {
+                const matches = observations.cases!.filter(item => item.case_id === id);
+                return matches.length !== 1 || matches[0].status !== expectedStatus || !optionalTrue(matches[0].call_assertable);
+            })) { return false; }
+        }
+        return true;
+    };
+    const split = (items: unknown, status: 'returned' | 'raised') => {
+        const available: Record<string, unknown>[] = [], diagnostics: Record<string, unknown>[] = [];
+        for (const item of items as Record<string, unknown>[]) { (usable(item, status) ? available : diagnostics).push(item); }
+        return { available, diagnostics };
+    };
+    const returned = split(examples, 'returned'), raised = split(errors, 'raised');
+    const identity = { func_name: metadata.func_name, args: metadata.args,
+        ...(observations?.run_id ? { observationRunId: observations.run_id } : {}) };
+    return { observations: { ...identity, examples: returned.available, errors: raised.available },
+        diagnostics: { ...metadata, ...identity, examples: returned.diagnostics, errors: raised.diagnostics } };
 }
 
 /** Select whole exact cases; a stale/missing identifier fails open to full evidence. */

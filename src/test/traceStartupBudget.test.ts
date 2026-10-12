@@ -5,7 +5,25 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { preflightTargetModule } from '../pipeline/modulePreflight';
-import { planTraceStartupBudget } from '../pipeline/traceStartupBudget';
+import { planTraceStartupBudget, traceTimingPreferences } from '../pipeline/traceStartupBudget';
+
+test('configured Trace time increases execution allowances while preserving cleanup and the target deadline', () => {
+    const defaults = traceTimingPreferences(undefined, undefined, undefined);
+    assert.deepEqual(defaults, { totalTimeoutSeconds: 60, planningTimeoutSeconds: 15, caseTimeoutSeconds: 5 });
+    const timing = planTraceStartupBudget(1000, 200000, defaults);
+    assert.equal(timing.outerTimeoutMs, 60000);
+    assert.equal(timing.planningTimeoutSeconds, 15);
+    assert.equal(timing.caseTimeoutSeconds, 5);
+    assert.equal(timing.totalTimeoutSeconds, 58);
+    const later = planTraceStartupBudget(1000, 4000, defaults);
+    assert.equal(later.outerTimeoutMs, 4000);
+    assert.equal(later.totalTimeoutSeconds, 3.6);
+    assert.ok(later.caseTimeoutSeconds <= later.totalTimeoutSeconds);
+    assert.equal(planTraceStartupBudget(0, 400000, traceTimingPreferences(300, 40, 30)).outerTimeoutMs, 300000);
+    for (const invalid of [0, -1, 301, NaN, Infinity, true, '120', 1.5]) {
+        assert.equal(traceTimingPreferences(invalid, invalid, invalid).totalTimeoutSeconds, 60);
+    }
+});
 
 test('unknown preflight keeps the prior Trace allowances without inventing startup evidence', () => {
     for (const unknown of [undefined, null, false, '5000', -1, NaN, Infinity, {}]) {

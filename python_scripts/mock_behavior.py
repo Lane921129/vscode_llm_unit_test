@@ -44,17 +44,110 @@ def imports(statements):
     return result
 
 
+def source_function(tree, context, fragment=False):
+    """Select the exact source member; fragments may contain just its def."""
+    target = context.get('target', '').rsplit('.', 1)[-1]
+    owner = context.get('className')
+    nodes = tree.body
+    if owner:
+        classes = [node for node in nodes if isinstance(node, ast.ClassDef) and node.name == owner]
+        if len(classes) == 1:
+            nodes = classes[0].body
+        elif not fragment or len(nodes) != 1 or not isinstance(nodes[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return None
+    functions = [node for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and node.name == target]
+    return functions[0] if len(functions) == 1 else None
+
+
+def source_module_imports(context):
+    """Prove module-object identity from full AST, never from a name hint.
+
+    A from-import copies a binding and is intentionally not an equivalent
+    provider patch. Rebinding, attribute writes and dynamic namespaces revoke
+    this conservative proof, including writes in other functions.
+    """
+    raw = context.get('moduleSource', context.get('source', ''))
+    if not isinstance(raw, str) or len(raw) > 512000:
+        return {}
+    try:
+        tree = ast.parse(textwrap.dedent(raw))
+        fragment = ast.parse(textwrap.dedent(context.get('source', '')))
+    except (SyntaxError, TypeError):
+        return {}
+    selected, expected = source_function(tree, context), source_function(fragment, context, True)
+    if not selected or not expected or ast.dump(selected) != ast.dump(expected):
+        return {}
+    bindings = {}
+    direct_imports = {id(node) for node in tree.body if isinstance(node, ast.Import)}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = alias.asname or alias.name.split('.')[0]
+                if name in bindings:
+                    bindings[name] = None
+                else:
+                    bindings[name] = alias.name if alias.asname else alias.name.split('.')[0]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and id(node) not in direct_imports:
+            for alias in node.names:
+                bindings.pop(alias.asname or alias.name.split('.')[0], None)
+        elif isinstance(node, ast.ImportFrom):
+            if any(alias.name == '*' for alias in node.names):
+                return {}
+            for alias in node.names:
+                bindings.pop(alias.asname or alias.name, None)
+        elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings.pop(dotted(node).split('.')[0], None)
+        elif isinstance(node, ast.arg):
+            bindings.pop(node.arg, None)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bindings.pop(node.name, None)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bindings.pop(node.name, None)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bindings.pop(node.rest, None)
+        elif isinstance(node, ast.Attribute) and node.attr in ('__dict__', '__builtins__', '__getattribute__'):
+            return {}
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bindings.pop(node.name, None)
+        elif isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] in {
+                'globals', 'locals', 'vars', 'eval', 'exec', 'setattr', 'delattr', '__import__', 'reload'}:
+            return {}
+    return {name: origin for name, origin in bindings.items() if origin}
+
+
+def possible_test_origins(tree):
+    """Conservative alias set only for revoking equivalence, never granting it."""
+    result = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                binding = alias.asname or (alias.name.split('.')[0] if isinstance(node, ast.Import) else alias.name)
+                origin = (alias.name if alias.asname else alias.name.split('.')[0]) if isinstance(node, ast.Import) else f'{node.module}.{alias.name}'
+                result.setdefault(binding, set()).add(origin)
+    for _ in range(3):
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                root, _, tail = dotted(node.value).partition('.')
+                origins = {origin + ('.' + tail if tail else '') for origin in result.get(root, ())}
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and origins:
+                        result.setdefault(target.id, set()).update(origins)
+    return result
+
+
 def target_use_points(context):
     try:
         source = ast.parse(textwrap.dedent(context.get('source', '')))
     except SyntaxError:
         return set(), False
-    functions = [node for node in source.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                 and node.name == context.get('target')]
-    if len(functions) != 1:
+    selected = source_function(source, context, True)
+    if not selected:
         return set(), False
-    calls, _, roots = function_scope_usage(functions[0], function_scope_bindings(functions[0]))
-    return {f"{context['module']}.{call}" for call in calls if call.split('.')[0] in roots}, isinstance(functions[0], ast.AsyncFunctionDef)
+    calls, _, roots = function_scope_usage(selected, function_scope_bindings(selected))
+    return {f"{context['module']}.{call}" for call in calls if call.split('.')[0] in roots}, isinstance(selected, ast.AsyncFunctionDef)
 
 
 def has_mock_behavior(tree, context):
@@ -65,6 +158,42 @@ def has_mock_behavior(tree, context):
     use_points, asynchronous = target_use_points(context)
     permitted = use_points - {target_path, f'{module}.{owner}' if owner else ''}
     module_imports = imports(tree.body)
+    # A provider member is the same object only while the application's module
+    # binding remains intact. A test that replaces that binding cannot borrow
+    # this proof for a simultaneous patch on the unrelated provider object.
+    equivalent = source_module_imports(context)
+    revocation_aliases = possible_test_origins(tree)
+
+    def possible(node):
+        root, _, tail = dotted(node).partition('.')
+        return {origin + ('.' + tail if tail else '') for origin in revocation_aliases.get(root, {root})}
+
+    for node in ast.walk(tree):
+        resolved = set()
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            resolved = possible(node)
+        elif isinstance(node, ast.Call):
+            factories = possible(node.func)
+            if 'unittest.mock.patch' in factories and node.args and isinstance(node.args[0], ast.Constant):
+                if isinstance(node.args[0].value, str):
+                    resolved.add(node.args[0].value)
+            elif ('unittest.mock.patch.object' in factories and len(node.args) >= 2
+                  and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str)):
+                resolved = {origin + '.' + node.args[1].value for origin in possible(node.args[0])}
+            elif any(factory.split('.')[-1] in ('setattr', 'delattr', 'globals', 'locals', 'vars', 'eval', 'exec')
+                     for factory in factories):
+                equivalent = {}
+        else:
+            continue
+        for binding in list(equivalent):
+            if f'{module}.{binding}' in resolved:
+                equivalent.pop(binding)
+    for use_point in list(permitted):
+        call = use_point[len(module) + 1:]
+        root, separator, tail = call.partition('.')
+        if separator and root in equivalent:
+            permitted.add(equivalent[root] + '.' + tail)
+    permitted -= {target_path, f'{module}.{owner}' if owner else ''}
 
     for cls in tree.body:
         if not isinstance(cls, ast.ClassDef) or cls.decorator_list:
@@ -164,21 +293,27 @@ def has_mock_behavior(tree, context):
                     return expression(node.value, active, True)
                 if not isinstance(node, ast.Call):
                     return False
+                # Python evaluates call arguments before invoking the outer
+                # call. A real target inside a standard result assertion is
+                # still an actual target call, not merely unused text.
+                found = False
+                for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+                    found = expression(argument, active) or found
                 if is_target(node):
                     if asynchronous and not awaited:
                         return False
                     observed.update(active)
                     observed.update(value for arg in [*node.args, *(k.value for k in node.keywords)]
                                     if (value := token(arg)) is not None)
-                    return False
+                    return found
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ASSERTIONS:
                     value = token(node.func.value)
-                    return (value is not None and token(node.func) == value and value in observed and value not in manual
-                            and (value not in configured_children or dotted(node.func.value) in mock_roots))
+                    return found or (value is not None and token(node.func) == value and value in observed and value not in manual
+                                     and (value not in configured_children or dotted(node.func.value) in mock_roots))
                 value = token(node.func)
                 if value is not None:
                     manual.add(value)
-                return False
+                return found
 
             def statements(nodes, active):
                 nonlocal serial

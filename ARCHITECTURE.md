@@ -1,5 +1,21 @@
 # 專案閱讀入口
 
+## 跨專案 P0／P1 與 Tier 分流（2026-10-12）
+
+主流程保持 Analyst → Writer → 真實隔離執行 → 另一 LLM Reviewer → 同候選批准 → 突變 → 品質缺口修訂。`tierFailurePolicy.ts` 只對候選或修復契約耗盡降低生成策略；模型、環境、工具、預算與審查失敗不借降級回避。沒有可用 Bug Fixer 時由 Writer 修訂，仍保留已通過情境。
+
+`batchPreflightPartition.ts` 以最後真正匯入檢查分開 loaded／受阻／未檢來源。`batchSetupContinuity.ts` 核對根、選取來源、初始化閉包、Python及實際fixture身份後，只排程已實測loaded目標；其他目標單獨記 environment-blocked、零模型請求。`batchPreflightSnapshot.ts` 在批次內保存最後預檢快照。局部完成不是整批通過，取消或身分漂移仍停止。
+
+`compactWriterContext.ts` 的 v2 投影把來源 setup 放成原文區段，JSON內只引用完全相同已列來源；derived imports明示其性質。可斷言觀測與完整診斷分開，不把 non_assertable repr 當 return value。`mock_behavior.py` 只在完整模組來源與唯一目標相符且沒有重綁時，證明 module-member 原始位置與使用點 patch 等價；測試中未定義／遮蔽名稱與未完成骨架交 Writer，無法證明的外部呼叫不自動全部Mock。
+
+`probeInputFixtures.ts` 載入來源綁定的有界 JSON；`probe_fixture_builder.py` 只解析有界 Python literal，不 import 應用或執行模型碼。測资包含四組 args／kwargs／constructor_args／constructor_kwargs，沒有 expected。未知物件仍需明確 fixture 設計，不能宣稱任意第三方型別都可重建。`probe_case_plan.py` 去除完全相同的自動規劃呼叫並保留 origins；每個保留案例仍新建 worker／資源，使用者測資及未知狀態不合併。
+
+Trace 新執行預設60／15／5秒（total／planning／case），總時間與單例最多300／30秒，依成功預檢校準冷載入且不延長原目標 deadline。LLM 請求時間獨立計算。完整流程及失敗報告分開呈現分配與實際 planning／case 耗時；逾時不是函式例外 oracle。
+
+Reviewer 依完整編號測試及同候選事實逐項檢查輸入／expected，不以自己的模型假設代替執行。`reviewerDiagnosticsPresentation.ts` 呈現有界且去密的原因、引用、行號、修改動作與assessment拒絕碼；可執行、審查建議、已批准、完整品質通過保持不同狀態。
+
+`source_setup_call_contract.py` 輸出獨立的來源呼叫事實卡，與只描述物件消費形狀的 fixture topology 分開；Python AST正規化拼字不是原始格式或執行證據。每項綁定完整目標片段摘要與qualified target，標示 `assertionOracle=false`、`patchAuthorization=false`。required Writer語境列明可選屬性owner、真正的module-global呼叫參數與來源`__file__`；未知與超限不給具體操作權限，測試仍須實際執行及審查。
+
 ## 批次資格重用、輸出恢復與冷啟動（2026-10-12）
 
 `batchRuntimeQualification.ts` 以同一頂層 `ExecutionContext` 持有 `RuntimeQualificationSession`，核對確認的來源集合、實體路徑、Python 與 venv 設定、已載入相依及 fixture 身分。只重用同端點、模型、容量及資格版本的完整能力判定；傳輸／執行不可用不形成負面能力快取。後續目標可沿用本批次已核驗的較大容量，偏好與跨批次儲存不變，所有實際候選仍重新執行與審查。

@@ -2,7 +2,11 @@
 import ast
 import json
 import sys
-from mock_behavior import has_mock_behavior
+import builtins
+import symtable
+import io
+import tokenize
+from mock_behavior import has_mock_behavior, imports as mock_imports
 from target_result_evidence import has_target_result_assertion
 
 
@@ -15,11 +19,123 @@ def dotted(node):
     return ''
 
 
+def definite_test_name_failure(tree, code):
+    """Diagnose only direct, statically certain test-owned name failures.
+
+    Unknown branches, dynamic namespaces and nested expression scopes are left
+    to execution. Source globals are not magically imported into a test module.
+    """
+    try:
+        tables = symtable.symtable(code, '<generated-test>', 'exec')
+    except SyntaxError:
+        return {'name': 'scope', 'reasonCode': 'writer-invalid-name-scope', 'method': 'generated scope'}
+    globals_ = {symbol.get_name() for symbol in tables.get_symbols()
+                if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace()}
+    globals_.update(vars(builtins))
+    globals_.update({'__name__', '__file__', '__package__', '__spec__', '__loader__', '__builtins__', '__doc__'})
+    module_imports = mock_imports(tree.body)
+    if any(isinstance(node, ast.ImportFrom) and any(alias.name == '*' for alias in node.names)
+           or isinstance(node, ast.Call) and dotted(node.func) in ('globals', 'locals', 'vars', 'exec', 'eval')
+           for node in ast.walk(tree)):
+        return None
+
+    def reads(expression):
+        if expression is None:
+            return []
+        if any(isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
+               for node in ast.walk(expression)):
+            return []
+        return [node.id for node in ast.walk(expression) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)]
+
+    for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+        bases = [dotted(base).partition('.') for base in cls.bases]
+        if cls.decorator_list or not any(module_imports.get(root, root) + ('.' + tail if separator else '')
+                                        in ('unittest.TestCase', 'unittest.IsolatedAsyncioTestCase')
+                                        for root, separator, tail in bases):
+            continue
+        method_counts = {}
+        for method in cls.body:
+            if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                method_counts[method.name] = method_counts.get(method.name, 0) + 1
+        cls_table = next((table for table in tables.get_children() if table.get_lineno() == cls.lineno
+                          and table.get_name() == cls.name), None)
+        if not cls_table:
+            continue
+        for method in cls.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or not method.name.startswith('test_'):
+                continue
+            if method_counts[method.name] != 1:
+                continue
+            if any(isinstance(node, (ast.Global, ast.Nonlocal, ast.NamedExpr)) for node in ast.walk(method)):
+                continue
+            scope = next((table for table in cls_table.get_children() if table.get_lineno() == method.lineno
+                          and table.get_name() == method.name), None)
+            if not scope:
+                continue
+            local = {symbol.get_name() for symbol in scope.get_symbols() if symbol.is_local()}
+            bound = {symbol.get_name() for symbol in scope.get_symbols() if symbol.is_parameter()}
+
+            def check(expression):
+                for name in reads(expression):
+                    if name in local and name not in bound:
+                        return {'name': name, 'reasonCode': 'writer-unbound-local-name'}
+                    if name not in local and name not in globals_:
+                        return {'name': name, 'reasonCode': 'writer-undefined-name'}
+                return None
+
+            def statements(nodes):
+                for node in nodes:
+                    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                        failure = check(node.value)
+                        if failure:
+                            return failure
+                        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                        if node.value is not None:
+                            bound.update(child.id for target in targets for child in ast.walk(target)
+                                         if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store))
+                    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                        bound.update(alias.asname or (alias.name.split('.')[0] if isinstance(node, ast.Import) else alias.name)
+                                     for alias in node.names)
+                    elif isinstance(node, ast.With):
+                        for item in node.items:
+                            failure = check(item.context_expr)
+                            if failure:
+                                return failure
+                            if item.optional_vars:
+                                bound.update(child.id for child in ast.walk(item.optional_vars)
+                                             if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store))
+                        failure = statements(node.body)
+                        if failure:
+                            return failure
+                    elif isinstance(node, (ast.Expr, ast.Return, ast.Raise, ast.Assert)):
+                        failure = check(node)
+                        if failure:
+                            return failure
+                        if isinstance(node, (ast.Return, ast.Raise)):
+                            return None
+                    elif not isinstance(node, ast.Pass):
+                        return None
+                return None
+
+            failure = statements(method.body)
+            if failure:
+                return {**failure, 'method': method.name}
+    return None
+
+
 def validate_bindings(code, context):
     try:
         tree = ast.parse(code)
     except SyntaxError as error:
         return {'valid': False, 'reason': f'Python syntax: {error.msg} (line {error.lineno})'}
+    # These are exact tool-owned scaffold markers, not a ban on legitimate None
+    # fixtures or arbitrary source comments/strings containing the word TODO.
+    markers = ('# SETUP PLACEHOLDERS ONLY:', '# TODO: set appropriate mock return value',
+               '# TODO: set appropriate test value for', '# TODO: provide valid values for', '# TODO: add assertions here')
+    if any(token.type == tokenize.COMMENT and token.string.startswith(markers)
+           for token in tokenize.generate_tokens(io.StringIO(code).readline)):
+        return {'valid': False, 'reasonCode': 'writer-scaffold-placeholder', 'repairRole': 'writer',
+                'reason': 'Writer must complete the setup-only scaffold and remove its unresolved placeholder markers before validation.'}
     module = context.get('module', '')
     target = context.get('target', '')
     dependencies = context.get('dependencies', {})
@@ -125,6 +241,18 @@ def validate_bindings(code, context):
                 expected = f'{module}.{binding}'
                 if patch_path != expected:
                     return {'valid': False, 'reason': f'Patch the dependency at its target use point: {expected}, not {patch_path}. Verify the mock was called.'}
+    # Diagnose the same certain test-owned binding failures before generic
+    # behavior gates can hide the missing import or local shadowing from Writer.
+    failure = definite_test_name_failure(tree, code)
+    if failure:
+        name = failure['name']
+        reason = (f'Writer binding repair: {name} is undefined or read before its local binding in {failure["method"]}. '
+                  'Use a distinct mock alias and explicitly import test helpers or source globals at the canonical target module; '
+                  'do not change assertions or install a guessed package.')
+        if failure['reasonCode'] == 'writer-invalid-name-scope':
+            reason = 'Writer binding repair: generated global/local declarations are inconsistent. Revise the test scope before execution.'
+        return {'valid': False, **failure, 'repairRole': 'writer',
+                'reason': reason}
     if context.get('requireMockBehavior') and not has_mock_behavior(tree, context):
         return {'valid': False, 'reason': 'Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.'}
     if context.get('requireTargetBehavior') and not (has_target_result_assertion(tree, context) or has_mock_behavior(tree, context)):

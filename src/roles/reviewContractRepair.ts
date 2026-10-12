@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { currentTargetBudget } from '../pipeline/targetBudget';
 import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
-import { parseTestReviewDetailed, ReviewConstraints, ReviewRejectionCode, TestReview } from './testReviewer';
+import { parseTestReviewDetailed, projectRejectedReviewFindings, RejectedReviewFinding,
+    ReviewConstraints, ReviewRejectionCode, TestReview } from './testReviewer';
+import { redactCredentialStrings } from '../pipeline/artifactSafety';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 export type { ReviewConstraints } from './testReviewer';
 
@@ -12,6 +14,8 @@ export interface ReviewContractEvent {
     responseCharacters?: number;
     diagnostics?: ReviewRejectionCode[];
     result?: TestReview;
+    /** Diagnostic claims only; rejected assessments never become candidate approval. */
+    rejectedFindings?: RejectedReviewFinding[];
     reasonCode?: 'deadline-expired';
 }
 
@@ -19,6 +23,7 @@ export interface ReviewContractRepairOptions {
     tests: string;
     prompt: string;
     constraints?: ReviewConstraints;
+    knownSecrets?: readonly string[];
     /** Absolute deadline shared by the original request and its single correction. */
     deadlineAt: number;
     /** The caller owns request/transport/token accounting; never create a new target budget here. */
@@ -54,10 +59,13 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
                 { reasonCode: 'deadline-expired', attempt });
         }
         const parsed = parseTestReviewDetailed(raw, options.tests, true, options.constraints);
+        const rejectedFindings = parsed.review ? [] : projectRejectedReviewFindings(raw, options.tests, options.knownSecrets);
         options.event(parsed.review ? 'parsed' : 'invalid-response', {
             contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, attempt,
             responseHash: createHash('sha256').update(raw).digest('hex'), responseCharacters: raw.length,
-            diagnostics: parsed.diagnostics, ...(parsed.review ? { result: parsed.review } : {})
+            diagnostics: parsed.diagnostics, ...(parsed.review
+                ? { result: redactCredentialStrings(parsed.review, options.knownSecrets) as TestReview }
+                : rejectedFindings.length ? { rejectedFindings } : {})
         });
         if (parsed.review) { return parsed.review; }
         if (attempt === 0) {

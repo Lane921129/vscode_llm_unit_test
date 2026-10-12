@@ -28,6 +28,7 @@ test('initialization setup stops after one confirmed recheck and preserves the r
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     let root = '', settings: Record<string, any> = {}, approve = true, confirmations = 0, updates = 0, modelCalls = 0;
     let duringConfirmation: (() => void) | undefined;
+    let duringFinalReport: (() => void) | undefined;
     const messages: any[] = [];
     const confirmationMessages: string[] = [];
     const vscode = {
@@ -41,7 +42,9 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             openTextDocument: async (file: string) => { assert.ok(fs.existsSync(file)); return { file }; }
         },
         window: {
-            showTextDocument: async () => {}, showInformationMessage: async () => {},
+            showTextDocument: async (document: { file: string }) => {
+                if (path.basename(document.file) === 'import_setup.md') { duringFinalReport?.(); }
+            }, showInformationMessage: async () => {},
             showWarningMessage: async (_message: string, options?: { modal?: boolean }, action?: string) => {
                 if (options?.modal) { confirmationMessages.push(_message); confirmations++; duringConfirmation?.(); return approve ? action : undefined; }
                 return undefined;
@@ -62,7 +65,8 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             fs.writeFileSync(path.join(parent, 'neutral_runtime.py'),
                 'from pathlib import Path\ndef launch():\n    Path("must_not_exist").mkdir()\n');
             settings = { pythonPath: python, projectPath: root, importFixtures: [] };
-            approve = true; confirmations = 0; updates = 0; messages.length = 0; confirmationMessages.length = 0; duringConfirmation = undefined;
+            approve = true; confirmations = 0; updates = 0; messages.length = 0; confirmationMessages.length = 0;
+            duringConfirmation = undefined; duringFinalReport = undefined;
             const output = path.join(base, 'results', name.length < 12 ? name : createHash('sha256').update(name).digest('hex').slice(0, 8));
             const controller = new ImportSetupController((message: unknown) => messages.push(message));
             return { file, source, output, controller };
@@ -87,7 +91,16 @@ test('initialization setup stops after one confirmed recheck and preserves the r
             assert.equal(outcome.applied, session.applied);
             const finalCheck = JSON.parse(fs.readFileSync(path.join(directory, session.checks.at(-1)!.directory, 'import_check.json'), 'utf8'));
             assert.equal(outcome.fixtureId, finalCheck.fixtureId, 'handoff uses the actual final scan plan, never its proposal');
-            assert.deepEqual(outcome.rows, finalCheck.rows.map((row: { file: string; status: string }) => ({ file: row.file, status: row.status })));
+            assert.deepEqual(outcome.rows.map(row => ({ file: row.file, status: row.status })),
+                finalCheck.rows.map((row: { file: string; status: string }) => ({ file: row.file, status: row.status })));
+            assert.equal(outcome.actualImports, ['ready', 'blocked'].includes(outcome.status) && finalCheck.phase !== 'planning' && finalCheck.rows.length > 0);
+            if (outcome.actualImports) {
+                assert.equal(outcome.finalCheckReport, path.join(directory, session.checks.at(-1)!.directory, 'import_check.md'));
+                for (const row of outcome.rows.filter(row => row.status === 'blocked')) {
+                    const original = finalCheck.rows.find((item: { file: string }) => item.file === row.file);
+                    assert.deepEqual(row.issue, original.issue); assert.deepEqual(row.diagnostic, original.diagnostic);
+                }
+            }
             return { directory, session, outcome };
         };
         await t.test('parent data initialization is previewed once and one recheck leaves original sibling data untouched', async () => {
@@ -228,6 +241,26 @@ test('initialization setup stops after one confirmed recheck and preserves the r
                     }
                 }
             } finally { setLanguage(originalLanguage); }
+        });
+        await t.test('a mixed real scan exposes ready and blocked sources without inferring readiness for either', async () => {
+            const fixture = createFixture('mixed-partial', 'import neutral_runtime as rt\nrt.launch()\nrt.launch()\ndef target(): return 4\n');
+            const ready = path.join(root, 'ready.py'); fs.writeFileSync(ready, 'def independent(): return 9\n');
+            const result = await run(fixture, [{ file: fixture.file, target: 'target' }, { file: ready, target: 'independent' }]);
+            assert.equal(result.outcome.status, 'blocked'); assert.equal(result.outcome.actualImports, true);
+            assert.deepEqual(result.outcome.rows.map(row => [row.file, row.status]), [['sample.py', 'blocked'], ['ready.py', 'loaded']]);
+            assert.equal(result.outcome.rows[0].issue?.kind, 'import-side-effect');
+            assert.equal(result.outcome.rows[0].issue?.origin?.line, 3);
+            assert.equal(confirmations, 1); assert.equal(modelCalls, 0);
+            assert.equal(fs.readFileSync(ready, 'utf8'), 'def independent(): return 9\n');
+            assert.equal(fs.existsSync(path.join(root, 'must_not_exist')), false); fixture.controller.dispose();
+        });
+        await t.test('source drift after opening a partial final report invalidates the actual-import handoff', async () => {
+            const fixture = createFixture('partial-drift', 'import neutral_runtime as rt\nrt.launch()\nrt.launch()\ndef target(): return 4\n');
+            duringFinalReport = () => fs.appendFileSync(fixture.file, '# changed while viewing report\n');
+            const result = await run(fixture);
+            assert.equal(result.outcome.status, 'failed'); assert.equal(result.outcome.actualImports, false);
+            assert.equal(result.outcome.finalCheckReport, undefined); assert.equal(result.session.reason, 'error');
+            fixture.controller.dispose();
         });
         await t.test('setup invoked from a selected batch keeps that scope instead of scanning unrelated source', async () => {
             const fixture = createFixture('selected', 'def target(): return 4\n');

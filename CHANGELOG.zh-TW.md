@@ -4,6 +4,19 @@
 
 ## 2026-10-12
 
+### 跨專案 P0／P1、Tier 分流與來源測資
+
+- 批次改為依最後真正的隔離匯入結果分流。相同根、來源閉包、目標集合、Python 與 fixture 身分核對後，loaded 來源繼續；受阻、未檢及診斷不完整目標單列 environment-blocked，不呼叫模型、不計通過。取消／拒絕與身分漂移仍停止，沒有循環批准。最後安全預檢 JSON／Markdown 存入本批次，不依賴外部 import_check 目錄；partial 與整批通過分開。
+- Tier 降級只接受耗盡的候選／修復契約失敗。模型／環境／AST與修訂工具／預算／Reviewer失敗不再混成生成問題；工具故障不重問 Writer。缺少可用 Bug Fixer 時交 Writer 修訂，保留原成功情境。已證明的測試名稱未匯入／遮蔽先給具體 Writer 原因，不再被泛用「沒有目標斷言」訊息掩蓋。
+- Mock 的 provider member／使用點等價只在完整來源 AST、唯一目標、同一且未重綁的 module import 成立時接受。from-import、目標／class patch、替換模組與反射反例不借此通過。scaffold 只建已知 I/O 邊界，未知匯入與純計算保留 unknown；取消未核實 Trace repr 的 `Real return`，未填骨架不得執行。
+- Writer v2 把完整 globals／class／property setup 放為來源片段，保留 imports 的 AST性質與每個身分；同文只引用一次。可斷言觀測與完整不可斷言診斷分開。新增 `source-setup-call-contract-v1`：來源摘要綁定的 AST 正規化呼叫拼字、可選屬性、參數 scope 與來源 `__file__`，具體提示缺少屬性的 `create=True` 及真正 module-global binding；不計算expected、不授patch權限，未知／遮蔽／重綁／超限不發具體指引。
+- 整合既有未提交的 type-shape／input-plan 工作：有界scalar、容器、Union／Literal 與來源條件規劃，不 import／eval 型別或猜自訂物件。新增 `probeInputFile` 與 literal builder，提供來源檔／qualified target／SHA-256 綁定的型別化四組呼叫與建構輸入；32案例、64KiB，沒有 expected或可執行碼。過期、逃逸、junction、型別損失及解碼後credential拒絕；不偷偷回退。自動規劃中相同可重播呼叫去重但保留所有來源位置，未知狀態／使用者fixture／型別／kwargs順序／建構子不合併。
+- Trace 新執行預設總60秒／planning15秒／每案例5秒，可配置總最多300秒、單案例最多30秒，仍受原target deadline與cleanup限制；這是Python載入／執行時間。完整workflow與failure報告分開顯示設定、實際宿主分配、planning與case耗時及固定原因碼，未知不補0，不借後輪到逐輪；final維持精簡。
+- Reviewer 獨立核對每案例input／expected及來源或實測依據。拒絕 assessment 的行號／引用／reason／action保留為有界去密診斷，與有效finding／正式批准分開；不保存完整provider回覆，不刪矛盾finding冒充同意。review-v7／資格v8與實跑、同雜湊批准、80%突變門檻不變。
+- 真實本機Qwen3B兩輪三目標均為1／3：`_now_text` 審查完成、行覆蓋1／1、builtin-ast-v2突變3／3 KILLED；`get_app_dir` 與 `_connect` 仍有缺target import、test-side path運算／可選屬性Mock，以及Path對str參數斷言與重複候選。第二輪來源事實卡版本150.247秒，正式15次與增容資格4次請求完成，另fresh公開資格3次，沒有API超時；來源、相依、編譯副本與設定保持不變。新增事實卡不能保證小模型遵循；最後名稱診斷順序修正另由回歸驗證。不能宣稱車輛整批或所有Python專案已通過，Codellama13B仍待實驗室相同範圍重測。
+
+- 最終統一定向回歸：Node 174／174 通過，Python 230項執行、229通過及1項Windows不適用symlink案例跳過（Windows junction另由Node真測）。涵蓋真Python、角色／批次整合、source fixtures、coverage、builtin突變與八類型別樣本；固定模型回覆不代替真LLM驗收。TypeScript、lint、生產建置、Webview語法與差異格式檢查通過；提交前另掃描新追蹤檔及可達歷史秘密。CI與全庫矩陣依可執行版本優先政策未重跑，不宣稱CI通過。
+
 ### 車輛增容政策、批次資格重用、Writer 恢復與 Mutatest 索引適配
 
 - 五批實驗室結果分流：`all_test_03_55` 與 `vehicle_04_00` 停在不同根的初始化；`import_check_20-01` 最後仍有 WebSpider notifier 網路初始化阻擋，`import_check_20-04` 的內層車輛根7模組全載入。`vehicle_04_04` 的212目標全結束但0完整通過；不能把模組 ready、批次 completed 或保存基線當通過。

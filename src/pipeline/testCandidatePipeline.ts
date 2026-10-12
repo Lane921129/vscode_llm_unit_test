@@ -174,6 +174,13 @@ export async function validateTestCandidate(
             const revisionViolation = arithmetic ? undefined : await hooks.validateRevision?.(previousCode, candidate, lastFailure, role);
             if (revisionViolation) {
                 const reason = typeof revisionViolation === 'string' ? revisionViolation : revisionViolation.reason;
+                const toolReason = typeof revisionViolation !== 'string' ? revisionViolation.reasonCode : undefined;
+                if (toolReason && ['scope-tool-error', 'scope-result-invalid', 'preservation-tool-error'].includes(toolReason)) {
+                    await hooks.rejectedCandidate?.(candidate, attempt, 'revision-scope', toolReason);
+                    hooks.event('revision-validation', 'tool-failed', { attempt, reasonCode: toolReason, category: 'validation' });
+                    throw new AnalysisStageError('validation', 'repair-scope', localize('修訂驗證工具無法完成；未繼續模型修復或降級 Tier。'),
+                        { reasonCode: toolReason });
+                }
                 await hooks.rejectedCandidate?.(candidate, attempt, 'revision-scope',
                     repairReasonCode(typeof revisionViolation === 'string' ? undefined : revisionViolation.reasonCode));
                 feedback.reject(reason);

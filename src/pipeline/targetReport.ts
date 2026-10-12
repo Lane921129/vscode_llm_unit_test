@@ -8,6 +8,8 @@ import { presentOutcome, presentSummaryOutcome, withOutcomeHeader } from './resu
 import { formatTierHistory } from './tierHistory';
 import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../mutation/mutationResult';
+import { renderReviewerDiagnostics } from './reviewerDiagnosticsPresentation';
+import { renderTraceTiming } from './traceTimingPresentation';
 
 export interface ReportIdentity {
     schemaVersion: 'target-report-v1'; sourcePath: string; sourceFile: string;
@@ -258,7 +260,7 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
                 + (event.stage === 'model-request' && event.status === 'timing'
                     ? '; ' + (formatModelRequestTiming(detail) || localize('未知')) : '');
             return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)}${rejectedCandidateLink(directory, detail, runId, sourceHash, loop)} |`;
-        }), '', `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
+        }), '', renderReviewerDiagnostics(events), `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
 }
 
 export function writeTargetReports(directory: string, identity: ReportIdentity, sourceHash: string,
@@ -269,7 +271,8 @@ export function writeTargetReports(directory: string, identity: ReportIdentity, 
     const displayState = verifiedPresentation ? state : { ...state, terminalStatus: 'incomplete', executionVerified: false };
     const failed = !verifiedPresentation || Boolean(state.firstFailure || state.lastRepairFailure)
         || (!isReportExcluded(terminal) && !['running', 'passed', 'execution-passed'].includes(String(terminal)));
-    const flow = withOutcomeHeader(formatTierHistory(state) + eventTimeline(directory, runId, sourceHash) + processBody, displayState);
+    const flow = withOutcomeHeader(formatTierHistory(state) + eventTimeline(directory, runId, sourceHash)
+        + renderTraceTiming(state, identity.target) + processBody, displayState);
     fs.writeFileSync(path.join(directory, 'workflow_report.md'), flow, 'utf8');
     if (functionReportDirectory(directory) !== directory) {
         return writeOrganizedReports(directory, identity, sourceHash, runId, state, processBody, summary, failed);
@@ -344,6 +347,8 @@ function writeOrganizedReports(data: string, identity: ReportIdentity, sourceHas
     const index = localize('# 失敗報告\n\n') + identityLines(identity)
         + localize('- **失敗原因**: {0}\n', reportCell(conciseReason(summary.reason)))
         + localize('- **首次失敗**: {0}\n- **最近失敗**: {1}\n', describe(state.firstFailure), describe(state.lastFailure))
+        + renderReviewerDiagnostics(events)
+        + renderTraceTiming(state, identity.target)
         + '\n' + localize('### 各輪流程\n\n') + links.join('\n') + '\n\n'
         + localize('[共用紀錄與完整稽核流程](loop/_run/workflow_report.md)\n');
     fs.writeFileSync(path.join(root, 'failure_report.md'), index, 'utf8');
