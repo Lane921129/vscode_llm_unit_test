@@ -31,6 +31,44 @@ class ModelCases(unittest.TestCase):
         self.assertIsNone(self.ledger.increase('entry', 2))
 `;
 
+test('top-level targets do not launch the ordered instance experiment worker', async () => {
+    const topLevelSource = 'def select_items(page, item): return [item]\n'
+        + 'def read_values(): return {}\n'
+        + 'def format_text(value): return value\n';
+    for (const target of ['select_items', 'read_values', 'format_text']) {
+        const result = await prepareQualityExperiments({ sourcePath: 'nonexistent-source.py', source: topLevelSource,
+            target, module: 'sample', testCode: 'import unittest\n',
+            focus: { id: 'top-level-gap', kind: 'coverage', line: 1, evidence: 'line:1' },
+            python: 'must-not-execute-an-instance-worker' });
+        assert.deepEqual(result, { schemaVersion: 'quality-experiment-result-v2', status: 'unsupported',
+            sourceHash: evidenceHash(topLevelSource), target, gapId: 'top-level-gap',
+            reason: 'instance-target-required', experiments: [], assertionOracle: false });
+        const prompt = buildQualityExperimentEvidencePrompt(result);
+        const projection = JSON.parse(prompt.slice(prompt.indexOf('{')));
+        assert.equal(projection.status, 'unsupported');
+        assert.equal(projection.reasonCode, 'instance-target-required');
+        assert.equal(projection.includedCases, 0);
+        assert.equal(projection.assertionOracle, false);
+        assert.doesNotMatch(prompt, /constructor|ordered calls|fits this evidence budget/);
+    }
+});
+
+test('empty quality diagnostics preserve unsupported, unavailable and duplicate reasons', () => {
+    for (const [status, reason] of [['unsupported', 'bounded-plain-state-required'],
+        ['unavailable', 'worker-timeout'], ['duplicate', 'no-new-literal-experiment']] as const) {
+        const result: QualityExperimentResult = { schemaVersion: 'quality-experiment-result-v2', status,
+            sourceHash: evidenceHash(source), target: 'Ledger.increase', gapId: 'reason-gap', reason,
+            experiments: [], assertionOracle: false };
+        const prompt = buildQualityExperimentEvidencePrompt(result);
+        const projection = JSON.parse(prompt.slice(prompt.indexOf('{')));
+        assert.equal(projection.status, status);
+        assert.equal(projection.reasonCode, reason);
+        assert.equal(projection.includedCases, 0);
+        assert.equal(buildQualityExperimentEvidencePrompt(result, 0), '');
+        assert.equal(buildQualityExperimentEvidencePrompt(result, 12000, [reason]), '');
+    }
+});
+
 test('quality evidence verifies the effective fixture plan injected into its worker', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-fixture-context-'));
     try {

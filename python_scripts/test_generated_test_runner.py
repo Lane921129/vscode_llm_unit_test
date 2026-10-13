@@ -12,23 +12,30 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class GeneratedRunnerTests(unittest.TestCase):
-    def run_case(self, body, target='', coverage=False, setup='', target_name=None):
+    def run_case(self, body, target='', coverage=False, setup='', target_name=None,
+                 result_json=False, expected_test_file='generated.py'):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'sample.py').write_text(target, encoding='utf-8')
             code = 'import unittest\n' + setup + '\nclass Cases(unittest.TestCase):\n    def test_case(self):\n' + textwrap.indent(body, '        ')
             (root / 'generated.py').write_text(code, encoding='utf-8')
+            if expected_test_file != 'generated.py':
+                (root / expected_test_file).write_text(code, encoding='utf-8')
             args = [sys.executable, '-B', str(TOOLS / 'generated_test_runner.py'), 'generated', '-v',
                     '--violation-report', str(root / 'violations.jsonl')]
             if coverage:
                 args += ['--coverage-source', folder]
+            if result_json:
+                args += ['--result-json', str(root / 'result.json')]
             if target_name:
                 args += ['--target-file', str(root / 'sample.py'), '--target-name', target_name,
                          '--target-evidence', str(root / 'target_evidence.json'), '--target-run-id', 'neutral-run',
-                         '--target-test-file', str(root / 'generated.py')]
+                         '--target-test-file', str(root / expected_test_file)]
             result = subprocess.run(args, cwd=folder, capture_output=True, text=True, encoding='utf-8',
                                     env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}, timeout=20)
             result.events = [json.loads(line) for line in (root / 'violations.jsonl').read_text(encoding='utf-8').splitlines()]
+            if result_json:
+                result.structured_result = json.loads((root / 'result.json').read_text(encoding='utf-8'))
             if target_name:
                 result.target_evidence = json.loads((root / 'target_evidence.json').read_text(encoding='utf-8'))
                 if coverage:
@@ -40,6 +47,72 @@ class GeneratedRunnerTests(unittest.TestCase):
                     self.assertEqual(evidence.returncode, 0, evidence.stderr)
                     result.coverage_evidence = json.loads(evidence.stdout)
             return result, [p.name for p in root.iterdir()]
+
+    def test_generated_import_error_keeps_loader_cause_instead_of_identity_mismatch(self):
+        result, _ = self.run_case('self.assertEqual(target(), 2)\n', 'def target(): return 2\n',
+                                  setup='from unavailable_generated_helpers import DB_NAME\nfrom sample import target\n',
+                                  target_name='target', result_json=True, coverage=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("No module named 'unavailable_generated_helpers'", result.stderr)
+        self.assertNotIn('Target invocation test identity mismatch', result.stderr)
+        report = result.structured_result
+        self.assertEqual(report['status'], 'runner-error')
+        self.assertEqual(report['loadDiagnostics'], {
+            'version': 'generated-test-load-diagnostics-v1', 'reasonCode': 'generated-test-load-failed',
+            'failedTests': 1, 'truncated': False,
+        })
+        self.assertEqual(report['testFailures'], [{'testId': None, 'kind': 'error', 'phase': 'fixture-or-load'}])
+        self.assertEqual(result.events[-1]['loadDiagnostics'], report['loadDiagnostics'])
+        self.assertEqual(result.target_evidence['status'], 'failed')
+        self.assertFalse(result.target_evidence['observed'])
+        self.assertFalse(result.coverage_evidence['available'])
+
+    def test_source_import_failure_remains_load_error_without_private_exception_in_json(self):
+        result, _ = self.run_case('self.assertEqual(target(), 2)\n',
+                                  'def target(): return 2\nraise ImportError("private-loader-detail")\n',
+                                  setup='from sample import target\n', target_name='target', result_json=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('ImportError: private-loader-detail', result.stderr)
+        self.assertNotIn('Target invocation test identity mismatch', result.stderr)
+        self.assertEqual(result.structured_result['status'], 'runner-error')
+        self.assertEqual(result.structured_result['loadDiagnostics']['reasonCode'], 'generated-test-load-failed')
+        self.assertNotIn('private-loader-detail', json.dumps(result.structured_result))
+        self.assertFalse(result.target_evidence['observed'])
+
+    def test_uncaught_source_loader_exception_has_bounded_diagnostic(self):
+        result, _ = self.run_case('self.assertTrue(True)\n', 'def target(): return 2\n',
+                                  setup='raise ValueError("private-direct-loader-detail")\n',
+                                  target_name='target', result_json=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn('Target invocation test identity mismatch', result.stderr)
+        self.assertEqual(result.structured_result['status'], 'runner-error')
+        self.assertEqual(result.structured_result['loadDiagnostics']['reasonCode'], 'generated-test-loader-error')
+        self.assertNotIn('private-direct-loader-detail', json.dumps(result.structured_result))
+        self.assertEqual(result.structured_result['testsRun'], 0)
+        self.assertFalse(result.target_evidence['observed'])
+
+    def test_successfully_loaded_wrong_test_file_still_stops_before_target_execution(self):
+        result, _ = self.run_case('self.assertEqual(target(), 2)\n', 'def target(): return 2\n',
+                                  setup='from sample import target\n', target_name='target', result_json=True,
+                                  expected_test_file='other_generated.py')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.structured_result['status'], 'runner-error')
+        self.assertEqual(result.structured_result['loadDiagnostics']['reasonCode'], 'generated-test-identity-mismatch')
+        self.assertEqual(result.structured_result['testsRun'], 0)
+        self.assertEqual(result.structured_result['testFailures'], [])
+        self.assertFalse(result.target_evidence['observed'])
+        self.assertEqual(result.target_evidence['status'], 'failed')
+
+    def test_loaded_test_failure_keeps_method_identity_without_load_diagnostics(self):
+        result, _ = self.run_case('self.assertEqual(target(), 3)\n', 'def target(): return 2\n',
+                                  setup='from sample import target\n', target_name='target', result_json=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.structured_result['status'], 'failed')
+        self.assertNotIn('loadDiagnostics', result.structured_result)
+        self.assertEqual(result.structured_result['testFailures'], [
+            {'testId': 'generated.Cases.test_case', 'kind': 'failure', 'phase': 'test'},
+        ])
+        self.assertTrue(result.target_evidence['observed'])
 
     def test_target_invocation_distinguishes_call_from_import_and_same_named_nested_callable(self):
         source = 'def target(): return 2\ndef outer():\n    def target(): return 3\n    return target()\n'

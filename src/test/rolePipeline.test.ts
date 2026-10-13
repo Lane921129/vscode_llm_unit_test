@@ -285,8 +285,11 @@ class Cases(unittest.TestCase):
 });
 
 test('prompt budget refuses partial evidence, and quality tasks must quote measured gaps', () => {
-    assert.equal(fitReviewPrompt({ tests: 'complete tests', evidence: 'complete source' }, 10), undefined);
-    assert.ok(fitReviewPrompt({ tests: 'complete tests', evidence: 'complete source' }, 200));
+    const parts = { tests: 'complete tests', evidence: 'complete source' };
+    const complete = fitReviewPrompt(parts, 10000)!;
+    assert.ok(complete.includes(parts.tests) && complete.includes(parts.evidence));
+    assert.equal(fitReviewPrompt(parts, complete.length - 1), undefined);
+    assert.equal(fitReviewPrompt(parts, complete.length), complete);
     const task = { evidence: 'line 4: And to Or', hypothesis: 'missing combination', scenario: 'mixed truth values', verification: 'compare original and mutant' };
     assert.equal(parseQualityTasks(JSON.stringify({ tasks: [task] }), 'different gap'), undefined);
     assert.equal(parseQualityTasks(JSON.stringify({ tasks: [task] }), task.evidence)?.length, 1);

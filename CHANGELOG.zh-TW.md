@@ -2,6 +2,21 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-13
+
+### 車輛候選載入、Writer 外框與提示、Reviewer 事實及輸出恢復
+
+- 對照兩批 Codellama13B：10/12 13:57 的212目標為2完整通過、194 failed、6 retained、7 review-blocked、3零突變候選；10/13 10:55 使用者中止時只處理66／212，60 failed、3 retained、2零候選、1 cancelled，0完整通過。兩批環境均未受阻，Analyst209／209及65／65完成；均真正量測Mutatest5次，零候選仍為null。主要瓶頸是Writer錯誤／重複候選與較慢的完整生成，不再泛稱初始化或Analyst失敗。
+- runner純unittest `_FailedTest`保留真正匯入失敗，避免被 `Target invocation test identity mismatch` 遮蔽。新診斷由result／invocation雙產物、現行source／test byte hash、native path、target、run ID及profile核驗；只授Writer整份修訂，真正identity／runner錯誤、失敗證據與成功exit矛盾typed停止、不降Tier。execution／full均接線，資源schema診斷優先；成功仍須原執行與隔離證據。
+- Writer正式提示改為中性文字設計指引，不再傳可抄用的 `example_target` 完整測試與範例答案，原catalog保留內部回歸。程式抽取先處理均一外框，保留literal與尾端程式；字串內marker／fence不當wrapper，多份候選不猜第一份。移除主流程再次trim／全域marker刪除／main後截尾。
+- target行為AST支援方法詞法範圍內的明確import，遮蔽／重綁／條件／其他方法不外洩。窄版input-state只接納來源唯一函式直接寫入參數屬性、fresh明確stdlib `SimpleNamespace`、同物件真呼叫後的狀態斷言；Mock／未知helper／覆寫／錯物件／未呼叫／分支強反例保持拒絕。錯誤expected靜態可相關、實跑仍失敗，不產生oracle。
+- Reviewer同候選AST新增inherited unittest assertion語法，反證「import等於無target的patch」、「target import須是unittest module」及「合法assertion無效」等完整機械指控；未知語意、override、rebind與實際patch仍審。只要求原deadline內一次重審，不刪finding自動批准。狀態斷言說明保持Reviewer提示小於3,000字元。
+- Local Writer／修訂在首問前預留最多兩次單次額度，每次仍受使用者設定、shared／target期限與原計數限制。length加長重送只用當次完整數值Ollama timing估算；時間不足記available／estimated／原因而不啟動注定超時請求，未知時要求完整單次額度。截斷前綴不保存／執行，不重設期限，不改已保存容量。
+- 有序instance品質工具對canonical頂層函式直接回不適用、不spawn；一般數值mutation probes仍支持頂層。空觀測報unsupported／unavailable／duplicate／真正預算不足的原因，不再一律稱提示超額。
+- 定向回歸Node186／186、Python146／146通過；初次整合捕獲新Python測試根目錄import與舊prompt長度假設，修正後重驗相應suite。TypeScript、lint、生產建置、Webview語法與diff格式通過。新測試列入正式Python入口；提交前掃描新追蹤檔與可達歷史密鑰。依可執行版本優先政策未重跑全庫／CI矩陣，不宣稱CI或212目標通過。
+- 真實本機Qwen3B車輛三目標兩輪分別2／3及1／3完整通過：首輪 `_connect` 行1／1、builtin突變1／1，`_now_text` 行1／1、builtin突變3／3；最終快照第二輪只有 `_now_text` 同樣完整通過。`get_app_dir`仍漏sys／target import並重複候選；第二輪 `_connect`把實際字串參數斷言成WindowsPath，Fixer class-wrapper被拒、Writer回傳相同候選，未審查或突變，沒有API超時。各輪來源／相依／編譯快照不變，無設定寫入或SecretStorage存取。這是builtin、本機3B實測，不替代實驗室Codellama13B／Mutatest驗收；成功輪不能證明穩定。
+- 完整根因、修訂範圍及下一批驗收見 [車輛批次分析與修復](docs/車輛批次分析與修復_2026_10_13.md)。既有未提交UI／NLS／requirements等修改保留，未混入本次提交。
+
 ## 2026-10-12
 
 ### 跨專案 P0／P1、Tier 分流與來源測資

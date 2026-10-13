@@ -75,14 +75,17 @@ async function runNeutral(options: { source: string; initial: string; revised: s
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-test('real guarded missing-import failure receives a whole-file Writer import fix and passes binding/execution evidence', async () => {
+test('undefined test-owned import is rejected by AST and receives a whole-file Writer fix before real execution', async () => {
     const revised = 'from datetime import date\n' + missingDate;
     const result = await runNeutral({ source: yearSource, initial: missingDate, revised, expectSuccess: true });
     assert.deepEqual(result.roles, ['writer']); assert.equal(result.revisions, 1); assert.equal(result.gateChecks, 1);
-    assert.equal(wholeCandidateNameException(result.failures[0]), 'NameError');
-    assert.equal(result.routing[0].reasonCode, 'execution-name-binding');
+    assert.equal(wholeCandidateNameException(result.failures[0]), undefined, 'the invalid test does not need to execute to expose its missing import');
+    assert.match(result.failures[0], /\bdate\b/);
+    assert.ok(result.rejected.some(reason => /\bdate\b/.test(reason)), 'the AST gate must identify the missing test-owned name');
+    assert.equal(result.routing.filter(event => event.reasonCode === 'execution-name-binding').length, 0,
+        'a structural rejection must not fabricate a runtime NameError diagnosis');
     assert.equal(inspect('repairScope', { previous: missingDate, candidate: revised, failure: result.failures[0] }).reasonCode,
-        'no-method-change', 'the narrower Bug Fixer gate remains unchanged; the Writer owns this import-only repair');
+        'unidentified-failure', 'an AST rejection supplies no unique failed method; the import-only repair belongs to Writer');
 });
 
 test('real guarded assertion failure remains a scoped Bug Fixer repair', async () => {

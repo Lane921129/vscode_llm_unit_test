@@ -13,6 +13,7 @@ import { throwIfExecutionCancelled } from './executionContext';
 import { pythonToolPath } from './pythonTools';
 import { currentImportFixtures } from './importFixtures';
 import { readResourceSetupFailure } from './resourceSetupFailure';
+import { readGeneratedRunnerDiagnostics } from './generatedRunnerDiagnostics';
 
 interface ExecutionVerificationOptions {
     directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
@@ -82,14 +83,15 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             const testFile = `exec${++attempt}_test.py`;
             const testPath = path.join(artifacts, testFile);
             fs.writeFileSync(testPath, code, { encoding: 'utf8', flag: 'wx' });
-            const [invocation, isolation] = reserveArtifactFiles(artifacts, ['invocation', 'isolation'], 'jsonl');
+            const [invocation, isolation, resultFile] = reserveArtifactFiles(artifacts, ['invocation', 'isolation', 'runner'], 'jsonl');
             const baseline: ExecutionBaseline = { schemaVersion: 'execution-baseline-v1', validationMode: 'execution',
                 ...expected, testFile, testHash: evidenceHash(code), testRunId: randomUUID(),
                 invocationFile: path.basename(invocation), isolationFile: path.basename(isolation), dependencyVersions: dependencies };
             const run = await runSpawn(python, [
                 ...generatedUnittestArguments(path.basename(testFile, '.py'), path.dirname(file), false, true),
                 '--target-file', file, '--target-name', target, '--target-test-file', testPath,
-                '--target-evidence', invocation, '--target-run-id', baseline.testRunId, '--violation-report', isolation
+                '--target-evidence', invocation, '--target-run-id', baseline.testRunId, '--violation-report', isolation,
+                '--result-json', resultFile
             ], { cwd: artifacts, env, timeout: 30000 });
             checkCurrent();
             const resourceFailure = readResourceSetupFailure({ isolationFile: isolation, sourceFile: file, testFile: testPath,
@@ -98,6 +100,24 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             if (resourceFailure) {
                 throw new AnalysisStageError('environment', 'resource-setup',
                     localize('隔離測試資料庫缺少資料表或欄位；請在「隔離測試資源」補齊 schema 後重新執行。'), resourceFailure);
+            }
+            const diagnostic = readGeneratedRunnerDiagnostics({ resultFile, invocationFile: invocation,
+                sourceFile: file, testFile: testPath, target, testRunId: baseline.testRunId,
+                sourceHash: baseline.sourceHash, testHash: baseline.testHash });
+            if (diagnostic) {
+                if (run.code === 0) {
+                    throw new AnalysisStageError('validation', 'generated-test-runner',
+                        'Generated test runner exit status contradicts its load failure diagnostic.',
+                        { reasonCode: 'generated-test-diagnostics-exit-mismatch' });
+                }
+                hooks.event('generated-test-runner', diagnostic.repairRole === 'writer' ? 'load-failed' : 'unavailable',
+                    { ...diagnostic, resultFile: path.basename(resultFile), invocationFile: path.basename(invocation) });
+                if (diagnostic.repairRole === 'none') {
+                    throw new AnalysisStageError('validation', 'generated-test-runner',
+                        'Generated test runner could not establish a repairable candidate load failure.', diagnostic);
+                }
+                return { ok: false, out: (run.stdout + run.stderr).trim() || diagnostic.reasonCode,
+                    qualityGaps: [], testModule: path.basename(testFile, '.py'), repairRole: 'writer' as const };
             }
             const ok = run.code === 0 && verifyExecutionEvidence(directory, file, baseline, expected);
             const out = (run.stdout + run.stderr).trim()

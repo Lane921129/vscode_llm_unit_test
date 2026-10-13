@@ -7,11 +7,74 @@ import ast
 import hashlib
 import json
 import sys
+import unittest
 from trace_value_codec import snapshot_value, restore_value
 
 
 class Unknown(Exception):
     pass
+
+
+def standard_assertion_syntax(cls, method, aliases, overrides):
+    """Method validity only: never claims a branch ran or its expected value is correct."""
+    params = method.args.posonlyargs + method.args.args
+    if not params or method.decorator_list or overrides.intersection({'run', '__getattribute__', '__getattr__'}):
+        return []
+    receiver = params[0].arg
+    if any(isinstance(node, ast.Name) and node.id == receiver and isinstance(node.ctx, (ast.Store, ast.Del))
+           for node in ast.walk(method)):
+        return []
+    standard = {name for name in dir(unittest.TestCase) if name.startswith('assert')
+                and callable(getattr(unittest.TestCase, name))}
+    if any(isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
+           and aliases.get(dotted(node).split('.')[0], '').startswith('unittest') for node in ast.walk(cls)):
+        return []
+    # A fixture may replace an inherited assertion; syntax alone cannot then bind it.
+    for member in cls.body:
+        if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        arguments = member.args.posonlyargs + member.args.args
+        if not arguments:
+            continue
+        owner = arguments[0].arg
+        for node in ast.walk(member):
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                path = dotted(node)
+                root, _, tail = path.partition('.')
+                if root == owner and (tail in standard or tail.startswith('__')):
+                    return []
+                if aliases.get(root, '').startswith('unittest'):
+                    return []
+            if isinstance(node, ast.Call) and any(isinstance(value, ast.Name) and value.id == owner
+                                                for value in [*node.args, *(item.value for item in node.keywords)]):
+                return []
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and dotted(node.func.value) == owner and node.func.attr not in standard \
+                    and node.func.attr not in ('addCleanup', 'skipTest', 'subTest'):
+                return []
+            if isinstance(node, ast.Call):
+                root, _, tail = dotted(node.func).partition('.')
+                origin = aliases.get(root, '') + ('.' + tail if tail else '')
+                if origin == 'unittest.mock.patch' and node.args and isinstance(node.args[0], ast.Constant) \
+                        and type(node.args[0].value) is str and node.args[0].value.startswith('unittest.'):
+                    return []
+                if origin == 'unittest.mock.patch.object' and node.args:
+                    base, _, attribute = dotted(node.args[0]).partition('.')
+                    if (aliases.get(base, '') + ('.' + attribute if attribute else '')).startswith('unittest.'):
+                        return []
+    result = []
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and dotted(node.func.value) == receiver and node.func.attr in standard \
+                and node.func.attr not in overrides:
+            result.append({'line': node.lineno, 'kind': node.func.attr})
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+    for statement in method.body:
+        visit(statement)
+    return result
 
 
 def dotted(node):
@@ -187,6 +250,10 @@ def build_review_facts(payload):
             rebound.add(node.name)
         else:
             rebound.update(item.id for item in ast.walk(node) if isinstance(item, ast.Name) and isinstance(item.ctx, (ast.Store, ast.Del)))
+            # Imported module attributes can be overwritten without rebinding
+            # the Name itself; no inherited-method proof survives that mutation.
+            rebound.update(dotted(item).split('.')[0] for item in ast.walk(node)
+                           if isinstance(item, ast.Attribute) and isinstance(item.ctx, (ast.Store, ast.Del)))
             for item in ast.walk(node):
                 if isinstance(item, (ast.Import, ast.ImportFrom)):
                     for entry in item.names:
@@ -235,7 +302,10 @@ def build_review_facts(payload):
                 continue
             receiver = params[0].arg
             facts = {'line': method.lineno, 'endLine': method.end_lineno, 'name': cls.name + '.' + method.name,
-                     'assertions': [], 'calls': [], 'exceptionGuards': [], 'scalarBindings': [], 'mockAssertions': []}
+                     'assertions': [], 'calls': [], 'exceptionGuards': [], 'scalarBindings': [], 'mockAssertions': [],
+                     'standardAssertions': []}
+            if not custom_loader:
+                facts['standardAssertions'] = standard_assertion_syntax(cls, method, aliases, overrides)
             if not custom_loader and not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'}):
                 facts['mockAssertions'] = mock_call_assertions(method, aliases, target)
             # All assigned local names shadow module aliases, including assignments later in the method.
@@ -386,7 +456,7 @@ def build_review_facts(payload):
             'target': payload['target'], 'module': payload['module'], 'testHash': hashlib.sha256(code.encode()).hexdigest(),
             'executionVerified': payload.get('executionVerified') is True, 'imports': imports,
             'importStatements': import_statements, 'classes': classes, 'methods': methods,
-            'limitations': 'Import statements prove syntax/presence only; wildcard exports and rebound bindings remain unknown. Static facts cover directly resolved unittest constructs, straight-line literal target calls and default patch-created mock call assertions. Mock assertions prove presence only, not return requirements or coverage. Unknown or unexecuted paths are not observations.'}
+            'limitations': 'Import statements prove syntax/presence only; wildcard exports and rebound bindings remain unknown. Standard assertions prove inherited unittest method syntax only, never execution or expected-value validity. Static facts cover directly resolved unittest constructs, straight-line literal target calls and default patch-created mock call assertions. Mock assertions prove presence only, not return requirements or coverage. Unknown or unexecuted paths are not observations.'}
 
 
 if __name__ == '__main__':

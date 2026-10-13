@@ -17,6 +17,8 @@ export interface CandidateExecution {
     coverage?: TargetCoverageAssessment;
     /** Generated candidate modules change between attempts; testcase identity must not. */
     testModule?: string;
+    /** Host-verified loader failure; it has no replaceable failing test method. */
+    repairRole?: 'writer';
 }
 
 /** The application preflight already ran; candidate import/setup errors belong to the Writer. */
@@ -68,6 +70,7 @@ export async function validateTestCandidate(
     let writerRecoveryUsed = false;
     let writerRecoveryPending = false;
     let executionFailure = false;
+    let executionRepairRole: 'writer' | undefined;
     let toolRepairAttempts = 0;
     let unresolvedReview = false;
     // One reserved handoff after a no-op or unusable method repair response.
@@ -117,12 +120,13 @@ export async function validateTestCandidate(
                 }
             }
             const arithmetic = hooks.reviewRequired === false && !hooks.repairEvidence
-                && executionFailure && toolRepairAttempts < 2 && hooks.repairExpectations
+                && executionRepairRole !== 'writer' && executionFailure && toolRepairAttempts < 2 && hooks.repairExpectations
                 ? (toolRepairAttempts++, await hooks.repairExpectations(code, lastFailure)) : undefined;
             executionFailure = false;
             hooks.checkCancelled();
             if (!arithmetic && role === 'bug-fixer') {
-                role = preferWholeCandidateRepair(lastFailure, attempt) ? 'writer' : hooks.repairRole?.(code, lastFailure) || role;
+                role = executionRepairRole === 'writer' || preferWholeCandidateRepair(lastFailure, attempt)
+                    ? 'writer' : hooks.repairRole?.(code, lastFailure) || role;
             }
             if (!arithmetic && role === 'bug-fixer') {
                 const failureKey = repairFailureKey(lastFailure);
@@ -206,6 +210,7 @@ export async function validateTestCandidate(
         const invalidReason = typeof invalid === 'string' ? invalid : invalid?.reason;
         hooks.event('structure', invalid ? 'rejected' : 'passed', { attempt, reason: invalidReason });
         if (invalid) {
+            executionRepairRole = undefined;
             unresolvedReview = false;
             await hooks.rejectedCandidate?.(code, attempt,
                 typeof invalid === 'string' ? 'unittest-structure' : invalid.gate,
@@ -218,6 +223,7 @@ export async function validateTestCandidate(
             continue;
         }
         const execution = await hooks.execute(code);
+        executionRepairRole = execution.ok ? undefined : execution.repairRole;
         hooks.checkCancelled();
         hooks.event('validation', execution.ok ? 'passed' : 'failed', { attempt, code, ...execution });
         const regression = feedback.record(execution.out, execution.testModule);
@@ -226,7 +232,7 @@ export async function validateTestCandidate(
             await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-regression');
             lastFailure = feedback.output;
             code = retainedCode;
-            role = 'bug-fixer';
+            role = executionRepairRole === 'writer' ? 'writer' : 'bug-fixer';
             if (writerRecoveryAttempt) { break; }
             continue;
         }
@@ -285,7 +291,7 @@ export async function validateTestCandidate(
         executionFailure = true;
         if (writerRecoveryAttempt) { break; }
         // A module/fixture failure is not a failed test-method replacement.
-        role = preferWholeCandidateRepair(execution.out, attempt)
+        role = executionRepairRole === 'writer' || preferWholeCandidateRepair(execution.out, attempt)
             || /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }

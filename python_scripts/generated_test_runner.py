@@ -44,6 +44,27 @@ def _safe_test_id(test):
     return identifier if len(identifier) <= 1024 and all(part.isidentifier() for part in identifier.split('.')) else None
 
 
+def suite_load_diagnostics(suite):
+    """Identify loader placeholders without saving exception text or user values."""
+    pending = [suite]
+    failed, visited, only_failed = 0, 0, True
+    while pending and visited < 256:
+        item = pending.pop()
+        visited += 1
+        if type(item) in (unittest.TestSuite, unittest.BaseTestSuite):
+            pending.extend(item._tests)
+        elif type(item) is unittest.loader._FailedTest:
+            failed += 1
+        else:
+            only_failed = False
+    truncated = bool(pending) or failed > 32
+    diagnostic = ({'version': 'generated-test-load-diagnostics-v1',
+                   'reasonCode': 'generated-test-load-failed',
+                   'failedTests': min(failed, 32), 'truncated': truncated}
+                  if failed else None)
+    return diagnostic, bool(failed and only_failed and not pending)
+
+
 class StructuredTestResult(unittest.TextTestResult):
     """Record identifiers only; exception text and subTest values stay private."""
     def __init__(self, *args, **kwargs):
@@ -150,16 +171,37 @@ def main(argv=None):
     violation = None
     test_result = None
     structured_result = None
+    load_diagnostics = None
     observation = tracker.observe() if tracker else nullcontext()
     try:
         with observation:
             _target_tracking = bool(tracker)
             with guarded_test_runtime() as violations:
-                suite = unittest.defaultTestLoader.loadTestsFromName(args.test_module)
+                # A fresh loader prevents errors from an earlier main() call
+                # from becoming evidence about this candidate.
+                try:
+                    suite = unittest.TestLoader().loadTestsFromName(args.test_module)
+                except RuntimePolicyError:
+                    raise
+                except Exception:
+                    load_diagnostics = {'version': 'generated-test-load-diagnostics-v1',
+                                        'reasonCode': 'generated-test-loader-error',
+                                        'failedTests': 0, 'truncated': False}
+                    raise
+                load_diagnostics, only_load_failures = suite_load_diagnostics(suite)
                 if tracker:
                     if not tracker.matches_test_module(args.test_module):
-                        raise RuntimeError('Target invocation test identity mismatch')
-                    tracker.testing = True
+                        # unittest returns _FailedTest when an import fails and
+                        # removes the partially imported module from sys.modules.
+                        # Run that failure to retain its real import/syntax cause.
+                        # A successfully imported wrong module must still stop.
+                        if sys.modules.get(args.test_module) is not None or not only_load_failures:
+                            load_diagnostics = {'version': 'generated-test-load-diagnostics-v1',
+                                                'reasonCode': 'generated-test-identity-mismatch',
+                                                'failedTests': 0, 'truncated': False}
+                            raise RuntimeError('Target invocation test identity mismatch')
+                    elif not load_diagnostics:
+                        tracker.testing = True
                 result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1,
                                                  resultclass=StructuredTestResult).run(suite)
                 structured_result = result
@@ -198,7 +240,8 @@ def main(argv=None):
             with open(args.result_json, 'w', encoding='utf-8') as report:
                 json.dump({'schemaVersion': 'generated-test-result-v1', 'status': 'isolation-blocked',
                            'importFixtures': import_fixture_evidence(),
-                           'testsRun': test_result['testsRun'] if test_result else 0, 'testFailures': []}, report)
+                           'testsRun': test_result['testsRun'] if test_result else 0, 'testFailures': [],
+                           **({'identity': result_identity(tracker)} if tracker else {})}, report)
         print(f'{ISOLATION_MARKER}: {violation}; mock the dependency at its target use point.', file=sys.stderr)
         record('completed', status='isolation-blocked', operation=violation)
         return ISOLATION_EXIT_CODE
@@ -210,9 +253,18 @@ def main(argv=None):
             json.dump({'schemaVersion': 'generated-test-result-v1', 'status': status,
                        'importFixtures': import_fixture_evidence(),
                        'testsRun': test_result['testsRun'] if test_result else 0,
-                       'testFailures': failures}, report)
-    record('completed', status='passed' if exit_code == 0 else 'failed')
+                       'testFailures': failures,
+                       **({'identity': result_identity(tracker)} if tracker else {}),
+                       **({'loadDiagnostics': load_diagnostics} if load_diagnostics else {})}, report)
+    record('completed', status='passed' if exit_code == 0 else 'failed',
+           **({'loadDiagnostics': load_diagnostics} if load_diagnostics else {}))
     return exit_code
+
+
+def result_identity(tracker):
+    return {'version': 'generated-test-result-identity-v1', 'testRunId': tracker.test_run_id,
+            'canonicalFile': tracker.source_file, 'canonicalTestFile': tracker.test_file,
+            'target': tracker.target, 'sourceHash': tracker.source_hash, 'testHash': tracker.test_hash}
 
 
 if __name__ == '__main__':

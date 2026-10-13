@@ -1,5 +1,7 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '生成測試的載入或身分證據無效；停止修復，未計入通過。': 'Generated test loading or identity evidence is invalid. Repair stopped; this is not a pass.',
+    '模型輸出已達上限，剩餘時間不足以完成較長的重送；未採用截斷內容，也未重置目標期限。': 'The model reached its output limit, and the remaining time cannot fit a longer retry. Truncated output was discarded; the target deadline was preserved.',
     '# 本批次最後模組載入診斷': '# Final module load diagnosis for this batch',
     '實際載入檢查：{0}；初始化設定：{1}': 'Actual import check: {0}; initialization setting: {1}',
     '| 來源 | 載入狀態 | 階段 | 原因 | 處理方式 |': '| Source | Load status | Stage | Cause | Remedy |',

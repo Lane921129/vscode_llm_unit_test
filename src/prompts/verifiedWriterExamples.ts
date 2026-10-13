@@ -146,3 +146,20 @@ export function matchingWriterExamples(context: {
     }
     return features.flatMap(feature => VERIFIED_WRITER_EXAMPLES.filter(item => item.feature === feature)).slice(0, 2);
 }
+
+/** Executable examples are a regression catalogue, never candidate templates.
+ * Send only their setup lessons so a model cannot copy a foreign target import,
+ * fixture value or expected answer into the selected target's test file.
+ */
+export function formatWriterPatternGuide(example: WriterExample): string {
+    const guidance: Record<WriterExample['feature'], string> = {
+        database: 'Use the source-shown connection/cursor flow. For an explicit context manager, configure return_value.__enter__.return_value; otherwise use the direct return_value. Do not invent a context manager, SQL statement or fetch shape.',
+        async: 'Use an async test method and await the real selected target. Make only source-shown awaited dependency methods AsyncMock; configure their same-test returns and check the actual awaited calls.',
+        'async-context': 'Use an async test method and await the real selected target. A synchronous factory can return an async context manager: configure its return_value.__aenter__.return_value and only the awaited resource methods as AsyncMock. Check enter/exit only when source-shown.',
+        class: 'Construct the real owning class with the supplied constructor contract. Pass controlled dependencies to that constructor, then call the selected method with its own method arguments; do not replace the owning class.',
+        patch: 'Patch only an external or ambient dependency at the supplied target-module use point. Retain the real selected target, configure the mock per test and check that its source-shown call was actually observed.',
+        exception: 'Use assertRaises only for a verified exception or an explicitly configured same-test dependency side_effect. Use the supplied target import and real target call; do not borrow an exception type from an example.'
+    };
+    return `VERIFIED PATTERN ${example.id} (setup guidance only; never copy its target, inputs or expected values):\n`
+        + `${guidance[example.feature]}\nUse only TARGET SOURCE, Target import/binding and the current evidence for names, inputs and assertions.`;
+}

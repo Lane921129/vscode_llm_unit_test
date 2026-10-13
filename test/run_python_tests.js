@@ -21,6 +21,8 @@ if (!fs.existsSync(pythonExecutable)) {
         'python_scripts/test_source_setup_call_contract.py',
         'python_scripts/test_dependency_fixture_contract.py',
         'python_scripts/test_pipeline_reliability.py',
+        'python_scripts/test_target_result_imports.py',
+        'python_scripts/test_target_state_evidence.py',
         'python_scripts/test_generated_test_runner.py',
         'python_scripts/test_environment_probe.py',
         'python_scripts/test_trace_observation_guard.py',

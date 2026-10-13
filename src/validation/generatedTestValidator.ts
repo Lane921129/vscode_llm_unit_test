@@ -18,16 +18,21 @@ function escapeRegex(value: string): string {
  * lexer keeps prose, docstrings, and commented-out examples from
  * impersonating an assertion or target call in the regex behavior gate.
  */
-function executablePythonText(code: string): string {
+function executablePythonText(code: string, stringContinuationLines?: Set<number>): string {
     let result = '';
     let quote: '\'' | '"' | undefined;
     let triple = false;
     let escaped = false;
     let inComment = false;
+    let line = 0;
 
     for (let index = 0; index < code.length; index++) {
         const char = code[index];
         const nextThree = code.slice(index, index + 3);
+        if (char === '\n') {
+            line++;
+            if (quote && (triple || escaped)) { stringContinuationLines?.add(line); }
+        }
 
         if (inComment) {
             if (char === '\n') {
@@ -516,6 +521,29 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
     return response;
 }
 
+/** Remove only a uniform transport indent, before trimming its first line.
+ * Literal continuation lines keep their exact bytes; inconsistent indentation
+ * and escaped-line syntax remain for the real Python parser to diagnose.
+ */
+function normalizePythonTransportBlock(code: string): string {
+    const block = code.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/(?:\r?\n[ \t]*)+$/, '');
+    if (/\\\r?\n/.test(block)) { return block; }
+    const protectedLines = new Set<number>();
+    const executable = executablePythonText(block, protectedLines).split('\n');
+    const lines = block.split('\n');
+    const prefixes = executable.flatMap((line, index) => !protectedLines.has(index) && line.trim()
+        ? [line.match(/^[ \t]*/)?.[0] || ''] : []);
+    if (!prefixes.length) { return block; }
+    let prefix = prefixes[0];
+    for (const item of prefixes) {
+        while (prefix && !item.startsWith(prefix)) { prefix = prefix.slice(0, -1); }
+    }
+    // Mixed tabs and spaces do not establish a portable indentation unit.
+    if (!prefix || prefix.includes(' ') && prefix.includes('\t')) { return block; }
+    return lines.map((line, index) => !protectedLines.has(index) && line.startsWith(prefix)
+        ? line.slice(prefix.length) : line).join('\n');
+}
+
 /**
  * Extract the most plausible Python unittest fence from model output.
  * Models differ on whether they label a fence as python, Python, py, or leave
@@ -524,31 +552,47 @@ export function unwrapGeneratedCodeEnvelope(response: string): string {
  * for the normal structural validator to reject.
  */
 export function extractPythonTestCode(response: string): string {
-    const unwrapped = unwrapGeneratedCodeEnvelope(response).trim();
+    const raw = unwrapGeneratedCodeEnvelope(response);
+    const unwrapped = raw.trim();
     // Legacy model wrappers are transport markup, never Python expressions.
     const wrapper = unwrapped.match(/^\[(python|pytest)\]\s*\r?\n([\s\S]*?)\r?\n\[\/\1\]$/i);
     if (wrapper) { return extractPythonTestCode(wrapper[2]); }
     const fencedBlocks: Array<{ language: string; code: string }> = [];
-    const fence = /```([^\r\n`]*)\r?\n([\s\S]*?)```/g;
+    const literalLines = new Set<number>();
+    executablePythonText(unwrapped, literalLines);
+    const fence = /^[ \t]*```([^\r\n`]*)[ \t]*$/gm;
+    let opening: { language: string; bodyStart: number } | undefined;
     let match: RegExpExecArray | null;
     while ((match = fence.exec(unwrapped)) !== null) {
-        fencedBlocks.push({ language: match[1].trim().toLowerCase(), code: match[2].trim() });
+        const openingLine = unwrapped.slice(0, match.index).split('\n').length - 1;
+        if (literalLines.has(openingLine)) { continue; }
+        if (!opening) {
+            const after = match.index + match[0].length;
+            const newline = unwrapped.slice(after).match(/^\r?\n/);
+            if (newline) { opening = { language: match[1].trim().toLowerCase(), bodyStart: after + newline[0].length }; }
+        } else if (!match[1].trim()) {
+            fencedBlocks.push({ language: opening.language, code: unwrapped.slice(opening.bodyStart, match.index) });
+            opening = undefined;
+        }
     }
     if (fencedBlocks.length === 0) {
-        const bracket = unwrapped.match(/\[PYTHON\]([\s\S]*?)\[\/PYTHON\]/i);
-        return bracket ? bracket[1].trim() : unwrapped;
+        const bracket = unwrapped.match(/^\[PYTHON\]([\s\S]*?)\[\/PYTHON\]$/i);
+        return normalizePythonTransportBlock(bracket ? bracket[1] : raw);
     }
 
     const hasUnittestEvidence = (block: { language: string; code: string }) =>
         /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(block.code);
-    const preferred = fencedBlocks.find(block =>
+    const candidates = fencedBlocks.filter(hasUnittestEvidence);
+    // Multiple complete candidates are ambiguous: do not silently choose one.
+    if (candidates.length !== 1) { return unwrapped; }
+    const preferred = candidates.find(block =>
         (block.language === 'python' || block.language === 'py') && hasUnittestEvidence(block)
-    ) || fencedBlocks.find(hasUnittestEvidence);
+    ) || candidates[0];
     // Some providers wrap the structured {"code": "..."} contract in a
     // ```json fence. Select the evidence-bearing fence first, then unwrap its
     // single code field as a second, format-only step. Unknown JSON shapes
     // remain untouched and are rejected by the normal structural validator.
-    return preferred ? unwrapGeneratedCodeEnvelope(preferred.code).trim() : unwrapped;
+    return normalizePythonTransportBlock(unwrapGeneratedCodeEnvelope(preferred.code));
 }
 
 /**

@@ -1,6 +1,7 @@
 import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
 import { loadTargetProbeFixtures, ProbeFixtureIdentity } from './pipeline/probeInputFixtures';
 import { traceTimingPreferences } from './pipeline/traceStartupBudget';
+import { readGeneratedRunnerDiagnostics } from './pipeline/generatedRunnerDiagnostics';
 import { localize, withLanguage } from './i18n/core';
 import { initI18n } from './i18n';
 import * as vscode from 'vscode';
@@ -120,7 +121,8 @@ import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/co
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
-import { boundedRoleStageDeadline, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent } from './llm/requestTiming';
+import { boundedRoleStageDeadline, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent, type TransportAttemptTiming } from './llm/requestTiming';
+import { createOutputRecoveryStage, outputRecoveryAttemptDeadline, planOutputRecoveryRetry } from './llm/outputRecoveryTiming';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
 import { planCallerPartitions } from './tier/callerPartitionPlan';
@@ -1115,22 +1117,8 @@ async function requestLlmApiUnlocked(
     }
 }
 
-function cleanCodeBlock(code: string): string {
-    let clean = stripUniformIndent(code);
-    clean = clean.replace(/\[\/?\s*PYTHON\s*\]/gi, '');
-    clean = clean.replace(/^```[a-z]*\n?/i, '').replace(/```\s*$/g, '').trim();
-
-    // 截斷 unittest.main() 之後的文字說明 (Explanation/Note)
-    const mainMatch = clean.match(/if\s+__name__\s*==\s*['"]__main__['"]\s*:\s*\n?\s*unittest\.main\(\)/);
-    if (mainMatch && mainMatch.index !== undefined) {
-        const endIdx = mainMatch.index + mainMatch[0].length;
-        clean = clean.substring(0, endIdx);
-    }
-    return clean.trim();
-}
-
 function sanitizeLlmResponse(rawCode: string): string {
-    let cleanCode = unwrapGeneratedCodeEnvelope(rawCode).trim();
+    const cleanCode = unwrapGeneratedCodeEnvelope(rawCode);
 
     // 偵測無限 thinking 迴圈（小模型常見問題）
     const thinkingCount = (cleanCode.match(/<thinking>/g) || []).length;
@@ -1138,7 +1126,7 @@ function sanitizeLlmResponse(rawCode: string): string {
     const emojiLoopMatch = cleanCode.match(/([\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF])\1{7,}/u);
     if (emojiLoopMatch) { return ''; }
 
-    return cleanCodeBlock(extractPythonTestCode(cleanCode));
+    return extractPythonTestCode(cleanCode);
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
@@ -1211,29 +1199,6 @@ async function validateGeneratedTestCode(
         throw new AnalysisStageError('validation', 'static-analysis', localize("Python AST 驗證工具無法完成；未交給 Writer 修復或降級 Tier。"),
             { reasonCode: 'bindings-tool-unavailable' });
     }
-}
-
-/**
- * 移除所有行共有的前導空格（統一縮排）
- * 例：所有行都以 4 個空格開頭 → 全部去掉 4 格
- */
-function stripUniformIndent(code: string): string {
-    const lines = code.split('\n');
-    const nonEmptyLines = lines.filter(l => l.trim().length > 0);
-    if (nonEmptyLines.length === 0) {return code;}
-
-    // 計算所有非空行最小的前導空格數
-    let minIndent = Infinity;
-    for (const line of nonEmptyLines) {
-        const leadingSpaces = line.match(/^( *)/)?.[1].length || 0;
-        if (leadingSpaces < minIndent) {minIndent = leadingSpaces;}
-    }
-
-    // 只有大於 0 才有意義
-    if (minIndent > 0 && minIndent < Infinity) {
-        return lines.map(l => l.substring(minIndent)).join('\n');
-    }
-    return code;
 }
 
 /** Parse bare asserts with Python AST; the normal validation gates still apply. */
@@ -1753,10 +1718,17 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         prompt += importResourcePrompt();
         const contractedSystem = addOutputContract(system, format);
-        const deadline = Math.min(sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(requestParams.timeoutSeconds),
-            currentTargetBudget()?.deadlineAt ?? Infinity);
-        // A length retry keeps this exact complete prompt, original deadline and target counters.
-        for (let outputAttempt = 0; outputAttempt < 2; outputAttempt++) {
+        const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
+            && activeModelProfile.contextLengthKnown === true;
+        const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
+            sharedDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
+        if (recoveryAllowed) {
+            recordRole('model-request', 'recovery-stage-planned', { role, ...outputStage, targetDeadlinePreserved: true });
+        }
+        // Reserve both attempts up front. Each respects the user's request limit;
+        // output retry, HTTP fallback and context growth never renew the stage or target.
+        for (let outputAttempt = 0; outputAttempt < outputStage.maximumAttempts; outputAttempt++) {
+        const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt);
         throwIfExecutionCancelled();
         currentTargetBudget()?.assertRemaining();
         if (!runtimeQualifications.current()) {
@@ -1861,7 +1833,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, minimumOutputTokens });
         const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
             ...roleBudget, reservedInputTokens,
-            contextWindow, deadlineAt: deadline, outputAttempt,
+            contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt,
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
         if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, reservedInputTokens)) {
@@ -1870,12 +1842,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 localize("完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。"), metrics);
         }
         const started = Date.now();
+        let completedTransport: TransportAttemptTiming | undefined;
         currentTargetBudget()?.consumeModelRequest();
         recordRole('model-request', 'requested', metrics);
         try {
             const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow,
                 requestOutputTokens: roleBudget.requestOutputTokens }, system, prompt, requestLog, format, deadline,
-                timing => recordRole('model-request', 'timing', { role, ...timing }));
+                timing => {
+                    if (timing.kind === 'transport' && timing.outcome === 'completed') { completedTransport = timing; }
+                    recordRole('model-request', 'timing', { role, ...timing });
+                });
             if (containsCredential(response, knownSecrets)) {
                 throw new AnalysisStageError('validation', 'sensitive-output',
                     localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
@@ -1893,12 +1869,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
             if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
-                && activeModelProfile.contextLengthKnown === true && remainingDeadlineMs(deadline) > 0) {
+                && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
                 const nextOutputTokens = writerOutputBudget.grow(diagnostic.outputTokenLimit, activeModelProfile.contextLength);
                 if (nextOutputTokens) {
+                    const recovery = planOutputRecoveryRetry(outputStage, nextOutputTokens, completedTransport);
+                    if (!recovery.allowed) {
+                        const detail = { role, ...recovery, previousOutputTokens: diagnostic.outputTokenLimit,
+                            requestOutputTokens: nextOutputTokens, stageDeadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true };
+                        recordRole('model-request', 'output-recovery-blocked', detail);
+                        throw new AnalysisStageError('model-format', 'model-request',
+                            localize('模型輸出已達上限，剩餘時間不足以完成較長的重送；未採用截斷內容，也未重置目標期限。'), detail);
+                    }
                     recordRole('model-request', 'output-budget-grown', { role,
                         previousOutputTokens: diagnostic.outputTokenLimit, requestOutputTokens: nextOutputTokens,
-                        retry: 1, deadlinePreserved: true, deadlineAt: deadline });
+                        retry: 1, deadlinePreserved: true, deadlineAt: outputStage.deadlineAt,
+                        stageDeadlineAt: outputStage.deadlineAt, attemptDeadlineAt: deadline, ...recovery });
                     continue;
                 }
             }
@@ -3040,12 +3025,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     preserveCandidate(testPath);
                     const testRunId = randomUUID();
                     const testHash = evidenceHash(code);
-                    const [invocationFile, coverageFile] = reserveArtifactFiles(testDir, ['invocation', 'coverage'], 'json');
+                    const [invocationFile, coverageFile, resultFile] = reserveArtifactFiles(testDir, ['invocation', 'coverage', 'result'], 'json');
                     const [isolationFile] = reserveArtifactFiles(testDir, ['isolation'], 'jsonl');
                     const executionArguments = [...generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
                         '--target-file', params.filePath, '--target-name', params.funcName || targetFuncName,
                         '--target-evidence', invocationFile, '--target-run-id', testRunId, '--target-test-file', testPath,
-                        '--violation-report', isolationFile];
+                        '--violation-report', isolationFile, '--result-json', resultFile];
                     const run = await runSpawn(pythonExecutable,
                         executionArguments,
                         { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
@@ -3055,6 +3040,19 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (resourceFailure) {
                         throw new AnalysisStageError('environment', 'resource-setup',
                             localize('隔離測試資料庫缺少資料表或欄位；請在「隔離測試資源」補齊 schema 後重新執行。'), resourceFailure);
+                    }
+                    const runnerDiagnostic = readGeneratedRunnerDiagnostics({ resultFile, invocationFile,
+                        sourceFile: params.filePath, testFile: testPath, target: params.funcName || targetFuncName,
+                        testRunId, sourceHash: journal.sourceHash, testHash });
+                    if (runnerDiagnostic) {
+                        recordRole('validation', 'load-failed', runnerDiagnostic);
+                        if (run.code === 0 || runnerDiagnostic.repairRole !== 'writer') {
+                            throw new AnalysisStageError('validation', 'generated-test-runner',
+                                localize('生成測試的載入或身分證據無效；停止修復，未計入通過。'), runnerDiagnostic);
+                        }
+                        return { ok: false, out: 'GENERATED_TEST_LOAD_FAILED: Repair the generated test imports using the canonical target module; '
+                            + 'do not guess packages or change application source.\n' + `${run.stdout}${run.stderr}`.trim(),
+                            qualityGaps: [], repairRole: 'writer' as const };
                     }
                     const scenarios = await inventory(code);
                     passingExecutions.set(evidenceHash(code), [...passingTestIds(run.stdout + run.stderr, path.basename(testPath, '.py'))]);

@@ -112,10 +112,12 @@ export function getMutationOperatorHints(survivedMutants: string): string {
 }
 
 export function formatFewShotForPrompt(examples: FewShotExample[], useThinking = true): string {
+    // The executable catalogue stays available to regression tests. Runtime
+    // prompts receive only general lessons, without a second target/source or
+    // candidate test file that could contaminate imports and expected values.
+    void useThinking;
     return examples.map((example, index) => {
-        const thinkingBlock = useThinking
-            ? `(Start directly with <thinking>; do not add other headings.)\n<thinking>\n${example.thinking}\n</thinking>\n\n`
-            : '(Analyze boundary conditions, then write test code directly.)\n';
-        return `==== Example ${index + 1}: ${example.label} ====\n${thinkingBlock}Source:\n${example.sourceCode}\n\nTest:\n${example.testCode}`;
+        return `==== Guidance ${index + 1}: ${example.label} ====\n${example.thinking}\n`
+            + 'Use the supplied Target import/binding and current source/evidence. This guidance supplies no target names, inputs or expected answers.';
     }).join('\n\n\n');
 }

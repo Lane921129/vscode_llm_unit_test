@@ -135,7 +135,8 @@ test('async context retrieval uses the selected construction rule instead of an 
         context: { is_async: true, args: ['client'] }, evidence, budgetTokens: 8000 });
     assert.match(prompt, /VERIFIED PATTERN async-context-boundary-v1/);
     assert.doesNotMatch(prompt, /VERIFIED PATTERN async-boundary-v1/);
-    assert.match(prompt, /client = MagicMock\(\)/);
+    assert.match(prompt, /return_value\.__aenter__\.return_value/);
+    assert.doesNotMatch(prompt, /from example_target import|class Cases\(|client = MagicMock\(\)/);
 });
 
 test('Reviewer rejects with stable reason codes without leaking response text or weakening review-v4', () => {

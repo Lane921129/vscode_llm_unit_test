@@ -137,6 +137,45 @@ class ReviewFactsTests(unittest.TestCase):
         nested = 'if flag:\n    import missing\n'
         self.assertFalse(any(item['module'] == 'missing' for item in self.facts('', code=nested)['importStatements']))
 
+    def test_standard_assertion_syntax_in_patch_context_has_no_result_or_execution_authority(self):
+        code = ('import unittest\nfrom unittest.mock import patch\nfrom sample import score\n'
+                'class Cases(unittest.TestCase):\n'
+                '    def setUp(self):\n        self.patcher = patch("sample.channel")\n'
+                '        self.channel = self.patcher.start()\n'
+                '    def test_value(self):\n        with patch("sample.value", 2):\n'
+                '            self.assertEqual(score(), 2)\n')
+        method = self.facts('', code=code)['methods'][0]
+        self.assertEqual(method['standardAssertions'], [{'line': 10, 'kind': 'assertEqual'}])
+        self.assertFalse(method['assertions'], 'syntax cannot certify a patched return value')
+        conditional = self.facts('if flag:\n    self.assertIs(score(1), None)')['methods'][0]
+        self.assertEqual(conditional['standardAssertions'], [{'line': 6, 'kind': 'assertIs'}])
+        self.assertFalse(conditional['assertions'], 'syntax does not prove the branch ran')
+
+    def test_rebound_receiver_or_custom_methods_do_not_gain_standard_assertion_authority(self):
+        base = suite('self.assertEqual(score(1), 2)')
+        cases = [
+            suite('self = other\nself.assertEqual(score(1), 2)'),
+            base.replace('    def test_value', '    def assertEqual(self, *args):\n        pass\n    def test_value'),
+            base.replace('    def test_value', '    def setUp(self):\n        self.assertEqual = other\n    def test_value'),
+            base.replace('    def test_value', '    def setUp(self):\n        mutate(self)\n    def test_value'),
+            base.replace('    def test_value', '    def setUp(self):\n        self.prepare()\n    def test_value'),
+            base.replace('    def test_value', '    @other\n    def test_value'),
+            base + 'def load_tests(*args):\n    return unittest.TestSuite()\n',
+            base.replace('from sample import score', 'from sample import score\nunittest.TestCase.assertEqual = other'),
+            base.replace('    def test_value', '    unittest.TestCase.assertEqual = other\n    def test_value'),
+            base.replace('    def test_value', '    def setUp(self):\n        import unittest\n        unittest.TestCase.assertEqual = other\n    def test_value'),
+        ]
+        for code in cases:
+            with self.subTest(code=code):
+                self.assertFalse(any(item['standardAssertions'] for item in self.facts('', code=code)['methods']))
+        unknown = self.facts('self.assertNotAUnittestMethod(score(1), 2)')['methods'][0]
+        self.assertFalse(unknown['standardAssertions'])
+
+    def test_patch_of_unittest_harness_leaves_method_binding_unknown(self):
+        for patch_code in ('patch("unittest.TestCase.assertEqual")', 'patch.object(unittest.TestCase, "assertEqual")'):
+            code = suite('with ' + patch_code + ':\n    self.assertEqual(score(1), 2)', 'from unittest.mock import patch\n')
+            self.assertFalse(self.facts('', code=code)['methods'][0]['standardAssertions'])
+
 
 if __name__ == '__main__':
     unittest.main()

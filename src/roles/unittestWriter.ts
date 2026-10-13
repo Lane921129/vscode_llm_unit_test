@@ -148,7 +148,7 @@ Output format:
 Output only that single Python code fence. Do not include analysis, reasoning, headings, or other prose.
 
 Guidelines:
-- Use absolute import (e.g. from module_name import target_function).
+- Use the exact absolute Target import supplied in the target contract; import helpers explicitly and never substitute example names.
 - ${PURE_STDLIB_INPUT_GUIDANCE}
 - Use unittest.mock (patch, MagicMock) for external dependencies${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}.${isolatedResourceSystemRule()}
 - Cover branches, boundaries, and exception paths that are supported by the source code, selected test-generation rule cards, or verified execution facts. Do not add None or empty-input tests merely by habit.
@@ -158,7 +158,7 @@ Guidelines:
 - Do NOT call a dependency directly merely to calculate an expected value or create unused setup. When dependency behavior must be controlled, patch it at the target module's use point.
 `;
 
-    prompt += `\nFEW-SHOT EXAMPLES:\n${formatFewShotForPrompt(getBaseFewShotExamples(), false)}\n`;
+    prompt += `\nTEST DESIGN GUIDANCE (not target evidence):\n${formatFewShotForPrompt(getBaseFewShotExamples(), false)}\n`;
 
     if (loopCount > 1 && survivedMutants) {
         prompt += `\nSome mutants survived. Analyze and kill them:\n${survivedMutants}`;

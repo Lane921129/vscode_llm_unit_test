@@ -163,6 +163,17 @@ export function validateQualityExperimentResult(value: unknown): asserts value i
 /** The host returns isolated observations only. Writer authors every test, which
  * must then pass execution, independent review and mutation gates. */
 export async function prepareQualityExperiments(input: QualityExperimentInput): Promise<QualityExperimentResult> {
+    // This tool observes ordered calls and plain state on one real instance.
+    // The canonical top-level target has no class component; numeric mutation
+    // probes remain a separate path and must not be disabled by this verdict.
+    if (!input.target.includes('.')) {
+        const result: QualityExperimentResult = { schemaVersion: 'quality-experiment-result-v2', status: 'unsupported',
+            sourceHash: evidenceHash(input.source), target: input.target, gapId: input.focus.id,
+            reason: 'instance-target-required', experiments: [], assertionOracle: false };
+        validateQualityExperimentResult(result);
+        if (sensitive(result, input.knownSecrets)) { throw new Error('Sensitive quality observation was withheld.'); }
+        return result;
+    }
     const effectiveEnvironment = importFixtureEnvironment(input.env ?? process.env);
     const run = await runSpawn(input.python, ['-B', pythonToolPath('qualityExperiments'), '--run'], {
         input: JSON.stringify({ ...input, python: undefined, env: undefined, timeoutMs: undefined, knownSecrets: undefined,
@@ -230,9 +241,16 @@ export function buildQualityExperimentEvidencePrompt(result: QualityExperimentRe
         if (render().length > maxChars) { selected.pop(); }
     }
     if (!selected.length) {
-        const diagnostic = 'QUALITY_EXPERIMENT_DIAGNOSTIC_V2\n' + JSON.stringify({ includedCases: 0, omittedCases: observed.length,
+        const payload = { status: result.status,
+            reasonCode: result.status === 'observed' ? 'no-complete-safe-observation-fit'
+                : result.reason ?? `quality-experiments-${result.status}`,
+            includedCases: 0, omittedCases: observed.length,
             unavailableCases: result.experiments.length - observed.length, assertionOracle: false,
-            reason: 'No complete safe observation fits this evidence budget; do not infer expected values.' });
+            reason: result.status === 'observed'
+                ? 'No complete safe observation fits this evidence budget; do not infer expected values.'
+                : 'No verified observation was produced; do not infer expected values.' };
+        if (sensitive(payload, knownSecrets)) { return ''; }
+        const diagnostic = 'QUALITY_EXPERIMENT_DIAGNOSTIC_V2\n' + JSON.stringify(payload);
         return diagnostic.length <= maxChars ? diagnostic : '';
     }
     const rendered = render();

@@ -19,6 +19,8 @@ export interface ReviewMethodFacts {
     exceptionGuards: Array<{ line: number; exception: string; callLines: number[] }>;
     scalarBindings: Array<{ line: number; name: string; type: string }>;
     mockAssertions?: Array<{ line: number; kind: string; patchTarget: string; mockPath: string; targetCallLine: number }>;
+    /** Tool-owned inherited unittest method syntax, not proof of execution or expected values. */
+    standardAssertions?: Array<{ line: number; kind: string }>;
 }
 export interface ReviewFacts extends ReviewFactIdentity {
     schemaVersion: 'review-test-facts-v1'; module: string; testHash: string; executionVerified: boolean;
@@ -105,6 +107,18 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
         || value.module !== options.module || value.testHash !== evidenceHash(options.code)
         || !Array.isArray(value.imports) || !Array.isArray(value.classes) || !Array.isArray(value.methods)
         || containsCredential(run.stdout, options.knownSecrets)) { invalid('ast-identity'); }
+    for (const method of value.methods) {
+        if (!object(method) || method.standardAssertions === undefined) { continue; }
+        if (!Array.isArray(method.standardAssertions) || method.standardAssertions.length > 12000
+            || !Number.isSafeInteger(method.line) || !Number.isSafeInteger(method.endLine)
+            || method.line < 1 || method.endLine < method.line
+            || method.standardAssertions.some((item: unknown) => !object(item)
+                || Object.keys(item).some(key => !['line', 'kind'].includes(key))
+                || !Number.isSafeInteger(item.line) || item.line < method.line || item.line > method.endLine
+                || typeof item.kind !== 'string' || !/^assert[A-Za-z_]\w*$/.test(item.kind))) {
+            invalid('ast-standard-assertion-shape');
+        }
+    }
     return value as unknown as ReviewFacts;
 }
 

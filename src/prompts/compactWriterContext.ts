@@ -1,7 +1,7 @@
 import { BehaviorObservations, observationsForPrompt, summarizeObservationPhase, TraceInputSnapshot, TraceValueSnapshot, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { estimatePromptTokens } from './promptBudget';
-import { matchingWriterExamples } from './verifiedWriterExamples';
+import { formatWriterPatternGuide, matchingWriterExamples } from './verifiedWriterExamples';
 import { callerForPrompt, callerMatchesObservation, typedCallFields } from '../pipeline/probeInputs';
 import { validTraceInputSnapshot, validTraceValueSnapshot } from '../pipeline/traceValues';
 import { formatDependencyMockContract, formatDependencyTopology, formatSourceImport, relevantSourceImports } from './dependencyMockContract';
@@ -162,8 +162,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + 'Use complete TARGET SOURCE; unknown stays unknown.');
     }
     for (const example of matchingWriterExamples({ ...context, selectedRuleIds: input.evidence.ruleSelection.ids })) {
-        append(`VERIFIED PATTERN ${example.id} (unrelated neutral fixture; adapt setup only, never copy its target, inputs or expected values):\n`
-            + `Example source:\n\`\`\`python\n${example.source}\n\`\`\`\nExample test:\n\`\`\`python\n${example.tests}\n\`\`\``);
+        append(formatWriterPatternGuide(example));
     }
     if (input.evidence.semanticPlan) {
         append('OPTIONAL ANALYST HYPOTHESES (unverified; never an assertion oracle):\n' + JSON.stringify(input.evidence.semanticPlan.hypotheses));

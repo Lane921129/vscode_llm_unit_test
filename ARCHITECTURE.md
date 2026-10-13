@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 車輛批次候選修復（2026-10-13）
+
+`generated_test_runner.py` 區分純 `_FailedTest` 載入失敗與真正模組身分不符。純載入失敗保留 unittest 原始匯入原因，並輸出不含例外原文的版本化診斷與執行身分。`generatedRunnerDiagnostics.ts` 以 result／invocation 雙產物、current source／test byte hash、native path、target、run ID、profile 與 failed 狀態核對；僅 pure load failure 可交 Writer，exit code／身分矛盾或工具資料無效直接 typed stop。成功仍須原來的 coverage／invocation／isolation／Reviewer gate。
+
+Writer 提示的完整中性範例保留作內部回歸，正式語境改為不含範例模組、程式及答案的文字指引。抽取只正規化可證明的外框縮排，保留多行 literal 與尾端程式；literal 內的 `[PYTHON]`／fence 不當作傳輸包裝，多完整候選不任選。`target_result_evidence.py` 按方法詞法範圍核驗局部 import；並窄版支援來源直接寫入參數屬性、測試 fresh `SimpleNamespace`、同物件在真實呼叫後的狀態斷言。AST 只證明相關性，不產生 expected；重綁、未知 helper、Mock、覆寫與分支不借此通過。
+
+Reviewer 的同候選事實新增 inherited unittest assertion 語法；只有 exact mechanical claim 與實跑／AST 明確矛盾才要求原期限內重審，沒有刪 finding 自動批准。有序 instance 實驗對頂層函式不啟動 worker，保存真實不適用原因；一般數值 mutation probes 保留獨立支持，空觀測不冒稱預算超額或 oracle。
+
 ## 跨專案 P0／P1 與 Tier 分流（2026-10-12）
 
 主流程保持 Analyst → Writer → 真實隔離執行 → 另一 LLM Reviewer → 同候選批准 → 突變 → 品質缺口修訂。`tierFailurePolicy.ts` 只對候選或修復契約耗盡降低生成策略；模型、環境、工具、預算與審查失敗不借降級回避。沒有可用 Bug Fixer 時由 Writer 修訂，仍保留已通過情境。
@@ -22,7 +30,7 @@ Reviewer 依完整編號測試及同候選事實逐項檢查輸入／expected，
 
 增容時 Auto/full 要求新 Writer／Reviewer verified；手動 Tier 依原本的當次角色嘗試政策繼續，Reviewer 探針失敗不封鎖 Analyst／Writer。`roleQualification.ts` 的 Reviewer 探針使用正式 `review-v7` schema 與獨立 `review-json` 傳輸，資格版本為 `python-unittest-v8`。安全診斷只保存固定原因碼、字數與結構統計，不保存 provider 原文。未取得同候選審查批准仍不得突變。
 
-`writerOutputBudget.ts` 在一目標內記錄已確定耗盡的輸出 cap。`requestBudgeted` 對 Local Writer／完整修訂至多重送一次相同完整證據；較大輸出保留量與 wire `num_predict` 成對，必要時依已核實上限增容。截斷前綴完全丟棄，原邏輯請求期限與 target counters 不重設。
+`writerOutputBudget.ts` 在一目標內記錄已確定耗盡的輸出 cap。`requestBudgeted` 對 Local Writer／完整修訂至多重送一次相同完整證據；較大輸出保留量與 wire `num_predict` 成對，必要時依已核實上限增容。2026-10-13 起 `outputRecoveryTiming.ts` 在首問前預留至多兩個單次額度，受明傳 shared deadline 與原 target deadline 限制；各次請求及其 HTTP／容量回退不續期，原 stage 與 target counters 不重設。當次 length transport 有完整數值耗時時估算較大輸出需要的時間，不足便記錄 `output-recovery-blocked`；未知時要求留足單次額度。截斷前綴完全丟棄。
 
 `modulePreflight.ts` 的成功 `elapsedMs` 由宿主量測；`traceStartupBudget.ts` 在原剩餘時間內預分規劃、第一次案例重載與清理。Trace 外層最多60秒，未知時保留原5／12／20秒政策；Python 的 planning/case/total progress 保存實際分配。新的額度不增加既有 target deadline，也不把載入或規劃當成觀測。
 
@@ -42,7 +50,7 @@ Reviewer 依完整編號測試及同候選事實逐項檢查輸入／expected，
 
 Local `/api/generate.format` 帶此 schema；Custom 保留 JSON mode，Cloud 共用 schema。Cloud 的 OpenAPI `responseSchema` 傳輸投影只移除 schema 節點不支援的 `additionalProperties`，保留合法同名資料欄位、長度／數量與必要欄位限制，不改寫共用 schema 或本地語意 gate。Writer 仍生成 Python。Analyst 的無效回覆只交 `semanticWithContractRepair` 補正一次，沒有額外的隱藏文字重問；明確服務格式拒絕仍可在同一次 deadline 內移除格式參數，但提示文字保持完全相同。
 
-`requestTiming.ts` 預先分配至多兩個 Analyst 單次額度，例如設定60秒時，階段最多120秒、每次最多60秒，且受目標剩餘時間限制。HTTP 重試、格式／思考量回退及排隊共享各自邏輯請求期限。其他角色維持原有政策；傳輸超時、取消與證據漂移不能觸發格式補問。
+`requestTiming.ts` 預先分配至多兩個 Analyst 單次額度，例如設定60秒時，階段最多120秒、每次最多60秒，且受目標剩餘時間限制。HTTP 重試、格式／思考量回退及排隊共享各自邏輯請求期限。Writer 的 length 恢復採上述 2026-10-13 階段政策，其餘角色維持原有政策；傳輸超時、取消與證據漂移不能觸發格式補問。
 
 本機短計畫輸出 cap 為1,024 tokens，不高於原輸出預留；輸入預算與實際 wire `num_predict` 成對。已儲存的手動容量保持原值；完整提示超額時，僅本次執行可依上述流程增容。`model-request-timing-v1` 分開保存 queue／transport 事件及 Ollama 的數值 timing／token metadata，未知為null。`modelRequestTimingPresentation.ts` 將同次紀錄呈現在日誌、逐輪與失敗流程表；HTTP 等待可能包含服務推論，不能稱為網路延遲或GPU耗時。完整 provider 回覆不持久保存。
 
