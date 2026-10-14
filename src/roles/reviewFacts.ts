@@ -21,6 +21,10 @@ export interface ReviewMethodFacts {
     mockAssertions?: Array<{ line: number; kind: string; patchTarget: string; mockPath: string; targetCallLine: number }>;
     /** Tool-owned inherited unittest method syntax, not proof of execution or expected values. */
     standardAssertions?: Array<{ line: number; kind: string }>;
+    /** Complete AST-owned call spellings; only recognize unchanged edit proposals. */
+    standardAssertionCalls?: Array<{ line: number; kind: string; spellings: string[] }>;
+    /** Syntax presence, not proof that a patch ran or implements a requirement. */
+    dependencyPatchSyntax?: Array<{ line: number; origin: string; target: string; binding: string; spellings: string[] }>;
 }
 export interface ReviewFacts extends ReviewFactIdentity {
     schemaVersion: 'review-test-facts-v1'; module: string; testHash: string; executionVerified: boolean;
@@ -118,12 +122,31 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
                 || typeof item.kind !== 'string' || !/^assert[A-Za-z_]\w*$/.test(item.kind))) {
             invalid('ast-standard-assertion-shape');
         }
+        for (const field of ['standardAssertionCalls', 'dependencyPatchSyntax'] as const) {
+            const items = method[field];
+            if (items === undefined) { continue; }
+            const allowed = field === 'standardAssertionCalls' ? ['line', 'kind', 'spellings']
+                : ['line', 'origin', 'target', 'binding', 'spellings'];
+            if (!Array.isArray(items) || items.length > 12000 || items.some((item: unknown) => !object(item)
+                || Object.keys(item).some(key => !allowed.includes(key))
+                || !Number.isSafeInteger(item.line) || item.line < method.line || item.line > method.endLine
+                || !Array.isArray(item.spellings) || item.spellings.length < 1 || item.spellings.length > 2
+                || item.spellings.some((text: unknown) => typeof text !== 'string' || !text || text.length > 200000)
+                || field === 'standardAssertionCalls' && (typeof item.kind !== 'string'
+                    || !method.standardAssertions.some((assertion: Record<string, unknown>) => assertion.line === item.line && assertion.kind === item.kind))
+                || field === 'dependencyPatchSyntax' && (item.origin !== 'unittest.mock.patch'
+                    || typeof item.target !== 'string' || typeof item.binding !== 'string'))) {
+                invalid('ast-review-syntax-shape');
+            }
+        }
     }
     return value as unknown as ReviewFacts;
 }
 
-/** The prompt includes every fact used by the guard, with bulky typed call snapshots omitted. */
+/** Call spellings already appear in TEST_FILE; project their AST presence without duplicating code. */
 export function reviewFactsForPrompt(facts: ReviewFacts): string {
     return 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...facts,
-        methods: facts.methods.map(method => ({ ...method, calls: method.calls.map(call => ({ line: call.line })) })) });
+        methods: facts.methods.map(method => ({ ...method, calls: method.calls.map(call => ({ line: call.line })),
+            standardAssertionCalls: method.standardAssertionCalls?.map(({ line, kind }) => ({ line, kind })),
+            dependencyPatchSyntax: method.dependencyPatchSyntax?.map(({ line, origin, target, binding }) => ({ line, origin, target, binding })) })) });
 }

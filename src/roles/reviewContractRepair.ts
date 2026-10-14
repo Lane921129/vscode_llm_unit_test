@@ -73,6 +73,8 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
                 attempt: 1, diagnostics: parsed.diagnostics });
             prompt = `${options.prompt}\n\nREVIEW_CONTRACT_REPAIR_V1\n`
                 + `The previous assessment failed these contract checks: ${parsed.diagnostics.join(', ')}.\n`
+                + 'Give a concrete defect and its evidence, not copied instructions, a bare verdict or generic advice to verify expected values. '
+                + 'A proposal identical to the AST-owned assertion, canonical binding or existing patch changes nothing. '
                 + 'Fact contradictions mean the cited host AST/observation facts already establish that binding, assertion or exact-input outcome. '
                 + 'Do not repeat the contradicted claim: a unittest harness is not the target class; an expected exception is not a failing test; '
                 + 'verified observed values must not be replaced by guessed calculations; exact string equality must not become string ordering or loose membership. '

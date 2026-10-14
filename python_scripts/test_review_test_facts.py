@@ -1,4 +1,7 @@
 import pathlib
+import json
+import os
+import subprocess
 import sys
 import unittest
 
@@ -175,6 +178,37 @@ class ReviewFactsTests(unittest.TestCase):
         for patch_code in ('patch("unittest.TestCase.assertEqual")', 'patch.object(unittest.TestCase, "assertEqual")'):
             code = suite('with ' + patch_code + ':\n    self.assertEqual(score(1), 2)', 'from unittest.mock import patch\n')
             self.assertFalse(self.facts('', code=code)['methods'][0]['standardAssertions'])
+
+    def test_complete_assertion_and_patch_syntax_does_not_certify_patched_results(self):
+        code = ('import unittest\nfrom unittest.mock import patch\nfrom sample import score\n'
+                'class Cases(unittest.TestCase):\n    def test_value(self):\n'
+                '        with patch("sample.clock") as clock:\n'
+                '            clock.now.return_value = "肥胖"\n'
+                '            self.assertEqual(score(), "肥胖")\n')
+        result = self.facts('', code=code)['methods'][0]
+        self.assertEqual(result['standardAssertionCalls'][0]['line'], 8)
+        self.assertIn('self.assertEqual(score(), "肥胖")', result['standardAssertionCalls'][0]['spellings'])
+        self.assertEqual(result['dependencyPatchSyntax'][0]['origin'], 'unittest.mock.patch')
+        self.assertEqual(result['dependencyPatchSyntax'][0]['binding'], 'clock')
+        self.assertEqual(result['assertions'], [], 'presence cannot verify the expected return value')
+        rebound = code.replace('        with patch', '        patch = other\n        with patch')
+        self.assertFalse(self.facts('', code=rebound)['methods'][0]['dependencyPatchSyntax'])
+
+    def test_json_stdin_is_utf8_under_a_non_utf8_console_code_page(self):
+        code = suite('self.assertEqual(score(1), "肥胖")')
+        payload = {'code': code, 'module': 'sample', 'target': 'score', 'runId': 'run', 'sourceHash': 'a' * 64}
+        run = subprocess.run([sys.executable, '-B', str(pathlib.Path(__file__).with_name('review_test_facts.py'))],
+                             input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             env={**os.environ, 'PYTHONIOENCODING': 'cp1252'}, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr.decode('ascii', errors='replace'))
+        facts = json.loads(run.stdout.decode('ascii'))
+        self.assertEqual(facts['methods'][0]['assertions'][0]['expected']['value']['value'], '肥胖')
+
+    def test_nested_argument_calls_are_not_mislabelled_as_standard_assertions(self):
+        method = self.facts('self.assertEqual(score(service.value()), "same")')['methods'][0]
+        self.assertEqual([item['kind'] for item in method['standardAssertionCalls']], ['assertEqual'])
+        self.assertFalse(any(item.get('observationVerified') for item in method['assertions']))
 
 
 if __name__ == '__main__':

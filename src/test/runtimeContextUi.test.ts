@@ -7,7 +7,7 @@ import { setLanguage, t } from '../i18n/core';
 test('context UI clears stale model and endpoint values, saves a choice and freezes during analysis', () => {
     setLanguage('en');
     const html = getWebviewContent(t, 'en');
-    assert.match(html, /Saving 0 clears the choice and detects capacity again/);
+    assert.match(html, /(?:Saving 0 clears the choice and detects capacity again|saving 0 clears it and restores automatic mode)/i);
     const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i)![1];
     const elements = new Map<string, any>();
     for (const match of html.matchAll(/<[a-z][^>]*\bid="([^"]+)"[^>]*>/gi)) {

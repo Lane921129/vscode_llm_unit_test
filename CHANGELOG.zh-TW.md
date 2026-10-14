@@ -4,6 +4,17 @@
 
 ## 2026-10-14
 
+### 同步容量快照、具體審查證據、受限輸出恢復與 Mock 修訂
+
+- 分析10/14 BMI及車輛結果：兩批正式完成請求皆HTTP200，主要問題為metadata上限未知、泛用／矛盾Reviewer意見及錯誤Mock；BMI修訂以1,536 tokens長度中止，車輛只處理7／212後取消，不能當成整批失敗或API超時。環境與Analyst已完成，不重做既有初始化。
+- 新增 `localRuntimeMetadata.ts`，UI及每次執行開始共用同端點／模型show／ps資料，HTTP及body共用期限、支援取消，只保存固定診斷與數字。取得執行所有權後、任何目標前一次補齊本次snapshot；同身分合法舊上限明示cached，無資料明示unavailable，不借其它模型，不授角色資格，不寫回模型profile或手動／captured偏好。
+- Reviewer維持review-v7，純指令回聲及沒有具體問題的泛用verify建議交原有限契約重審；同候選AST增加完整assertion及直接stdlib with-patch語法，只反駁完整重複修改提議。不同方法、literal空白、patch配置及未知callback／業務語意保持審查；不能刪finding冒充批准。Python事實入口明確讀UTF-8，中文案例不受Windowsconsole編碼影響。
+- Writer長度恢復不再被未知上限整個關閉：同已核對num_ctx內可增加輸出，需要增容才依可信上限重驗角色。對同完整提示採max(估量, prompt_eval_count)，保留輸入及128 tokens餘裕；以當次數值耗時、容量及原階段餘額選輸出cap。探針與正式請求各建一次單次期限，stage／shared／target期限首問前固定；探針後、真正重送前再核對時間，未知耗時需完整單次額度。截斷內容不保存或執行，不重設計數或偏好。
+- Mock來源形狀補安全單一comprehension的iterable及常數索引，明確提示真正 `receiver.method.return_value` 與每筆所需位置，不製造expected、資料或例外。重綁／filter／動態索引等未知情境不猜。可選屬性、真正module.__file__、path constructor輸入與來源global轉換指引保持來源綁定；非static的self／cls不當protocol替身。唯一實測mock初始化ERROR須標準堆疊及失敗測試patch行一致才交Writer，目標內部錯誤不誤分流。
+- 相關Node回歸去重238／238通過；正式Python入口671案例，668通過、3略過。TypeScript、lint、生產建置、Webview語法及差異格式通過，提交前另掃描新追蹤檔與可達歷史密鑰。首輪Node199／203，修正舊角色預算、探索計數及UI文案假設；Reviewer整合原30秒只能量88／96突變候選，改測試至現行60秒後保留全部原門檻重驗通過。初次Python手動選錯兩個不存在suite，改用正式完整入口完成。沙箱Temp native path EPERM不放寬產品，正常Windows環境重驗。
+- 真實本機Qwen3B四目標新快照：1／4完整通過，`_now_text`行1／1、builtin突變3／3且同候選批准；`_connect`8192→9216→10240增容及新容量資格成功，仍有DB_NAME字串／DB_PATH斷言與修復無變更；get_app_dir仍漏import，_table_columns仍有錯誤Mock資料列及修復失敗。四目標正式23筆、容量重驗4筆均完成，公開資格另列；來源、相依及compiled快照不變，SecretStorage／設定寫入0，租約回收。
+- 另以與實驗室同hash的BMI來源真實Qwen3B實測，執行、算術修復及Reviewer完成，已進builtin；20秒僅量64／96候選，32未執行、2timeout，分數保持null，覆蓋5／10仍需補測。沒有API超時或length；不能宣稱BMI品質通過。此實測使用builtin，不代替Codellama13B／Mutatest或212目標验收；既有UI／NLS／requirements等未提交修改保留且不混入提交。未重跑完整Node或GitHub CI矩陣。
+
 ### 命名 Checker 執行校驗階段
 
 - 將執行 Writer 測試、以 unittest 斷言比對實際結果與預期答案的工具階段命名為 Checker，正式實作仍是 `generated_test_runner.py`。角色、架構、Python 工具與專案規則同步說明：Writer／Reviewer 是 LLM 任務，Checker 不呼叫模型；Validation 是包含預檢與執行的工具驗證總稱。

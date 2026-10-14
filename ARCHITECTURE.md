@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## 容量、審查與 Mock 修訂（2026-10-14）
+
+`localRuntimeMetadata.ts` 共用 Ollama show／ps 探索，HTTP與body解析共用有界期限，僅投影固定狀態、數字與端點摘要。`SidebarProvider.prepareLocalAnalysisRuntime` 在取得本次執行所有權後更新 execution snapshot；UI與正式請求共用同份上限／分配資料。cached上限須同端點、模型且合法；探索不授予角色資格，也不寫回模型profile或使用者容量偏好。`model-runtime selected` 保存 fresh／cached／unavailable 診斷，避免未知上限被泛稱成模型無法執行。
+
+`planWriterOutputGrowth` 分開已核對 num_ctx 內的輸出增量與需要可信上限的增容。相同完整提示的 length transport 可提供實測輸入與生成耗時；輸入保留 max(估量, 實測) 及128 tokens餘裕，輸出受容量、單次時間及原階段餘額限制。新容量仍重驗角色；正式请求在探針完成後建立一次單次期限，stage／shared／target期限從首問前固定，重送前重新檢查餘額，不續已發送請求或重設計數。截斷前綴不保存或執行。
+
+Reviewer v7 不新增必填JSON欄位。AST事實增加完整標準assertion及直接stdlib with-patch的同方法語法，僅用來拒收完整重複的修改提議。當前指令回聲、泛用verify要求及同canonical import／assertion／patch重複提議走原本有限契約重審，不能刪finding自動批准。literal內容、其它方法的patch及未知callback／業務語意不能借這些語法事實否定；事實工具入口明確使用UTF-8，支援非UTF-8 Windows console。
+
+`dependency_fixture_contract.py` 對安全單一comprehension補充 iterable及常數索引的結果消費形狀；Writer提示因此能指出真正的 `receiver.method.return_value`，而不產生資料內容或expected。patch初始化ERROR由標準mock堆疊及本次測試行核對，交Writer整理fixture；一般目標例外仍按原唯一方法失敗分流。來源 `__file__`、可選屬性及path constructor輸入提示保持來源綁定，非static類別的self／cls不當外部protocol物件。
+
 ## 車輛批次候選修復（2026-10-13）
 
 `generated_test_runner.py` 區分純 `_FailedTest` 載入失敗與真正模組身分不符。純載入失敗保留 unittest 原始匯入原因，並輸出不含例外原文的版本化診斷與執行身分。`generatedRunnerDiagnostics.ts` 以 result／invocation 雙產物、current source／test byte hash、native path、target、run ID、profile 與 failed 狀態核對；僅 pure load failure 可交 Writer，exit code／身分矛盾或工具資料無效直接 typed stop。成功仍須原來的 coverage／invocation／isolation／Reviewer gate。

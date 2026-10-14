@@ -36,6 +36,34 @@ export interface OutputRecoveryDecision {
     estimatedRetryMs: number | null;
 }
 
+function measuredOutputCost(timing?: TransportAttemptTiming): { fixedMs: number; msPerToken: number } | undefined {
+    const positive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
+    const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+    const stats = timing?.ollama;
+    if (timing?.version !== 'model-request-timing-v1' || timing.kind !== 'transport'
+        || timing.outcome !== 'completed' || stats?.done !== true || stats.completionReason !== 'length'
+        || !Number.isSafeInteger(stats.evalCount) || !positive(stats.evalCount) || !positive(stats.evalDurationMs)
+        || !nonnegative(stats.promptEvalDurationMs) || !nonnegative(stats.loadDurationMs)
+        || !nonnegative(stats.totalDurationMs) || !nonnegative(timing.elapsedMs)) { return undefined; }
+    const fixedMs = Math.max(stats.promptEvalDurationMs + stats.loadDurationMs,
+        stats.totalDurationMs - stats.evalDurationMs)
+        + Math.max(0, timing.elapsedMs - stats.totalDurationMs) + 1000;
+    const msPerToken = stats.evalDurationMs / stats.evalCount;
+    return Number.isFinite(fixedMs) && positive(msPerToken) ? { fixedMs, msPerToken } : undefined;
+}
+
+/** A cap for this same prompt's one reserved retry, never an extension of its deadline. */
+export function outputRecoveryTokenLimit(stage: OutputRecoveryStage, timing?: TransportAttemptTiming,
+    now = Date.now()): number | undefined {
+    if (!Number.isFinite(now)) { throw new TypeError('Output retry clock must be finite'); }
+    const cost = measuredOutputCost(timing);
+    if (!cost) { return undefined; }
+    const availableMs = stage.maximumAttempts === 2
+        ? Math.max(0, Math.min(stage.timeoutSeconds * 1000, stage.deadlineAt - now)) : 0;
+    const cap = Math.max(0, Math.floor((availableMs - cost.fixedMs) / cost.msPerToken));
+    return Number.isSafeInteger(cap) ? cap : undefined;
+}
+
 /** Estimate only from a completed length-stopped transport of the same full prompt.
  * This predicts request time, never a model's quality, GPU state or expected answer. */
 export function planOutputRecoveryRetry(stage: OutputRecoveryStage, nextOutputTokens: number,
@@ -45,18 +73,10 @@ export function planOutputRecoveryRetry(stage: OutputRecoveryStage, nextOutputTo
     }
     const availableMs = stage.maximumAttempts === 2
         ? Math.max(0, Math.min(stage.timeoutSeconds * 1000, stage.deadlineAt - now)) : 0;
-    const positive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
-    const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-    const stats = timing?.ollama;
+    const cost = measuredOutputCost(timing);
     let estimatedRetryMs: number | null = null;
-    if (timing?.version === 'model-request-timing-v1' && timing.kind === 'transport'
-        && timing.outcome === 'completed' && stats?.done === true && stats.completionReason === 'length'
-        && Number.isSafeInteger(stats.evalCount) && positive(stats.evalCount) && positive(stats.evalDurationMs)
-        && nonnegative(stats.promptEvalDurationMs) && nonnegative(stats.loadDurationMs)
-        && nonnegative(stats.totalDurationMs) && nonnegative(timing.elapsedMs)) {
-        const estimated = Math.ceil(stats.promptEvalDurationMs + stats.loadDurationMs
-            + stats.evalDurationMs / stats.evalCount * nextOutputTokens
-            + Math.max(0, timing.elapsedMs - stats.totalDurationMs) + 1000);
+    if (cost) {
+        const estimated = Math.ceil(cost.fixedMs + cost.msPerToken * nextOutputTokens);
         if (Number.isSafeInteger(estimated)) { estimatedRetryMs = estimated; }
     }
     // Without measurements, reserve a complete request instead of gambling on

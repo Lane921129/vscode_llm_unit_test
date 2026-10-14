@@ -126,6 +126,7 @@ class Cases(unittest.TestCase):
     };
     utilities.detectMutationEngine = () => null;
     globalThis.fetch = async (_url, options) => {
+        if (/\/api\/(?:show|ps)$/.test(String(_url))) { return new Response('{}', { status: 503 }); }
         assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
@@ -428,8 +429,12 @@ class Cases(unittest.TestCase):
             paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
             qualificationRuntime: { version: 'ollama-context-v1', numCtx: 8572 },
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
-        let serviceCalls = 0;
-        globalThis.fetch = async () => { serviceCalls++; return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 }); };
+        let serviceCalls = 0, discoveryCalls = 0;
+        globalThis.fetch = async url => {
+            if (/\/api\/(?:show|ps)$/.test(String(url))) { discoveryCalls++; }
+            else { serviceCalls++; }
+            return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 });
+        };
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
             maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'service-failure') });
@@ -439,6 +444,7 @@ class Cases(unittest.TestCase):
         assert.doesNotMatch(serviceJournal, /PROVIDER_BODY_MUST_REMAIN_PRIVATE/);
         const serviceEvents = serviceJournal.trim().split('\n').map(line => JSON.parse(line));
         assert.equal(serviceCalls, 3, 'planning transport retries are bounded; an incomplete Analyst does not start the Writer');
+        assert.equal(discoveryCalls, 2, 'startup metadata requests are discovery, not role transport retries');
         assert.equal(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer').length, 0);
         assert.ok(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error').every(event => event.detail.category === 'model-api'));
         const serviceErrors = serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error');

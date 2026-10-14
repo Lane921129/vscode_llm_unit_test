@@ -141,11 +141,79 @@ function jsonObjects(raw: string): string[] {
 
 function validText(value: unknown, maxLength = 600): value is string {
     return typeof value === 'string' && Boolean(value.trim()) && value.length <= maxLength
-        && !hasTemplatePlaceholder(value) && !hasRoleTemplateEcho(value);
+        && !hasTemplatePlaceholder(value) && !hasRoleTemplateEcho(value) && !reviewInstructionEcho(value);
+}
+
+const reviewWords = (text: string): string[] => text.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}_]+/gu) || [];
+
+/** Match dominant verbatim instruction content, not model/provider or target names. */
+function reviewInstructionEcho(text: string): boolean {
+    const words = reviewWords(text);
+    if (words.length < 8) { return false; }
+    const instruction = reviewWords(getTestReviewerSystemPrompt());
+    let previous = new Array<number>(instruction.length + 1).fill(0);
+    let longest = 0;
+    for (const word of words) {
+        const current = new Array<number>(instruction.length + 1).fill(0);
+        for (let index = 0; index < instruction.length; index++) {
+            if (word === instruction[index]) { current[index + 1] = previous[index] + 1; longest = Math.max(longest, current[index + 1]); }
+        }
+        previous = current;
+    }
+    return longest >= 8 && longest / words.length >= 0.8;
+}
+
+/** A generic verification request supplies no input, expected value or missing evidence. */
+function genericVerificationAdvice(text: string): boolean {
+    const words = reviewWords(text);
+    const verbs = new Set(['verify', 'check', 'validate', 'recheck', 'ensure']);
+    const generic = new Set(['a', 'an', 'the', 'its', 'this', 'these', 'all', 'each', 'expected', 'actual', 'value', 'values',
+        'result', 'results', 'return', 'state', 'answer', 'answers', 'correctness', 'separately', 'again', 'before', 'using',
+        'use', 'it', 'them', 'independently', 'please', 'and', 'or', ...verbs]);
+    return !!words.length && verbs.has(words[0]) && words.every(word => generic.has(word));
 }
 
 function actionable(value: unknown): value is string {
-    return validText(value) && !/^(?:focused (?:correction|improvement)|fix(?: (?:it|fixture|test|issue))?|change source|(?:make|apply) (?:a )?(?:correction|improvement)|待修正|請修正)[.!。\s]*$/i.test(value.trim());
+    return validText(value) && !genericVerificationAdvice(value)
+        && !/^(?:focused (?:correction|improvement)|fix(?: (?:it|fixture|test|issue))?|change source|(?:make|apply) (?:a )?(?:correction|improvement)|待修正|請修正)[.!。\s]*$/i.test(value.trim());
+}
+
+/** Remove presentation whitespace only; quoted Python data and escapes remain exact. */
+function syntaxSpelling(text: string): string {
+    let result = ''; let quote = ''; let escaped = false;
+    for (let index = 0; index < text.length; index++) {
+        const char = text[index];
+        if (quote) {
+            if (!escaped && text.startsWith(quote, index)) { result += quote; index += quote.length - 1; quote = ''; }
+            else {
+                result += char;
+                if (escaped) { escaped = false; }
+                else if (char === '\\') { escaped = true; }
+            }
+        } else if (char === "'" || char === '"') {
+            quote = text.startsWith(char.repeat(3), index) ? char.repeat(3) : char;
+            result += quote; index += quote.length - 1;
+        }
+        else if (!/\s/u.test(char)) { result += char; }
+    }
+    return result;
+}
+
+/** Only complete mechanical replacement proposals can be compared with AST-owned syntax. */
+function proposedReplacement(action: string, subject: 'assertion' | 'binding'): string | undefined {
+    const prefix = subject === 'assertion' ? 'assertion' : '(?:target\\s+)?binding';
+    const match = new RegExp(`^(?:Please\\s+)?(?:Change|Replace|Set|Update)\\s+(?:the\\s+)?${prefix}\\s+(?:to|with)\\s+([\\s\\S]+)$`, 'i').exec(action.trim());
+    if (!match) { return undefined; }
+    let value = match[1].trim().replace(/\.$/, '').trim();
+    if (["'", '"', '`'].includes(value[0]) && value.endsWith(value[0])) { value = value.slice(1, -1); }
+    return value;
+}
+
+function genericDefectClaim(text: string): boolean {
+    const generic = new Set(['a', 'an', 'the', 'this', 'that', 'its', 'is', 'are', 'not', 'no', 'has', 'does',
+        'correct', 'incorrect', 'valid', 'invalid', 'isolated', 'weak', 'wrong', 'assertion', 'target', 'binding', 'mock']);
+    const words = reviewWords(text);
+    return words.length > 2 && words.every(word => generic.has(word));
 }
 
 export type ReviewRejectionCode = 'invalid-json' | 'invalid-envelope' | 'too-many-findings'
@@ -299,11 +367,33 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
     const leaf = context.target.split('.').pop()!;
     const subject = `(?:\\b${escape(context.target)}\\b|\\b${escape(leaf)}\\b|(?:selected |target |tested |被測|目標)(?:function|method|implementation|函式|方法|實作)|\\btarget\\b)`;
     for (const issue of review.issues) {
+        const priorCodeCount = codes.size;
         const facts = context.facts;
         const line = issue.testLine;
         const method = line ? facts?.methods.find(item => item.line <= line && line <= item.endLine) : undefined;
         const assertion = method && method.assertions.find(item => item.line === line);
         const text = issue.reason + '\n' + issue.action;
+        if (facts?.executionVerified && line) {
+            const assertionSyntax = method?.standardAssertionCalls?.find(item => item.line === line);
+            const proposedAssertion = proposedReplacement(issue.action, 'assertion');
+            if (assertionSyntax && proposedAssertion
+                && assertionSyntax.spellings.some(spelling => syntaxSpelling(spelling) === syntaxSpelling(proposedAssertion))) {
+                codes.add('non-actionable-action');
+            }
+            const importedTarget = facts.imports.find(item => item.line === line && item.origin === `${context.module}.${context.target}`);
+            const proposedBinding = proposedReplacement(issue.action, 'binding');
+            if (importedTarget && proposedBinding === importedTarget.origin && genericDefectClaim(issue.reason)) {
+                codes.add('target-binding-contradiction');
+            }
+            // A complete proposed context expression already appears in the same
+            // test method. Extra location/configuration instructions stay unknown.
+            const addPatch = /^Add\s+([\s\S]+)\s+to\s+(?:the\s+)?test\s+case[.!\s]*$/i.exec(issue.action.trim());
+            const citedMethods = method ? [method] : facts.methods.length === 1 ? facts.methods : [];
+            if (addPatch && citedMethods.some(item => item.dependencyPatchSyntax?.some(patch =>
+                patch.spellings.some(spelling => syntaxSpelling(spelling) === syntaxSpelling(addPatch[1]))))) {
+                codes.add('non-actionable-action');
+            }
+        }
         if (facts && line) {
             if (issue.category === 'target-binding' && facts.classes.some(item => item.line === line)
                 && /(?:target|function|method).*(?:bound|binding).*(?:class|module)|(?:TestCase|test harness).*(?:is|as|the).*(?:target|tested class)/i.test(issue.reason)) {
@@ -505,6 +595,13 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
         }
         if (context.methodKind === 'instance' && /\b(?:target|method|function) is (?:a )?static(?:method| method)?\b|目標是靜態方法/i.test(reason)) {
             codes.add('target-binding-contradiction');
+        }
+        if (facts?.executionVerified && line && codes.size === priorCodeCount && genericDefectClaim(issue.reason)
+            && (facts.imports.some(item => item.line === line) || method?.standardAssertionCalls?.some(item => item.line === line)
+                || method?.dependencyPatchSyntax?.some(item => item.line === line))) {
+            // A bare verdict has no causal evidence to assess. Ask the Reviewer
+            // for a concrete reason; never reinterpret it as an empty approval.
+            codes.add('non-actionable-reason');
         }
     }
     return [...codes];

@@ -4,6 +4,11 @@
 
 ## 目前驗收優先順序
 
+- 2026-10-14 起，Local 單測／批次在取得執行所有權後、任何目標開始前，核對同端點／模型的 `/api/show` 與 `/api/ps`，再建立本次容量快照；UI 與正式請求使用同份 metadata。只沿用合法且同身分的舊上限，明示 fresh／cached／unavailable 及安全原因碼；探索不授予角色資格、不修改手動或 captured 偏好。取消不得開始目標或保存新觀測。
+- Writer 的長度恢復分開「同容量增加輸出」與「提高 num_ctx」。上限未知時只能在本次已核對容量內配置完整輸入、輸出與128 tokens餘裕；增容仍要求同模型可信上限與新容量資格。只在相同完整提示的 completed length transport 採數值 prompt_eval_count／耗時，以 max(估量, 實測) 保留輸入；按容量及時間限額選有意義的增量，沒有空間就保存原因停止。首問前固定階段、shared及target期限；探針與正式請求各建一次單次期限，正式重送前再核對探針後餘額，已送出請求不續期，計數不重設，截斷內容不執行。
+- Reviewer 維持 review-v7，純指令回聲與沒有具體問題的泛用核實要求屬無效 assessment；完整重複的 import／assertion／patch 修改提議只依同候選 AST 事實拒收。不同測試方法、字串 literal 差異、patch 配置及附帶未知語意不得借機械事實否定。無效審查只有限重審，不刪 finding 冒充批准；Trace 支持案例一致性，仍不證明獨立業務需求。
+- Mock fixture 的結果消費形狀只描述來源實際需要的 iterable／常數索引，不生成 expected、資料內容或例外；重綁、動態索引、filter及未知控制流保持未知。唯一實測 unittest ERROR 的 patch 初始化失敗，須標準 mock 堆疊與本次失敗測試的 patch 使用行一致，才交 Writer；目標內部錯誤及類別 self／cls 不借此當成外部 protocol fixture。
+
 - 依使用者 2026-10-12 要求持續建立跨 Python 專案的 P0／P1 相容能力，不以專案或模型名稱特化。Tier 降級只接受已耗盡的候選／修復契約失敗；環境、AST 工具、來源漂移、模型傳輸、提示預算與 Reviewer 未完成保持其獨立失敗，不用更低 Tier 掩蓋。
 - 批次局部續跑為下方「仍受阻即停止」的窄例外：同一選取根、來源閉包、完整目標集合、Python 及實際 fixture ID 經核對，最後一次真正隔離匯入檢查明確 loaded 的來源可以繼續；受阻、未檢或診斷不完整來源的目標單獨列 environment-blocked，模型請求為零且不算通過。只有靜態 planning、取消／拒絕或身分漂移則停止批次，不推定相鄰來源或依賴可執行。批次內保存最後預檢快照及原因，不依賴外部 import_check 目錄。
 - Trace 新執行預設總時間60秒、規劃15秒、每案例目標執行5秒，可由 `traceTimeoutSeconds`／`tracePlanningTimeoutSeconds`／`traceCaseTimeoutSeconds` 調整，總時間最多300秒、單案例最多30秒，仍受原目標期限及清理時間限制。這是 Python 執行時間，不是 LLM 思考時間；宿主分配、規劃及案例實際耗時分開記錄。沒有明確新設定的舊純 planner 介面保留相容預設。

@@ -25,6 +25,7 @@ import { passingTestIds } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt } from './roles/writerPhases';
 import { selectWriterSeedCaseIds } from './prompts/compactWriterContext';
 import { getRuntimeContextPreference, RuntimeContextPreference } from './llm/runtimeContextPreferences';
+import { LocalRuntimeMetadataDiagnostic } from './llm/localRuntimeMetadata';
 import { collectNumericRepairEvidence } from './pipeline/numericTestSkill';
 import { NumericEvidenceLedger } from './pipeline/numericEvidenceLedger';
 import { verificationMode, VerificationMode } from './pipeline/verificationMode';
@@ -110,11 +111,11 @@ import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
 import { roleRequestBudget } from './prompts/roleRequestBudget';
-import { planContextGrowth } from './prompts/contextGrowth';
+import { CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS, planContextGrowth } from './prompts/contextGrowth';
 import { requalifyLocalRuntime, runLocalRuntimeQualificationProbe, runtimeQualificationExecutionBudget } from './llm/localRuntimeRequalification';
 import { runtimeRoleAuthorization } from './llm/runtimeQualificationSession';
 import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification } from './pipeline/batchRuntimeQualification';
-import { WriterOutputBudget } from './prompts/writerOutputBudget';
+import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText } from './llm/ollamaResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
@@ -122,7 +123,7 @@ import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } 
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { boundedRoleStageDeadline, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent, type TransportAttemptTiming } from './llm/requestTiming';
-import { createOutputRecoveryStage, outputRecoveryAttemptDeadline, planOutputRecoveryRetry } from './llm/outputRecoveryTiming';
+import { createOutputRecoveryStage, outputRecoveryAttemptDeadline, outputRecoveryTokenLimit, planOutputRecoveryRetry } from './llm/outputRecoveryTiming';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
 import { planCallerPartitions } from './tier/callerPartitionPlan';
@@ -257,11 +258,12 @@ interface ModelSnapshot {
     stored: StoredModelProfile[];
     runtimeContextTokens: unknown;
     runtimeContextPreferences: RuntimeContextPreference[];
+    localRuntimeMetadata?: LocalRuntimeMetadataDiagnostic;
 }
 const analysisRuns = new ExecutionManager<ModelSnapshot>();
 interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
 
-async function runAnalysisSession<T extends object>(
+async function runAnalysisSession<T extends { envType?: string; modelName?: string; ollamaUrl?: string }>(
     params: T,
     sidebar: MutationViewProvider,
     operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView,
@@ -273,8 +275,11 @@ async function runAnalysisSession<T extends object>(
         void sidebar.webview?.postMessage({ command: 'analysisFinished' });
         return;
     }
+    const config = vscode.workspace.getConfiguration('llmUnitTest');
+    const selectedParams = params.envType === 'local' ? { ...params,
+        ollamaUrl: params.ollamaUrl || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434') } : params;
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
-        runtimeContextTokens: vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('runtimeContextTokens', 0),
+        runtimeContextTokens: config.get<unknown>('runtimeContextTokens', 0),
         runtimeContextPreferences: sidebar.runtimeContextPreferencesSnapshot() });
     if (!execution) {
         environmentLease.release();
@@ -288,9 +293,34 @@ async function runAnalysisSession<T extends object>(
     const log = (text: string) => { void view.webview?.postMessage({ command: 'appendLog', text }); };
     sidebar.beginAnalysis(execution.id);
     // Group this run's results under its local date and minute.
-    const runParams = { ...params, sessionDate: formatSessionDate() };
+    const runParams = { ...selectedParams, sessionDate: formatSessionDate() };
     await withLanguage(() => runInExecution(execution, async () => {
-        try { await operation(runParams, log, view, setup => environmentLease.withSetup(execution, setup)); }
+        try {
+            if (selectedParams.envType === 'local' && selectedParams.modelName) {
+                const identity = { envType: 'local' as const, modelName: selectedParams.modelName,
+                    endpointKey: qualificationEndpointKey('local', selectedParams.ollamaUrl) };
+                const snapshot = execution.snapshot;
+                const cachedProfile = findModelProfile(snapshot.stored, identity)
+                    ?? (snapshot.current.envType === identity.envType && snapshot.current.modelName
+                        ? findModelProfile([{ ...snapshot.current, envType: identity.envType, modelName: snapshot.current.modelName }], identity)
+                        : undefined);
+                const controller = new AbortController();
+                const releaseCancellation = execution.onCancel(() => controller.abort());
+                try {
+                    const prepared = await sidebar.prepareLocalAnalysisRuntime({ modelName: selectedParams.modelName,
+                        baseUrl: selectedParams.ollamaUrl!, configuredTokens: snapshot.runtimeContextTokens,
+                        preferences: snapshot.runtimeContextPreferences, cachedProfile, signal: controller.signal,
+                        canPublish: () => analysisRuns.canPublish(execution) });
+                    execution.throwIfCancelled();
+                    // Finalize discovery exactly once before any target reads this run's snapshot.
+                    // Global profiles, user choices and role qualifications are not changed.
+                    snapshot.stored = upsertModelProfile(snapshot.stored, prepared.profile);
+                    snapshot.localRuntimeMetadata = prepared.diagnostic;
+                } finally { releaseCancellation(); }
+            }
+            execution.throwIfCancelled();
+            await operation(runParams, log, view, setup => environmentLease.withSetup(execution, setup));
+        }
         catch (error: any) {
             if (!execution.cancelled) { log(localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error)); }
         } finally {
@@ -1719,7 +1749,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         prompt += importResourcePrompt();
         const contractedSystem = addOutputContract(system, format);
         const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
-            && activeModelProfile.contextLengthKnown === true;
+            && localRuntime?.ok === true;
         const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
             sharedDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
         if (recoveryAllowed) {
@@ -1727,18 +1757,25 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         // Reserve both attempts up front. Each respects the user's request limit;
         // output retry, HTTP fallback and context growth never renew the stage or target.
+        let observedInputTokens: number | undefined;
+        let recoveryTransport: TransportAttemptTiming | undefined;
         for (let outputAttempt = 0; outputAttempt < outputStage.maximumAttempts; outputAttempt++) {
-        const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt);
+        const qualificationDeadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt);
         throwIfExecutionCancelled();
         currentTargetBudget()?.assertRemaining();
         if (!runtimeQualifications.current()) {
             throw new AnalysisStageError('validation', 'source-changed', localize('來源或相依版本改變，停止保存舊執行證據。'));
         }
         const minimumOutputTokens = writerOutputBudget.minimumTokens;
+        const estimatedInputTokens = estimatePromptTokens(contractedSystem + '\n' + prompt);
+        const requiredInputTokens = Math.max(estimatedInputTokens, observedInputTokens ?? 0);
+        const correctionReserve = reservedInputTokens + (outputAttempt > 0 ? CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS : 0);
+        const currentRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode,
+            role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
+            revisionCurrentCode, minimumOutputTokens });
         if (requestParams.envType === 'local'
-            && !promptFits(contractedSystem, prompt, roleRequestBudget({ envType: requestParams.envType, mode,
-                role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
-                revisionCurrentCode, minimumOutputTokens }).inputBudget, reservedInputTokens)) {
+            && (!promptFits(contractedSystem, prompt, currentRoleBudget.inputBudget, correctionReserve)
+                || requiredInputTokens + correctionReserve > currentRoleBudget.inputBudget)) {
             // Budget the output cap that the larger request will actually use.
             // Never grow using an old, smaller seed cap and then send a larger one.
             const limitBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
@@ -1748,8 +1785,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const growth = planContextGrowth({ currentContextTokens: requestContextWindow,
                 modelContextLimit: activeModelProfile.contextLength,
                 modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
-                estimatedPromptTokens: estimatePromptTokens(contractedSystem + '\n' + prompt),
-                reservedInputTokens, requestOutputTokens: limitBudget.requestOutputTokens });
+                estimatedPromptTokens: requiredInputTokens,
+                reservedInputTokens: correctionReserve, requestOutputTokens: limitBudget.requestOutputTokens });
             if (growth.status === 'grown') {
                 const previousContextWindow = requestContextWindow;
                 const qualificationStartedAt = Date.now();
@@ -1774,11 +1811,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 localize('新容量無法容納完整角色探針；未沿用舊容量認證。'));
                         }
                         currentTargetBudget()?.consumeModelRequest();
-                        recordRole('context-qualification', 'requested', { role: probeRole, contextWindow: growth.contextTokens, deadlineAt: deadline });
+                        recordRole('context-qualification', 'requested', { role: probeRole, contextWindow: growth.contextTokens, deadlineAt: qualificationDeadline });
                         recordRole('model-request', 'requested', { role: probeRole, phase: 'context-qualification',
-                            contextWindow: growth.contextTokens, deadlineAt: deadline });
+                            contextWindow: growth.contextTokens, deadlineAt: qualificationDeadline });
                         const response = await requestLlmApi({ ...requestParams, requestContextTokens: growth.contextTokens,
-                            requestOutputTokens: probeOutputTokens }, probeSystem, probePrompt, requestLog, probeFormat, deadline,
+                            requestOutputTokens: probeOutputTokens }, probeSystem, probePrompt, requestLog, probeFormat, qualificationDeadline,
                             timing => recordRole('model-request', 'timing', { role: probeRole, phase: 'context-qualification', ...timing }));
                         if (containsCredential(response, knownSecrets)) {
                             throw new AnalysisStageError('validation', 'sensitive-output',
@@ -1787,7 +1824,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRole('context-qualification', 'completed', { role: probeRole, contextWindow: growth.contextTokens });
                         return response;
                     },
-                    executor: code => runLocalRuntimeQualificationProbe(code, runtimeQualificationExecutionBudget(deadline), pythonExecutable)
+                    executor: code => runLocalRuntimeQualificationProbe(code, runtimeQualificationExecutionBudget(qualificationDeadline), pythonExecutable)
                 });
                 throwIfExecutionCancelled();
                 currentTargetBudget()?.assertRemaining();
@@ -1831,15 +1868,32 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const contextWindow = requestContextWindow;
         const roleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
             contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, minimumOutputTokens });
-        const metrics = { role, format, estimatedInputTokens: estimateTokens(contractedSystem + '\n' + prompt),
-            ...roleBudget, reservedInputTokens,
+        // Probes are separate logical requests. Start this formal request's allowance
+        // once after prerequisites, still within the original stage/shared/target cap.
+        const formalAttemptStartedAt = Date.now();
+        const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt, formalAttemptStartedAt);
+        const metrics = { role, format, estimatedInputTokens,
+            ...roleBudget, reservedInputTokens: correctionReserve,
+            ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
             contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt,
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
-        if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, reservedInputTokens)) {
+        if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, correctionReserve)
+            || requiredInputTokens + correctionReserve > roleBudget.inputBudget) {
             recordRole('model-request', 'budget-exceeded', metrics);
             throw new AnalysisStageError('validation', 'prompt-budget',
                 localize("完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。"), metrics);
+        }
+        if (outputAttempt > 0 && roleBudget.requestOutputTokens) {
+            const recovery = planOutputRecoveryRetry({ ...outputStage, deadlineAt: deadline },
+                roleBudget.requestOutputTokens, recoveryTransport, formalAttemptStartedAt);
+            if (!recovery.allowed) {
+                const detail = { role, ...recovery, requestOutputTokens: roleBudget.requestOutputTokens,
+                    deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true };
+                recordRole('model-request', 'output-recovery-blocked', detail);
+                throw new AnalysisStageError('model-format', 'model-request',
+                    localize('模型輸出已達上限，剩餘時間不足以完成較長的重送；未採用截斷內容，也未重置目標期限。'), detail);
+            }
         }
         const started = Date.now();
         let completedTransport: TransportAttemptTiming | undefined;
@@ -1870,8 +1924,27 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
-                const nextOutputTokens = writerOutputBudget.grow(diagnostic.outputTokenLimit, activeModelProfile.contextLength);
-                if (nextOutputTokens) {
+                const stats = completedTransport?.ollama;
+                if (completedTransport?.outcome === 'completed' && stats?.done === true && stats.completionReason === 'length'
+                    && Number.isSafeInteger(stats.promptEvalCount) && (stats.promptEvalCount as number) > 0) {
+                    observedInputTokens = stats.promptEvalCount!;
+                }
+                const growth = planWriterOutputGrowth({ exhaustedCap: diagnostic.outputTokenLimit,
+                    currentContextTokens: requestContextWindow, modelContextLimit: activeModelProfile.contextLength,
+                    modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
+                    estimatedPromptTokens: estimatedInputTokens, observedPromptTokens: observedInputTokens,
+                    reservedInputTokens, timedOutputLimit: outputRecoveryTokenLimit(outputStage, completedTransport) });
+                if (growth.status === 'blocked') {
+                    recordRole('model-request', 'output-recovery-blocked', { role,
+                        previousOutputTokens: diagnostic.outputTokenLimit, contextWindow: requestContextWindow,
+                        estimatedInputTokens, observedInputTokens, stageDeadlineAt: outputStage.deadlineAt,
+                        ...((typeof diagnostic.outputTokenLimit === 'number' && Number.isSafeInteger(diagnostic.outputTokenLimit))
+                            ? planOutputRecoveryRetry(outputStage, Math.min(Number.MAX_SAFE_INTEGER,
+                                Math.max(diagnostic.outputTokenLimit + 1024, Math.ceil(diagnostic.outputTokenLimit * 1.5))), completedTransport) : {}),
+                        reasonCode: growth.reasonCode,
+                        targetDeadlinePreserved: true });
+                } else {
+                    const nextOutputTokens = growth.outputTokens;
                     const recovery = planOutputRecoveryRetry(outputStage, nextOutputTokens, completedTransport);
                     if (!recovery.allowed) {
                         const detail = { role, ...recovery, previousOutputTokens: diagnostic.outputTokenLimit,
@@ -1880,8 +1953,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throw new AnalysisStageError('model-format', 'model-request',
                             localize('模型輸出已達上限，剩餘時間不足以完成較長的重送；未採用截斷內容，也未重置目標期限。'), detail);
                     }
+                    if (!writerOutputBudget.learn(nextOutputTokens)) { throw error; }
+                    recoveryTransport = completedTransport;
                     recordRole('model-request', 'output-budget-grown', { role,
                         previousOutputTokens: diagnostic.outputTokenLimit, requestOutputTokens: nextOutputTokens,
+                        estimatedInputTokens, observedInputTokens, boundedBy: growth.boundedBy,
+                        capacityCeiling: growth.capacityCeiling,
                         retry: 1, deadlinePreserved: true, deadlineAt: outputStage.deadlineAt,
                         stageDeadlineAt: outputStage.deadlineAt, attemptDeadlineAt: deadline, ...recovery });
                     continue;
@@ -1922,6 +1999,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             savedContextTokens: contextPreference?.tokens, savedContextSource: contextPreference?.source,
             lastObservedRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens,
             runtimeContextSource: selectedModelProfile.runtimeContextSource,
+            metadataDiagnostic: modelSnapshot.localRuntimeMetadata,
             qualificationApplicable: currentQualification });
     }
     let astContext: AstContext | null = null;

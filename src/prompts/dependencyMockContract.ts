@@ -76,6 +76,13 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + '. Build input values in test scope and pass them to the target; parameter names alone do not authorize '
         + 'patching target_module.<parameter>. An independent source-proven global lookup may justify a module patch. '
         + 'Do not infer fixture shapes or expected outputs from parameter names.\n' : '';
+    const parameterMethods = parameters.flatMap(parameter => {
+        if (context?.class_name && context?.method_kind !== 'static' && parameter === declaredParameters[0]) { return []; }
+        const methods = calls.filter(call => call.startsWith(parameter + '.'))
+            .map(call => call.slice(parameter.length + 1)).filter(method => /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(method));
+        return methods.length ? [`Input ${parameter} is used with methods ${[...new Set(methods)].join(', ')}; `
+            + 'for those source paths pass a controlled protocol object, not a string/scalar. Configure the consumed method, not unrelated methods.'] : [];
+    }).join('\n');
     const sourceCalls = sourceSetupCallGuidance(module, context);
     if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return parameterSetup + sourceCalls; }
     // Conservative prompt relevance only; identifiers in source strings can
@@ -94,7 +101,7 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         || item.oracle_reason || item.result_type === 'non_assertable')
         ? 'Never use non_assertable diagnostic text or private tool classes as a return fixture or expected type. ' : '';
     const aliasGuidance = imports.length ? 'Use distinct mock/import names; as Path shadows imported Path. ' : '';
-    return parameterSetup + sourceCalls + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
+    return parameterSetup + (parameterMethods ? parameterMethods + '\n' : '') + sourceCalls + 'DEPENDENCY USE-SITE CONTRACT (source setup only, never an output oracle):\n'
         + JSON.stringify({ targetModule: module,
             imports: options.sourceImportsListed ? { same_complete_setup_as: 'SOURCE SETUP.imports' } : bindings, sourceCalls: calls,
             ...(topology ? { sourceConsumption: topology } : {}),
@@ -102,7 +109,7 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + '\nPatch source-shown use points: from-import alias => target_module.alias; module alias => target_module.alias.member. '
         + 'Check scope/rebindings; locals and constructor-injected objects are not module patch targets. '
         + (allowedMockTargets ? 'Supplied use points are setup hints, not an exhaustive whitelist; verify every patch against the source binding. ' : 'No patch list was supplied; source imports alone do not prove a patch is allowed. ')
-        + (topology ? TOPOLOGY_LEGEND + ' '
+        + (topology ? TOPOLOGY_LEGEND + ' ' + formatFixtureConsumptionGuidance(module, context)
             : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
         + globalsGuidance + conversions + diagnosticGuidance + aliasGuidance
         + optionalGuidance
@@ -111,7 +118,7 @@ export function formatDependencyMockContract(module: string, context?: any, allo
 }
 
 /** Exact AST spellings reduce setup guesswork, not the execution or assertion gates. */
-function sourceSetupCallGuidance(module: string, context?: any): string {
+export function sourceSetupCallGuidance(module: string, context?: any): string {
     const facts = context?.source_setup_call_contract;
     const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
     if (!facts || facts.schemaVersion !== 'source-setup-call-contract-v1' || facts.status !== 'complete'
@@ -148,7 +155,9 @@ function sourceSetupCallGuidance(module: string, context?: any): string {
     }
     if (facts.sourceLocations.length) {
         lines.push(`The source __file__ is ${module}.__file__, never the generated test __file__. `
-            + 'Use only source-shown operations and scoped dependency return objects; do not call test-side resolve() or invent os.path operations for expected values.');
+            + `If controlling it, patch ${JSON.stringify(module + '.__file__')} within the test. `
+            + 'Use only source-shown operations and scoped dependency return objects; do not call test-side resolve() or invent os.path operations for expected values. '
+            + 'A path-constructor argument is input, not the returned resolved parent. Preserve the consumed return object/member and assert its explicitly controlled value.');
     }
     return lines.join('\n') + '\n';
 }
@@ -202,7 +211,46 @@ export function formatDependencyTopology(context?: any): string {
     if (!topology) { return ''; }
     return 'SOURCE CONSUMPTION TOPOLOGY (source setup only, not an output oracle or patch permission):\n'
         + JSON.stringify({ sourceConsumption: topology })
-        + '\n' + TOPOLOGY_LEGEND;
+        + '\n' + TOPOLOGY_LEGEND + ' ' + formatFixtureConsumptionGuidance(context?.target_import_module || '', context);
+}
+
+/** Source-bound shape instructions. They never supply values or approve an assertion. */
+export function formatFixtureConsumptionGuidance(module: string, context?: any): string {
+    const facts = context?.dependency_fixture_contract;
+    const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
+    if (!facts || facts.schemaVersion !== 'dependency-fixture-contract-v1'
+        || !['complete', 'partial'].includes(facts.status) || facts.authority !== 'fixture-shape-only'
+        || facts.assertionOracle !== false || facts.patchAuthorization !== false
+        || facts.sourceHashKind !== 'normalized-target-source' || !source
+        || facts.targetSourceHash !== createHash('sha256').update(source).digest('hex')
+        || facts.target !== (context?.class_name ? `${context.class_name}.${context.name}` : context?.name)
+        || !Array.isArray(facts.flows) || facts.flows.length > 128) { return ''; }
+    const identifier = (value: unknown): value is string => typeof value === 'string'
+        && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(value.normalize('NFKC'));
+    const lines: string[] = [];
+    for (const flow of facts.flows) {
+        const consumption = flow?.resultConsumption;
+        if (!consumption || consumption.kind !== 'iterable' || !Array.isArray(consumption.itemAccesses)
+            || consumption.itemAccesses.length > 8 || consumption.itemAccesses.some((access: any) => !access
+                || access.kind !== 'index' || !Number.isSafeInteger(access.index) || access.index < 0 || access.index >= 256)
+            || !flow.root || !identifier(flow.root.name) || !['parameter', 'use-point'].includes(flow.root.kind)
+            || flow.method !== null && !identifier(flow.method) || !Array.isArray(flow.steps)
+            || flow.steps.length > 64 || flow.steps.some((step: any) => !step
+                || !['return_value', 'member', 'context-enter'].includes(step.kind)
+                || step.kind === 'member' && !identifier(step.name))) { continue; }
+        if (flow.root.kind === 'use-point' && !module) { continue; }
+        const receiver = (flow.root.kind === 'parameter' ? flow.root.name : module + '.' + flow.root.name)
+            + flow.steps.map((step: any) => step.kind === 'member' ? '.' + step.name
+                : step.kind === 'context-enter' ? '.__enter__.return_value' : '.return_value').join('')
+            + (flow.method ? '.' + flow.method : '');
+        const indexes = [...new Set<number>(consumption.itemAccesses.map((access: any) => access.index))];
+        lines.push(`Fixture shape: ${receiver}.return_value is the exact result iterated by the target. `
+            + `Configure ${receiver}.return_value as an explicit controlled iterable, not another method's return_value. `
+            + (indexes.length ? `Each item must support ${indexes.map(index => '[' + index + ']').join(', ')}; `
+                + `a tuple/list fixture needs at least ${Math.max(...indexes) + 1} entries per item (a compatible mapping/object may also satisfy the access). ` : '')
+            + 'Choose fixture contents explicitly; this shape supplies no expected output or exception.');
+    }
+    return lines.length ? lines.join('\n') + '\n' : '';
 }
 
 export function formatSourceImport(item: any): string {

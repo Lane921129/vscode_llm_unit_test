@@ -95,7 +95,9 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
             assert.match(request.prompt, /WRITER_SEED_V1/);
             response = '```python\n' + candidate + '\n```';
         }
-        return new Response(JSON.stringify({ response, done: true, done_reason: reason }), { status: 200 });
+        return new Response(JSON.stringify({ response, done: true, done_reason: reason,
+            ...(reason === 'length' ? { eval_count: 1536, eval_duration: 1_000_000_000,
+                prompt_eval_duration: 100_000_000, load_duration: 0, total_duration: 1_100_000_000 } : {}) }), { status: 200 });
     };
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,

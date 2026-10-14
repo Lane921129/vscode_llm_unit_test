@@ -217,6 +217,50 @@ def mock_call_assertions(method, aliases, target):
     return facts
 
 
+def review_syntax_details(code, method, aliases, standard_assertions):
+    """Complete spellings for no-op review proposals; never an execution/oracle proof."""
+    standard_calls = {(item['line'], item['kind']) for item in standard_assertions}
+    parameters = method.args.posonlyargs + method.args.args
+    receiver = parameters[0].arg if parameters else ''
+    assertions, patches = [], []
+    local_names = {node.id for node in ast.walk(method) if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
+    local_names.update(arg.arg for arg in method.args.posonlyargs + method.args.args)
+
+    def spelling(node):
+        return list(dict.fromkeys(filter(None, [ast.get_source_segment(code, node), ast.unparse(node)])))
+
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and dotted(node.func.value) == receiver \
+                and (node.lineno, node.func.attr) in standard_calls:
+            assertions.append({'line': node.lineno, 'kind': node.func.attr, 'spellings': spelling(node)})
+        # Only explicit, directly bound stdlib context managers have patch syntax facts.
+        # Conditional presence does not prove execution; these fields are used solely
+        # to recognize a proposal that repeats an existing complete spelling.
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                call = item.context_expr
+                if not isinstance(call, ast.Call) or not isinstance(item.optional_vars, ast.Name):
+                    continue
+                root, _, tail = dotted(call.func).partition('.')
+                if root in local_names or root not in aliases:
+                    continue
+                origin = aliases[root] + ('.' + tail if tail else '')
+                if origin != 'unittest.mock.patch' or not call.args or not isinstance(call.args[0], ast.Constant) \
+                        or type(call.args[0].value) is not str:
+                    continue
+                patches.append({'line': call.lineno, 'origin': origin, 'target': call.args[0].value,
+                                'binding': item.optional_vars.id,
+                                'spellings': [text + ' as ' + item.optional_vars.id for text in spelling(call)]})
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in method.body:
+        visit(statement)
+    return assertions, patches
+
+
 def build_review_facts(payload):
     code = payload['code']
     if len(code) > 120000:
@@ -306,6 +350,9 @@ def build_review_facts(payload):
                      'standardAssertions': []}
             if not custom_loader:
                 facts['standardAssertions'] = standard_assertion_syntax(cls, method, aliases, overrides)
+                assertion_syntax, patch_syntax = review_syntax_details(code, method, aliases, facts['standardAssertions'])
+                facts['standardAssertionCalls'] = assertion_syntax
+                facts['dependencyPatchSyntax'] = patch_syntax
             if not custom_loader and not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'}):
                 facts['mockAssertions'] = mock_call_assertions(method, aliases, target)
             # All assigned local names shadow module aliases, including assignments later in the method.
@@ -461,7 +508,8 @@ def build_review_facts(payload):
 
 if __name__ == '__main__':
     try:
-        result = build_review_facts(json.load(sys.stdin))
+        # The host writes UTF-8 JSON regardless of the user's Windows console code page.
+        result = build_review_facts(json.loads(sys.stdin.buffer.read().decode('utf-8')))
         print(json.dumps(result, ensure_ascii=True))
     except (ValueError, KeyError, TypeError, SyntaxError, RecursionError):
         print(json.dumps({'error': 'review-test-facts-unavailable'}))

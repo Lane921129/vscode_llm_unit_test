@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createOutputRecoveryStage, outputRecoveryAttemptDeadline, planOutputRecoveryRetry } from '../llm/outputRecoveryTiming';
+import { createOutputRecoveryStage, outputRecoveryAttemptDeadline, outputRecoveryTokenLimit, planOutputRecoveryRetry } from '../llm/outputRecoveryTiming';
 import { createTransportAttemptTiming } from '../llm/requestTiming';
 
 const lengthTiming = (generationMs: number, outputTokens = 1536) => createTransportAttemptTiming({
@@ -73,4 +73,26 @@ test('non-recoverable roles get one allowance and invalid budgets do not create 
     assert.throws(() => createOutputRecoveryStage({ timeoutSeconds: 0, recoveryAllowed: true, now: 0 }));
     assert.throws(() => createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true, sharedDeadlineAt: NaN, now: 0 }));
     assert.throws(() => planOutputRecoveryRetry(stage, Infinity));
+});
+
+test('same-prompt measured output is bounded by both the fixed request allowance and remaining stage', () => {
+    const stage = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true, now: 0 });
+    const timing = lengthTiming(45000);
+    const cap = outputRecoveryTokenLimit(stage, timing, 47000)!;
+    assert.ok(cap > 1536 && cap < 2560);
+    assert.equal(planOutputRecoveryRetry(stage, cap, timing, 47000).allowed, true);
+    assert.equal(planOutputRecoveryRetry(stage, cap + 1, timing, 47000).allowed, false);
+    assert.ok(outputRecoveryTokenLimit(stage, timing, 90000)! < cap);
+    assert.equal(outputRecoveryTokenLimit(stage, timing, 120000), 0);
+    assert.equal(outputRecoveryTokenLimit(stage, undefined), undefined);
+});
+
+test('provider residual processing time is retained when calculating a retry cap', () => {
+    const stage = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true, now: 0 });
+    const timing = createTransportAttemptTiming({ transportAttempt: 1, outcome: 'completed', startedAt: 0, finishedAt: 46820,
+        ollamaPayload: { done: true, done_reason: 'length', eval_count: 1536, prompt_eval_count: 5729,
+            eval_duration: 39724791000, prompt_eval_duration: 2754897000, load_duration: 6796100, total_duration: 46769098800 } });
+    const cap = outputRecoveryTokenLimit(stage, timing, 47000)!;
+    assert.ok(cap > 1536 && cap < 2335, 'the BMI observation fits a bounded increase, not the full 2560 growth');
+    assert.equal(planOutputRecoveryRetry(stage, cap, timing, 47000).allowed, true);
 });

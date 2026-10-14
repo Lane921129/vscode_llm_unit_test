@@ -9,6 +9,7 @@ import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import type { CandidateRejectionGate } from './rejectedCandidateStore';
 import { AnalysisStageError, classifyExecutionFailure } from '../utils/executionFailureCategory';
 import { wholeCandidateNameException } from '../validation/unittestException';
+import { isMockInitializationFailure } from '../roles/bugFixer';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -92,6 +93,11 @@ export async function validateTestCandidate(
     };
     const attemptedBugFixFailures = new Set<string>();
     const preferWholeCandidateRepair = (failure: string, attempt: number): boolean => {
+        if (isMockInitializationFailure(code, failure)) {
+            hooks.event('repair-routing', 'selected', { attempt, action: 'writer-fixture-setup',
+                reasonCode: 'mock-initialization-failed', previousTestHash: repairHash(code) });
+            return true;
+        }
         const exceptionType = wholeCandidateNameException(failure);
         if (!exceptionType) { return false; }
         hooks.event('repair-routing', 'selected', { attempt, action: 'writer-name-binding', reasonCode: 'execution-name-binding',

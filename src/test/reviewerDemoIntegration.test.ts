@@ -10,6 +10,30 @@ import { BatchJournal } from '../pipeline/batchJournal';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { setLanguage } from '../i18n/core';
 
+/** Fixture diagnostics contain lifecycle codes/counts only, never source/provider text. */
+function safeReviewFlowDiagnostic(scenario: string, knowledge: any, events: any[], requests: object): string {
+    const code = (value: unknown): string | undefined => typeof value === 'string'
+        && /^[a-z][a-z0-9-]{0,79}$/i.test(value) ? value : undefined;
+    const failure = (value: any) => value ? { stage: code(value.stage), category: code(value.category), status: code(value.status),
+        reasonCode: code(value.reasonCode) || code(value.reason) } : undefined;
+    const mutation = knowledge.latestMutation || knowledge.mutation;
+    const numeric = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    return JSON.stringify({ scenario, terminalStatus: code(knowledge.terminalStatus),
+        firstFailure: failure(knowledge.firstFailure), lastFailure: failure(knowledge.lastFailure),
+        diagnosticReasonCode: code(knowledge.diagnostic?.reasonCode), requests,
+        mutation: mutation ? { engine: code(mutation.engine), status: code(mutation.status), baselineStatus: code(mutation.baselineStatus),
+            stageTimeoutSeconds: numeric(mutation.stageTimeoutSeconds), elapsedMs: numeric(mutation.elapsedMs), workers: numeric(mutation.workers),
+            baselineAllocatedSeconds: numeric(mutation.baselineAllocatedSeconds), baselineElapsedMs: numeric(mutation.baselineElapsedMs),
+            configuredMutantTimeoutSeconds: numeric(mutation.configuredMutantTimeoutSeconds),
+            effectiveMutantTimeoutSeconds: numeric(mutation.effectiveMutantTimeoutSeconds),
+            counts: mutation.counts && Object.fromEntries(Object.entries(mutation.counts)
+                .filter(([key, value]) => !!code(key) && numeric(value) !== undefined)) } : undefined,
+        assessments: events.filter(event => event.stage === 'reviewer' && event.status === 'assessed').map(event => ({
+            sequence: event.sequence, findingCount: Array.isArray(event.detail?.review?.issues) ? event.detail.review.issues.length : undefined })),
+        events: events.slice(-60).map(event => ({ sequence: event.sequence, stage: code(event.stage), status: code(event.status),
+            role: code(event.detail?.role), reasonCode: code(event.detail?.reasonCode) })) });
+}
+
 test('full workflow blocks mutation on invalid review and requires AI revision plus fresh approval for quality findings', async () => {
     const repo = path.resolve(__dirname, '../..');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-gate-'));
@@ -96,9 +120,12 @@ class Cases(unittest.TestCase):
         for (const selected of ['invalid', 'quality'] as const) {
             scenario = selected; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
             const outputPath = path.join(root, 'results-' + scenario);
+            // The builtin-v2 full universe contains 96 candidates here. This
+            // fixture verifies review/approval ordering, not a 30-second speed
+            // limit; give the real engine the current default stage budget.
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture', filePath: file,
                 funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', validationMode: 'full',
-                maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 30 });
+                maxLoops: 1, timeoutSeconds: 60, mutpyTimeout: 60 });
             const report = fs.readdirSync(outputPath, { recursive: true }).map(String).find(p => path.basename(p) === 'function_knowledge.json')!;
             assert.ok(report, logs.join('\n'));
             const directory = path.dirname(path.join(outputPath, report));
@@ -150,7 +177,8 @@ class Cases(unittest.TestCase):
                 assert.ok(revisionIndex < executed[1].index);
                 assert.ok(executed[1].index < reviewAssessments[1].index);
                 assert.ok(reviewAssessments[1].index < approvalIndex && approvalIndex < mutationIndex,
-                    'only a fresh review of the executed revision permits mutation');
+                    'only a fresh review of the executed revision permits mutation: '
+                    + safeReviewFlowDiagnostic(scenario, knowledge, events, { writers, revisions, fixes, reviews }));
                 const approvedCode = fs.readFileSync(path.join(directory, checkpoint.testFile), 'utf8');
                 assert.equal(events[approvalIndex].detail.approvedCodeHash, evidenceHash(approvedCode));
                 assert.equal(knowledge.mutation.counts.executed, knowledge.mutation.counts.selected);

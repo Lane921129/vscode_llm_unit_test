@@ -72,6 +72,37 @@ class DependencyFixtureContractTests(unittest.TestCase):
         self.assertEqual(contract['flows'][0]['steps'], [])
         self.assertEqual(contract['status'], 'partial')
 
+    def test_single_comprehension_records_only_consumed_result_and_item_index_shape(self):
+        contract = self.contract('cur.execute("query")\nreturn [row[1] for row in cur.fetchall()]', parameters='cur')
+        self.assertNotIn('resultConsumption', contract['flows'][0], 'execute result is not the row iterable')
+        self.assertEqual(contract['flows'][1]['resultConsumption'],
+                         {'kind': 'iterable', 'itemAccesses': [{'kind': 'index', 'index': 1}]})
+        self.assertFalse(contract['assertionOracle'])
+        self.assertFalse(contract['patchAuthorization'])
+        self.assertNotIn('expected', json.dumps(contract))
+        self.assertNotIn('tuple', json.dumps(contract), 'index access does not prove a runtime container type')
+        chained = self.contract('return [row[2] for row in cur.execute("query").fetchall()]', parameters='cur')
+        self.assertEqual(chained['flows'][-1]['steps'],
+                         [{'kind': 'member', 'name': 'execute'}, {'kind': 'return_value'}])
+        self.assertEqual(chained['flows'][-1]['resultConsumption']['itemAccesses'], [{'kind': 'index', 'index': 2}])
+
+    def test_conditional_dynamic_rebound_and_nested_items_do_not_gain_concrete_shape(self):
+        expressions = ['[row[1] for row in cur.fetchall() if keep(row)]',
+                       '[row[1] for row in cur.fetchall() for other in factory()]',
+                       '[row[index] for row in cur.fetchall()]',
+                       '[row[True] for row in cur.fetchall()]',
+                       '[row[-1] for row in cur.fetchall()]',
+                       '[row[1].finish() for row in cur.fetchall()]',
+                       '[row[1] if flag else row[0] for row in cur.fetchall()]']
+        for returned in expressions:
+            with self.subTest(returned=returned):
+                contract = self.contract('return ' + returned, parameters='cur, index, flag, keep')
+                self.assertTrue(all('resultConsumption' not in flow for flow in contract['flows']))
+        rebound = self.contract('cur = factory()\nreturn [row[1] for row in cur.fetchall()]', parameters='cur')
+        self.assertTrue(all('resultConsumption' not in flow for flow in rebound['flows']))
+        branch = self.contract('if flag:\n    return [row[1] for row in cur.fetchall()]', parameters='cur, flag')
+        self.assertEqual(branch['flows'], [])
+
     def test_comprehension_elements_filters_and_later_iterables_stay_unknown(self):
         contract = self.contract('return [row.consume() if flag else other() '
                                  'for row in cur.fetchall() if keep(row) '

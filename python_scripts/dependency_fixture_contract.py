@@ -99,6 +99,31 @@ def build_dependency_fixture_contract(func_node, target_source, target_name, mod
         if code:
             diagnostic(code, node, name)
 
+    def comprehension_consumption(node):
+        """Only an unconditional single-loop element lookup, never a result oracle.
+
+        Python's first iterable is evaluated in the enclosing scope. The loop
+        variable is independent: do not propagate its methods or rebind source
+        receivers. An integer subscript proves an access requirement, not that
+        an item is a tuple, its value, or the target's returned collection.
+        """
+        if (len(node.generators) != 1 or node.generators[0].is_async
+                or node.generators[0].ifs or not isinstance(node.generators[0].target, ast.Name)):
+            return None
+        name = node.generators[0].target.id
+        elements = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        indexes = []
+        for element in elements:
+            if isinstance(element, ast.Name) and element.id == name:
+                continue
+            if (not isinstance(element, ast.Subscript) or not isinstance(element.value, ast.Name)
+                    or element.value.id != name or not isinstance(element.slice, ast.Constant)
+                    or type(element.slice.value) is not int or not 0 <= element.slice.value < 256):
+                return None
+            indexes.append(element.slice.value)
+        return {'kind': 'iterable', 'itemAccesses': [{'kind': 'index', 'index': index}
+                                                  for index in sorted(set(indexes))]}
+
     def expression(node):
         nonlocal overflow
         if isinstance(node, NESTED):
@@ -154,7 +179,13 @@ def build_dependency_fixture_contract(func_node, target_source, target_name, mod
                     and not any(isinstance(part, ast.NamedExpr) for part in ast.walk(node))
                     and not any(isinstance(part, unsupported) for part in ast.walk(first))
                     and not any(isinstance(part, ast.keyword) and part.arg is None for part in ast.walk(first))):
-                expression(first)
+                previous_count = len(contract['flows'])
+                result = expression(first)
+                consumption = comprehension_consumption(node)
+                if result is not None and consumption is not None and len(contract['flows']) > previous_count:
+                    # expression(first) records its actual final call, including
+                    # a real execute().fetchall() layer when present.
+                    contract['flows'][-1]['resultConsumption'] = consumption
             # Do not infer a shape for the comprehension's result. Retain the
             # existing conservative invalidation of names written inside it.
             for name in _writes(node):

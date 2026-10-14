@@ -7,7 +7,7 @@ import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } from '../pipeline/repairDiagnostics';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, missingNameRepairGuidance, OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE, relevantSourceImports, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, formatFixtureConsumptionGuidance, missingNameRepairGuidance, OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE, relevantSourceImports, sourceSetupCallGuidance, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { callerForPrompt } from '../pipeline/probeInputs';
 import { createPromptContextReferences } from '../prompts/compactWriterContext';
 
@@ -82,6 +82,7 @@ function testMethodFragments(code: string): TestMethodFragment[] {
 
 function selectedFailureMethod(code: string, output: string): TestMethodFragment | undefined {
     if (output.includes('TEST_ISOLATION_BLOCKED')) { return undefined; }
+    if (isMockInitializationFailure(code, output)) { return undefined; }
     if (/(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown|asyncSetUp|asyncTearDown)(?:Class|Module)?\b)/.test(output)) {
         return undefined;
     }
@@ -90,6 +91,31 @@ function selectedFailureMethod(code: string, output: string): TestMethodFragment
     if (failed.length !== 1) { return undefined; }
     const matches = fragments.filter(fragment => fragment.name === failed[0]);
     return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** A real patch entry failed at a source-matched test setup line, before its body.
+ * A target's AttributeError or a printed string mentioning mock.py is insufficient.
+ */
+export function isMockInitializationFailure(code: string, output: string): boolean {
+    const errors = [...output.matchAll(/^ERROR:\s+(test_[A-Za-z0-9_]+)\s+\(/gm)];
+    if (errors.length !== 1 || /^FAIL:\s+/m.test(output)
+        || !/^AttributeError:\s+[^\r\n]*does not have the attribute\s+['"][^'"\r\n]+['"]\s*$/m.test(output)
+        || !/^\s*File "[^"\r\n]*[\\/]unittest[\\/]mock\.py", line \d+, in get_original\s*$/m.test(output)) { return false; }
+    const lines = code.replace(/\r\n/g, '\n').split('\n');
+    const method = testMethodFragments(code).find(fragment => fragment.name === errors[0][1]);
+    if (!method || testMethodFragments(code).filter(fragment => fragment.name === method.name).length !== 1) { return false; }
+    const escaped = method.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const frames = new RegExp(`^\\s*File "[^"\\r\\n]+", line (\\d+), in ${escaped}\\s*\\r?\\n([^\\r\\n]+)`, 'gm');
+    const patchNames = [...code.matchAll(/^\s*from unittest\.mock import patch(?: as ([A-Za-z_]\w*))?(?:\s|,|$)/gm)]
+        .map(match => match[1] || 'patch');
+    const pattern = patchNames.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    if (!pattern) { return false; }
+    const patchEntry = new RegExp(`^\\s*with\\s+(?:${pattern})(?:\\.object)?\\s*\\(`);
+    return [...output.matchAll(frames)].some(frame => {
+        const line = Number(frame[1]) - 1;
+        return line > method.start && line < method.end && lines[line]?.trim() === frame[2].trim()
+            && patchEntry.test(lines[line]);
+    });
 }
 
 export function canRepairTestMethod(code: string, output: string): boolean {
@@ -143,6 +169,7 @@ ${formatRepairSetup(brokenCode, astContext, method)}
 
 === NECESSARY TARGET BRANCH ===
 ${focusedSource(sourceCode)}
+${formatFixtureConsumptionGuidance(moduleName, astContext)}${sourceSetupCallGuidance(moduleName, astContext)}
 
 RESPONSE:
 Return one Python fence with only truly missing imports and the complete named method. Repair only that method. Preserve its signature and valid assertions. Recheck every expected field affected by the correction using source evidence; do not merely copy the observed output. The host merges this fragment into the existing tests.`;

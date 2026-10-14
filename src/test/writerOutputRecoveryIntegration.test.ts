@@ -34,10 +34,12 @@ test('formal Writer length recovery resends complete evidence once with paired c
     const probeCode = 'import unittest\nclass TestProbe(unittest.TestCase):\n'
         + '    def test_positive(self):\n        self.assertEqual(increment(1), 2)\n'
         + '    def test_negative(self):\n        self.assertEqual(increment(-1), 0)\n';
-    let scenario: 'recover' | 'recover-after-slow-first' | 'repeat-length' | 'first-request-expired' | 'measured-too-slow' = 'recover';
+    let scenario: 'recover' | 'recover-after-slow-first' | 'repeat-length' | 'first-request-expired' | 'measured-too-slow'
+        | 'qualification-consumed-retry' = 'recover';
     let writerCalls = 0;
     let timeShift = 0;
     let writes = 0;
+    let qualificationDelayed = false;
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
@@ -66,6 +68,10 @@ test('formal Writer length recovery resends complete evidence once with paired c
         requests.push(request);
         let response: string;
         let doneReason: 'stop' | 'length' = 'stop';
+        if (probe && scenario === 'qualification-consumed-retry' && writerCalls === 1 && !qualificationDelayed) {
+            timeShift += 55000;
+            qualificationDelayed = true;
+        }
         if (wire.prompt.includes('A safe runtime already provides increment(value)')) {
             response = probeCode;
         } else if (wire.prompt.includes('Review this exact TEST_FILE')) {
@@ -86,6 +92,7 @@ test('formal Writer length recovery resends complete evidence once with paired c
                 doneReason = 'length';
                 if (scenario === 'first-request-expired') { timeShift = 61000; }
                 if (scenario === 'recover-after-slow-first') { timeShift = 45000; }
+                if (scenario === 'qualification-consumed-retry') { timeShift = 45000; }
                 if (scenario === 'measured-too-slow') { timeShift = 270000; }
             } else {
                 response = complete;
@@ -93,7 +100,9 @@ test('formal Writer length recovery resends complete evidence once with paired c
         }
         const measurements = scenario === 'measured-too-slow' && writerCalls === 1 && doneReason === 'length'
             ? { eval_count: 1536, eval_duration: 270_000_000_000, prompt_eval_duration: 10_000_000_000,
-                load_duration: 1_000_000_000, total_duration: 281_000_000_000 } : {};
+                load_duration: 1_000_000_000, total_duration: 281_000_000_000 }
+            : doneReason === 'length' ? { eval_count: 1536, eval_duration: 1_000_000_000,
+                prompt_eval_duration: 100_000_000, load_duration: 0, total_duration: 1_100_000_000 } : {};
         return new Response(JSON.stringify({ response, done: true, done_reason: doneReason, ...measurements }), { status: 200 });
     };
     try {
@@ -107,9 +116,9 @@ test('formal Writer length recovery resends complete evidence once with paired c
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON,
             roleQualification: { writer: { state: 'verified', reason: 'fixed original capacity' },
                 reviewer: { state: 'verified', reason: 'fixed original capacity' }, bugFixer: { state: 'not-run', reason: 'not used' } } });
-        for (scenario of ['recover', 'recover-after-slow-first', 'repeat-length', 'first-request-expired', 'measured-too-slow'] as const) {
+        for (scenario of ['recover', 'recover-after-slow-first', 'repeat-length', 'first-request-expired', 'measured-too-slow', 'qualification-consumed-retry'] as const) {
             await t.test(scenario, async () => {
-                timeShift = 0; writerCalls = 0; requests.length = 0;
+                timeShift = 0; writerCalls = 0; requests.length = 0; qualificationDelayed = false;
                 const savedBefore = JSON.stringify(persisted.get('llmUnitTest.modelProfiles.v1'));
                 const writesBefore = writes;
                 const output = path.join(directory, scenario);
@@ -137,16 +146,21 @@ test('formal Writer length recovery resends complete evidence once with paired c
                         'a length-stopped provider prefix is never stored as candidate/report evidence: ' + file);
                 }
                 assert.equal(fs.readFileSync(source, 'utf8'), sourceText);
-                if (scenario === 'first-request-expired' || scenario === 'measured-too-slow') {
+                if (scenario === 'first-request-expired' || scenario === 'measured-too-slow' || scenario === 'qualification-consumed-retry') {
                     assert.equal(writers.length, 1, 'a retry that cannot fit its allowance is not sent');
                     const blocked = events.find(event => event.stage === 'model-request' && event.status === 'output-recovery-blocked');
                     assert.ok(!events.some(event => event.stage === 'tier' && event.status === 'fallback'));
-                    if (scenario === 'measured-too-slow') {
+                    if (scenario === 'measured-too-slow' || scenario === 'qualification-consumed-retry') {
                         assert.ok(blocked);
                         assert.equal(blocked.detail.reasonCode, 'insufficient-output-retry-time');
                         assert.equal(blocked.detail.targetDeadlinePreserved, true);
                         assert.ok(blocked.detail.estimatedRetryMs > blocked.detail.availableMs);
-                        assert.equal(blocked.detail.availableMs, 300000);
+                        if (scenario === 'measured-too-slow') { assert.equal(blocked.detail.availableMs, 300000); }
+                        else {
+                            assert.ok(qualificationDelayed, 'the new capacity probes consumed the retry allowance');
+                            assert.ok(requests.some(request => request.roleInstructions === ''), 'public probes actually ran');
+                            assert.ok(blocked.detail.availableMs < 25000);
+                        }
                     } else {
                         assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'error'),
                             'the first request remains expired despite a longer reserved stage');
