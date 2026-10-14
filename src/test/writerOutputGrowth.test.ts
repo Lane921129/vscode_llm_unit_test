@@ -37,12 +37,12 @@ test('output growth rejects unknown caps, unsafe values and impossible upper bou
     assert.equal(session.grow(1536, 16384), undefined);
 });
 
-test('learned Writer output floors never shrink a complete revision or alter another role', () => {
+test('learned Writer output floors never shrink a complete revision or alter roles without output recovery', () => {
     const code = 'class TestExample:\n' + '    # retained setup and assertions\n'.repeat(400);
     const revision = roleRequestBudget({ ...request, role: 'writer-revision', revisionCurrentCode: code,
         minimumOutputTokens: 2560 });
     assert.ok(revision.requestOutputTokens! > 2560);
-    assert.equal(roleRequestBudget({ ...request, role: 'analyst-planning', minimumOutputTokens: 9000 }).requestOutputTokens, 1024);
+    assert.equal(roleRequestBudget({ ...request, role: 'analyst-quality', minimumOutputTokens: 9000 }).requestOutputTokens, undefined);
     assert.deepEqual(roleRequestBudget({ ...request, envType: 'cloud', minimumOutputTokens: 9000 }),
         roleRequestBudget({ ...request, envType: 'cloud' }));
 });

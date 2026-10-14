@@ -53,6 +53,7 @@ export const englishMessages: Record<string, string> = {
     '模型請求耗時：{0}，HTTP 第 {1} 次，{2}；總耗時 {3}，HTTP 回應等待 {4}，讀取回覆 {5}。': 'Model request timing: {0}, HTTP attempt {1}, {2}; elapsed {3}, wait for HTTP response {4}, response read {5}.',
     'Ollama 載入 {0}，提示處理 {1}，生成 {2}；輸入 {3}、輸出 {4} tokens。缺值為未知，不能推定 GPU 耗時。': 'Ollama load {0}, prompt evaluation {1}, generation {2}; input {3}, output {4} tokens. Missing values are unknown and cannot establish GPU time.',
     '模型回覆達到輸出上限而未完成；未保存或執行截斷內容。': 'The model response reached its output limit before completion; truncated content was neither saved nor executed.',
+    '模型回覆因長度限制未完成（本次 num_predict={0} tokens）；輸出額度與 Context 容量分開設定。未保存或執行截斷內容。': 'The model response stopped at a length limit (requested num_predict={0} tokens); output allowance and context capacity are configured separately. Truncated content was neither saved nor executed.',
     'Context 必須為 0（自動）或正整數。': 'Context must be 0 (automatic) or a positive integer.',
     '無法確認模型的 Context 上限，不能使用明確指定的 Context。': 'The model context limit could not be verified, so an explicit context cannot be used.',
     '指定的 Context 超過模型回報的上限。': 'The requested context exceeds the limit reported by the model.',

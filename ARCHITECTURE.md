@@ -1,5 +1,9 @@
 # 專案閱讀入口
 
+## Analyst 輸出長度恢復（2026-10-15）
+
+`num_ctx` 決定請求 Context 容量；`num_predict` 限制單次生成長度。自動容量 `0` 不表示輸出無上限，初始 Analyst 短計畫仍以1,024 tokens開始。`requestBudgetedOne` 現在對 Local Analyst 的明確 length 回覆使用與 Writer 相同的容量／時間規劃，但持有獨立的本目標輸出額度。至多重送一次同一完整提示，輸入預留與 wire 輸出 cap 成對；原 Analyst callback 單次 deadline、外層規劃及 target 期限均不增加，後續格式補正也不重設計數。未知耗時、容量不足或再次截斷保持受阻；新容量仍走公開角色重驗，完整候選仍須 Checker、Reviewer 與品質驗證。錯誤訊息列出合法 `num_predict` 數值，避免誤認模型 Context 上限。沒有70B角色事件時，這條確定存在的缺口不能直接當作該次實驗的已證根因。
+
 ## BMI 增量補測與證據綁定（2026-10-14）
 
 初始 Analyst 仍分析完整來源；Writer 先寫一個可執行種子，Checker 獨立執行，再由另一 LLM Reviewer 審查。同 source／run／target／test hash 批准後才量測覆蓋率及突變。`writerSeedContract.ts` 在提示確實包含一個完整受控案例時核對方法數與 literal 呼叫的精確輸入，並提供簡短 `WRITER_SEED_CASE_FACTS_V1`；不計算答案或把未知 Mock／動態呼叫判成通過。

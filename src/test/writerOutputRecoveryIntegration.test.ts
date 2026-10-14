@@ -8,12 +8,12 @@ import { currentTargetBudget } from '../pipeline/targetBudget';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { estimatePromptTokens } from '../prompts/promptBudget';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { ollamaRuntimeMetadataFixture, readObservedSeedCaseForModelFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 
 test('formal Writer length recovery resends complete evidence once with paired context and unchanged budget ownership', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-output-recovery-'));
     const source = path.join(directory, 'sample.py');
-    const targetSource = 'def increment(value):\n    # REQUIRED_SOURCE_BEGIN\n    # '
+    const targetSource = 'def increment(value: int):\n    # REQUIRED_SOURCE_BEGIN\n    # '
         + 'complete source context '.repeat(525) + '\n    # REQUIRED_SOURCE_END\n    return value + 1\n';
     const sourceText = targetSource + Array.from({ length: 18 }, (_, index) =>
         `\ndef caller_${index}():\n    return increment(1)\n`).join('');
@@ -28,9 +28,7 @@ test('formal Writer length recovery resends complete evidence once with paired c
     const markerFile = path.join(directory, 'length-prefix-executed');
     const incomplete = 'import unittest\nfrom pathlib import Path\n'
         + `Path(${JSON.stringify(markerFile.replace(/\\/g, '/'))}).write_text("${prefixMarker}")\n`;
-    const complete = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
-        + '    def test_integers(self):\n        self.assertEqual(increment(0), 1)\n'
-        + '        self.assertEqual(increment(1), 2)\n        self.assertEqual(increment(-1), 0)\n';
+    let complete = '';
     const probeCode = 'import unittest\nclass TestProbe(unittest.TestCase):\n'
         + '    def test_positive(self):\n        self.assertEqual(increment(1), 2)\n'
         + '    def test_negative(self):\n        self.assertEqual(increment(-1), 0)\n';
@@ -59,6 +57,9 @@ test('formal Writer length recovery resends complete evidence once with paired c
     };
     Date.now = () => originalNow() + timeShift;
     globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options,
+            { modelName: 'neutral-writer-recovery', metadataAvailable: false });
+        if (metadata) { return metadata; }
         const wire = JSON.parse(String(options?.body));
         const probe = wire.prompt.includes('A safe runtime already provides increment(value)')
             || wire.prompt.includes('Review this exact TEST_FILE');
@@ -87,6 +88,15 @@ test('formal Writer length recovery resends complete evidence once with paired c
             writerCalls++;
             assert.ok(request.prompt.includes(targetSource.trimEnd()), 'the complete selected function survives every request');
             assert.match(request.prompt, /WRITER_SEED_V1/);
+            const observed = readObservedSeedCaseForModelFixture(request.prompt, 'increment');
+            assert.ok(observed, 'the formal seed must use exactly the one source-bound executed observation');
+            assert.equal(observed.args.length, 1);
+            assert.deepEqual(observed.kwargs, {});
+            complete = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
+                + '    def test_observed_seed(self):\n'
+                + (observed.observedOutcome === 'returned'
+                    ? `        self.assertEqual(increment(${observed.args[0]}), ${observed.observedResult})\n`
+                    : `        with self.assertRaises(${observed.exception!.qualname}):\n            increment(${observed.args[0]})\n`);
             if (writerCalls === 1 || scenario === 'repeat-length') {
                 response = incomplete;
                 doneReason = 'length';

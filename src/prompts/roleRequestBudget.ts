@@ -18,11 +18,13 @@ export function roleRequestBudget(input: {
     inputBudget: number;
     /** The exact candidate owned by this revision, never inferred from a prompt or checkpoint. */
     revisionCurrentCode?: string;
-    /** A previous complete transport ended at this target's exact output cap. */
+    /** A previous complete transport for this exact role ended at its output cap.
+     * The caller owns separate Writer and Analyst floors; never transfer one
+     * role's learned minimum to another role or a qualification probe. */
     minimumOutputTokens?: number;
 }): { inputBudget: number; reservedOutputTokens: number; requestOutputTokens?: number } {
     const defaultReserve = input.contextWindow - input.inputBudget;
-    const learnedMinimum = input.envType === 'local' && ['writer', 'writer-revision'].includes(input.role)
+    const learnedMinimum = input.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(input.role)
         && Number.isSafeInteger(input.minimumOutputTokens) && (input.minimumOutputTokens as number) > 0
         ? input.minimumOutputTokens as number : 0;
     const boundedPlan = input.role === 'analyst-planning';

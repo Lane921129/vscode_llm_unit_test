@@ -55,6 +55,53 @@ test('Analyst short-plan output cap is independent of Writer phase and model siz
         { inputBudget: 5734, reservedOutputTokens: 2458 });
 });
 
+test('an explicit local Analyst recovery floor pairs its larger output with the same capacity', () => {
+    for (const mode of ['full', 'execution'] as const) {
+        for (const seedPending of [true, false]) {
+            const input = { ...seed, mode, role: 'analyst-planning' as const, seedPending, minimumOutputTokens: 1792 };
+            const recovered = roleRequestBudget(input);
+            assert.deepEqual(recovered, { inputBudget: 6400, reservedOutputTokens: 1792, requestOutputTokens: 1792 });
+            assert.equal(recovered.inputBudget + recovered.requestOutputTokens!, input.contextWindow);
+            assert.deepEqual(roleRequestBudget({ ...input, minimumOutputTokens: undefined }),
+                { inputBudget: 7168, reservedOutputTokens: 1024, requestOutputTokens: 1024 },
+                'a recovery floor is explicit request data and never changes the initial Analyst policy');
+        }
+    }
+    const small = roleRequestBudget({ ...seed, role: 'analyst-planning', contextWindow: 2048,
+        inputBudget: 1433, minimumOutputTokens: 768 });
+    assert.deepEqual(small, { inputBudget: 1280, reservedOutputTokens: 768, requestOutputTokens: 768 });
+});
+
+test('Analyst and Writer explicit floors remain independent and unsupported roles or remote providers ignore floors', () => {
+    const analyst = roleRequestBudget({ ...seed, role: 'analyst-planning', minimumOutputTokens: 1792 });
+    const writer = roleRequestBudget({ ...seed, minimumOutputTokens: 2560 });
+    assert.equal(analyst.requestOutputTokens, 1792);
+    assert.equal(writer.requestOutputTokens, 2560);
+    assert.equal(roleRequestBudget({ ...seed, role: 'analyst-planning' }).requestOutputTokens, 1024);
+    assert.equal(roleRequestBudget(seed).requestOutputTokens, 1536);
+    for (const role of ['reviewer', 'bug-fixer', 'analyst-quality'] as const) {
+        assert.deepEqual(roleRequestBudget({ ...seed, role, minimumOutputTokens: 9000 }), roleRequestBudget({ ...seed, role }));
+    }
+    for (const envType of ['cloud', 'custom'] as const) {
+        assert.deepEqual(roleRequestBudget({ ...seed, envType, role: 'analyst-planning', minimumOutputTokens: 9000 }),
+            roleRequestBudget({ ...seed, envType, role: 'analyst-planning' }));
+    }
+});
+
+test('invalid Analyst floors are ignored and an oversized valid floor cannot borrow input room', () => {
+    const base = { ...seed, role: 'analyst-planning' as const };
+    for (const minimumOutputTokens of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.deepEqual(roleRequestBudget({ ...base, minimumOutputTokens }), roleRequestBudget(base));
+    }
+    assert.equal(roleRequestBudget({ ...base, minimumOutputTokens: 1 }).requestOutputTokens, 1024,
+        'a smaller floor cannot shrink the existing bounded initial cap');
+    const exhausted = roleRequestBudget({ ...base, minimumOutputTokens: 9000 });
+    assert.equal(exhausted.requestOutputTokens, 9000);
+    assert.equal(exhausted.inputBudget, 0, 'the requested output is not silently lowered below the role-owned floor');
+    assert.equal(promptFits('Complete Analyst contract', 'Complete source and observations', exhausted.inputBudget), false,
+        'the unchanged complete prompt must be rejected or requalified at a sufficient context before transport');
+});
+
 test('length completion rejects a valid Python prefix without exposing provider content', () => {
     const validPrefix = 'import unittest\nclass Tests(unittest.TestCase):\n    def test_one(self):\n        self.assertEqual(1, 1)\n';
     assert.throws(() => getCompletedOllamaText({ response: validPrefix, done: true, done_reason: 'length',

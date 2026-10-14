@@ -1581,6 +1581,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
     let mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
     const writerOutputBudget = new WriterOutputBudget();
+    // Analyst output needs belong to this target and never raise Writer's floor.
+    const analystOutputBudget = new WriterOutputBudget();
     let writerAdditionBaseline: string | undefined;
     let activeSeedCaseIds: string[] | undefined;
     let activeSeedCaseFacts = '';
@@ -1786,7 +1788,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             }
         }
         const contractedSystem = addOutputContract(system, format);
-        const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
+        const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
             && localRuntime?.ok === true;
         const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
             sharedDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
@@ -1804,7 +1806,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (!runtimeQualifications.current()) {
             throw new AnalysisStageError('validation', 'source-changed', localize('來源或相依版本改變，停止保存舊執行證據。'));
         }
-        const minimumOutputTokens = writerOutputBudget.minimumTokens;
+        const roleOutputBudget = role === 'analyst-planning' ? analystOutputBudget : writerOutputBudget;
+        const minimumOutputTokens = roleOutputBudget.minimumTokens;
         const estimatedInputTokens = estimatePromptTokens(contractedSystem + '\n' + prompt);
         const requiredInputTokens = Math.max(estimatedInputTokens, observedInputTokens ?? 0);
         const correctionReserve = reservedInputTokens + (outputAttempt > 0 ? CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS : 0);
@@ -1959,7 +1962,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit } : {}),
                 ...(modelRequestHttpStatus(error) !== undefined ? { httpStatus: modelRequestHttpStatus(error) } : {}),
                 reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
-            if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
+            if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
                 const stats = completedTransport?.ollama;
@@ -1991,7 +1994,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throw new AnalysisStageError('model-format', 'model-request',
                             localize('模型輸出已達上限，剩餘時間不足以完成較長的重送；未採用截斷內容，也未重置目標期限。'), detail);
                     }
-                    if (!writerOutputBudget.learn(nextOutputTokens)) { throw error; }
+                    if (!roleOutputBudget.learn(nextOutputTokens)) { throw error; }
                     recoveryTransport = completedTransport;
                     recordRole('model-request', 'output-budget-grown', { role,
                         previousOutputTokens: diagnostic.outputTokenLimit, requestOutputTokens: nextOutputTokens,
@@ -2005,7 +2008,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             throw error;
         }
         }
-        throw new AnalysisStageError('model-format', 'model-request', 'Writer output recovery exhausted.');
+        throw new AnalysisStageError('model-format', 'model-request', 'Role output recovery exhausted.');
     };
     const recordRejected = (code: string, attempt: number, gate: CandidateRejectionGate, reasonCode: string) => {
         const artifact = rejectedCandidates.record({ code, phase: seedPending ? 'seed' : currentLoop > 1 ? 'expand' : 'generation',

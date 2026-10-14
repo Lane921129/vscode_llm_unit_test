@@ -4,6 +4,8 @@
 
 ## 目前驗收優先順序
 
+- 2026-10-15 起，Local 初始 Analyst 的 `num_predict=1024` 是起始輸出額度，不是模型 Context 上限。明確 `done_reason=length` 可在同一完整提示下增加輸出並至多重送一次，Analyst 與 Writer 的學習額度各自限定本目標；Reviewer、品質分析師、Fixer 與資格探針不借該額度。重送仍受原 Analyst 單次 shared deadline、階段與 target deadline／計數限制；缺少耗時資料時須保留完整單次時間，時間或完整輸入／輸出容量不足即記錄原因停止。必要增容仍須已核實上限與新容量角色資格，不採用截斷前綴、不重設保存偏好。
+
 - 品質補測任務使用 `quality-task-v4` 綁定本次 run／source／qualified target／focus 與已執行的精確輸入族；模型只能引用 scenario ID 與 `verify-observed-behavior`。模型的預期值及例外假設不送入 Writer 的已核實觀測欄位。空任務、無效契約或分析暫停可使用相同實測觀測繼續要求 Writer，但不造分析批准或品質通過。
 - `WRITER_FOCUS_CASE_FACTS_V1` 逐案呈現型別化證據還原的完整呼叫與實測結果；每案參數順序／型別不能互換或自行取整。可定位 literal 新呼叫須涵蓋本輪完整輸入族，缺案或偏離範圍交 Writer 有界修訂；完全未知動態呼叫仍由執行及審查確認。已有新觀測卻只回原基線，不進行重複量測；工具不生成 assertion，也不以輸入族匹配宣告殺死突變。
 - 單一目標在開始前依正規化輪數規劃角色、資格探針及重試的共享預算；五輪預設44 logical requests、88 transport attempts、440,000 estimated input tokens、20 candidates，上限64／128／640,000／40。`targetBudget` 的顯式限制（含零額度）仍優先；原10分鐘總期限不增加，途中不重設計數，巢狀流程不能換新預算。
