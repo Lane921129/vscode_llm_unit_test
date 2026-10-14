@@ -1,4 +1,4 @@
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { readOllamaRoleRequest, ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -27,9 +27,13 @@ class ModelCases(unittest.TestCase):
         self.ledger = Ledger()
     def test_real_calls(self):
         self.assertIsNone(self.ledger.increase('entry', 3))
-        self.assertIsNone(self.ledger.increase('entry', 2))
 `;
-    const strong = weak + `    def test_observed_state(self):
+    const strong = `import unittest
+from ledger import Ledger
+class ObservedStateCases(unittest.TestCase):
+    def setUp(self):
+        self.ledger = Ledger()
+    def test_observed_state(self):
         self.assertIsNone(self.ledger.increase('entry', 3))
         self.assertEqual(self.ledger.entries, {'entry': 3})
         self.assertIsNone(self.ledger.increase('entry', 3))
@@ -46,13 +50,16 @@ class ModelCases(unittest.TestCase):
             provider.webview = { postMessage: async () => true }; return { dispose() {} };
         }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }], openTextDocument: async () => ({}),
-            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'runtimeContextTokens' ? 8572 : fallback }) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture', observedContextTokens: 8572 });
+        if (metadata) { return metadata; }
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         assert.equal(request.options.num_ctx, 8572, 'the fixture uses its observed runtime, not the advertised maximum');
         let response: string;
@@ -129,6 +136,8 @@ class ModelCases(unittest.TestCase):
         const syntheticCredential = 'sk-' + 'x'.repeat(32);
         let rejectedRequests = 0;
         globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture', observedContextTokens: 8572 });
+            if (metadata) { return metadata; }
             assert.equal(JSON.parse(String(options?.body)).options.num_ctx, 8572);
             rejectedRequests++;
             return new Response(JSON.stringify({ response: syntheticCredential, done: true }), { status: 200 });

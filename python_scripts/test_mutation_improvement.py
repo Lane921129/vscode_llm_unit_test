@@ -56,6 +56,67 @@ class MutationInputsTests(unittest.TestCase):
         self.assertEqual(len(equivalents), 2)
         self.assertTrue(all(d['excludedFromScore'] is False for d in equivalents))
 
+    def test_boundary_family_is_opt_in_and_never_changes_default_input_planning(self):
+        data = payload()
+        default = plan(data)
+        data['boundaryFamily'] = False
+        self.assertEqual(plan(data), default)
+        data['boundaryFamily'] = 'true'
+        self.assertEqual(plan(data), default, 'only an explicit boolean enables the input family')
+        data['boundaryFamily'] = True
+        family = plan(data)
+        self.assertFalse(family['assertionOracle'])
+        self.assertLessEqual(len(family['inputs']), 12)
+        self.assertTrue(all(set(item) == {'args', 'kwargs', 'mutantId'} for item in family['inputs']))
+        self.assertEqual(family['diagnostics'], default['diagnostics'], 'input experiments never alter equivalent scoring')
+
+    def test_each_rounded_boundary_focus_gets_below_at_and_above_input_experiments(self):
+        for threshold, line, position in [(7.5, 4, 0), (13, 6, 1), (21, 8, 1)]:
+            with self.subTest(threshold=threshold):
+                data = payload()
+                selected = next(item for item in data['mutants'] if item['kind'] == 'compare'
+                                and item['line'] == line and item['position'] == position)
+                data['mutants'] = [selected]
+                data['boundaryFamily'] = True
+                result = plan(data)
+                reached = {round(item['args'][0] / (item['args'][1] / 10) ** 2, 2) for item in result['inputs']}
+                self.assertEqual(len(result['inputs']), 3, result)
+                self.assertTrue(any(value < threshold for value in reached), result)
+                self.assertIn(threshold, reached)
+                self.assertTrue(any(value > threshold for value in reached), result)
+                self.assertFalse(result['assertionOracle'])
+
+    def test_boundary_family_reobserves_existing_focus_inputs_without_claiming_quality_progress(self):
+        data = payload('def categorize(amount, scale):\n    if amount < 7.5: return 0\n    return scale\n')
+        data['observations'] = [{'args': ['7.5', '10']}]
+        self.assertEqual(plan(data)['inputs'], [])
+        data['boundaryFamily'] = True
+        family = plan(data)
+        self.assertIn([7.5, 10], [item['args'] for item in family['inputs']])
+        self.assertFalse(family['assertionOracle'])
+        self.assertTrue(all('expected' not in item and 'result' not in item for item in family['inputs']))
+
+    def test_boundary_family_does_not_guess_unknown_expressions_or_unsafe_inputs(self):
+        for expression in ['helper(amount)', "__import__('os').system('echo unsafe')", 'amount * amount']:
+            data = payload(SOURCE.replace('round(amount / factor ** 2, 2)', expression))
+            data['boundaryFamily'] = True
+            self.assertEqual(plan(data)['inputs'], [])
+        data = payload(); data['boundaryFamily'] = True
+        data['observations'][0]['call_assertable'] = False
+        self.assertEqual(plan(data)['inputs'], [])
+        data['observations'] = [{'args': ["__import__('os').system('echo unsafe')", '10']}]
+        self.assertEqual(plan(data)['inputs'], [])
+
+    def test_many_boundary_families_stop_at_the_twelve_input_transport_limit(self):
+        source = 'def categorize(amount, scale):\n' + ''.join(
+            f'    {"if" if boundary == 1 else "elif"} amount < {boundary}: return {boundary}\n'
+            for boundary in range(1, 7)) + '    return scale\n'
+        data = payload(source); data['boundaryFamily'] = True
+        result = plan(data)
+        self.assertEqual(len(result['inputs']), 12)
+        self.assertFalse(result['assertionOracle'])
+        self.assertTrue(all(set(item) == {'args', 'kwargs', 'mutantId'} for item in result['inputs']))
+
     def test_unknown_calls_side_effects_and_blocked_observations_do_not_supply_inputs(self):
         for expression in ["helper(amount)", "__import__('os').system('echo unsafe')", 'amount * amount']:
             data = payload(SOURCE.replace('round(amount / factor ** 2, 2)', expression))

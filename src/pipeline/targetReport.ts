@@ -10,6 +10,7 @@ import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../mutation/mutationResult';
 import { renderReviewerDiagnostics } from './reviewerDiagnosticsPresentation';
 import { renderTraceTiming } from './traceTimingPresentation';
+import { CandidateMethodSummary, readCandidateMethodSummary, renderCandidateMethodCounts, renderCandidateMethodTimeline } from './candidateMethodSummary';
 
 export interface ReportIdentity {
     schemaVersion: 'target-report-v1'; sourcePath: string; sourceFile: string;
@@ -22,6 +23,7 @@ export interface TargetReportSummary {
     summaryOutcome?: string; summaryReason?: string;
     mutationEngine?: string; mutationOperatorSet?: string; mutationElapsedMs?: number;
     latestCandidate?: { status: 'review-blocked'; mutation: 'not-run' };
+    methodSummary?: CandidateMethodSummary;
 }
 const excluded = new Set(['dummy-skipped', 'stub-skipped', 'stub-smoke-generated']);
 export const isReportExcluded = (status: unknown): boolean => typeof status === 'string' && excluded.has(status);
@@ -211,6 +213,7 @@ export function renderFinalReport(identity: ReportIdentity, summary: TargetRepor
             reportCell(summary.mutationEngine), reportCell(summary.mutationOperatorSet))
             : identity.requestedMutationEngine ? localize('- **指定突變引擎**: {0}（尚無可核對量測）\n', reportCell(identity.requestedMutationEngine)) : '')
         + (hasFailures ? localize('- [失敗報告與完整流程](failure_report.md)\n') : '')
+        + (summary.methodSummary ? renderCandidateMethodCounts(summary.methodSummary) : '')
         + (retainedMetrics ? '\n' + localize('以上量測與下方突變表屬於保留測資 {0}；最新受阻候選沒有突變分數，不能沿用此分數。\n',
             `[${reportCell(summary.testFile)}](${reportLink(summary.testFile!)})`) : '')
         + '\n' + localize('### 測資\n\n')
@@ -266,12 +269,15 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
 export function writeTargetReports(directory: string, identity: ReportIdentity, sourceHash: string,
     runId: string, state: Record<string, unknown>, processBody: string): string {
     const summary = summarizeTarget(directory, state, identity, sourceHash);
+    summary.methodSummary = readCandidateMethodSummary(directory, { runId, sourceHash, target: identity.target,
+        ...(summary.code !== undefined ? { retainedCodeHash: evidenceHash(summary.code) } : {}) });
     const terminal = state.terminalStatus;
     const verifiedPresentation = summary.outcome === presentOutcome(state).label;
     const displayState = verifiedPresentation ? state : { ...state, terminalStatus: 'incomplete', executionVerified: false };
     const failed = !verifiedPresentation || Boolean(state.firstFailure || state.lastRepairFailure)
         || (!isReportExcluded(terminal) && !['running', 'passed', 'execution-passed'].includes(String(terminal)));
-    const flow = withOutcomeHeader(formatTierHistory(state) + eventTimeline(directory, runId, sourceHash)
+    const flow = withOutcomeHeader(formatTierHistory(state) + renderCandidateMethodTimeline(summary.methodSummary)
+        + eventTimeline(directory, runId, sourceHash)
         + renderTraceTiming(state, identity.target) + processBody, displayState);
     fs.writeFileSync(path.join(directory, 'workflow_report.md'), flow, 'utf8');
     if (functionReportDirectory(directory) !== directory) {
@@ -331,6 +337,7 @@ function writeOrganizedReports(data: string, identity: ReportIdentity, sourceHas
             + localize('本頁僅記錄本輪；最終保留成果請見函式的 final_report.md。\n\n')
             + ((state.tierHistory as any)?.transitions || []).filter((item: any) => item.loop === number)
                 .map((item: any) => localize('第 {0} 輪 Tier {1} → {2}（{3}）', item.loop, item.from, item.to, item.reason) + '\n\n').join('')
+            + renderCandidateMethodTimeline(readCandidateMethodSummary(data, { runId, sourceHash, target: identity.target }, number))
             + eventTimeline(data, runId, sourceHash, number) + (sections.get(number) || '')
             + '\n' + localize('### 本輪檔案\n\n')
             + artifacts.map(file => `- [${reportCell(file)}](${reportLink(file)})`).join('\n') + '\n';
@@ -347,6 +354,7 @@ function writeOrganizedReports(data: string, identity: ReportIdentity, sourceHas
     const index = localize('# 失敗報告\n\n') + identityLines(identity)
         + localize('- **失敗原因**: {0}\n', reportCell(conciseReason(summary.reason)))
         + localize('- **首次失敗**: {0}\n- **最近失敗**: {1}\n', describe(state.firstFailure), describe(state.lastFailure))
+        + (summary.methodSummary ? renderCandidateMethodTimeline(summary.methodSummary) : '')
         + renderReviewerDiagnostics(events)
         + renderTraceTiming(state, identity.target)
         + '\n' + localize('### 各輪流程\n\n') + links.join('\n') + '\n\n'

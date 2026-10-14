@@ -1,3 +1,4 @@
+import { ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 import { functionReportDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -24,7 +25,7 @@ test('missing target dependency preserves declared import setup and diagnostics 
         },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
             getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
-                : key === 'importFixtures' ? [{ file: 'sample.py', mkdir: true }] : fallback }), openTextDocument: async () => ({}) },
+                : key === 'language' ? 'zh-tw' : key === 'importFixtures' ? [{ file: 'sample.py', mkdir: true }] : fallback }), openTextDocument: async () => ({}) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } }, env: { openExternal: async () => true }, Uri: { file: (file: string) => file }
@@ -32,7 +33,11 @@ test('missing target dependency preserves declared import setup and diagnostics 
     Module._load = function(name: string, ...args: any[]) {
         return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
     };
-    globalThis.fetch = async () => { modelCalls++; throw new Error('Must not request a model before import preflight passes'); };
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture-model', metadataAvailable: false });
+        if (metadata) { return metadata; }
+        modelCalls++; throw new Error('Must not request a model before import preflight passes');
+    };
     try {
         const source = 'from pathlib import Path\nPath("must_not_exist").mkdir()\nimport fixture_dependency_not_installed\ndef target(value):\n    return value + 1\n';
         fs.writeFileSync(path.join(directory, 'sample.py'), source);

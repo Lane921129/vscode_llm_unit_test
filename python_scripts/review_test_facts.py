@@ -380,22 +380,34 @@ def build_review_facts(payload):
                     base = expression(node.value)
                     index = literal(node.slice)
                     if base[0] == 'result' and type(index) is int:
-                        return ('result', base[1], base[2] + [index])
+                        return ('result', base[1], base[2] + [index], base[3])
                 if isinstance(node, ast.Call) and resolve(node.func, local) == target:
                     binding = dotted(node.func).split('.')[0]
                     for imported in imports:
                         if imported['binding'] == binding:
                             imported['targetUseLines'] = sorted({*imported.get('targetUseLines', []), node.lineno})
                     if any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):
-                        return ('result', None, [])
+                        return ('result', None, [], node.lineno)
                     try:
                         args = [literal(arg) for arg in node.args]
                         kwargs = {item.arg: literal(item.value) for item in node.keywords}
                     except Unknown:
-                        return ('result', None, [])
+                        return ('result', None, [], node.lineno)
                     call = snapshot_value({'args': args, 'kwargs': kwargs})
-                    facts['calls'].append({'line': node.lineno, 'call': call})
-                    return ('result', call, [])
+                    literal_call = ast.Call(func=node.func,
+                                            args=[ast.parse(repr(arg), mode='eval').body for arg in args],
+                                            keywords=[ast.keyword(arg=name, value=ast.parse(repr(value), mode='eval').body)
+                                                      for name, value in kwargs.items()])
+                    fact = {'line': node.lineno, 'call': call,
+                            'spellings': list(dict.fromkeys(filter(None, [ast.get_source_segment(code, node), ast.unparse(literal_call)])))}
+                    matches = [item for item in observations if same_call(item.get('call'), call) and 'result_snapshot' in item]
+                    # This is a source-bound exact-input return observation, not proof
+                    # that a fixture/unknown setup produces the same behavior.
+                    if matches and all(item['result_snapshot'] == matches[0]['result_snapshot'] for item in matches) \
+                            and not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'}):
+                        fact['observationReturned'] = True
+                    facts['calls'].append(fact)
+                    return ('result', call, [], node.lineno)
                 return ('literal', literal(node))
 
             def assign(binding, value, line):
@@ -405,7 +417,7 @@ def build_review_facts(payload):
                         facts['scalarBindings'].append({'line': line, 'name': binding.id, 'type': type(value[1]).__name__})
                 elif isinstance(binding, (ast.Tuple, ast.List)):
                     for index, child in enumerate(binding.elts):
-                        part = ('result', value[1], value[2] + [index]) if value and value[0] == 'result' else None
+                        part = ('result', value[1], value[2] + [index], value[3]) if value and value[0] == 'result' else None
                         assign(child, part, line)
 
             def assertion(node):
@@ -424,6 +436,8 @@ def build_review_facts(payload):
                     if actual[0] != 'result' or expected[0] != 'literal':
                         return
                     fact.update({'targetResult': True, 'expectedType': type(expected[1]).__name__, 'expected': snapshot_value(expected[1])})
+                    if actual[1] is not None:
+                        fact['targetCallLine'] = actual[3]
                     matches = [item for item in observations if same_call(item.get('call'), actual[1]) and 'result_snapshot' in item]
                     if not matches or any(item['result_snapshot'] != matches[0]['result_snapshot'] for item in matches):
                         return

@@ -68,6 +68,25 @@ export function stageLabel(status: string): string {
 
 /** Human progress messages never turn intermediate acceptance into certification. */
 export function describeStageEvent(stage: string, status: string, detail: unknown, mode: 'full' | 'execution' = 'full'): string {
+    const candidateDetail = detail && typeof detail === 'object' && !Array.isArray(detail)
+        ? detail as Record<string, unknown> : {};
+    if (stage === 'writer-seed-input') {
+        if (status === 'grounded') { return localize('種子輸入已對應選定受控案例；仍須執行與審查，尚非通過。'); }
+        if (status === 'unknown') { return localize('種子輸入無法由靜態事實核實；繼續執行與審查，不推定通過。'); }
+        const reasons: Record<string, string> = {
+            'writer-seed-method-count': localize('種子需一個測試方法'),
+            'writer-seed-call-count': localize('種子需一個可定位的目標呼叫'),
+            'writer-seed-input-mismatch': localize('輸入未對應選定受控案例'),
+            'writer-seed-identity-mismatch': localize('來源、執行與目標身分不一致')
+        };
+        const reason = typeof candidateDetail.reasonCode === 'string' ? reasons[candidateDetail.reasonCode] : undefined;
+        if (status === 'rejected' && reason) { return localize('種子輸入契約未通過：{0}；交 Writer 修訂。', reason); }
+    }
+    if ((stage === 'candidate-artifact' || stage === 'structure') && status === 'rejected'
+        && (candidateDetail.withheldReason === 'not-extracted-python'
+            || candidateDetail.reasonCode === 'response-not-extracted-python')) {
+        return localize('回覆未能抽取為 Python 測試候選；尚未進入 import 或測試方法檢查，交 Writer 修正回覆格式。');
+    }
     if (stage === 'model-runtime' && ['context-grown', 'context-growth-requested'].includes(status)) {
         const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
             ? detail as Record<string, unknown> : {};
@@ -140,6 +159,8 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
         'reviewer:approved': localize("Reviewer 已批准此版測試；可進入突變量測，尚非完整通過"),
         'reviewer:rejected': localize("Reviewer 提出待處理問題；交 Writer 修訂後重新執行與審查"),
         'candidate-artifact:rejected': localize("已記錄拒絕原因；可保存的測試候選附於失敗報告"),
+        'candidate-methods:inventoried': localize('已盤點候選 AST 測試方法；數量不代表測試通過'),
+        'candidate-methods:unavailable': localize('候選 AST 方法盤點未完成；方法數標示未知，不當成零'),
         'structure:passed': localize("測試結構、目標呼叫與斷言證據檢查通過；尚未判定完整品質"),
         'structure:rejected': localize("測試候選未通過檢查：{0}；交 Writer 修訂，修訂額度用盡則停止本候選", reason || localize("請查看報告中的拒絕原因")),
         'scenarios:observed': localize("已記錄本次實際執行的測試情境"),

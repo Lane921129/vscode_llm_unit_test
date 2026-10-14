@@ -278,7 +278,7 @@ test('organized reports isolate rounds, preserve rejected candidates and fail cl
         assert.equal(fs.existsSync(roundDirectory(data, 99)), false);
         assert.doesNotMatch(first + second, /[\u4e00-\u9fff]/);
         const final = fs.readFileSync(path.join(root, 'final_report.md'), 'utf8');
-        assert.match(final, /loop\/1\/loop1_test.py/); assert.doesNotMatch(final, /rejected|SECOND_ROUND_ONLY/);
+        assert.match(final, /loop\/1\/loop1_test.py/); assert.doesNotMatch(final, /rejected\.py|SECOND_ROUND_ONLY/);
         assert.equal(resultArtifactPath(data, 'loop1_test.py'), path.join(round1, 'loop1_test.py'));
         for (const name of ['../escape.py', 'a:b', 'loop/1/test.py', '..']) {
             assert.throws(() => resultArtifactPath(data, name));

@@ -21,7 +21,7 @@ test('real batch command records grouped failures and cancellation, then passes 
     const utilities = require('../utils/utils');
     const originalEngine = utilities.detectMutationEngine;
     const handlers = new Map<string, (...args: any[]) => any>();
-    let modelCalls = 0;
+    let modelCalls = 0, metadataCalls = 0;
     let cancelFirstTarget = false;
     const vscode = {
         CancellationTokenSource: class {
@@ -47,7 +47,13 @@ test('real batch command records grouped failures and cancellation, then passes 
         } }, env: { openExternal: async () => true }, Uri: { file: (file: string) => file }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async () => { modelCalls++; throw new Error('Environment errors must not request models'); };
+    globalThis.fetch = async url => {
+        if (['/api/show', '/api/ps'].includes(new URL(String(url)).pathname)) {
+            metadataCalls++;
+            return new Response('{}', { status: 404 });
+        }
+        modelCalls++; throw new Error('Environment errors must not request models');
+    };
     try {
         fs.writeFileSync(path.join(root, 'a_missing.py'), 'import fixture_dependency_not_installed\ndef first(x): return x + 1\ndef second(x): return x - 1\n');
         fs.writeFileSync(path.join(root, 'b_boundary.py'), 'import setup_state\ndef first(x): return x + 1\ndef second(x): return x - 1\n');
@@ -122,6 +128,7 @@ test('real batch command records grouped failures and cancellation, then passes 
         assert.equal(unreadable.manifest.complete, false);
         assert.deepEqual(unreadable.manifest.discoveryFailures, [{ file: '.', stage: 'source-discovery' }]);
         assert.equal(modelCalls, 0);
+        assert.equal(metadataCalls, 8, 'four run-owned discoveries are independent of generation blocked by the environment');
 
         // Neutral provider fixture supplies controlled tests; the production
         // pipeline still runs actual Python, coverage and mutation gates.
@@ -141,6 +148,15 @@ class Cases(unittest.TestCase):
 `;
         const roles: string[] = [];
         globalThis.fetch = async (_url, options) => {
+            const route = new URL(String(_url)).pathname;
+            if (route === '/api/show' || route === '/api/ps') {
+                metadataCalls++;
+                return new Response(JSON.stringify(route === '/api/show'
+                    ? { details: { parameter_size: '13B' }, model_info: { 'general.architecture': 'llama', 'llama.context_length': 32768 } }
+                    : { models: [{ name: 'fixture', model: 'fixture', context_length: 16384 }] }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            modelCalls++;
             const body = JSON.parse(String(options?.body));
             assert.equal(body.options.num_ctx, 16384, 'the declared known fixture capacity drives the actual wire request');
             const request = readOllamaRoleRequest(body);

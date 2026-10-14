@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON, qualificationEndpointKey } from '../llm/modelQualification';
 import { RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { readOllamaRoleRequest, ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 
 test('formal requests bind context, qualification and whole-file settings to one run snapshot', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-context-'));
@@ -19,6 +19,7 @@ test('formal requests bind context, qualification and whole-file settings to one
     let setting: unknown = 8192;
     let changeDuringRequest = true;
     let changePreferenceDuringRequest = false;
+    let metadataAvailable = true;
     const requests: Array<{ role: string; numCtx?: number }> = [];
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 },
@@ -38,6 +39,8 @@ test('formal requests bind context, qualification and whole-file settings to one
         return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
     };
     globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'neutral-context', metadataAvailable });
+        if (metadata) { return metadata; }
         const body = JSON.parse(String(options?.body));
         if (body.contents) {
             requests.push({ role: 'cloud' });
@@ -126,6 +129,7 @@ test('formal requests bind context, qualification and whole-file settings to one
 
         for (const [value, known, reason] of [[32769, true, 'runtime-context-exceeds-model-limit'],
             [8192, false, 'runtime-context-metadata-required'], [-1, true, 'invalid-runtime-context']] as const) {
+            metadataAvailable = known;
             setting = value; update(profile(16384, { contextLengthKnown: known }));
             const output = path.join(directory, reason);
             await run({ ...params, outputPath: output });
@@ -134,6 +138,7 @@ test('formal requests bind context, qualification and whole-file settings to one
             assert.ok(events(output).some(row => row.detail?.diagnostic?.reasonCode === reason
                 || row.detail?.reasonCode === reason), reason);
         }
+        metadataAvailable = true;
 
         setting = -1;
         update({ ...profile(16384), envType: 'cloud', modelName: 'neutral-cloud', paramSize: 'Cloud',

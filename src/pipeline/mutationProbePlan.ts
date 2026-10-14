@@ -23,7 +23,7 @@ export async function planMutationProbes(source: string, target: string, mutatio
     const survivors = mutation.mutants.filter(item => item.status === 'SURVIVED');
     if (!survivors.length) { return empty; }
     const run = await runSpawn(python, ['-B', pythonToolPath('mutationInputs')], {
-        input: JSON.stringify({ source, target, mutants: survivors, observations: observations?.examples || [] }),
+        input: JSON.stringify({ source, target, mutants: survivors, observations: observations?.examples || [], boundaryFamily: true }),
         timeout: 5000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
     if (run.code !== 0) { throw new Error(localize("突變輸入規劃未完成；未產生斷言。")); }

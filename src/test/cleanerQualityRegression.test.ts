@@ -135,7 +135,7 @@ test('quality format correction is bounded, shares deadline and never echoes mal
         request: async (prompt, deadline) => {
             deadlines.push(deadline); calls++;
             if (calls === 1) { return 'PRIVATE_MALFORMED_RESPONSE'; }
-            assert.match(prompt, /FORMAT CORRECTION: invalid-json/);
+            assert.match(prompt, /CONTRACT CORRECTION: invalid-json/);
             assert.doesNotMatch(prompt, /PRIVATE_MALFORMED_RESPONSE/);
             return '{"tasks":[]}';
         }

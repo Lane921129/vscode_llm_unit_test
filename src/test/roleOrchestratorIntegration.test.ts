@@ -1,4 +1,4 @@
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, resultArtifactPath, roundDirectory } from '../pipeline/resultLayout';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import * as assert from 'node:assert/strict';
@@ -95,7 +95,9 @@ class Cases(unittest.TestCase):
         with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):
             self.assertFalse(target())
 `;
-    const stronger = code.replace('self.assertFalse(target())', 'self.assertIs(target(), False)') + `
+    // New exact assertions kill the weak false-result survivors while the
+    // already executed methods remain byte-for-byte unchanged.
+    const stronger = code + `
     def test_mixed(self):
         with patch('sample.read', return_value={'ready': True, 'kind': 'other'}):
             self.assertIs(target(), False)
@@ -126,7 +128,8 @@ class Cases(unittest.TestCase):
     };
     utilities.detectMutationEngine = () => null;
     globalThis.fetch = async (_url, options) => {
-        if (/\/api\/(?:show|ps)$/.test(String(_url))) { return new Response('{}', { status: 503 }); }
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+        if (metadata) { return metadata; }
         assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
@@ -380,6 +383,8 @@ class Cases(unittest.TestCase):
             'class Cases(unittest.TestCase):\n    def setUp(self):\n        self.required_fixture()')
             + '# ' + 'retained candidate context '.repeat(1200) + '\n';
         globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+            if (metadata) { return metadata; }
             const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             let response: string;
             if (request.roleInstructions.includes('dependency_behaviors')) {
@@ -471,6 +476,8 @@ class Cases(unittest.TestCase):
             return prompt;
         };
         globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+            if (metadata) { return metadata; }
             const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             if (request.roleInstructions.includes('dependency_behaviors')) {
                 return new Response(JSON.stringify({ response: '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the selected target with controlled inputs and use verified observations for assertions."}}' }), { status: 200 });
@@ -549,6 +556,8 @@ class Cases(unittest.TestCase):
 `;
         let partialWriters = 0, partialReviews = 0, qualityCalls = 0;
         globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+            if (metadata) { return metadata; }
             const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             let response: string;
             if (request.roleInstructions.includes('You are the test Reviewer')) {
@@ -564,7 +573,7 @@ class Cases(unittest.TestCase):
                     scenario: 'Mock read with mode b.', verification: 'Run original and mutants with the same mock.'
                 }] });
                 if (qualityCalls === 2) {
-                    assert.match(request.prompt, /FORMAT CORRECTION/);
+                    assert.match(request.prompt, /CONTRACT CORRECTION/);
                     assert.doesNotMatch(request.prompt, /INVALID_PRIVATE_RESPONSE/);
                 }
             } else if (request.roleInstructions.includes('dependency_behaviors')) {
@@ -628,6 +637,8 @@ class Cases(unittest.TestCase):
             const marker = 'PRIVATE_FIXER_REPLY_MUST_NOT_APPEAR';
             let fixerCalls = 0;
             globalThis.fetch = async (_url, options) => {
+                const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+                if (metadata) { return metadata; }
                 const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
                 const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
                 assert.deepEqual(runtimeOptions, { temperature: 0, num_ctx: 8572 },

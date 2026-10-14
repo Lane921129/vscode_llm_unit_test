@@ -1,3 +1,5 @@
+import { contextInputBudget, promptFits } from '../prompts/promptBudget';
+import { roleRequestBudget } from '../prompts/roleRequestBudget';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
@@ -10,7 +12,7 @@ import { buildIsolatedResourceContext, buildTargetIsolatedResourceContext, ISOLA
 import { SOURCE_VERSIONS_VERSION } from '../pipeline/sourceVersions';
 import { getExecutionWriterSystemPrompt, getSystemPrompt, getTier1EvidenceBoundSystemPrompt, getTier3SystemPrompt } from '../roles/unittestWriter';
 import { getSemanticAnalyzerSystemPrompt } from '../roles/semanticAnalyzer';
-import { getTestReviewerSystemPrompt } from '../roles/testReviewer';
+import { fitReviewPrompt, getTestReviewerSystemPrompt } from '../roles/testReviewer';
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 import { validateUnittestStructure } from '../validation/generatedTestValidator';
 import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
@@ -183,7 +185,13 @@ test('resource role guidance is scoped and bounded; ordinary functions and quali
             assert.ok(!prompt.includes(ISOLATED_RESOURCE_ROLE_RULE), 'full resource rules belong to the user context only');
             assert.ok(prompt.length <= ordinary[index].length + 300, 'resource guidance must remain a small system addition');
         }
-        assert.ok(getTestReviewerSystemPrompt().length < 3000);
+        const completeEvidence = buildIsolatedResourceContext(plan());
+        const reviewPrompt = fitReviewPrompt({ tests: 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(target(1), 2)\n',
+            evidence: completeEvidence, executionVerified: true }, 10000)!;
+        const budget = roleRequestBudget({ envType: 'local', mode: 'full', role: 'reviewer', seedPending: true,
+            contextWindow: 4096, inputBudget: contextInputBudget('', 4096) });
+        assert.ok(promptFits(getTestReviewerSystemPrompt(), reviewPrompt, budget.inputBudget),
+            'the complete resource rules, evidence and Reviewer contract fit the actual 4096-token request budget');
         assert.equal(buildIsolatedResourceContext(plan()).split(ISOLATED_RESOURCE_ROLE_RULE).length - 1, 1);
     });
     assert.deepEqual(prompts(), ordinary, 'resource settings cannot leak into later qualification or pure-function prompts');

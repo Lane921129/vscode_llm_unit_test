@@ -210,7 +210,7 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
             assert.ok(!result.events.some(event => ['writer-seed', 'execution', 'reviewer', 'mutation'].includes(event.stage)));
         });
 
-        await t.test('real caller-partition repair keeps each caller observation and candidate separate', async () => {
+        await t.test('real caller partitions inherit verified imports while keeping each caller observation separate', async () => {
             // The first real test kills both target mutants but leaves one line
             // uncovered. Strict quality asks for expansion, reaching the real
             // Tier 2 caller partitions without bypassing execution or mutation.
@@ -243,44 +243,37 @@ ${includeImport ? 'from partition_sample import _read\n' : ''}class Test_read(un
                     'another caller cannot lend an assertion oracle to this partition');
                 const attempt = (attempts.get(which) || 0) + 1;
                 attempts.set(which, attempt);
-                assert.ok(attempt <= 2);
+                assert.equal(attempt, 1, 'additions inherit the verified target import instead of rewriting it');
                 const previous = partitionCode(which, false);
-                if (attempt === 1) { return previous; }
-                assertRepairPrompt(prompt, previous, validateUnittestStructure(previous, '_read', 'partition_sample').reason!, 'partition_sample');
-                assert.ok(!prompt.includes(partitionCode(which === 'alpha' ? 'empty' : 'alpha', false)),
-                    'a repair never includes another partition rejected candidate');
-                assert.match(prompt, /WRITER_EXPANSION_V2/);
+                assert.match(prompt, /WRITER_ADDITION_V1/);
                 assert.ok(prompt.includes(partitionCode('alpha', true)), 'the executed baseline remains complete');
                 const wire = requests.at(-1)!;
                 assert.equal(wire.options.num_ctx, 8572);
                 assert.equal(wire.options.num_predict, undefined,
                     'a short partition fragment cannot size the output that must also preserve the complete baseline');
-                return partitionCode(which, true);
+                return previous;
             };
             const outputPath = path.join(directory, 'partition');
             await run({ ...params, filePath: partitionSource, promptStrategy: 'tier2', maxLoops: 2, outputPath });
             const result = readRun(outputPath);
-            assert.deepEqual([...attempts].sort(), [['alpha', 2], ['empty', 2]], JSON.stringify(result.knowledge.lastFailure));
+            assert.deepEqual([...attempts].sort(), [['alpha', 1], ['empty', 1]], JSON.stringify(result.knowledge.lastFailure));
             assert.ok(result.events.some(event => event.loop === 1 && event.stage === 'mutation'
                 && event.status === 'measured' && event.detail.score === 100));
             assert.ok(result.events.some(event => event.loop === 2 && event.stage === 'caller-partition'
                 && event.status === 'planned' && event.detail.mode === 'partitioned'));
             const revisions = result.events.filter(event => event.loop === 2 && event.stage === 'model-request'
                 && event.status === 'requested' && event.detail.role === 'writer-revision');
-            assert.equal(revisions.length, 2);
-            assert.ok(revisions.every(event => event.detail.reservedOutputTokens === 2572
-                && event.detail.requestOutputTokens === undefined && event.detail.inputBudget === 6000),
-            'both expansion repairs retain the original reserve instead of sizing it from the rejected fragment');
+            assert.equal(revisions.length, 0, 'valid additions need no import repair');
             assert.equal(result.knowledge.terminalStatus, 'passed', JSON.stringify(result.knowledge.lastFailure));
             assert.ok(result.events.some(event => event.loop === 2 && event.stage === 'reviewer' && event.status === 'approved'));
             assert.ok(result.events.some(event => event.loop === 2 && event.stage === 'mutation'
                 && event.status === 'measured' && event.detail.score === 100));
             assert.ok(!result.events.some(event => event.loop === 2 && event.stage === 'caller-merge' && event.status === 'rejected'));
-            assert.equal(requests.filter(request => request.role === 'writer').length, 5, JSON.stringify({
+            assert.equal(requests.filter(request => request.role === 'writer').length, 3, JSON.stringify({
                 requests: requests.map(request => ({ role: request.role,
                     revision: request.prompt.startsWith('WRITER_REVISION_REQUEST_V2'),
                     seed: request.prompt.includes('WRITER_SEED_V1'),
-                    expansion: request.prompt.includes('WRITER_EXPANSION_V2') })),
+                    expansion: request.prompt.includes('WRITER_ADDITION_V1') })),
                 events: result.events.filter(event => event.loop === 2 && ['model-request', 'passing-tests', 'structure',
                     'writer', 'repair-routing', 'tier', 'validation'].includes(event.stage))
                     .map(event => ({ stage: event.stage, status: event.status, role: event.detail?.role,

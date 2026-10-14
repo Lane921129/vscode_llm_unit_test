@@ -1,3 +1,4 @@
+import { ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -36,14 +37,18 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
             showWarningMessage: async () => preflightChoice
         },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }],
-            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }),
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : key === 'language' ? 'zh-tw' : fallback }),
             openTextDocument: async (file: string) => ({ file }) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } }, env: { openExternal: async () => true }, Uri: { file: (file: string) => file }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async () => { modelCalls++; throw new Error('No model work is authorized in this fixture'); };
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture', metadataAvailable: false });
+        if (metadata) { return metadata; }
+        modelCalls++; throw new Error('No model work is authorized in this fixture');
+    };
     let restorePrepare = () => {};
     try {
         fs.mkdirSync(path.join(root, 'old backup'));
@@ -68,7 +73,14 @@ test('real batch command respects confirmed files, diagnoses each ambiguous sele
         assert.equal(first.expectedTargets, 3);
         assert.equal(first.targets.filter((target: any) => target.target === 'repeated').length, 1);
         assert.equal(first.finishedTargets, 3);
-        assert.ok(first.targets.every((target: any) => target.terminalStatus === 'failed'));
+        assert.deepEqual(first.targets.filter((target: any) => target.file === 'selected.py').map((target: any) =>
+            [target.target, target.terminalStatus, target.category, target.modelRequests]).sort(),
+            [['first', 'environment-blocked', 'environment', 0], ['second', 'environment-blocked', 'environment', 0]]);
+        const ambiguous = first.targets.find((target: any) => target.target === 'repeated');
+        assert.deepEqual([ambiguous.state, ambiguous.terminalStatus, ambiguous.category, ambiguous.modelRequests],
+            ['finished', 'environment-blocked', 'environment', 0],
+            'the unique manifest selector stays blocked when preflight cannot prove a unique executable target');
+        assert.equal(first.allTargetsPassed, false);
         assert.deepEqual(first.discoveryFailures, [], 'excluded syntax errors never enter discovery');
         assert.equal(modelCalls, 0);
 

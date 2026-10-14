@@ -3,15 +3,17 @@ import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templ
 import { createHash } from 'crypto';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { coverageGapIds } from '../pipeline/qualityRegression';
+import type { QualityTaskEvidence, QualityTaskIdentity } from '../pipeline/qualityTaskEvidence';
 
 export interface QualityTask {
     evidence: string;
     hypothesis: string;
     scenario: string;
     verification: string;
+    boundObservations?: QualityTaskEvidence;
 }
 
-export function getQualityAnalystSystemPrompt(): string {
+export function getQualityAnalystSystemPrompt(grounded = false): string {
     return `You are the Analyst after successful unittest execution. Plan the next quality improvement; do not write test code.
 Use only the supplied target, tests and measured gaps. Distinguish test weaknesses from unproven product defects.
 Return at most ONE task for the supplied FOCUS. Copy its evidence_id exactly; do not repeat the evidence text. Propose one input/mock scenario and state how execution should verify it.
@@ -19,7 +21,7 @@ An expected value is a hypothesis until verified with that same input and mock c
 If evidence is insufficient return an empty tasks array; do not fill gaps by guessing.
 The scenario must name exact proposed inputs and any required object state or mock return configuration. For stateful methods, arrange the state that reaches the selected gap before calling the target. For an index mutation, propose isolated rows with distinguishable column values. These are input experiments, never expected-output facts.
 Do not propose editing target code or enforcing types inferred from annotations. Do not repeat previously attempted scenarios without a concrete changed input/state/mock.
-Return one JSON object with tasks. A task has exactly evidence_id, hypothesis, scenario, verification. Fill the fields with a concrete experiment from the supplied context, never field descriptions or template text. If no concrete experiment is justified return {"tasks":[]}.`;
+Return one JSON object with tasks. A task has exactly evidence_id, hypothesis, scenario, verification. Fill the fields with a concrete experiment from the supplied context, never field descriptions or template text. If no concrete experiment is justified return {"tasks":[]}.${grounded ? '\nGROUNDED FOCUS: the host has already executed the supplied focus input family. Copy scenario_id exactly into scenario; verification must be exactly "verify-observed-behavior". Do not propose different inputs or write expected values/exceptions. Explain the focus only in hypothesis; the Writer receives the bound observations separately.' : ''}`;
 }
 
 export interface QualityFocus { id: string; kind: 'coverage' | 'survivor'; evidence: string }
@@ -41,7 +43,12 @@ export function selectQualityFocus(coverage: TargetCoverageAssessment, survivors
     return item;
 }
 
-export function parseFocusedQualityTask(raw: string, focus: QualityFocus): { tasks?: QualityTask[]; diagnostics: string[] } {
+export function parseFocusedQualityTask(raw: string, focus: QualityFocus, observations?: QualityTaskEvidence,
+    identity?: QualityTaskIdentity): { tasks?: QualityTask[]; diagnostics: string[] } {
+    if (observations && (!identity || observations.sourceHash !== identity.sourceHash || observations.runId !== identity.runId
+        || observations.target !== identity.target || observations.focusId !== focus.id)) {
+        return { diagnostics: ['quality-evidence-identity-mismatch'] };
+    }
     let value: any;
     try { value = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n?/i, '').replace(/\s*```$/, '')); }
     catch { return { diagnostics: ['invalid-json'] }; }
@@ -56,13 +63,18 @@ export function parseFocusedQualityTask(raw: string, focus: QualityFocus): { tas
             return { diagnostics: ['invalid-task'] };
         }
         if (task.evidence_id !== focus.id) { return { diagnostics: ['unknown-evidence-id'] }; }
+        if (observations && (observations.focusId !== focus.id || task.scenario !== observations.scenarioId
+            || task.verification !== 'verify-observed-behavior')) {
+            return { diagnostics: ['quality-observation-mismatch'] };
+        }
         if (!['hypothesis', 'scenario', 'verification'].every(key => typeof task[key] === 'string'
             && task[key].trim() && task[key].length <= 800 && !hasTemplatePlaceholder(task[key]) && !hasRoleTemplateEcho(task[key]))) {
             return { diagnostics: ['invalid-task-fields'] };
         }
     }
     return { tasks: value.tasks.map((task: any) => ({ evidence: focus.evidence,
-        hypothesis: task.hypothesis, scenario: task.scenario, verification: task.verification })), diagnostics: [] };
+        hypothesis: task.hypothesis, scenario: task.scenario, verification: task.verification,
+        ...(observations ? { boundObservations: observations } : {}) })), diagnostics: [] };
 }
 
 /** One format repair at most, sharing the original deadline. Never echo a bad response. */
@@ -73,8 +85,14 @@ export async function requestFocusedQualityTask(input: {
     event(status: string, detail: unknown): void;
     now?: () => number;
     maxAttempts?: number;
+    observations?: QualityTaskEvidence;
+    identity?: QualityTaskIdentity;
 }): Promise<QualityTask[] | undefined> {
-    const prompt = `QUALITY_TASK_V3\nFOCUS\n${JSON.stringify(input.focus)}\n${input.context}`;
+    const contractVersion = input.observations ? 'quality-task-v4' : 'quality-task-v3';
+    const prompt = `${input.observations ? 'QUALITY_TASK_V4' : 'QUALITY_TASK_V3'}\nFOCUS\n${JSON.stringify(input.focus)}\n${input.context}`
+        + (input.observations ? '\nBOUND FOCUS OBSERVATIONS (executed inputs, not model proposals)\n'
+            + JSON.stringify({ scenario_id: input.observations.scenarioId, cases: input.observations.cases })
+            + '\nCopy scenario_id into scenario; verification="verify-observed-behavior". Never replace these facts with a predicted output.' : '');
     let correction = '';
     for (let attempt = 0; attempt < Math.min(2, input.maxAttempts ?? 2); attempt++) {
         input.checkCancelled();
@@ -84,12 +102,17 @@ export async function requestFocusedQualityTask(input: {
         }
         const raw = await input.request(prompt + correction, input.deadlineAt);
         input.checkCancelled();
-        const parsed = parseFocusedQualityTask(raw, input.focus);
+        if ((input.now || Date.now)() >= input.deadlineAt) {
+            input.event('deadline-exhausted', { attempt, evidenceId: input.focus.id });
+            return undefined;
+        }
+        const parsed = parseFocusedQualityTask(raw, input.focus, input.observations, input.identity);
         input.event(parsed.tasks ? 'parsed-hypotheses' : 'invalid-response', {
-            attempt, contractVersion: 'quality-task-v3', focus: input.focus, raw, ...parsed
+            attempt, contractVersion, focus: input.focus, raw, ...parsed
         });
         if (parsed.tasks) { return parsed.tasks; }
-        correction = `\nFORMAT CORRECTION: ${parsed.diagnostics.join(', ')}. Return only {"tasks":[]} or one task with evidence_id="${input.focus.id}", hypothesis, scenario, verification. No other keys or prose.`;
+        correction = `\nCONTRACT CORRECTION: ${parsed.diagnostics.join(', ')}. Return only {"tasks":[]} or one task with evidence_id="${input.focus.id}", hypothesis, scenario, verification. No other keys or prose.`
+            + (input.observations ? ` scenario="${input.observations.scenarioId}"; verification="verify-observed-behavior". Do not propose other inputs or an expected result.` : '');
     }
     return undefined;
 }

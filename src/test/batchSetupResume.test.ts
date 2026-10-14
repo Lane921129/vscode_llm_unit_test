@@ -1,3 +1,4 @@
+import { ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -12,7 +13,7 @@ test('real batch applies the confirmed isolated resource once and resumes the sa
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
-    const settings: Record<string, unknown> = { pythonPath: python, importFixtures: [] };
+    const settings: Record<string, unknown> = { pythonPath: python, importFixtures: [], language: 'zh-tw' };
     const output = path.join(root, 'results'), file = path.join(root, 'sample.py');
     let mode: 'ready' | 'declined' | 'new-blocker' | 'cancelled' | 'source-changed' | 'dependency-fixed' | 'default-output' = 'ready';
     let scopePrompts = 0, setupPrompts = 0, modelCalls = 0, updates = 0;
@@ -27,7 +28,7 @@ test('real batch applies the confirmed isolated resource once and resumes the sa
                 update: async (key: string, value: unknown) => { updates++; settings[key] = value; } }) },
         window: {
             registerWebviewViewProvider: (_: string, provider: any) => { provider.webview = { postMessage: async (message: any) => {
-                if (message.command === 'appendLog' && message.text?.includes('繼續同一批次')) { resumedCaches.push(preflightFailureCacheSize()); }
+                if (message.command === 'appendLog' && message.text?.includes('個可執行目標')) { resumedCaches.push(preflightFailureCacheSize()); }
                 return true;
             } }; return { dispose() {} }; },
             showInformationMessage: async () => {}, showTextDocument: async () => {},
@@ -52,7 +53,11 @@ test('real batch applies the confirmed isolated resource once and resumes the sa
         }, commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => { handlers.set(name, handler); return { dispose() {} }; } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async () => { modelCalls++; throw new Error('No provider calls in this neutral stub fixture'); };
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture', metadataAvailable: false });
+        if (metadata) { return metadata; }
+        modelCalls++; throw new Error('No provider calls in this neutral stub fixture');
+    };
     try {
         fs.writeFileSync(path.join(root, 'excluded.py'), 'def broken(\n');
         const { activate } = require('../orchestrator');
@@ -97,8 +102,23 @@ test('real batch applies the confirmed isolated resource once and resumes the sa
                 else { assert.equal(ready.fixtureId, null); assert.equal(ready.resourceCount, 0); }
                 assert.equal(path.isAbsolute(ready.report), false);
                 assert.equal(fs.existsSync(path.resolve(directory, ready.report)), true);
-                assert.equal(manifest.preflightEvents.at(-1).status, 'resumed');
+                const resumed = manifest.preflightEvents.find((event: any) => event.phase === 'decision' && event.status === 'resumed');
+                assert.ok(resumed, 'the one approved setup still resumes the same captured batch');
+                assert.equal(resumed.fixtureId, ready.fixtureId);
+                assert.equal(manifest.preflightEvents.at(-1).status, 'ready', 'the final source partition separately authorizes the ready target');
                 assert.equal(manifest.preflightEvents.at(-1).fixtureId, ready.fixtureId);
+            } else if (scenario === 'new-blocker') {
+                assert.equal(manifest.finishedTargets, 1);
+                assert.equal(manifest.targets[0].state, 'finished');
+                assert.equal(manifest.targets[0].terminalStatus, 'environment-blocked');
+                assert.equal(manifest.targets[0].modelRequests, 0);
+                assert.equal(manifest.complete, false);
+                assert.equal(manifest.status, 'environment-blocked');
+                assert.ok(manifest.preflightEvents.some((event: any) => event.status === 'resumed-partially'),
+                    'the confirmed rescan partitions the still blocked target without reopening setup');
+                assert.equal(manifest.preflightEvents.at(-1).status, 'blocked');
+                assert.ok(fs.existsSync(path.join(directory, 'failure_report.md')));
+                assert.equal(updates, 2);
             } else {
                 assert.equal(manifest.finishedTargets, 0);
                 assert.equal(manifest.targets[0].state, 'pending');
@@ -106,14 +126,13 @@ test('real batch applies the confirmed isolated resource once and resumes the sa
                 assert.equal(manifest.status, ['declined', 'cancelled'].includes(scenario) ? 'cancelled' : 'environment-blocked');
                 assert.ok(!manifest.preflightEvents.some((event: any) => event.status === 'resumed'));
                 assert.ok(fs.existsSync(path.join(directory, 'failure_report.md')));
-                if (scenario === 'new-blocker') { assert.equal(updates, 2); }
-                else { assert.equal(updates, 0); }
+                assert.equal(updates, 0);
             }
             assert.equal(modelCalls, 0);
             assert.equal(fs.existsSync(path.join(root, 'owned_first')), false);
             assert.equal(fs.existsSync(path.join(root, 'owned_second')), false);
             const release = pythonEnvironmentActivity.acquire('setup'); assert.ok(release); release();
         }
-        assert.deepEqual(resumedCaches, [0, 0, 0], 'both changed and unchanged fixture IDs refresh the parent failure cache');
+        assert.deepEqual(resumedCaches, [0, 0, 0, 0], 'both changed and unchanged fixture IDs refresh the parent failure cache');
     } finally { globalThis.fetch = originalFetch; Module._load = originalLoad; fs.rmSync(root, { recursive: true, force: true }); }
 });

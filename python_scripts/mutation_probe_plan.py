@@ -157,7 +157,10 @@ def plan(payload):
             if not isinstance(statement, ast.Assign) or len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name): break
             bindings[statement.targets[0].id] = expand(statement.value, bindings)
         comparisons = [n for n in mutation_scope_walk(scope) if isinstance(n, ast.Compare)]
-        seen = {tuple(s[n] for n in names) for s in seeds}
+        family = payload.get('boundaryFamily') is True
+        # Bracket a source boundary with input experiments, never expected values.
+        # Re-observation may bind an existing input to this exact measured focus.
+        seen = set() if family else {tuple(s[n] for n in names) for s in seeds}
         experiments = []
         for m in survivors:
             if m.get('kind', '').lower() != 'compare': continue
@@ -169,21 +172,36 @@ def plan(payload):
             operands = [c.left] + c.comparators
             left, right = [expand(n, bindings) for n in operands[pos:pos + 2]]
             for expression, boundary in [(left, right), (right, left)]:
-                try: desired = evaluate(boundary, {})
+                try: centre = evaluate(boundary, {})
                 except (ValueError, KeyError, ArithmeticError): continue
-                for seed in seeds[:4]:
-                    for name in names:
-                        try:
-                            value = solve(expression, name, desired, seed)
-                            values = {**seed, name: value}
-                            if not number(value) or not math.isclose(evaluate(expression, values), desired, rel_tol=1e-10, abs_tol=1e-10): continue
-                            key = tuple(values[n] for n in names)
-                            if key in seen: continue
-                            seen.add(key)
-                            experiments.append({'args': list(key), 'kwargs': {}, 'mutantId': m['id']})
-                            break
-                        except (ValueError, KeyError, ArithmeticError): continue
-                    if experiments and experiments[-1]['mutantId'] == m['id']: break
+                delta = 0.01
+                if (isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name)
+                        and expression.func.id == 'round' and len(expression.args) in (1, 2)):
+                    try:
+                        digits = evaluate(expression.args[1], {}) if len(expression.args) == 2 else 0
+                        if type(digits) is not int or abs(digits) > 6: continue
+                        delta = 10 ** -digits
+                    except (ValueError, KeyError, ArithmeticError): continue
+                desires = [centre - delta, centre, centre + delta] if family else [centre]
+                for desired in desires:
+                    found = False
+                    for seed in seeds[:4]:
+                        for name in names:
+                            try:
+                                value = solve(expression, name, desired, seed)
+                                values = {**seed, name: value}
+                                if not number(value) or not math.isclose(evaluate(expression, values), desired, rel_tol=1e-10, abs_tol=1e-10): continue
+                                key = tuple(values[n] for n in names)
+                                if key in seen: continue
+                                seen.add(key)
+                                experiments.append({'args': list(key), 'kwargs': {}, 'mutantId': m['id']})
+                                found = True
+                                break
+                            except (ValueError, KeyError, ArithmeticError): continue
+                        if found: break
+                    if len(experiments) >= LIMIT: break
+                if family and any(item['mutantId'] == m['id'] for item in experiments): break
+            if len(experiments) >= LIMIT: break
         result['inputs'] = experiments[:LIMIT]
     except (SyntaxError, ValueError, TypeError, KeyError, ArithmeticError, RecursionError):
         result['diagnostics'].append({'status': 'unsupported', 'reasonCode': 'bounded-planning-unavailable', 'excludedFromScore': False})

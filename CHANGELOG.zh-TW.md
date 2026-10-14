@@ -4,6 +4,24 @@
 
 ## 2026-10-14
 
+### BMI 品質任務、增量合併、例外審查與方法統計
+
+- 分析 `bmi_2026_10_14_17_41` 的「只有一個測試」：第一輪種子刻意最小化，但後續任務未綁定實測輸入、Writer 重寫基線與 Reviewer 無依據例外建議，使新增候選遭拒。新增生成／新增／拒絕／保留方法盤點，報告不再把初始種子或重複失敗當成完整測資。
+- `quality-task-v4` 以同 run／source／target／focus 的完整受控返回觀測綁定 scenario ID；不同輸入、型別、建構或不完整／變異／衝突觀測不借證據。Writer 只收精確輸入與實測結果，模型 expected 或例外文字仍為假說。空任務、無效契約或暫停可回到相同觀測的 Writer 補測，不造 Analyst 批准。只從下輪實驗候選中排除已證明相同的通過 literal 輸入，存活突變及分母不變。
+- 比較邊界探測增加 below／at／above 輸入族，直接 round 精度只用於探測間隔，沒有 source expression 或模型假設當成答案。新輸入都經真正 worker 執行再交 Writer；零身高的真正例外不當成 expected-zero 返回。
+- Writer 擴充只寫新增內容，Host 用 `writer-addition-v1` AST 合併，保留已執行基線完整原文。支援完整 class、單一可綁定裸方法及可證明外框；改寫既有方法、fixture、import 衝突及多份含糊候選 typed 拒絕。Tier 分區與修訂共用入口；新完整候選仍須獨立執行、審查與同雜湊批准才突變。
+- Reviewer return→exception 修改須精確輸入、具體例外及依據；同候選／同輸入的實跑 returned 觀測矛盾交一次契約重審，不刪 finding 自動批准。review-v7 與角色資格 v8 不變。未抽取為 Python 的回覆另列固定格式診斷，不推測缺 import。
+- 真實本機 3B 初輪另抓到種子塞九組猜測值與首案算術錯誤。`writerSeedContract.ts` 在完整單一受控案例存在時，給明確實跑 case facts 並核對一個方法、一個可定位呼叫及精確輸入；未知 Mock／動態呼叫仍走原執行與審查。輸入核對不批准 expected，也不由工具寫測試。
+- 後續兩次真實3B驗收達到種子／Reviewer／外部Mutatest，但仍為8／10行、26／39突變；Writer交換參數、只取家族第一案，且20次logical預算在第三輪後耗盡。據此在system層覆寫全面suite範圍，末尾列精確targetCall及每案結果；literal family缺案、有觀測卻no-op均走原有界Writer修訂。五輪開始前預留44次logical／88次transport／440,000 estimated tokens／20候選，上限64／128／640,000／40；顯式預算及10分鐘deadline保持，途中不重設。真實失敗保留原目錄，不改標通過。
+- 同步頂層函式以逐案 Writer 子任務補齊完整已觀測輸入族；每案一個新增方法、一個精確呼叫，最多兩次契約補正。家族期限按 focus／baseline hash 固定，外層修訂及 Tier 回退不續期；草稿全數完成才交完整執行、審查及突變。class／async／未知呼叫仍走既有流程，沒有工具代寫 assertion。
+- 真實3B後續達到9／10行、33／39突變，但仍把舊輸入帶入新案例。修正單案 core 重新附回全域 Boundary／Numeric 觀測的接線；以完整 typed call／result 重新解析合併後的真實 Trace ID，避免潛在原 worker ID 碰撞。第9輪的實際 ID 沒有碰撞，不能把這項潛在缺陷當成該輪已證根因。
+- `writer-addition-context-v1` 對簡單 unittest 基線只向逐案 Writer 提供 AST imports／class setup、完整基線雜湊及方法清單，Host 仍保存完整原文，不重送舊測試 body。fixture／helper／全域狀態／裝飾器與未知結構回完整提示；真正工具或契約失敗停止。setup 投影不是可執行候選或批准，完整來源與當前觀測不截斷。
+- 接線審查另外修正已有品質候選的 Writer 修訂誤走初次逐案生成：現在保留具體執行錯誤、Reviewer finding 與原候選，不把新鮮 case prompt 取代失敗回饋，亦不把未審可執行草稿變成不可修改的補測基線。passing 保護與重新執行／審查／同版批准不放寬。
+- 修訂提示的 baseline／draft 去重只接收完全相同的獨立 Python fence；原種子只是較大未批准草稿的 prefix 時仍完整另列，避免把原基線與待修新增方法混為一份。此分支以 Reviewer finding 整合回歸驗證，不把無修訂的真模型成功當成該分支實測。
+- 最新真實本機 `qwen2.5-coder:3b-instruct` BMI 驗收完整通過：同 `bmi_2026_10_14_17_41` 來源 SHA-256，三輪保留7個測試，行覆蓋10／10、Mutatest39／39 KILLED；每輪 available／selected／executed均39，無timeout／error／未執行，未減少分母。三輪執行、Reviewer及突變使用相同候選雜湊，6次逐案提示的輸入／結果逐型別逐值相符。完整流程約170秒，含公開資格約178秒；15次正式角色、2次目標內增容資格及3次執行前公開資格共20次生成請求，容量8192→9216並重驗角色。完成時來源／編譯快照未變、設定及SecretStorage寫入0、租約回收。Codellama13B、其他專案整批與GitHub CI仍待驗收。
+- BMI 固定角色回覆整合以真正 Python／coverage／Mutatest 執行，六項案例通過；成功案例保留八個方法，行覆蓋10／10、Mutatest39／39 KILLED，完整候選全集、無timeout／error／未執行，逐輪同候選批准。負例證明修改已通過種子在執行、審查及第二次突變前拒絕；新 Reviewer finding 情境證明單次完整 Writer 修訂保留原基線及具體回饋、重新執行與同版批准。這是流程回歸，不能代替真實模型或實驗室13B驗收。
+- 直接相關 Python83／83、Node去重146／146通過：方法／證據／角色／預算／報告基本126項，最後Writer提示10項取代其中8項，另加9項具體審查、3項輸出修訂及6項BMI整合。正常Windows重新驗證沙箱Temp rename EPERM及Trace受限情境，不改產品門檻；舊plain-substring去重fixture改為完整獨立fence，新反例仍要求保留整份基線。完整Python入口首輪696案例含3略過，唯一密鑰掃描假陽性診斷字樣已改名並用相關suite重驗；完整Node首輪的舊fixture失敗分別修正驗證，未宣稱本次有全套乾淨通過。型別／lint／生產建置／Webview及差異檢查通過，提交前另掃新追蹤檔與可達歷史；完整矩陣留待里程碑。
+
 ### 同步容量快照、具體審查證據、受限輸出恢復與 Mock 修訂
 
 - 分析10/14 BMI及車輛結果：兩批正式完成請求皆HTTP200，主要問題為metadata上限未知、泛用／矛盾Reviewer意見及錯誤Mock；BMI修訂以1,536 tokens長度中止，車輛只處理7／212後取消，不能當成整批失敗或API超時。環境與Analyst已完成，不重做既有初始化。

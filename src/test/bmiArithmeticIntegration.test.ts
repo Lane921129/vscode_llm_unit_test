@@ -1,4 +1,4 @@
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import { resultArtifactPath } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -22,7 +22,7 @@ test('laboratory unpacked BMI failures hand arithmetic hypotheses to AI and exec
         .replace('self.assertAlmostEqual(bmi, 23.44, delta=0.01)\n        self.assertEqual(status, "體重過重")',
             'self.assertAlmostEqual(bmi, 23.44, delta=0.01)\n        self.assertEqual(status, "健康體位")');
     fs.writeFileSync(file, source);
-    const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, validationMode: 'execution' };
+    const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, validationMode: 'execution', language: 'zh-tw' };
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     let requests = 0;
@@ -38,7 +38,9 @@ test('laboratory unpacked BMI failures hand arithmetic hypotheses to AI and exec
         } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async (_url, options) => {
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture', metadataAvailable: false });
+        if (metadata) { return metadata; }
         requests++;
         assert.ok(requests <= 2, 'the Writer must revise once from bounded arithmetic evidence');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));

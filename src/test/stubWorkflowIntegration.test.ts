@@ -18,7 +18,7 @@ test('stub outcomes bypass unused external mutation preflight and accurately ide
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const selection = require('../mutation/mutationSelection'), originalSelection = selection.selectMutationEngine;
-    let mutationPreflights = 0, modelRequests = 0;
+    let mutationPreflights = 0, modelRequests = 0, metadataRequests = 0;
     const logs: string[] = [];
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -34,7 +34,10 @@ test('stub outcomes bypass unused external mutation preflight and accurately ide
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     selection.selectMutationEngine = async () => { mutationPreflights++; throw Error('selected external engine is not installed'); };
-    globalThis.fetch = async () => { modelRequests++; throw Error('stub outcome must not request an AI'); };
+    globalThis.fetch = async url => {
+        if (/\/api\/(?:show|ps)$/.test(String(url))) { metadataRequests++; return new Response('{}', { status: 503 }); }
+        modelRequests++; throw Error('stub outcome must not request an AI');
+    };
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
@@ -63,6 +66,7 @@ test('stub outcomes bypass unused external mutation preflight and accurately ide
         }
         assert.equal(mutationPreflights, 0);
         assert.equal(modelRequests, 0);
+        assert.equal(metadataRequests, 4, 'each owned local run refreshes show/ps metadata without asking the model to generate');
         assert.equal(fs.readFileSync(file, 'utf8'), source);
     } finally {
         setLanguage('zh-tw'); selection.selectMutationEngine = originalSelection;

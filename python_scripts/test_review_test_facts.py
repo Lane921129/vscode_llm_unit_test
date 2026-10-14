@@ -34,6 +34,21 @@ class ReviewFactsTests(unittest.TestCase):
             result = self.facts('self.assertEqual(score(1), 2)', observations)
             self.assertNotIn('observationVerified', result['methods'][0]['assertions'][0])
 
+    def test_return_observation_and_call_line_stay_bound_to_the_exact_literal_call(self):
+        result = self.facts('value = 1\nnumber, label = score(value, 1)\nself.assertEqual(number, 10000.0)\nself.assertEqual(label, "high")\nother = score(1, 0)\nself.assertEqual(other, 0)',
+                            [self.observed([1, 1], (10000.0, 'high'))])['methods'][0]
+        self.assertEqual([item.get('observationReturned') for item in result['calls']], [True, None])
+        self.assertEqual([item['targetCallLine'] for item in result['assertions']], [6, 6, 9])
+        self.assertEqual(result['calls'][0]['spellings'], ['score(value, 1)', 'score(1, 1)'])
+
+    def test_unknown_setup_and_conflicting_return_observations_never_protect_a_call(self):
+        for observations in ([self.observed([True], 2)], [self.observed([1], 2), self.observed([1], 3)]):
+            result = self.facts('self.assertEqual(score(1), 2)', observations)['methods'][0]
+            self.assertNotIn('observationReturned', result['calls'][0])
+        code = suite('self.assertEqual(score(1), 2)').replace('    def test_value', '    def setUp(self):\n        self.value = 1\n    def test_value')
+        result = self.facts('', [self.observed([1], 2)], code)['methods'][0]
+        self.assertNotIn('observationReturned', result['calls'][0])
+
     def test_conditional_and_rebound_imports_stay_unknown(self):
         for body in ('if True:\n    self.assertEqual(score(1), 2)', 'score = lambda value: 2\nself.assertEqual(score(1), 2)'):
             result = self.facts(body, [self.observed([1], 2)])

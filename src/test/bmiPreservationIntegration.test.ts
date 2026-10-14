@@ -1,9 +1,10 @@
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
@@ -43,6 +44,15 @@ class Cases(unittest.TestCase):
     const weakened = complete.replace("self.assertEqual(status, 'overweight')", "self.assertGreaterEqual(status, 'overweight')");
     const dropped = 'import unittest\nfrom bmi import calculate_bmi\nclass Cases(unittest.TestCase):\n' + exceptionMethod;
     fs.writeFileSync(targetFile, source);
+    // Input-only fixtures give the formal seed the exact executed source call.
+    // No expected result or exception is supplied to the Trace builder.
+    const built = spawnSync(python, ['-B', path.resolve(__dirname, '../../python_scripts/probe_fixture_builder.py'),
+        '--root', root, '--file', targetFile, '--target', 'calculate_bmi'], {
+        input: JSON.stringify({ cases: [[70, 170], [70, 0]].map(args => ({ args_literals: JSON.stringify(args) })) }),
+        encoding: 'utf8', timeout: 30000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+    assert.equal(built.status, 0, built.stderr);
+    fs.writeFileSync(path.join(root, 'trace-inputs.json'), built.stdout, 'utf8');
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     let scenario: 'weakened' | 'dropped' = 'weakened';
@@ -54,13 +64,15 @@ class Cases(unittest.TestCase):
             provider.webview = { postMessage: async () => true }; return { dispose() {} };
         }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }], openTextDocument: async () => ({}),
-            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : key === 'probeInputFile' ? 'trace-inputs.json' : fallback }) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async (_url, options) => {
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture', metadataAvailable: false });
+        if (metadata) { return metadata; }
         requests++;
         assert.ok(requests <= 8, 'a rejected rewrite must not start unbounded model retries');
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
@@ -71,8 +83,8 @@ class Cases(unittest.TestCase):
             assert.doesNotMatch(request.prompt, /self\.assertGreaterEqual\(status/,
                 'the weakened candidate must be rejected before review');
             response = JSON.stringify({ findings: reviews === 1 ? [{ category: 'missing-scenario', test_line: 'L5',
-                reason: 'This case uses a positive height; a separate zero-height input is not tested.',
-                action: 'Add a separate zero-height exception case while preserving this passing normal-input case and its exact assertions.' }] : [] });
+                reason: 'This case uses the observed positive-height input (70, 170); the separate controlled Trace input (70, 0) raised ZeroDivisionError and is not tested.',
+                action: 'Add a separate test method with assertRaises(ZeroDivisionError) around calculate_bmi(70, 0), preserving this passing normal-input case and its exact assertions.' }] : [] });
         } else if (request.roleInstructions?.includes('dependency_behaviors')) {
             response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
         } else if (request.roleInstructions?.includes('Python unittest Bug Fixer')) {
@@ -121,13 +133,20 @@ class Cases(unittest.TestCase):
             const events = fs.readFileSync(path.join(runRoot, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
             const diagnostic = JSON.stringify({ scenario, writers, revisions, reviews, requests, fixes, failure: knowledge.lastFailure,
                 preservation: events.filter(event => event.stage === 'passing-tests').map(event => event.detail) });
-            assert.equal(revisions, 2, diagnostic);
+            assert.equal(revisions, scenario === 'weakened' ? 2 : 1, diagnostic);
             assert.equal(reviews, 2, diagnostic);
             assert.equal(writers, scenario === 'weakened' ? 1 : 2, diagnostic);
             assert.equal(fixes, scenario === 'weakened' ? 0 : 1, diagnostic);
             const rejected = events.filter(event => event.stage === 'passing-tests' && event.status === 'preservation-rejected');
-            assert.equal(rejected.length, 1, diagnostic);
-            assert.ok(rejected.every(event => event.detail.reasonCode === (scenario === 'weakened' ? 'assertion-weakened' : 'removed-passing-method')));
+            assert.equal(rejected.length, scenario === 'weakened' ? 1 : 0, diagnostic);
+            assert.ok(rejected.every(event => event.detail.reasonCode === 'assertion-weakened'));
+            if (scenario === 'dropped') {
+                const merged = events.filter(event => event.stage === 'writer-addition' && event.status === 'merged');
+                assert.equal(merged.length, 1, diagnostic);
+                assert.equal(merged[0].detail.baselineCodeHash, evidenceHash(seed.trim()),
+                    'the fallback fragment omits the old case, but the host still merges against its immutable executed seed');
+                assert.equal(merged[0].detail.addedMethodsCount, 1);
+            }
             const executedHashes = events.filter(event => event.stage === 'scenarios' && event.status === 'observed')
                 .map(event => event.detail.codeHash);
             assert.equal(executedHashes.length, scenario === 'weakened' ? 2 : 4, diagnostic);

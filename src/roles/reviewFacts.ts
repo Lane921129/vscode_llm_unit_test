@@ -11,11 +11,11 @@ import { runSpawn } from '../utils/processRunner';
 export interface ReviewFactIdentity { runId: string; sourceHash: string; target: string }
 export interface ReviewAssertionFact {
     line: number; kind: string; targetResult?: boolean; expectedType?: string;
-    expected?: TraceValueSnapshot; observationVerified?: boolean;
+    expected?: TraceValueSnapshot; observationVerified?: boolean; targetCallLine?: number;
 }
 export interface ReviewMethodFacts {
     line: number; endLine: number; name: string; assertions: ReviewAssertionFact[];
-    calls: Array<{ line: number; call: TraceValueSnapshot }>;
+    calls: Array<{ line: number; call: TraceValueSnapshot; observationReturned?: true; spellings?: string[] }>;
     exceptionGuards: Array<{ line: number; exception: string; callLines: number[] }>;
     scalarBindings: Array<{ line: number; name: string; type: string }>;
     mockAssertions?: Array<{ line: number; kind: string; patchTarget: string; mockPath: string; targetCallLine: number }>;
@@ -112,6 +112,17 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
         || !Array.isArray(value.imports) || !Array.isArray(value.classes) || !Array.isArray(value.methods)
         || containsCredential(run.stdout, options.knownSecrets)) { invalid('ast-identity'); }
     for (const method of value.methods) {
+        if (object(method) && Array.isArray(method.calls) && method.calls.some((call: unknown) => !object(call)
+            || call.observationReturned !== undefined && call.observationReturned !== true
+            || call.spellings !== undefined && (!Array.isArray(call.spellings) || call.spellings.length < 1 || call.spellings.length > 2
+                || call.spellings.some((text: unknown) => typeof text !== 'string' || !text || text.length > 200000)))) {
+            invalid('ast-call-observation-shape');
+        }
+        if (object(method) && Array.isArray(method.assertions) && method.assertions.some((assertion: unknown) => !object(assertion)
+            || assertion.targetCallLine !== undefined && (!Number.isSafeInteger(assertion.targetCallLine)
+                || !Array.isArray(method.calls) || !method.calls.some((call: Record<string, unknown>) => call.line === assertion.targetCallLine)))) {
+            invalid('ast-assertion-call-shape');
+        }
         if (!object(method) || method.standardAssertions === undefined) { continue; }
         if (!Array.isArray(method.standardAssertions) || method.standardAssertions.length > 12000
             || !Number.isSafeInteger(method.line) || !Number.isSafeInteger(method.endLine)
@@ -146,7 +157,7 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
 /** Call spellings already appear in TEST_FILE; project their AST presence without duplicating code. */
 export function reviewFactsForPrompt(facts: ReviewFacts): string {
     return 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...facts,
-        methods: facts.methods.map(method => ({ ...method, calls: method.calls.map(call => ({ line: call.line })),
+        methods: facts.methods.map(method => ({ ...method, calls: method.calls.map(({ line, observationReturned }) => ({ line, observationReturned })),
             standardAssertionCalls: method.standardAssertionCalls?.map(({ line, kind }) => ({ line, kind })),
             dependencyPatchSyntax: method.dependencyPatchSyntax?.map(({ line, origin, target, binding }) => ({ line, origin, target, binding })) })) });
 }

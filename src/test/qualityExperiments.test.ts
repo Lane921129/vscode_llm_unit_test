@@ -227,7 +227,8 @@ test('numeric boundary planning accepts Mutatest operators and rejects different
         mutants: [{ id: 'm1', status: 'SURVIVED', kind: 'Compare', line: 2, column: 7, position: 0, from: 'Lt', to: 'LtE' }] } as MutationRun;
     const observations = { func_name: 'classify', args: ['amount'], examples: [{ args: ['2'], result: '1' }], errors: [], load_error: null };
     const planned = await planMutationProbes(numeric, 'classify', mutation, observations, python);
-    assert.deepEqual(planned.inputs.map(input => input.args), [[10]]);
+    assert.deepEqual(planned.inputs.map(input => input.args), [[9.99], [10], [10.01]],
+        'one measured comparison gap proposes the exact boundary and both adjacent sides as a bounded input family');
     assert.equal(planned.assertionOracle, false);
     assert.equal((await planMutationProbes(numeric + '# changed', 'classify', mutation, observations, python)).inputs.length, 0);
     assert.equal((await planMutationProbes(numeric, 'Other.classify', mutation, observations, python)).inputs.length, 0);

@@ -1,5 +1,27 @@
 # 專案閱讀入口
 
+## BMI 增量補測與證據綁定（2026-10-14）
+
+初始 Analyst 仍分析完整來源；Writer 先寫一個可執行種子，Checker 獨立執行，再由另一 LLM Reviewer 審查。同 source／run／target／test hash 批准後才量測覆蓋率及突變。`writerSeedContract.ts` 在提示確實包含一個完整受控案例時核對方法數與 literal 呼叫的精確輸入，並提供簡短 `WRITER_SEED_CASE_FACTS_V1`；不計算答案或把未知 Mock／動態呼叫判成通過。
+
+品質不足時，`mutation_probe_plan.py` 可規劃比較點以下、相等、以上的有限輸入族，依來源直接 round 精度選擇探測間隔；每筆仍須受控執行。已通過 literal 輸入只用來避免重提相同實驗，不刪存活突變或改分母。`qualityTaskEvidence.ts` 把完整、同身分、未變異且可重播的 returned 觀測綁定本次 focus。`quality-task-v4` 只要求 Analyst 引用 scenario ID，不再另猜 expected；Writer 收到精確 args／kwargs 與實測結果。完整 typed 證據仍存執行產物，未知狀態不借失去型別的 JSON 證明。
+
+`writerPhases.ts` 要求擴充回覆只含新增內容，`testMerger.ts`／`merge_test_snippets.py` 的 `writer-addition-v1` 模式保留不可變基線原文，再以 AST 合併新增方法。既有方法改寫、fixture 或 import 衝突均拒絕；可證明的裸方法只能綁定唯一既有 class。新的完整候選仍經結構、精確輸入、保留、Checker、Reviewer與同雜湊批准，不共享舊執行或批准。Tier 子任務及 Writer 修訂走相同合併入口。
+
+Writer 的同層 system 指令明確以一個 focus 取代全面 suite／全部 survivor 範圍；末尾 `WRITER_FOCUS_CASE_FACTS_V1` 提供完整 `targetCall` 與實測結果，減少位置參數互換。literal 新呼叫不僅須在範圍內，也須涵蓋完整家族；只有部分已知 literal 的混合動態候選保持保守拒絕，完全動態未知仍須執行與審查。沒有新增方法的原基線回覆在既有修訂額度內補正，不重跑原分數。方法盤點的裸方法回綁採合併後真 AST 指紋，不以回覆文字雜湊冒充 AST。
+
+`focusedWriterAdditions.ts` 把同步頂層函式的完整觀測族分成逐案 Writer 子任務，每案一個新方法、一個精確 literal 呼叫，最多兩次契約補正。Host 只累積 AST 合併的未執行草稿，不產生 assertion；全部案例齊全後，完整候選才進原保留、Checker、Reviewer及突變門檻。任一子任務失敗保留原基線，部分草稿不取得批准。家族期限按 focus 與基線雜湊固定一次，外層修訂及 Tier 回退不續期；角色、傳輸及 token 計數仍共用原 target。class、async及未知狀態保留原生成流程。逐案提示只投影同 typed input／result 的完整觀測；Trace 合併後以真實新 ID 引用，原 ID 相同不能借用舊案例。完整來源、setup及已執行基線保留，前案未執行內容只列 AST 方法名稱與雜湊；單案請求不再附回全域 Boundary／Numeric 觀測，完整產物仍保存在原紀錄並供整套驗證與審查使用。
+
+`planAnalysisTargetBudget` 在最外層依輪數建立一次計數額度；五輪44次 logical request 讓初始分析、Writer、Reviewer、品質分析、容量探針與有界修訂共享足量額度。預設上限64次，傳輸與 token 估量同步有界；明確設定仍覆蓋，原10分鐘 deadline、巢狀共享及先驗證後消耗規則不變。這是開始前規劃，不是失敗後續期。
+
+對可證明的簡單 unittest 基線，`writer-addition-context-v1` 以 AST 提供完整 imports 與唯一 class setup，另列原始基線 SHA-256 及既有方法名稱；舊 test body 不重送給逐案 Writer，避免舊輸入混入當前案例。Host 仍以完整原始基線合併、執行與審查，投影本身不能執行或取得批准。fixture、helper、全域狀態、裝飾器及未知結構不做此投影，保留完整提示；真正工具／契約失敗直接停止。
+
+逐案拆解只適用初次品質生成。有失敗候選的 `writer-revision` 保留具體執行回饋／Reviewer finding 與完整原候選，交原修訂提示；不能改用 fresh case prompt 丟失問題，也不能把尚未批准的可執行草稿當新不可變基線。原始基線合併、passing 保護、重新執行及同版批准維持不變。
+
+baseline／draft 只在完全相同的獨立 Python fence 已存在時引用去重；基線原文只是較大草稿的 prefix，不代表已完整獨立供應。修訂提示因此能明確區分原已執行基線與尚未批准的新增方法。
+
+Reviewer review-v7 新增具體例外依據檢查；同候選實跑、同 literal 輸入的 returned 觀測可標記 return→exception 建議矛盾，沿用一次契約補正，不自動批准。`candidateMethodSummary.ts` 只讀同身分 AST 盤點與實際保留雜湊，分開生成／新增／拒絕／保留；未知不補零，合併不重算模型生成。最終報告留摘要，failure／workflow 留逐候選流程。
+
 ## 容量、審查與 Mock 修訂（2026-10-14）
 
 `localRuntimeMetadata.ts` 共用 Ollama show／ps 探索，HTTP與body解析共用有界期限，僅投影固定狀態、數字與端點摘要。`SidebarProvider.prepareLocalAnalysisRuntime` 在取得本次執行所有權後更新 execution snapshot；UI與正式請求共用同份上限／分配資料。cached上限須同端點、模型且合法；探索不授予角色資格，也不寫回模型profile或使用者容量偏好。`model-runtime selected` 保存 fresh／cached／unavailable 診斷，避免未知上限被泛稱成模型無法執行。
@@ -408,7 +430,7 @@ Writer 在選擇 optional 材料前，先預扣相同的初始化與資源語境
 
 ## 尚未實作與尚待驗收的界線
 
-本次流程重構不宣稱完成型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗只提供普通同步實例的同一目標最多兩次呼叫觀測，不自動寫入正式測試；實驗去重不等同突變量測快取。Writer 仍使用完整 Python fence，seed 與補強提示不等同已完成增量格式生成。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
+本次流程重構不宣稱完成型態 A/B/C/D 測資規劃、受限制 setup／Mock adapter、任意多方法狀態序列、逐案 coverage 回饋、完整 TargetSpec、宣告式 case-delta 生成、survivor 選測／量測快取，以及逐筆輸入 UI／設定遷移。狀態實驗只提供普通同步實例的同一目標最多兩次呼叫觀測，不自動寫入正式測試；實驗去重不等同突變量測快取。Writer 的 seed 使用完整 Python fence，基線通過後採 writer-addition-v1 新增片段；同步頂層函式的觀測族可逐案生成、合併後整套核驗。runtime policy 僅支援受管理的 `threading.Thread`；直接低階 `_thread` 啟動受阻擋，程序內防護不等同 OS sandbox。
 
 共用版本化 `QualityPolicy` 已交付；新執行的 standard80、歷史 strict100 與 fixture manifest 各自保存明確政策欄位。N/A、未知、未完成審查與未完成測量不因此升格通過。固定模型 A/B、完整 corpus／保留評估集，以及外部引擎的真實支援環境驗收均未執行。
 

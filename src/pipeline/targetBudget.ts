@@ -30,6 +30,38 @@ export const DEFAULT_TARGET_BUDGET: Readonly<TargetBudgetLimits> = Object.freeze
 
 const counters: TargetBudgetCounter[] = ['logicalRequests', 'transportAttempts', 'estimatedInputTokens', 'candidateAttempts'];
 
+/** Plan one target's allowance before it starts. Formal roles, capacity probes
+ * and retries share this allowance; more loops never renew the absolute deadline.
+ * Explicit limits remain authoritative, including a zero counter allowance.
+ */
+export function planAnalysisTargetBudget(maxLoops: number,
+    overrides: Partial<TargetBudgetLimits> = {}): TargetBudgetLimits {
+    if (!Number.isSafeInteger(maxLoops) || maxLoops <= 0) {
+        throw new TypeError('Analysis target budget requires a normalized positive maxLoops');
+    }
+    // Ten loops already reach every count cap. Clamp before multiplication so
+    // even the largest safe loop setting cannot overflow any computed allowance.
+    const boundedLoops = Math.min(maxLoops, 10);
+    const logicalRequests = Math.max(20, Math.min(64, 4 + boundedLoops * 8));
+    const limits: TargetBudgetLimits = {
+        timeoutMs: DEFAULT_TARGET_BUDGET.timeoutMs,
+        logicalRequests,
+        transportAttempts: logicalRequests * 2,
+        estimatedInputTokens: Math.max(200_000, logicalRequests * 10_000),
+        candidateAttempts: Math.max(20, Math.min(40, boundedLoops * 4))
+    };
+    for (const key of ['timeoutMs', ...counters] as const) {
+        const value = overrides[key];
+        if (value !== undefined) {
+            if (!Number.isSafeInteger(value) || value < 0 || (key === 'timeoutMs' && value === 0)) {
+                throw new TypeError(`Invalid target budget limit: ${key}`);
+            }
+            limits[key] = value;
+        }
+    }
+    return limits;
+}
+
 /** One target owns one budget across roles, tiers, format repair and retries.
  * Token counts are estimates supplied by the request builder, never reported
  * as provider-billed usage. Diagnostics contain counters only, not prompts.

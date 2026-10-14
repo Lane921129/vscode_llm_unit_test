@@ -22,8 +22,14 @@ import { semanticWithContractRepair } from './roles/semanticContractRepair';
 import { buildReviewFacts } from './roles/reviewFacts';
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
 import { passingTestIds } from './validation/repairFeedback';
-import { buildWriterSeedPrompt, buildWriterExpansionPrompt } from './roles/writerPhases';
+import { buildWriterSeedPrompt, buildWriterExpansionPrompt, buildWriterAdditionRevisionPrompt,
+    buildWriterAdditionSystemPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt } from './roles/writerPhases';
+import { bindQualityTaskObservations, QualityTaskEvidence, qualityTasksForWriter,
+    qualityFocusInputDiagnostic, qualityInputAlreadyTested, qualityFocusCasesForPrompt,
+    resolveQualityTaskTraceCaseIds } from './pipeline/qualityTaskEvidence';
 import { selectWriterSeedCaseIds } from './prompts/compactWriterContext';
+import { seedCaseFactsForPrompt, validateWriterSeedContract } from './pipeline/writerSeedContract';
+import { composeFocusedWriterAdditions } from './pipeline/focusedWriterAdditions';
 import { getRuntimeContextPreference, RuntimeContextPreference } from './llm/runtimeContextPreferences';
 import { LocalRuntimeMetadataDiagnostic } from './llm/localRuntimeMetadata';
 import { collectNumericRepairEvidence } from './pipeline/numericTestSkill';
@@ -35,7 +41,7 @@ import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegres
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
 import { SOURCE_VERSIONS_VERSION, sourceVersionsCurrent } from './pipeline/sourceVersions';
-import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget } from './pipeline/targetBudget';
+import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget, planAnalysisTargetBudget } from './pipeline/targetBudget';
 import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObservations } from './pipeline/behaviorObservations';
 import { buildProbeInputs, callerForPrompt, TypedProbeInputsV1 } from './pipeline/probeInputs';
 import { createDefaultQualityPolicy } from './pipeline/qualityPolicy';
@@ -69,7 +75,8 @@ import { normalizeScenarioOutput, reconcileScenarios, ScenarioIdentity } from '.
 import { dispatchTestRules } from './pipeline/testRuleDispatcher';
 import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir } from './utils/utils';
-import { mergeTestSnippets, mergeTestSnippetsPreservingBaseline } from './validation/testMerger';
+import { mergeTestSnippets, mergeTestSnippetsPreservingBaseline, mergeWriterTestAddition,
+    extractWriterAdditionCode, projectWriterAdditionContext } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
 import { buildOllamaPromptEnvelope } from './llm/ollamaPrompt';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
@@ -1454,7 +1461,8 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     if (!fixtures && config.get<ImportFixtureRule[]>('importFixtures', []).length) {
         log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。"));
     }
-    return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(limits),
+    const budget = planAnalysisTargetBudget(normalizeExecutionSettings(params).maxLoops, limits);
+    return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(budget),
         () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider, root)));
 }
 
@@ -1573,6 +1581,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
     let mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
     const writerOutputBudget = new WriterOutputBudget();
+    let writerAdditionBaseline: string | undefined;
+    let activeSeedCaseIds: string[] | undefined;
+    let activeSeedCaseFacts = '';
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
@@ -1689,6 +1700,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         target: params.funcName || 'file' }, knownSecrets);
     const numericEvidencePrompt = () => numericEvidence.prompt(Math.min(12000, activeModelProfile.budgetTokens));
     let pendingQualityGap: PendingQualityFocus | undefined;
+    let activeQualityTaskEvidence: QualityTaskEvidence | undefined;
+    const focusedWriterDeadlines = new Map<string, number>();
     let focusedQualityFeedback = '';
     let pendingQualityAttempts = 0;
     let deferredFocusId: string | undefined;
@@ -1731,22 +1744,47 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             + 'Observations describe this test setup, not production data, network or GUI startup.'
             + '\n\n' + resourceContext.context;
     };
-    const requestBudgeted = async (
+    const requestBudgetedOne = async (
         requestParams: AnalysisParams, system: string, prompt: string,
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
-        sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string
+        sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string,
+        writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }
     ): Promise<string> => {
-        if (role === 'writer' && mode === 'full') {
+        if (role === 'writer' && mode === 'full' && !writerCaseMode) {
+            writerAdditionBaseline = seedPending ? undefined : checkpoints.executable?.code || bestCode || undefined;
             prompt = seedPending ? buildWriterSeedPrompt(prompt)
                 : buildWriterExpansionPrompt(prompt, checkpoints.executable?.code || bestCode || '', analystTasks);
         }
-        prompt = appendQualityEvidence(prompt);
-        if (mode === 'full' && numericEvidence.hasEvidence) {
+        if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
+            system = buildWriterAdditionSystemPrompt(system);
+            format = 'text';
+        }
+        if (writerCaseMode) {
+            system += '\n\nWRITER_CASE_SUBTASK_V1: This request owns exactly ONE observed case. '
+                + 'Return exactly one NEW method with exactly one target call copied from the final WRITER_FOCUS_CASE_FACTS_V1. '
+                + 'The wider family and earlier analysis are context; do not write their other cases in this subtask. '
+                + `Name the new method ${writerCaseMode.methodName}; copy its required signature at the end of the user prompt. `
+                + 'Do not reuse a seed or accumulator method name. The host will assemble all case additions, '
+                + 'then execute and review the whole candidate before mutation. The accumulator is unexecuted and unapproved.';
+        }
+        if (mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
+            system = buildWriterSeedSystemPrompt(system);
+            if (activeSeedCaseFacts && !prompt.includes(activeSeedCaseFacts)) { prompt += '\n\n' + activeSeedCaseFacts; }
+        }
+        if (!writerCaseMode) { prompt = appendQualityEvidence(prompt); }
+        if (mode === 'full' && numericEvidence.hasEvidence && !writerCaseMode) {
             const observations = numericEvidencePrompt();
             if (!prompt.includes(observations)) { prompt += '\n\n' + observations; }
         }
         prompt += importResourcePrompt();
+        if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
+            const focusCases = qualityFocusCasesForPrompt(writerCaseMode?.evidence || activeQualityTaskEvidence);
+            if (focusCases && !prompt.includes(focusCases)) { prompt += '\n\n' + focusCases; }
+            if (writerCaseMode) {
+                prompt += `\n\nREQUIRED NEW METHOD SIGNATURE (body must be authored by you):\ndef ${writerCaseMode.methodName}(self):\n`;
+            }
+        }
         const contractedSystem = addOutputContract(system, format);
         const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision'].includes(role)
             && localRuntime?.ok === true;
@@ -2002,8 +2040,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             metadataDiagnostic: modelSnapshot.localRuntimeMetadata,
             qualificationApplicable: currentQualification });
     }
-    let astContext: AstContext | null = null;
     const targetDir = path.dirname(params.filePath);
+    let astContext: AstContext | null = null;
     let preflight: Awaited<ReturnType<typeof preflightTargetModule>> | undefined;
     const checkEnvironment = async (context: AstContext | null) => {
         const module = inferTargetImportModule(params.filePath, context?.file_imports || []);
@@ -2066,6 +2104,247 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     journal.knowledge({ dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
         dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions });
     const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
+    const methodInventories = new Map<string, ScenarioIdentity[]>();
+    const writerBaselineContexts = new Map<string, Awaited<ReturnType<typeof projectWriterAdditionContext>>>();
+    const additionRejections = new Map<string, { reason: string; reasonCode: string; gate: 'revision-scope' | 'unittest-structure' }>();
+    const recordCandidateMethods = async (code: string, phase: 'generated' | 'merged', role: string,
+        baseline = '') => {
+        const codeHash = evidenceHash(code);
+        const read = async (value: string): Promise<ScenarioIdentity[] | undefined> => {
+            if (!value) { return []; }
+            const hash = evidenceHash(value);
+            if (methodInventories.has(hash)) { return methodInventories.get(hash); }
+            const result = await runSpawn(pythonExecutable, ['-B', pythonToolPath('scenarios')],
+                { input: value, timeout: 5000, env: testExecutionEnv });
+            if (result.code !== 0) { return undefined; }
+            try {
+                const parsed = JSON.parse(result.stdout);
+                if (!Array.isArray(parsed) || parsed.length > 256 || parsed.some(item =>
+                    !item || typeof item.id !== 'string' || typeof item.fingerprint !== 'string'
+                    || !/^[a-f0-9]{64}$/.test(item.fingerprint))) { return undefined; }
+                methodInventories.set(hash, parsed);
+                return parsed;
+            } catch { return undefined; }
+        };
+        const methods = await read(code);
+        const baselineMethods = baseline ? await read(baseline) : [];
+        recordRole('candidate-methods', methods?.length ? 'inventoried' : 'unavailable', {
+            schemaVersion: 'candidate-methods-v1', target: params.funcName || targetFuncName,
+            runId: journal.runId, sourceHash: journal.sourceHash, codeHash, phase, role,
+            ...(methods?.length ? { methods: methods.map(({ id, fingerprint }) => ({ id, fingerprint })) }
+                : { reasonCode: 'candidate-methods-not-inventoried' }),
+            baselineCodeHash: evidenceHash(baseline), baselineMethods
+        });
+    };
+    const bindSingleAdditionInventory = (code: string, mergedCode: string, baseline: string,
+        addedMethods: Array<{ className: string; name: string }>, role: string) => {
+        if (methodInventories.get(evidenceHash(code))?.length !== 0 || addedMethods.length !== 1) { return; }
+        const [{ className, name }] = addedMethods;
+        const method = methodInventories.get(evidenceHash(mergedCode))?.find(item => item.id === `${className}.${name}`);
+        if (!method) { return; }
+        // The merger proves the unique class; the completed merged AST supplies
+        // its actual fingerprint. A bare response text hash proves neither.
+        const methods = [{ id: method.id, fingerprint: method.fingerprint }];
+        methodInventories.set(evidenceHash(code), methods);
+        recordRole('candidate-methods', 'inventoried', { schemaVersion: 'candidate-methods-v1',
+            target: params.funcName || targetFuncName, runId: journal.runId, sourceHash: journal.sourceHash,
+            codeHash: evidenceHash(code), phase: 'generated', role, methods,
+            inventoryOrigin: 'ast-single-addition-binding', baselineCodeHash: evidenceHash(baseline),
+            baselineMethods: methodInventories.get(evidenceHash(baseline)) });
+    };
+    const requestBudgeted: typeof requestBudgetedOne = async (requestParams, system, prompt, requestLog,
+        format = 'text', role = 'writer', sharedDeadlineAt, reservedInputTokens = 0, revisionCurrentCode) => {
+        const evidence = activeQualityTaskEvidence;
+        const baseline = checkpoints.executable?.code || bestCode;
+        // Candidate revisions must retain their exact execution/Reviewer finding
+        // prompt. A fresh per-case generation would discard that feedback and
+        // freeze an executable but unapproved draft as a new baseline.
+        if (mode !== 'full' || seedPending || role !== 'writer' || revisionCurrentCode !== undefined
+            || !baseline || !evidence || evidence.cases.length < 2
+            || astContext?.class_name !== null || astContext.is_async !== false || astContext.method_kind !== 'module') {
+            return requestBudgetedOne(requestParams, system, prompt, requestLog, format, role,
+                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode);
+        }
+        writerAdditionBaseline = baseline;
+        // Every case and its bounded correction shares this family's original
+        // deadline and the target's counters. No subtask renews either budget.
+        const familyKey = evidence.focusId + ':' + evidenceHash(baseline);
+        const plannedDeadline = Math.min(sharedDeadlineAt ?? Infinity, currentTargetBudget()?.deadlineAt ?? Infinity,
+            Date.now() + requestParams.timeoutSeconds * 2000 * evidence.cases.length);
+        const deadline = Math.min(focusedWriterDeadlines.get(familyKey) ?? plannedDeadline, plannedDeadline);
+        focusedWriterDeadlines.set(familyKey, deadline);
+        const baselineHash = evidenceHash(baseline);
+        if (!writerBaselineContexts.has(baselineHash)) {
+            writerBaselineContexts.set(baselineHash, await projectWriterAdditionContext({ baseline,
+                python: pythonExecutable, env: testExecutionEnv }));
+        }
+        const baselineContext = writerBaselineContexts.get(baselineHash)!;
+        if (!baselineContext.ok && baselineContext.reasonCode !== 'addition-context-unsupported') {
+            throw new AnalysisStageError('validation', 'writer-addition-context',
+                'The Writer baseline context tool did not establish a valid result.', { reasonCode: baselineContext.reasonCode });
+        }
+        recordRole('writer-baseline-context', baselineContext.ok ? 'projected' : 'complete', {
+            baselineCodeHash: baselineHash, passingBytesPreserved: true,
+            ...(baselineContext.ok ? { methodIds: baselineContext.methodIds } : { reasonCode: baselineContext.reasonCode }) });
+        let lastCaseAddition = '';
+        const composed = await composeFocusedWriterAdditions({ baseline, evidence,
+            request: async (caseEvidence, accumulator, ordinal, total, correction) => {
+                throwIfExecutionCancelled();
+                const methodName = `test_focus_${evidence.focusId.slice(1)}_${evidenceHash(baseline).slice(0, 8)}_${ordinal}`;
+                const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+                const projection = resolveQualityTaskTraceCaseIds({ identity, evidence: caseEvidence,
+                    observations: astContext.traceResult ? { ...identity, value: astContext.traceResult } : undefined });
+                if (projection.status !== 'resolved') {
+                    recordRole('writer-case', 'observation-rejected', { reasonCode: projection.reasonCode,
+                        focusId: evidence.focusId, caseId: caseEvidence.cases[0].caseId });
+                    throw new AnalysisStageError('validation', 'quality-case-projection',
+                        'The current Writer case could not be matched to its complete typed observation.', { reasonCode: projection.reasonCode });
+                }
+                // Construct this subtask from the complete source/setup evidence,
+                // not an earlier rejected draft. Prior AI bodies are not facts
+                // and can make the model exchange two otherwise correct cases.
+                const casePrompt = getUserPrompt(params.filePath, params.funcName || targetFuncName, astContext.code,
+                    'small', { ...astContext, writerScenarioCaseIds: projection.caseIds },
+                    undefined, activeModelProfile.budgetTokens, params.modelName, writerEvidenceBundle);
+                const gap = `Observed case ${ordinal}/${total}; write only this case in one new method.`;
+                const subtask = (baselineContext.ok
+                    ? buildWriterCaseAdditionPrompt(casePrompt, baselineContext.contextCode, baselineHash, baselineContext.methodIds, gap)
+                    : buildWriterExpansionPrompt(casePrompt, baseline, gap))
+                    + (accumulator === baseline ? '\nThe original baseline metadata above also lists all existing method names.\n'
+                        : '\n\nAI DRAFT METHOD INVENTORY (unexecuted, unapproved; names only):\n'
+                            + JSON.stringify({ codeHash: evidenceHash(accumulator),
+                                methods: (methodInventories.get(evidenceHash(accumulator)) || []).map(method => method.id) }) + '\n')
+                    + (correction ? `\nCONTRACT CORRECTION: ${correction}\n` : '');
+                recordRole('writer-case', 'scope-selected', { caseId: caseEvidence.cases[0].caseId,
+                    observedCaseIds: projection.caseIds, focusId: evidence.focusId, ordinal, total,
+                    correction: !!correction, methodName, deadlineAt: deadline });
+                lastCaseAddition = await requestBudgetedOne(requestParams, system, subtask, requestLog, 'text', role,
+                    deadline, reservedInputTokens, revisionCurrentCode, { evidence: caseEvidence, methodName });
+                await recordCandidateMethods(extractWriterAdditionCode(lastCaseAddition), 'generated', role, accumulator);
+                return lastCaseAddition;
+            },
+            merge: async (accumulator, addition) => {
+                const merged = await mergeWriterTestAddition({ baseline: accumulator, addition,
+                    python: pythonExecutable, env: testExecutionEnv });
+                if (!merged.ok && merged.reasonCode === 'merge-tool-error') {
+                    throw new AnalysisStageError('validation', 'writer-addition-tool', 'Writer case composition did not complete.');
+                }
+                if (merged.ok) {
+                    await recordCandidateMethods(merged.mergedCode, 'merged', role, accumulator);
+                    bindSingleAdditionInventory(extractWriterAdditionCode(addition), merged.mergedCode,
+                        accumulator, merged.addedMethods, role);
+                }
+                return merged;
+            },
+            validate: async (code, caseEvidence, previousBaseline) => {
+                const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+                const [facts, previous] = await Promise.all([
+                    buildReviewFacts({ ...identity, code, module: targetImportModule,
+                        python: pythonExecutable, env: testExecutionEnv, executionVerified: false, knownSecrets }),
+                    buildReviewFacts({ ...identity, code: previousBaseline, module: targetImportModule,
+                        python: pythonExecutable, env: testExecutionEnv, executionVerified: false, knownSecrets })
+                ]);
+                const previousIds = previous.methods.map(method => method.name);
+                const added = facts.methods.filter(method => !previousIds.includes(method.name));
+                if (added.length !== 1 || added[0].calls.length !== 1) { return 'writer-case-call-unproven'; }
+                return qualityFocusInputDiagnostic(facts, caseEvidence, previousIds);
+            },
+            onEvent: (status, detail) => {
+                recordRole('writer-case', status, { ...detail, focusId: evidence.focusId });
+                if (status === 'rejected' && lastCaseAddition && detail.reasonCode) {
+                    recordRejected(extractWriterAdditionCode(lastCaseAddition), detail.attempt, 'revision-scope', detail.reasonCode);
+                }
+            }
+        });
+        writerAdditionBaseline = baseline;
+        if (!composed.ok) {
+            const rejected = composed.addition || baseline;
+            additionRejections.set(evidenceHash(extractWriterAdditionCode(rejected)), {
+                gate: 'revision-scope', reasonCode: composed.reasonCode,
+                reason: 'A focused Writer case did not produce a valid addition: ' + composed.reasonCode });
+            return rejected;
+        }
+        return composed.code;
+    };
+    const prepareWriterCandidate = async (raw: string, role: string, attempt: number): Promise<string> => {
+        const code = writerAdditionBaseline ? extractWriterAdditionCode(raw) : sanitizeLlmResponse(raw);
+        await recordCandidateMethods(code, 'generated', role, writerAdditionBaseline);
+        if (writerAdditionBaseline && additionRejections.has(evidenceHash(code))) { return code; }
+        if (!writerAdditionBaseline) {
+            const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+            const seedEvidence = { identity, selectedCaseIds: activeSeedCaseIds,
+                observations: astContext?.traceResult ? { ...identity, value: astContext.traceResult } : undefined,
+                ...(astContext?.class_name === null && astContext.is_async === false && astContext.method_kind === 'module'
+                    ? { targetKind: 'sync-top-level-function' as const } : {}) };
+            // Enforce this input contract only when this generation received one
+            // usable selected observation. Unknown mock/state bindings retain the
+            // ordinary structure, execution and Reviewer validation path.
+            if (seedPending && seedCaseFactsForPrompt(seedEvidence) && methodInventories.has(evidenceHash(code))) {
+                const facts = await buildReviewFacts({ ...identity, code, module: targetImportModule,
+                    python: pythonExecutable, env: testExecutionEnv, executionVerified: false, knownSecrets });
+                const result = validateWriterSeedContract({ ...seedEvidence, facts });
+                recordRole('writer-seed-input', result.status, { ...result, codeHash: evidenceHash(code) });
+                if (result.status === 'rejected') {
+                    additionRejections.set(evidenceHash(code), { gate: 'unittest-structure', reasonCode: result.reasonCode!,
+                        reason: 'The seed must contain exactly one test method with one target call using exactly the selected observed input. '
+                            + 'Use WRITER_SEED_CASE_FACTS_V1; do not add guessed boundary cases or unrelated exception requirements.' });
+                }
+            }
+            return code;
+        }
+        const merged = await mergeWriterTestAddition({ baseline: writerAdditionBaseline,
+            addition: raw, python: pythonExecutable, env: testExecutionEnv });
+        throwIfExecutionCancelled();
+        if (!merged.ok) {
+            recordRejected(code, attempt, 'revision-scope', merged.reasonCode);
+            recordRole('writer-addition', 'rejected', { reasonCode: merged.reasonCode,
+                baselineCodeHash: evidenceHash(writerAdditionBaseline), additionCodeHash: evidenceHash(code) });
+            if (merged.reasonCode === 'merge-tool-error') {
+                throw new AnalysisStageError('validation', 'writer-addition-tool', 'Writer addition composition did not complete.');
+            }
+            additionRejections.set(evidenceHash(code), { reason: 'Writer addition rejected: ' + merged.reasonCode,
+                reasonCode: merged.reasonCode, gate: 'revision-scope' });
+            return code;
+        }
+        if (activeQualityTaskEvidence && merged.addedMethodsCount === 0) {
+            const reasonCode = 'writer-addition-no-focus-test';
+            recordRejected(code, attempt, 'revision-scope', reasonCode);
+            additionRejections.set(evidenceHash(merged.mergedCode), { gate: 'revision-scope', reasonCode,
+                reason: 'This quality gap has new executed input observations. The unchanged baseline contains no new test for them. '
+                    + 'Return one new test method using the supplied focus calls and their observed outcomes; '
+                    + 'do not copy the existing baseline or claim it already exercises different inputs.' });
+            recordRole('writer-addition', 'rejected', { reasonCode, baselineCodeHash: evidenceHash(writerAdditionBaseline),
+                additionCodeHash: evidenceHash(code), codeHash: evidenceHash(merged.mergedCode),
+                focusId: activeQualityTaskEvidence.focusId, addedMethodsCount: 0 });
+            return merged.mergedCode;
+        }
+        recordRole('writer-addition', 'merged', { baselineCodeHash: evidenceHash(writerAdditionBaseline),
+            additionCodeHash: evidenceHash(code), codeHash: evidenceHash(merged.mergedCode),
+            addedMethods: merged.addedMethods, addedMethodsCount: merged.addedMethodsCount });
+        await recordCandidateMethods(merged.mergedCode, 'merged', role, writerAdditionBaseline);
+        // A single bare method has no standalone TestCase identity. The AST
+        // merger resolves its unique baseline class; only that completed proof
+        // may finish the earlier method inventory (never a guessed count).
+        bindSingleAdditionInventory(code, merged.mergedCode, writerAdditionBaseline, merged.addedMethods, role);
+        if (activeQualityTaskEvidence) {
+            const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+            const facts = await buildReviewFacts({ ...identity, code: merged.mergedCode, module: targetImportModule,
+                python: pythonExecutable, env: testExecutionEnv, executionVerified: false, knownSecrets });
+            const failure = qualityFocusInputDiagnostic(facts, activeQualityTaskEvidence,
+                (methodInventories.get(evidenceHash(writerAdditionBaseline)) || []).map(item => item.id));
+            if (failure) {
+                additionRejections.set(evidenceHash(merged.mergedCode), { reasonCode: failure, gate: 'revision-scope',
+                    reason: failure === 'quality-focus-case-family-incomplete'
+                        ? 'The new method covers only part of the supplied observed case family. Include EVERY exact targetCall from '
+                            + 'WRITER_FOCUS_CASE_FACTS_V1 with its corresponding observed result; do not omit cases or swap arguments.'
+                        : 'The new test uses an input outside the bound focus observations. Use exactly the supplied observed case family; '
+                            + 'do not replace it with unrelated return or exception cases.' });
+                recordRole('quality-focus-inputs', 'rejected', { reasonCode: failure,
+                    codeHash: evidenceHash(merged.mergedCode), focusId: activeQualityTaskEvidence.focusId });
+            }
+        }
+        return merged.mergedCode;
+    };
     let mutationSelection: SelectedMutationEngine | undefined;
     if (mode === 'full' && !isStubFunction(astContext)) {
         journal.knowledge({ workflowVersion: AI_WORKFLOW_VERSION, testAuthor: 'llm',
@@ -2546,6 +2825,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // Select one complete observed case for initial generation only. Original
         // artifacts and the contexts used by validation/review/repair stay complete.
         const seedCaseIds = seedPending ? selectWriterSeedCaseIds(astContext?.traceResult) : undefined;
+        activeSeedCaseIds = seedCaseIds;
+        const seedIdentity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+        activeSeedCaseFacts = seedPending ? seedCaseFactsForPrompt({ identity: seedIdentity, selectedCaseIds: seedCaseIds,
+            observations: astContext?.traceResult ? { ...seedIdentity, value: astContext.traceResult } : undefined,
+            ...(astContext?.class_name === null && astContext.is_async === false && astContext.method_kind === 'module'
+                ? { targetKind: 'sync-top-level-function' as const } : {}) }) : '';
         const writerContext = seedCaseIds ? { ...astContext, writerScenarioCaseIds: seedCaseIds } : astContext;
         if (seedCaseIds) {
             recordRole('writer-context', 'selected', { phase: 'seed', caseIds: seedCaseIds,
@@ -2627,7 +2912,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     try {
                         const raw = await requestBudgeted(params, sysP, usrP, log, testGenerationResponseFormat);
                         rawCode = raw;
-                        const extracted = sanitizeLlmResponse(raw);
+                        const extracted = await prepareWriterCandidate(raw, 'writer', 0);
                         if (extracted) {
                             sanitizedCode = extracted;
                             log(localize("[Tier 3] 模型補充完成！"));
@@ -2689,9 +2974,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             subRaw = await requestBudgeted(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat,
                                 subRevisionCode === undefined ? 'writer' : 'writer-revision', undefined, 0,
                                 seedPending ? subRevisionCode : undefined);
-                            const subClean = sanitizeLlmResponse(subRaw);
+                            const subClean = await prepareWriterCandidate(subRaw,
+                                subRevisionCode === undefined ? 'writer' : 'writer-revision', retry);
                             if (subClean) {
-                                const subValidation = await validateGeneratedTestCode(
+                                const additionFailure = additionRejections.get(evidenceHash(subClean));
+                                const subValidation = additionFailure ? { valid: false, ...additionFailure }
+                                    : await validateGeneratedTestCode(
                                     subClean,
                                     targetFuncName,
                                     path.basename(params.filePath, '.py'),
@@ -2712,7 +3000,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                     break;
                                 }
                                 const subReason = subGate.reason || localize("不明驗證錯誤");
-                                recordRejected(subClean, retry, subValidation.valid ? 'assertion-evidence' : 'unittest-structure',
+                                recordRejected(subClean, retry, additionFailure ? additionFailure.gate : subValidation.valid ? 'assertion-evidence' : 'unittest-structure',
                                     subValidation.valid ? 'trace-evidence-rejected' : subValidation.reasonCode || 'candidate-structure-rejected');
                                 if (retry === 0) {
                                     log(localize("[分治合流] 呼叫點 {0} 子回覆未通過格式／行為觀測證據驗證：{1}；將重試此子任務。", cIdx + 1, subReason));
@@ -2722,8 +3010,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                         evidence: subUserPrompt
                                     });
                                     if (!seedPending && mode === 'full') {
-                                        subGenerationPrompt = buildWriterExpansionPrompt(subGenerationPrompt,
-                                            checkpoints.executable?.code || bestCode || '', analystTasks);
+                                        subGenerationPrompt = buildWriterAdditionRevisionPrompt(subGenerationPrompt,
+                                            writerAdditionBaseline || checkpoints.executable?.code || bestCode || '', subClean, subReason);
                                     }
                                     subRevisionCode = subClean;
                                 } else {
@@ -2779,7 +3067,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }
 
-                    sanitizedCode = sanitizeLlmResponse(rawCode);
+                    sanitizedCode = await prepareWriterCandidate(rawCode,
+                        generationRevisionCode === undefined ? 'writer' : 'writer-revision', llmRetry);
 
                     if (!sanitizedCode) {
                         recordRejected('', llmRetry, 'response-format', 'no-python-candidate');
@@ -2789,6 +3078,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         } else {
                             throw new CandidateValidationError(localize("模型產生的程式碼內容為空 (已重試失敗)"));
                         }
+                    }
+
+                    if (!methodInventories.has(evidenceHash(sanitizedCode))) {
+                        const reason = localize('模型回覆未能抽取為可解析的 Python 測試；未推定為缺少 import。');
+                        recordRejected(sanitizedCode, llmRetry, 'response-format', 'response-not-extracted-python');
+                        if (llmRetry > 0) { throw new CandidateValidationError(reason); }
+                        generationPrompt = buildWriterRevisionRequest({ code: '', findings: reason,
+                            moduleName: targetImportModule, functionName: targetFuncName,
+                            evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
+                                source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle }) });
+                        if (writerAdditionBaseline) {
+                            generationPrompt = buildWriterAdditionRevisionPrompt(generationPrompt, writerAdditionBaseline, '', reason);
+                        }
+                        generationRevisionCode = '';
+                        continue;
                     }
 
                     // 🚨 偵測 AI 是否在複製原始碼（小模型常見的注意力崩潰）
@@ -2819,9 +3123,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                         log(localize("[救援] 自動轉換成功！已將 AI 輸出包裝為 unittest.TestCase 格式。"));
                         sanitizedCode = rescued;
+                        await recordCandidateMethods(sanitizedCode, 'merged', 'writer');
                     }
 
-                    const candidateValidation = await validateGeneratedTestCode(
+                    const compositionFailure = additionRejections.get(evidenceHash(sanitizedCode));
+                    const candidateValidation = compositionFailure
+                        ? { valid: false, ...compositionFailure }
+                        : !methodInventories.has(evidenceHash(sanitizedCode))
+                            ? { valid: false, reason: localize('模型回覆未能抽取為可解析的 Python 測試；未推定為缺少 import。'),
+                                reasonCode: 'response-not-extracted-python' }
+                            : await validateGeneratedTestCode(
                         sanitizedCode,
                         targetFuncName,
                         path.basename(params.filePath, '.py'),
@@ -2838,7 +3149,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         astContext?.traceResult, targetImportModule, pythonExecutable, astContext?.class_name) : candidateValidation;
                     if (!candidateValidation.valid || !traceEvidenceValidation.valid) {
                         const validationReason = traceEvidenceValidation.reason || candidateValidation.reason;
-                        recordRejected(sanitizedCode, llmRetry, candidateValidation.valid ? 'assertion-evidence' : 'unittest-structure',
+                        recordRejected(sanitizedCode, llmRetry, compositionFailure?.gate
+                            || (candidateValidation.valid ? 'assertion-evidence' : 'unittest-structure'),
                             candidateValidation.valid ? 'trace-evidence-rejected' : candidateValidation.reasonCode || 'candidate-structure-rejected');
                         if (llmRetry === 0) {
                             log(localize("[警告] 模型輸出未通過證據／Python unittest 驗證：{0}；將以嚴格格式要求重試。", validationReason));
@@ -2852,8 +3164,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 }) : userPrompt
                             });
                             if (!seedPending && mode === 'full') {
-                                generationPrompt = buildWriterExpansionPrompt(generationPrompt,
-                                    checkpoints.executable?.code || bestCode || '', analystTasks);
+                            generationPrompt = buildWriterAdditionRevisionPrompt(generationPrompt,
+                                    writerAdditionBaseline || checkpoints.executable?.code || bestCode || '', sanitizedCode,
+                                    validationReason || analystTasks);
                             }
                             generationRevisionCode = sanitizedCode;
                             sanitizedCode = '';
@@ -2967,6 +3280,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 executable: (code, execution) => checkpointExecutable(code, execution.out, execution.qualityGaps,
                     'incomplete', [], execution.coverage || loopAssessment),
                 validate: async (code) => {
+                    const additionFailure = additionRejections.get(evidenceHash(code));
+                    if (additionFailure) { return additionFailure; }
                     const preservation = await checkPreservation(checkpoints.executable?.code || retainedCode, code, 'all');
                     if (preservation) { return preservation; }
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
@@ -3033,7 +3348,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     }
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
-                    const prompt = role === 'bug-fixer' ? repairContext(code, failure)
+                    let prompt = role === 'bug-fixer' ? repairContext(code, failure)
                         : buildWriterRevisionRequest({
                             code,
                             findings: failure,
@@ -3043,6 +3358,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
                                 allowedMockTargets: Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`) })
                         });
+                    if (role === 'writer' && writerAdditionBaseline) {
+                        prompt = buildWriterAdditionRevisionPrompt(prompt, writerAdditionBaseline, code, failure);
+                    }
                     // requestBudgeted checks the final prompt, including numeric/resource
                     // evidence, and records a stage-owned failure without Tier fallback.
                     const repairStarted = Date.now();
@@ -3064,7 +3382,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         if (merged.normalization) { recordRole('bug-fixer', 'format-normalized', { attempt, ...merged.normalization }); }
                         return merged.code!;
                     }
-                    return sanitizeLlmResponse(raw);
+                    return prepareWriterCandidate(raw, 'writer-revision', attempt);
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
                     const preservePassed = () => checkPreservation(previousCode, candidateCode,
@@ -3587,14 +3905,25 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         if (currentLoop < params.maxLoops && (survivedMutants || qualityGaps.length) && mayUseModelAuthoredTests) {
             try {
+                let taskEvidence: QualityTaskEvidence | undefined;
+                activeQualityTaskEvidence = undefined;
                 // Measured comparison survivors can propose bounded numeric inputs
                 // without another model call. Only isolated observations become oracles.
                 let observedBoundary = false;
                 // Planning is static and cheap. Prefer a gap with a supported bounded input
                 // before spending a request on an unsupported survivor; observe only the chosen gap.
-                const numericPlan = bestMutation && astContext && evidenceStillCurrent()
+                let numericPlan = bestMutation && astContext && evidenceStillCurrent()
                     ? await planMutationProbes(initialSource, params.funcName || targetFuncName,
                         bestMutation, astContext.traceResult, pythonExecutable) : undefined;
+                if (numericPlan?.inputs.length && bestCode && astContext) {
+                    const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
+                    const facts = await buildReviewFacts({ ...identity, code: bestCode, module: targetImportModule,
+                        python: pythonExecutable, env: testExecutionEnv, executionVerified: true, knownSecrets });
+                    const testedCalls = facts.methods.flatMap(method => method.calls.map(call => call.call));
+                    // This changes the next experiment selection only. Existing tests,
+                    // unproven equivalence and every survivor stay in the quality denominator.
+                    numericPlan = { ...numericPlan, inputs: numericPlan.inputs.filter(input => !qualityInputAlreadyTested(input, testedCalls)) };
+                }
                 const survivorLines = survivedMutants.split('\n').filter(Boolean);
                 const proposedIds = new Set(numericPlan?.inputs.map(input => input.mutantId) || []);
                 const supportedSurvivors = survivorLines.filter(line => [...proposedIds].some(id => line.startsWith(`- id ${id},`)));
@@ -3672,6 +4001,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                     localize('補測觀測含疑似憑證，未保存觀測或建立測試。'));
                             }
                             astContext.traceResult = mergeBehaviorProbeResults(astContext.traceResult, observations);
+                            taskEvidence = bindQualityTaskObservations({ runId: journal.runId, sourceHash: journal.sourceHash,
+                                target: params.funcName || targetFuncName, focus, proposedInputs: plan.inputs,
+                                observations: { runId: journal.runId, sourceHash: journal.sourceHash,
+                                    target: params.funcName || targetFuncName, value: observations } });
+                            activeQualityTaskEvidence = taskEvidence;
+                            recordRole('quality-task-evidence', taskEvidence ? 'bound' : 'unavailable', {
+                                focusId: focus.id, caseIds: taskEvidence?.cases.map(item => item.caseId) || [],
+                                reasonCode: taskEvidence ? 'exact-observed-focus-inputs' : 'focus-inputs-not-assertable' });
                             writerEvidenceBundle.mergedTargetObservations = astContext.traceResult;
                             qualityObservationEvidence = 'VERIFIED BOUNDARY OBSERVATIONS (the AI must write tests):\n'
                                 + JSON.stringify({ sourceHash: journal.sourceHash, target: params.funcName || targetFuncName,
@@ -3693,9 +4030,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             inputCount: plan.inputs.length, summary: summarizeObservationPhase(observations || undefined) });
                     }
                 }
-                const sys = getQualityAnalystSystemPrompt();
+                const sys = getQualityAnalystSystemPrompt(Boolean(taskEvidence));
                 if (focus) {
                     const tasks = await qualityAnalystSession.request({ focus,
+                        observations: taskEvidence,
+                        identity: { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName },
                         context: `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
                             + `CURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
                             + `CONDITIONAL STRATEGIES (not output facts)\n${qualityStrategyHints(focus.evidence).join('\n')}`,
@@ -3705,11 +4044,17 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         request: (prompt, deadline) => requestBudgeted(params, sys, prompt, log,
                             analysisResponseFormat === 'text' ? 'text' : 'quality-json', 'analyst-quality', deadline)
                     });
-                    if (tasks) {
-                        analystTasks += '\n' + JSON.stringify(tasks);
+                    if (tasks?.length) {
+                        analystTasks += '\n' + qualityTasksForWriter(tasks);
                         journal.record(currentLoop, 'next-tasks', 'unverified', { tasks });
                         journal.knowledge({ nextTasks: tasks, taskStatus: 'hypotheses-require-execution' });
                     } else {
+                        if (taskEvidence) {
+                            analystTasks += '\n' + qualityTasksForWriter([{ evidence: focus.evidence,
+                                hypothesis: 'Measured focus input family; model plan unavailable.',
+                                scenario: taskEvidence.scenarioId, verification: 'verify-observed-behavior',
+                                boundObservations: taskEvidence }]);
+                        }
                         const fallback = { evidence: focus.evidence, origin: 'measured-gap-guidance',
                             guidance: qualityStrategyHints(focus.evidence), assertionOracle: false };
                         analystTasks += '\nMEASURED GAP (not an output oracle):\n' + JSON.stringify(fallback);

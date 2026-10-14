@@ -1,5 +1,9 @@
+import { createHash } from 'node:crypto';
 import { runSpawn } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
+import { currentExecution } from '../pipeline/executionContext';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { unwrapGeneratedCodeEnvelope } from './generatedTestValidator';
 
 export interface MergeResult {
     mergedCode: string;
@@ -7,6 +11,97 @@ export interface MergeResult {
 }
 
 export type BaselineMergeResult = ({ ok: true } & MergeResult) | { ok: false; reasonCode: string };
+
+export interface AddedTestMethod { className: string; name: string }
+export type WriterAdditionMergeResult = ({ ok: true; addedMethodsCount: number; addedMethods: AddedTestMethod[] } & MergeResult)
+    | { ok: false; reasonCode: string };
+
+export type WriterAdditionContext = { ok: true; contextCode: string; methodIds: string[]; baselineHash: string }
+    | { ok: false; reasonCode: string };
+
+/** Prompt-only AST view for fixture-free suites. The original baseline remains
+ * the sole executed/preserved artifact; this projection grants no approval. */
+export async function projectWriterAdditionContext(options: {
+    baseline: string; python: string; env?: NodeJS.ProcessEnv;
+}): Promise<WriterAdditionContext> {
+    if (!options.baseline.trim() || Buffer.byteLength(options.baseline, 'utf8') > 1024 * 1024) {
+        return { ok: false, reasonCode: 'invalid-baseline-input' };
+    }
+    let run: Awaited<ReturnType<typeof runSpawn>>;
+    try {
+        run = await runSpawn(options.python, ['-B', pythonToolPath('testMerge')], {
+            input: JSON.stringify({ mode: 'writer-addition-context-v1', baseline: options.baseline }),
+            env: options.env, timeout: 5000
+        });
+    } catch (error) {
+        currentExecution()?.throwIfCancelled();
+        if (error instanceof AnalysisStageError || (error instanceof Error && error.name === 'AbortError')) { throw error; }
+        return { ok: false, reasonCode: 'projection-tool-error' };
+    }
+    if (run.code === 0) {
+        try {
+            const value = JSON.parse(run.stdout);
+            if (value?.schemaVersion === 'writer-addition-context-v1') {
+                const rejections = new Set(['invalid-baseline-input', 'invalid-python-structure', 'addition-context-unsupported']);
+                if (value.ok === false && rejections.has(value.reasonCode)) {
+                    return { ok: false, reasonCode: value.reasonCode };
+                }
+                const methodId = /^[\p{ID_Start}_][\p{ID_Continue}]*\.test_[\p{ID_Continue}]+$/u;
+                const baselineHash = createHash('sha256').update(options.baseline, 'utf8').digest('hex');
+                if (value.ok === true && typeof value.contextCode === 'string' && value.contextCode.trim()
+                    && Buffer.byteLength(value.contextCode, 'utf8') <= 1024 * 1024 && value.baselineHash === baselineHash
+                    && Array.isArray(value.methodIds) && value.methodIds.length > 0 && value.methodIds.length <= 256
+                    && value.methodIds.every((id: unknown) => typeof id === 'string' && methodId.test(id))
+                    && new Set(value.methodIds).size === value.methodIds.length
+                    && new Set(value.methodIds.map((id: string) => id.split('.')[0])).size === 1) {
+                    return { ok: true, contextCode: value.contextCode, methodIds: value.methodIds, baselineHash };
+                }
+            }
+        } catch { /* An incomplete or malformed projection is never setup evidence. */ }
+    }
+    return { ok: false, reasonCode: 'projection-tool-error' };
+}
+
+/** Remove only a complete, unambiguous transport wrapper around the addition. */
+export function extractWriterAdditionCode(response: string): string {
+    const raw = unwrapGeneratedCodeEnvelope(response).trim();
+    const fenced = raw.match(/^```(?:python|py|json)?[ \t]*\r?\n([\s\S]*)\r?\n```[ \t]*$/i);
+    if (fenced) { return unwrapGeneratedCodeEnvelope(fenced[1]); }
+    const bracketed = raw.match(/^\[python\][ \t]*\r?\n([\s\S]*)\r?\n\[\/python\]$/i);
+    return bracketed ? bracketed[1] : raw;
+}
+
+/** AST composition only. This result still requires every normal candidate gate. */
+export async function mergeWriterTestAddition(options: {
+    baseline: string; addition: string; python: string; env?: NodeJS.ProcessEnv;
+}): Promise<WriterAdditionMergeResult> {
+    const run = await runSpawn(options.python, ['-B', pythonToolPath('testMerge')], {
+        input: JSON.stringify({ mode: 'writer-addition-v1', baseline: options.baseline, addition: extractWriterAdditionCode(options.addition) }),
+        env: options.env, timeout: 5000
+    });
+    if (run.code === 0) {
+        try {
+            const value = JSON.parse(run.stdout);
+            if (value?.schemaVersion === 'writer-test-addition-v1') {
+                if (value.ok === false && typeof value.reasonCode === 'string' && /^[a-z-]+$/.test(value.reasonCode)) {
+                    return { ok: false, reasonCode: value.reasonCode };
+                }
+                const identifier = /^[\p{ID_Start}_][\p{ID_Continue}]*$/u;
+                if (value.ok === true && typeof value.mergedCode === 'string' && value.mergedCode.trim()
+                    && Number.isSafeInteger(value.totalMethodsCount) && value.totalMethodsCount > 0
+                    && Number.isSafeInteger(value.addedMethodsCount) && value.addedMethodsCount >= 0 && value.addedMethodsCount <= 32
+                    && value.addedMethodsCount <= value.totalMethodsCount && Array.isArray(value.addedMethods)
+                    && value.addedMethods.length === value.addedMethodsCount && value.addedMethods.every((method: AddedTestMethod) =>
+                        method && typeof method.className === 'string' && identifier.test(method.className)
+                        && typeof method.name === 'string' && identifier.test(method.name) && method.name.startsWith('test'))) {
+                    return { ok: true, mergedCode: value.mergedCode, totalMethodsCount: value.totalMethodsCount,
+                        addedMethodsCount: value.addedMethodsCount, addedMethods: value.addedMethods };
+                }
+            }
+        } catch { /* No complete valid tool result means no candidate. */ }
+    }
+    return { ok: false, reasonCode: 'merge-tool-error' };
+}
 
 /** Preserve the actual executed baseline; AST composition is never approval to
  * execute or an exemption from the existing preservation/structure gates. */

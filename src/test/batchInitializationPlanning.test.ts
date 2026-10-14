@@ -20,7 +20,7 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
     const handlers = new Map<string, (...args: any[]) => any>();
     const settings: Record<string, unknown> = { pythonPath: python };
     let mode: 'ready' | 'new-blocker' | 'declined' | 'cancelled' = 'ready';
-    let scopePrompts = 0, approvals = 0, preliminaryPrompts = 0, scans = 0, updates = 0, startedTargets = 0, modelCalls = 0;
+    let scopePrompts = 0, approvals = 0, preliminaryPrompts = 0, scans = 0, updates = 0, startedTargets = 0, modelCalls = 0, metadataCalls = 0;
     let beforeApproval: any;
     const scansWithTargets: ImportCheckTarget[][] = [];
     const logs: string[] = [];
@@ -76,7 +76,13 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
         } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async () => { modelCalls++; throw new Error('No model execution belongs to this batch coordination fixture'); };
+    globalThis.fetch = async url => {
+        if (['/api/show', '/api/ps'].includes(new URL(String(url)).pathname)) {
+            metadataCalls++;
+            return new Response('{}', { status: 404 });
+        }
+        modelCalls++; throw new Error('No model execution belongs to this batch coordination fixture');
+    };
     let restore = () => {};
     try {
         fs.mkdirSync(path.join(root, 'nested'));
@@ -128,7 +134,7 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
         const run = handlers.get('llm-unit-test.runBatchAnalysis')!;
         for (const scenario of ['ready', 'new-blocker', 'declined', 'cancelled'] as const) {
             await t.test(scenario, async () => {
-                mode = scenario; scopePrompts = approvals = preliminaryPrompts = scans = updates = startedTargets = 0;
+                mode = scenario; scopePrompts = approvals = preliminaryPrompts = scans = updates = startedTargets = modelCalls = metadataCalls = 0;
                 scansWithTargets.length = 0; logs.length = 0; beforeApproval = undefined;
                 settings.importFixtures = []; settings.importFixtureRoot = '';
                 const before = fs.existsSync(output) ? manifests() : [];
@@ -206,6 +212,7 @@ test('batch planning confirms once, resumes the same 212 targets, and preserves 
                 assert.equal(scans, ['ready', 'new-blocker'].includes(scenario) ? 3 : 2);
                 assert.equal(updates, ['ready', 'new-blocker'].includes(scenario) ? 2 : 0);
                 assert.equal(modelCalls, 0);
+                assert.equal(metadataCalls, 2, 'same-run read-only discovery does not execute or qualify a model');
                 assert.ok(!fs.existsSync(path.join(root, 'owned_0')));
                 const release = pythonEnvironmentActivity.acquire('setup'); assert.ok(release); release();
             });

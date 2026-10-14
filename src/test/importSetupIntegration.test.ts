@@ -1,3 +1,4 @@
+import { ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -9,7 +10,7 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'import-ui-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
-    const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, importFixtures: [] };
+    const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, importFixtures: [], language: 'zh-tw' };
     const messages: any[] = [], handlers = new Map<string, (...args: any[]) => any>();
     let approve = false, changeSource = false, modelCalls = 0, updates = 0;
     const source = 'from pathlib import Path\nPath("must_not_exist").mkdir(exist_ok=True)\ndef target(value):\n    return value + 1\n';
@@ -34,7 +35,11 @@ test('setup needs an exact preview confirmation; blocked batch stops before mode
         } }, commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => { handlers.set(name, handler); return { dispose() {} }; } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async () => { modelCalls++; throw new Error('No model calls during environment setup'); };
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture', metadataAvailable: false });
+        if (metadata) { return metadata; }
+        modelCalls++; throw new Error('No model calls during environment setup');
+    };
     try {
         const { activate } = require('../orchestrator');
         activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
