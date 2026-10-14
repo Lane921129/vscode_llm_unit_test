@@ -10,7 +10,7 @@ Reviewer 的同候選事實新增 inherited unittest assertion 語法；只有 e
 
 ## 跨專案 P0／P1 與 Tier 分流（2026-10-12）
 
-主流程保持 Analyst → Writer → 真實隔離執行 → 另一 LLM Reviewer → 同候選批准 → 突變 → 品質缺口修訂。`tierFailurePolicy.ts` 只對候選或修復契約耗盡降低生成策略；模型、環境、工具、預算與審查失敗不借降級回避。沒有可用 Bug Fixer 時由 Writer 修訂，仍保留已通過情境。
+主流程保持 Analyst → Writer → Checker（真實隔離執行校驗）→ 另一 LLM Reviewer → 同候選批准 → 突變 → 品質缺口修訂。Checker 由 `generated_test_runner.py` 執行 unittest，依測試內斷言比對實際結果與預期答案，不呼叫 LLM；Reviewer 另以 LLM 審查輸入、預期值與依據。Checker 通過不證明獨立業務需求正確。`tierFailurePolicy.ts` 只對候選或修復契約耗盡降低生成策略；模型、環境、工具、預算與審查失敗不借降級回避。沒有可用 Bug Fixer 時由 Writer 修訂，仍保留已通過情境。
 
 `batchPreflightPartition.ts` 以最後真正匯入檢查分開 loaded／受阻／未檢來源。`batchSetupContinuity.ts` 核對根、選取來源、初始化閉包、Python及實際fixture身份後，只排程已實測loaded目標；其他目標單獨記 environment-blocked、零模型請求。`batchPreflightSnapshot.ts` 在批次內保存最後預檢快照。局部完成不是整批通過，取消或身分漂移仍停止。
 
@@ -145,7 +145,7 @@ TypeScript 與 Python 同步驗證路徑及來源版本。外部資料在 worker
 
 1. **範圍與環境**：選取專案後保留所選根目錄及來源範圍，提供相依檢查和模組初始化預檢。批次先確認來源清單、合併重複的來源／限定目標身分，再做已存在的逐模組預檢。備份、測試 fixture 與業務程式的取捨由範圍選擇明示；同名重複定義只記一次歧義，不能猜選第一份定義。安裝和初始化替身仍須使用既有具體清單確認；關閉或取消不啟動生成。
 2. **來源、資格與 AI 分析**：固定單次 Python、來源／相依、限定目標、角色資格、Tier、品質政策與引擎。full Auto 的 Writer／Reviewer 都須 verified，否則停止，不使用 deterministic fallback。Semantic Analyst 根據 AST、相依、呼叫語境及受控觀測分析函式；初始分析必須通過本地 parser，無效或請求失敗不能略過後直接生成。
-3. **Writer seed 與工具執行**：Writer 先寫一個有證據支持的最小案例及必要 setup。模型候選通過結構、binding、簽名、assertion evidence 與隔離執行後，立即保存 executable checkpoint；審查仍為 incomplete、突變仍未量測。工具不附加 Trace／host 測試、不改 expected，不以其他工具案例彌補無效模型候選。執行失敗依唯一方法、結構／fixture 等證據交 Bug Fixer 或 Writer。
+3. **Writer seed 與 Checker 校驗**：Writer 先寫一個有證據支持的最小案例及必要 setup。模型候選通過結構、binding、簽名、assertion evidence 等工具預檢，再由 Checker 隔離執行並核對 unittest 斷言；通過後立即保存 executable checkpoint，審查仍為 incomplete、突變仍未量測。工具不附加 Trace／host 測試、不改 expected，不以其他工具案例彌補無效模型候選。執行失敗依唯一方法、結構／fixture 等證據交 Bug Fixer 或 Writer。
 4. **Reviewer 同意才突變**：Reviewer 審查已執行的同一份測試。有效 finding 交 Writer，修訂後重新執行、重新審查；零 findings 才批准。契約無效最多在原 absolute deadline 與總預算內修正一次，不重送壞回覆，不在傳輸／取消／預算失敗後擴大重試。審查仍無法完成時保存 `review-blocked`，保留 executable，沒有量測則為 `mutationStatus=not-measured`。候選的 `approvedCodeHash` 隨 run/source/target 保存為 `reviewApproval.testHash`；測試改變不得沿用舊同意。
 5. **量測後選單一缺口**：只有已批准候選可執行完整所選突變集合，保存同一候選的 coverage、branch、mutation。未達門檻時每輪選一個實測缺口或存活 mutant，交品質分析師與 Writer。支援範圍內，本機可規劃有上限的純資料輸入／狀態實驗；用 fingerprint 避免重複，unsupported 明示未知，不猜 expected。
 6. **工具證據交 AI 改寫**：同來源、constructor／輸入／呼叫順序與完整隔離觀測可交 AI 作為核對證據；計算步驟、回傳、例外及狀態不等同獨立需求規格。數值邊界與普通同步物件實驗不直接注入測試；由 Writer 選擇測資、組織 assertion 並產生新候選，再走執行、審查、突變。新名稱、重複測試與未執行提案不算改善。

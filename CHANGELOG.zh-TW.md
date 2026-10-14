@@ -2,6 +2,13 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-14
+
+### 命名 Checker 執行校驗階段
+
+- 將執行 Writer 測試、以 unittest 斷言比對實際結果與預期答案的工具階段命名為 Checker，正式實作仍是 `generated_test_runner.py`。角色、架構、Python 工具與專案規則同步說明：Writer／Reviewer 是 LLM 任務，Checker 不呼叫模型；Validation 是包含預檢與執行的工具驗證總稱。
+- 核對實際 runner 與 Reviewer 提示分工，檢查文件差異與格式。此次僅命名及文件說明，未修改執行邏輯、角色契約或驗證門檻，未執行程式回歸測試。Checker 通過只表示案例符合測試內預期，不能代替獨立需求審查。
+
 ## 2026-10-13
 
 ### 車輛候選載入、Writer 外框與提示、Reviewer 事實及輸出恢復

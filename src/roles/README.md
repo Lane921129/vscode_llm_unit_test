@@ -6,11 +6,13 @@
 |---|---|---|---|
 | 語意分析師 | 整合 AST、呼叫點與初始受控行為觀測，提出待測情境；不選規則 | [semanticAnalyzer.ts](semanticAnalyzer.ts) | 情境與證據假設 JSON |
 | Writer | 根據合併證據包與程式選出的測試生成規則寫測試，或依 Reviewer 意見修改 | [unittestWriter.ts](unittestWriter.ts) | 完整 Python unittest |
-| Reviewer | 隔離執行通過後檢查測試，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v7` 單一 findings 陣列，每項含 category、test_line、原因與具體動作；程式還原原文 |
+| Reviewer | Checker 執行通過後，由 LLM 審查每案輸入、預期值及依據，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v7` 單一 findings 陣列，每項含 category、test_line、原因與具體動作；程式還原原文 |
 | Bug Fixer | 根據可明確定位的實際測試失敗做單一方法修復 | [bugFixer.ts](bugFixer.ts) | `bug-fix-v5` 的單方法 Python fence，由管線合併回完整 unittest；無有效變更時限一次 Writer 接手 |
 | 品質分析師 | 執行通過後，根據覆蓋／突變結果規劃下一輪 | [qualityAnalyst.ts](qualityAnalyst.ts) | 最多一個綁定實測證據 ID 的待驗證任務 |
 
-這是五個任務入口，可以共用同一個模型；語意分析與品質分析分別在生成前後工作。Validation 是工具階段，不是另一個模型角色。
+這是五個 LLM 任務入口，可以共用同一個模型；語意分析與品質分析分別在生成前後工作。
+
+**Checker** 是工具執行校驗階段：由 [generated_test_runner.py](../../python_scripts/generated_test_runner.py) 執行 Writer 寫出的 unittest，透過測試內的斷言比對實際回傳值、例外或狀態與預期答案，回報通過或失敗。Checker 不呼叫 LLM，也不撰寫預期答案；Reviewer 則是上述獨立的 LLM 審查任務。原本的 Validation 泛指結構、binding、證據與執行等工具驗證，Checker 是其中的執行校驗。完整品質流程為 Writer → 工具預檢 → Checker → Reviewer → 突變量測；execution 模式執行 Checker，不包含 Reviewer 與突變量測。
 
 執行驗證模式遇到實際斷言失敗時，先以 `repair_source_expectations.py` 嘗試有界的來源算術檢查：僅處理無外部相依的簡單函式、明確案例輸入及失敗方法內的預期常數。它不呼叫目標、不將 runner 輸出抄成答案、不更改輸入／fixture／斷言種類，保存 `arithmetic_001.json` 計算依據後仍須通過 AST、隔離執行與已通過案例保留檢查。無法證明時交回原模型修復流程；此能力驗證來源行為一致性，不驗證獨立業務需求。完整品質模式維持原有證據要求。
 

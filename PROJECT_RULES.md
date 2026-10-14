@@ -10,6 +10,7 @@
 - `probeInputFile` 只接受專案內普通 JSON、來源雜湊／相對檔案／qualified target 綁定的型別化參數及建構子資料，不接受 expected、程式碼、來源宣稱或金鑰。來源過期／連結／越界／無效輸入拒絕，不偷偷回退自動值。輸入須進真正隔離 worker 才有觀測；未知自訂物件列診斷，不猜建構。等價自動探測輸入可在規劃時去重，但保留全部來源位置，不能合併未知狀態、型別、kwargs順序或不同建構子。
 - Writer 的必要 setup 保留來源原文並區分 imports／globals／class fragments；完整同文才可引用去重，不讓 JSON 摘要取代程式碼。可斷言觀測與不可斷言診斷分開，仍保存完整失敗狀態。Mock 跨 module alias 只在完整同來源 AST 證明同一且未重綁的 module member 時接受；from-import、目標替換或含糊控制流不能借此通過。名稱／scaffold 問題交 Writer，不改寫來源。
 - 第二個 LLM（Reviewer）核對 Writer 的輸入、expected 及依據；工具實跑與安全／品質契約仍保留。審查失敗保存最多五項行號、原文引用、reason、action及固定拒絕原因，先去密再有界呈現；模型矛盾只算未採用 assessment，不假裝已批准。未知需求或沒有獨立 oracle 不由 Reviewer 猜答案。
+- 工具執行校驗階段命名為 Checker：由 `generated_test_runner.py` 執行 Writer 的 unittest，以斷言比對實際結果與測試內預期答案，不呼叫 LLM、不產生或改寫 expected。Checker 與 LLM Reviewer 分工獨立；Checker 通過不代表需求正確或完整品質通過。Validation 仍泛指結構、binding、證據與執行等工具驗證，Checker 是其中的執行校驗。
 
 - 依使用者 2026-10-12 確認，完整本機角色提示超額時，可在同一執行中動態提高 `num_ctx`，只依該端點／模型已核實的容量上限；未超額不調整，未知上限或到頂後仍無法容納則保存診斷並停止。保留完整來源、候選、觀測、補正與輸出預留，不截斷必要證據。這是下文固定起始容量的窄例外：已儲存選擇與設定快照不改写，本次實際容量另記錄。
 - 新容量不得沿用舊 `num_ctx` 的角色資格；重新執行固定公開 Writer／Reviewer 探針及隔離驗證，需用 Bug Fixer 時也核驗該角色。Auto/full 必須由新容量 verified Writer／Reviewer 接續；手動 Tier 保留起始時的嘗試政策，只依當次角色判斷，不因尚未通過 Reviewer 探針阻止 Writer／Analyst。探針不可執行或傳輸不可用不當作能力失敗；正式候選仍必須通過工具執行、同來源與完整測試雜湊的 Reviewer 核准才能突變，不借舊審查。所有探針、回退、重試與正式請求共享原期限與計數，不因增容重置。
