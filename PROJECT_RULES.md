@@ -4,6 +4,10 @@
 
 ## 目前驗收優先順序
 
+- `prompt-capacity-v1` 只診斷 `current-role-prompt` 的完整輸入容量，保守字元估算不是 tokenizer 實測或整個流程可執行保證。相同完整請求已有合法觀測時，以 `max(estimatedInputTokens, observedInputTokens)` 加補正預留；逐容量重算既有 `roleRequestBudget` 的實際輸出政策與本角色 learned floor，才能反算最小容量，不沿用較小舊輸出額度低估需求。只保存固定 enum、數字與 null，不把來源或候選原文放入容量 DTO。
+- 模型上限須來自同端點／模型的已核實 metadata，明示 `ollama-show`／`stored-model-profile`；未知保持 null／`unknown`，不得以 fallback、參數量或模型名稱補造。`num_ctx`、Modelfile 預設與 `/api/ps` 最近分配另列，不等於所有同系列模型的上限。短角色探針通過只認證固定樣本；正式 Analyst、Writer、Reviewer 仍各核完整提示，容量足夠也不代表品質通過。
+- full 非 stub 流程先組好當前角色的完整提示並確認可容納，再對指定突變引擎執行本目標唯一一次預檢；所有增容資格探針與正式角色生成都須在該預檢成功後才能送出。預檢結果與失敗共用同一 Promise，不因換角色、重試或降階重跑；取消、來源版本核對、原單次／階段／target 期限及計數保持有效。即使增至已核實上限仍無法容納時，不得啟動引擎探測、截斷必要證據或放寬 schema。
+
 - Local Ollama 正式角色與連線資格探針使用同一串流接收器；NDJSON 必須有唯一 `done:true` 終端且完整讀至 EOF 才能採用，`length` 仍交既有有界輸出恢復，不採用前綴。明示 `done:false`、畸形／超界／重複終端或中斷皆停止；歷史普通 JSON 缺少 `done` 的相容不等於允許明示未完成。資格探針的原期限須涵蓋 HTTP 標頭與完整 body，清理不能因等待 `cancel()` 再次卡住。排隊自入隊就受原絕對期限及取消約束，過期項永不發送；active 工作真正結束後才能放行下一項。
 - `model-request-progress-v1` 只保存固定階段、安全數字與實際 wire 的 SHA-256／byte 數；提交傳輸層不代表伺服器收到、首段資料不等於首段回答、完整回覆也不等於測試通過。HTTP／模型耗時缺值保持未知。最近觀測容量與本次請求不同時明示重載風險，不自行覆寫已保存容量或將容量當成實際輸入 token 數。
 

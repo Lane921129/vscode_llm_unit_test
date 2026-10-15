@@ -119,6 +119,8 @@ import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
 import { roleRequestBudget } from './prompts/roleRequestBudget';
+import { assessPromptCapacity } from './prompts/promptCapacity';
+import { formatPromptCapacity } from './pipeline/promptCapacityPresentation';
 import { CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS, planContextGrowth } from './prompts/contextGrowth';
 import { requalifyLocalRuntime, runLocalRuntimeQualificationProbe, runtimeQualificationExecutionBudget } from './llm/localRuntimeRequalification';
 import { runtimeRoleAuthorization } from './llm/runtimeQualificationSession';
@@ -1776,6 +1778,49 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         finalReportMarkdown += diagnosticReport + (stage === 'repair-routing' ? formatRepairRouting(detail) : '');
         writeReport();
     };
+    let mutationSelection: SelectedMutationEngine | undefined;
+    let mutationSelectionTask: Promise<void> | undefined;
+    let mutationPreflightRequired = false;
+    const ensureMutationSelection = async (deadlineAt: number): Promise<void> => {
+        if (!mutationPreflightRequired) { return; }
+        const checkCurrent = () => {
+            throwIfExecutionCancelled();
+            currentTargetBudget()?.assertRemaining();
+            if (remainingDeadlineMs(deadlineAt) <= 0) {
+                throw new AnalysisStageError('timeout', 'mutation-preflight',
+                    localize('執行超時 (超過 {0} 秒)', params.timeoutSeconds),
+                    { reasonCode: 'request-deadline-exhausted' });
+            }
+            if (!runtimeQualifications.current()) {
+                throw new AnalysisStageError('validation', 'source-changed', localize('來源或相依版本改變，停止保存舊執行證據。'));
+            }
+        };
+        checkCurrent();
+        if (!mutationSelectionTask) {
+            // A complete role prompt must fit before starting this potentially
+            // expensive probe. Its result, including failure, belongs to this
+            // target and never receives a new deadline on later role attempts.
+            mutationSelectionTask = (async () => {
+                try {
+                    const selection = await selectMutationEngine(params.mutationEngine, params.mutationWorkers,
+                        args => runSpawn(pythonExecutable, args,
+                            { timeout: Math.min(10000, remainingDeadlineMs(deadlineAt)) }));
+                    checkCurrent();
+                    mutationSelection = selection;
+                    journal.knowledge({ mutationSelection });
+                    recordRole('mutation-engine', 'selected', mutationSelection);
+                    log(localize('[突變引擎] 指定 {0}；使用 {1}（{2}），並行數 {3}。',
+                        selection.requested, selection.actual, selection.operatorSetVersion, selection.workers));
+                } catch (error) {
+                    recordRole('mutation-engine', 'failed', { requested: params.mutationEngine || 'builtin', category: 'environment',
+                        reason: error instanceof AnalysisStageError ? error.message : localize('外部突變引擎預檢失敗，請核對所選 Python、套件版本與平台。') });
+                    throw error;
+                }
+            })();
+        }
+        await mutationSelectionTask;
+        checkCurrent();
+    };
     let resourceProjectionEvidence: IsolatedResourceSourceEvidence | undefined;
     const importResourcePrompt = (): string => {
         if (!importFixtures) { return ''; }
@@ -1876,6 +1921,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const estimatedInputTokens = estimatePromptTokens(contractedSystem + '\n' + prompt);
         const requiredInputTokens = Math.max(estimatedInputTokens, observedInputTokens ?? 0);
         const correctionReserve = reservedInputTokens + (outputAttempt > 0 ? CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS : 0);
+        const capacityAt = (contextWindow: number) => assessPromptCapacity({ envType: requestParams.envType, mode,
+            role, seedPending, contextWindow, estimatedInputTokens, observedInputTokens,
+            reservedInputTokens: correctionReserve, revisionCurrentCode, minimumOutputTokens,
+            modelContextLimit: activeModelProfile.contextLength,
+            modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
+            modelContextLimitSource: modelSnapshot.localRuntimeMetadata?.source ?? 'unknown' });
+        const initialCapacity = capacityAt(requestContextWindow);
+        journal.knowledge({ promptCapacity: initialCapacity });
+        recordRole('model-capacity', 'assessed', initialCapacity);
         const currentRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode,
             role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
             revisionCurrentCode, minimumOutputTokens });
@@ -1894,6 +1948,23 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 estimatedPromptTokens: requiredInputTokens,
                 reservedInputTokens: correctionReserve, requestOutputTokens: limitBudget.requestOutputTokens });
             if (growth.status === 'grown') {
+                const grownRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
+                    contextWindow: growth.contextTokens,
+                    inputBudget: contextInputBudget(activeModelProfile.paramSize, growth.contextTokens),
+                    revisionCurrentCode, minimumOutputTokens });
+                if (!promptFits(contractedSystem, prompt, grownRoleBudget.inputBudget, correctionReserve)
+                    || requiredInputTokens + correctionReserve > grownRoleBudget.inputBudget) {
+                    const capacity = capacityAt(growth.contextTokens);
+                    const metrics = { role, format, estimatedInputTokens, ...grownRoleBudget,
+                        reservedInputTokens: correctionReserve, contextWindow: growth.contextTokens, capacity };
+                    recordRole('model-request', 'budget-exceeded', metrics);
+                    throw new AnalysisStageError('validation', 'prompt-budget',
+                        formatPromptCapacity(capacity, true)!, metrics);
+                }
+                // Capacity qualification also sends model requests. Verify
+                // the chosen engine before those probes, not just before
+                // the later formal Analyst/Writer transport.
+                await ensureMutationSelection(qualificationDeadline);
                 const previousContextWindow = requestContextWindow;
                 const qualificationStartedAt = Date.now();
                 recordRole('model-runtime', 'context-growth-requested', { role, previousContextWindow,
@@ -1980,6 +2051,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt, formalAttemptStartedAt);
         const metrics = { role, format, estimatedInputTokens,
             ...roleBudget, reservedInputTokens: correctionReserve,
+            capacity: capacityAt(contextWindow),
             ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
             contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt,
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
@@ -1988,8 +2060,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             || requiredInputTokens + correctionReserve > roleBudget.inputBudget) {
             recordRole('model-request', 'budget-exceeded', metrics);
             throw new AnalysisStageError('validation', 'prompt-budget',
-                localize("完整角色提示超過模型輸入預算；保留來源與執行證據，未發送或截斷提示。"), metrics);
+                formatPromptCapacity(metrics.capacity, true)!, metrics);
         }
+        await ensureMutationSelection(deadline);
         if (outputAttempt > 0 && roleBudget.requestOutputTokens) {
             const recovery = planOutputRecoveryRetry({ ...outputStage, deadlineAt: deadline },
                 roleBudget.requestOutputTokens, recoveryTransport, formalAttemptStartedAt);
@@ -2106,6 +2179,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         recordRole('model-runtime', 'selected', { contextWindow: requestContextWindow,
             inputBudget: activeModelProfile.budgetTokens, configuredContextTokens: localRuntime.configuredTokens,
             contextPolicy: localRuntime.mode, metadataContextKnown: activeModelProfile.contextLengthKnown === true,
+            modelContextLimit: activeModelProfile.contextLengthKnown === true ? activeModelProfile.contextLength : null,
+            modelContextLimitSource: modelSnapshot.localRuntimeMetadata?.source ?? 'unknown',
             savedContextTokens: contextPreference?.tokens, savedContextSource: contextPreference?.source,
             lastObservedRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens,
             runtimeContextSource: selectedModelProfile.runtimeContextSource,
@@ -2423,25 +2498,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         return merged.mergedCode;
     };
-    let mutationSelection: SelectedMutationEngine | undefined;
     if (mode === 'full' && !isStubFunction(astContext)) {
+        mutationPreflightRequired = true;
         journal.knowledge({ workflowVersion: AI_WORKFLOW_VERSION, testAuthor: 'llm',
             reviewStatus: 'incomplete', mutationStatus: 'not-measured', mutationScore: null });
         if ((!mayUseModelAuthoredTests || !mayUseModelAuthoredReview) && !isStubFunction(astContext)) {
             throw new AnalysisStageError('validation', 'role-qualification',
                 localize('完整 AI 流程需要可用的 Writer 與 Reviewer；請先完成角色測試連線。'));
-        }
-        try {
-            mutationSelection = await selectMutationEngine(params.mutationEngine, params.mutationWorkers,
-                args => runSpawn(pythonExecutable, args, { timeout: 10000 }));
-            journal.knowledge({ mutationSelection });
-            recordRole('mutation-engine', 'selected', mutationSelection);
-            log(localize('[突變引擎] 指定 {0}；使用 {1}（{2}），並行數 {3}。',
-                mutationSelection.requested, mutationSelection.actual, mutationSelection.operatorSetVersion, mutationSelection.workers));
-        } catch (error) {
-            recordRole('mutation-engine', 'failed', { requested: params.mutationEngine || 'builtin', category: 'environment',
-                reason: error instanceof AnalysisStageError ? error.message : localize('外部突變引擎預檢失敗，請核對所選 Python、套件版本與平台。') });
-            throw error;
         }
     }
 

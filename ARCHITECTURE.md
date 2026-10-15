@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## 正式角色容量診斷與延後引擎預檢（2026-10-15）
+
+`requestBudgetedOne` 在組裝完整 phase、來源、必要 setup、觀測、資源與 output contract 後呼叫 `assessPromptCapacity`。`prompt-capacity-v1` 的範圍固定為 `current-role-prompt`，記錄保守輸入估量、同完整請求的實測輸入、補正預留、可用輸入、輸出預留、已核實模型上限及來源。有效輸入採兩種數字的較大值；`minimumContextTokens` 在每個候選容量重新套用既有 `roleRequestBudget`，包含各角色輸出 cap、完整修訂候選大小與本角色 learned floor，不把起始容量較小的輸出預留帶到更大容量。DTO 只含固定標籤、數字與 null，不含程式或 provider 回應。
+
+已核實上限來自同端點／模型的 show metadata 或合法舊 profile，分別標示 `ollama-show`／`stored-model-profile`；未知上限以 null／`unknown` 保存，不能授權增容。模型宣告上限、Modelfile `num_ctx` 預設、最近 `/api/ps` 分配與本次請求容量各自有不同含義；不能由一個標籤概括整個 Code Llama 系列。`promptCapacityPresentation.ts` 為日誌與失敗流程提供中英文容量數字、最低需求及下一步；明示估算不是實際 tokenizer 使用量，也不保證後續角色或測試品質。公開短角色探針的成功訊息亦說明固定樣本與正式完整提示的差異。
+
+full 非 stub 的指定引擎由 `ensureMutationSelection` 延後到完整角色提示放得下之後，且在任何增容資格或正式生成請求之前唯一預檢。相同目標共用完成或失敗 Promise，維持指定引擎，不因重試更換或重跑。預檢子程序最多10秒且不超過原請求剩餘期限，前後核對取消、target 預算及來源版本；不延長原單次、shared、stage 或 target deadline。此順序避免提示必然超額時先花時間探測外部引擎，不代表略過 Checker、Reviewer、同候選批准或實際突變。
+
+10/15 18:41 BMI 在初始 Analyst 的 `prompt-budget` 停止，約19秒、正式生成與候選皆0，與12:47／13:05的300秒 HTTP 等待不同。以該批完整 evidence 重建 wire，固定角色指令去重使提示估量2410→2302 tokens；來源、必要 setup、10筆成功／1筆例外觀測與2187 bytes的 transport schema 均保留，Trace JSON 段落逐位元一致。完整輸入仍大於2048，還需補正及輸出空間；此精簡不能當成2K Context全面支援，也不是新70B實驗室驗收。
+
 ## Ollama 串流、排隊期限與傳輸證據（2026-10-15）
 
 `requestLlmApi` 從入隊開始沿用原絕對期限；`SerialRequestQueue` 將呼叫者的等待結果與實際工作生命週期分開。等待時過期或取消會立即返回且之後不啟動該項；已啟動的工作仍須真正結束，不能用提早 rejected 的 Promise 釋放序列槽位。未發 HTTP 的排隊失敗只記 queue 證據，不虛構 transport 或模型數字。

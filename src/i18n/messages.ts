@@ -1,5 +1,13 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '同一完整請求已觀測輸入 {0}，本次按較大值 {1} 保留。': 'The same complete request reported {0} input tokens; the larger value {1} is reserved for this attempt.',
+    '短探針只認證固定樣本；正式函式仍須檢查完整提示容量、實際執行與審查品質。': 'A short probe qualifies only its fixed sample; a real target still requires complete prompt capacity checks, execution and quality review.',
+    '角色容量估算：{0}；num_ctx {1}，模型上限 {2}（{3}）；完整輸入 {4} + 補正預留 {5}，可用輸入 {6}，輸出預留 {7}；此角色提示至少需要 {8} tokens。': 'Role capacity estimate: {0}; num_ctx {1}, model limit {2} ({3}); complete input {4} + correction reserve {5}, input budget {6}, output reserve {7}; this role prompt needs at least {8} tokens.',
+    '在模型上限下可用輸入 {0}、輸出預留 {1}，輸入仍差 {2} tokens。': 'At the model limit: input budget {0}, output reserve {1}, input shortfall {2} tokens.',
+    '這是目前角色完整提示的保守估算，不是實測 token 數、後續角色或品質通過保證。': 'This is a conservative estimate for the complete current role prompt, not measured token usage or a guarantee for later roles or quality approval.',
+    '已核實上限仍不足，未送出生成請求；增加等待時間無法增加 Context。請精簡重複指令或使用容量足夠的模型。': 'The verified limit is still insufficient; no generation request was sent. A longer timeout cannot increase Context. Reduce repeated instructions or use a model with enough capacity.',
+    '模型上限未知，未送出生成請求；請先重新取得該模型的容量資訊，不能以未知上限授權增容。': 'The model limit is unknown; no generation request was sent. Refresh this model\'s capacity metadata before authorizing growth.',
+    '目前選用容量不足，未送出生成請求；可在已核實上限內調整容量並重新驗證角色。': 'The selected capacity is insufficient; no generation request was sent. Adjust capacity within the verified limit and requalify the roles.',
     '種子輸入已對應選定受控案例；仍須執行與審查，尚非通過。': 'The seed input matches the selected controlled case; execution and review are still required.',
     '種子輸入無法由靜態事實核實；繼續執行與審查，不推定通過。': 'The seed input cannot be confirmed by static facts; execution and review remain required.',
     '種子需一個測試方法': 'The seed requires one test method',

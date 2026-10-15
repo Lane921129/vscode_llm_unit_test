@@ -4,6 +4,16 @@
 
 ## 2026-10-15
 
+### BMI 送出前容量不足、角色容量診斷與提示精簡
+
+- 分析 `bmi_2026_10_15_18_41`：新建置在第一個 Analyst 的 `prompt-budget` 停止，約19秒、正式生成及候選計數皆0。當次選用容量1024、完整輸入估量2410及補正預留94，增容診斷為 `prompt-exceeds-model-context`；舊報告未保存上限原值。本次查詢的[官方 `codellama:70b` metadata](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)宣告2048，但不能以此代替該次私有服務的原始 metadata。尚未進 Writer、Reviewer或突變，不是新的300秒 API超時，也不能用此批判定串流修復無效；不把一個標籤概括成全部 Code Llama 上限。
+- 新增 `promptCapacity.ts`／`promptCapacityPresentation.ts`。`prompt-capacity-v1` 只描述當前完整角色提示，分列輸入、補正、輸出、缺口、已核實上限來源及最小容量；同請求已有觀測時採估量與實測較大值。每個候選容量套用既有角色輸出政策及 learned floor，不低估增容後的輸出預留。未知上限保持 null／unknown，不從 fallback 或模型名稱推定；DTO 不含來源、候選或 provider 原文。
+- 容量診斷接入角色事件、執行知識及中英文失敗流程，明示這是保守估算，不能當成 tokenizer 實測、後續角色可容納或品質通過。短角色連線探針亦補充只認證固定樣本，正式完整提示仍需各自核對容量。
+- 指定突變引擎預檢延後至完整提示可容納之後，並在所有增容資格與正式生成請求之前完成；同目標唯一 Promise 保存成功或失敗，不因角色重試再探測。不改指定引擎、取消、來源核驗、原請求／階段／target 期限與計數；確定容量不足時不啟動引擎探測。
+- 初始 Analyst 只精簡固定指令與結尾重述，system估量793→708、同批完整 wire提示2410→2302 tokens，含schema的request body 11317→10936 bytes。完整來源、setup、10筆成功與1筆例外觀測、2187 bytes原schema全保留；Trace JSON段落逐位元相同。沒有刪證據、變更literal或放寬語義gate；2302本身仍高於2048，不宣稱所有來源可在2K Context執行。
+- 驗證：提示相關定向回歸64／64；容量、英文診斷、引擎順序與真實Mutatest定向回歸39／39。完整Node共1399項，1397通過、1失敗、1略過；失敗為既有Windows路徑測試在D槽暫存區將Python的cp950輸出當UTF-8解碼，略過為該卷未提供8.3別名。兩項Windows案例均於原生C槽暫存區＋UTF-8補測通過（兩檔合計3／3，包含1項已通過案例）；D槽啟用UTF-8後正確略過無8.3的情境，未修改產品或測試條件，不宣稱原完整執行零失敗。
+- 完整Python共745項，740通過、5略過；新增的跨磁碟及8.3條件限制，另於C槽補測2／2通過，其餘3項保留Windows平台／symlink權限略過。TypeScript嚴格編譯、全src lint、production package、Webview語法、追蹤檔與Git歷史密鑰掃描及差異格式檢查通過。完整測試使用沙箱外的原子檔案操作，Python採`PYTHONUTF8=1`；保留原有8個工作區修改。工具回歸不代表遠端CI或DGX70B真模型已驗收，仍須以實驗室新批次確認。
+
 ### BMI 300秒超時定位與串流傳輸修復
 
 - 比對 `bmi_2026_10_15_12_47` 與 `13_05`：兩批均在第一個 Analyst `semantic-json` 請求等待約300秒，queue為0／1ms、HTTP標頭／狀態／Ollama統計均未知；估輸入2410、輸出cap1024、請求容量65536。尚未產生候選或進審查／突變，不是這兩批的Mock失敗、queue阻塞或已證實的length截斷。前置約19～21秒加API300秒，也不同於整個專案300秒總額。

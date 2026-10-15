@@ -108,7 +108,8 @@ test('full orchestrator uses real Mutatest and retains rejected source/test iden
                 assert.equal(mutation.executionBackend, 'isolated-unittest-v1');
                 assert.equal(mutation.counts.available, 6); assert.equal(mutation.counts.killed, 6);
                 assert.ok(mutation.mutants.every((item: any) => item.killedBy.length > 0));
-                assert.ok(events.find(e => e.stage === 'mutation-engine').sequence < events.find(e => e.stage === 'model-request').sequence);
+                assert.ok(events.find(e => e.stage === 'mutation-engine').sequence
+                    < events.find(e => e.stage === 'model-request' && e.status === 'requested').sequence);
                 assert.match(report, /Final outcome: Fully passed/);
                 assert.match(report, /mutatest.*mutatest-ast-3.1.0-v2/);
                 assert.match(report, /Mutation execution diagnostics/);

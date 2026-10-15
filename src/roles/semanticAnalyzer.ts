@@ -301,22 +301,19 @@ function formatAstSetupContext(context?: SemanticAstSetupContext): string {
 
 export function getSemanticAnalyzerSystemPrompt(_legacyRuleSummary?: string): string {
     return `You are a Python code analyst. Plan one initial unittest scenario; the runner selects rules and executes probes. Do not write tests or classify equivalent mutants.
-Return one JSON object. A meaningful test_strategy is required, including for zero-parameter functions, with approach and these fields:
-- approach: one source-specific action, at most ${SEMANTIC_PLAN_LIMITS.approachCharacters} characters.
-- input_hints: at most ${SEMANTIC_PLAN_LIMITS.inputHints} selected-target parameter hints. Each has param_name, strategy (at most ${SEMANTIC_PLAN_LIMITS.strategyCharacters} characters), boundary_inputs and invalid_inputs (each at most ${SEMANTIC_PLAN_LIMITS.scalarInputsPerKind} scalar Python literal strings, each at most ${SEMANTIC_PLAN_LIMITS.scalarCharacters} characters), notes (at most ${SEMANTIC_PLAN_LIMITS.notesCharacters} characters; empty when unnecessary).
-- assertion_style: assertEqual, assertRaises or mixed; mock_needed: boolean; key_rules: at most ${SEMANTIC_PLAN_LIMITS.keyRules} concrete actions, each at most ${SEMANTIC_PLAN_LIMITS.ruleCharacters} characters.
-Optional arrays: dependency_behaviors (at most ${SEMANTIC_PLAN_LIMITS.dependencyBehaviors}), unreachable_paths (at most ${SEMANTIC_PLAN_LIMITS.unreachablePaths}), mock_required_for (at most ${SEMANTIC_PLAN_LIMITS.mockUsePoints}). Omit unnecessary arrays or keep them empty.
-dependency_behaviors items: name, when_caller_passes, always_returns (exact verified Python repr), can_raise (at most 2 exact names).
-unreachable_paths items: condition, reason. mock_required_for items: path, mock_target (source use-point), example (a short action, not code).
-Optional item text is at most ${SEMANTIC_PLAN_LIMITS.detailCharacters} characters per field. If an exact repr or literal cannot fit, omit that suggestion; never truncate or alter evidence.
-Use concrete source-specific actions, never placeholders or copies of field descriptions. Later scenarios belong to the measured quality loop.
+Return JSON only: one object, no Markdown or prose. A meaningful test_strategy is required, including for zero-parameter functions, with approach and these fields:
+- approach: source-specific action, at most ${SEMANTIC_PLAN_LIMITS.approachCharacters} characters.
+- input_hints: at most ${SEMANTIC_PLAN_LIMITS.inputHints}; each has param_name, strategy (max ${SEMANTIC_PLAN_LIMITS.strategyCharacters} chars), boundary_inputs and invalid_inputs (each max ${SEMANTIC_PLAN_LIMITS.scalarInputsPerKind} scalar Python literal strings, ${SEMANTIC_PLAN_LIMITS.scalarCharacters} chars each), notes (max ${SEMANTIC_PLAN_LIMITS.notesCharacters} chars; empty if unnecessary).
+- assertion_style: assertEqual/assertRaises/mixed; mock_needed: boolean; key_rules: at most ${SEMANTIC_PLAN_LIMITS.keyRules} concrete actions, max ${SEMANTIC_PLAN_LIMITS.ruleCharacters} chars each.
+Optional arrays, empty/omitted if unnecessary: dependency_behaviors (max ${SEMANTIC_PLAN_LIMITS.dependencyBehaviors}: name, when_caller_passes, always_returns as exact verified Python repr, can_raise as max 2 exact names); unreachable_paths (max ${SEMANTIC_PLAN_LIMITS.unreachablePaths}: condition, reason); mock_required_for (max ${SEMANTIC_PLAN_LIMITS.mockUsePoints}: path, mock_target at source use-point, example as short action, not code).
+Optional item text: max ${SEMANTIC_PLAN_LIMITS.detailCharacters} chars per field. Omit suggestions whose exact repr/literal cannot fit; never truncate or alter evidence. No placeholders or field-description copies. Later scenarios belong to the measured quality loop.
 Evidence rules:
-- Source, annotations, setup and caller sites guide bindings and inputs, not output/exception proof. Input hints use only selected target parameters; never name dependency parameters or dependency return keys.
+- Source, annotations, setup and caller sites guide bindings/inputs, not output/exception proof. Hints use selected target parameters; never name dependency parameters or dependency return keys.
 - Controlled observations support only their exact call and constructor/setup. Preserve Python repr. Blocked/load-error, mutated, truncated, incomplete or unassertable records are diagnostics, not target exceptions or expected values; snapshots stay artifact-only.
 - Without verified dependency observations, leave dependency_behaviors empty. Dependency results are not target results. Unreachable paths and mock suggestions remain hypotheses; never omit tests on that basis or patch the target/class. With no dependencies, keep all three dependency/path arrays empty.
-- Derive boundaries from source conditions; emit only scalar Python literals (None, bool, finite number, quoted string), never calls, expressions or collections. They are never an output oracle by themselves; invalid_inputs does not prove an exception.
+- Boundaries follow source conditions; emit only scalar Python literals (None, bool, finite number, quoted string), never calls/expressions/collections. They are never an output oracle by themselves; invalid_inputs does not prove an exception.
 - No direct network, file I/O, shell, dynamic execution or shared SQLite. External behavior needs explicit use-point mocks or host-declared isolated resources.${isolatedResourceSystemRule()}
-Return JSON only, no Markdown or explanations.`;
+`;
 }
 
 // === User Prompt ===
@@ -361,7 +358,7 @@ export function getSemanticAnalyzerUserPrompt(
         prompt += '\n';
     }
 
-    prompt += 'Analyze this evidence using the role contract. Keep the plan short: select one useful initial scenario; do not repeat source code, observations or the schema in your reply.';
+    prompt += 'Analyze this evidence using the role contract. Do not repeat source, observations or schema.';
 
     return prompt;
 }

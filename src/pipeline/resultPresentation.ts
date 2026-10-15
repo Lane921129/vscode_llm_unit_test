@@ -1,5 +1,6 @@
 import { localize } from '../i18n/core';
 import { formatModelRequestTiming } from './modelRequestTimingPresentation';
+import { formatPromptCapacity } from './promptCapacityPresentation';
 export interface OutcomeEvidence {
     terminalStatus?: unknown;
     failureCategory?: unknown;
@@ -115,6 +116,8 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
     if (stage === 'model-request' && status === 'budget-exceeded') {
         const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
             ? detail as Record<string, unknown> : {};
+        const capacity = formatPromptCapacity(metrics.capacity, true);
+        if (capacity) { return capacity; }
         const keys = ['estimatedInputTokens', 'inputBudget', 'reservedInputTokens', 'contextWindow'] as const;
         if (keys.every(key => Number.isSafeInteger(metrics[key]) && Number(metrics[key]) >= 0)
             && Number.isSafeInteger(Number(metrics.estimatedInputTokens) + Number(metrics.reservedInputTokens))) {
@@ -126,6 +129,10 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
                 role, metrics.estimatedInputTokens, metrics.reservedInputTokens, metrics.inputBudget, excess, metrics.contextWindow);
         }
         return localize('提示超出輸入預算；完整證據已保留，未送出模型請求');
+    }
+    if (stage === 'model-capacity' && status === 'assessed') {
+        const capacity = formatPromptCapacity(detail);
+        if (capacity) { return capacity; }
     }
     const value = detail as { reason?: unknown; diagnostics?: unknown; role?: unknown; focus?: unknown; globalProgress?: unknown } | undefined;
     if (stage === 'quality-experiment' && value?.focus) {
