@@ -11,7 +11,7 @@ test('Ollama structured probe is small, deterministic, and domain neutral', () =
         model: 'local-model',
         system: ' ',
         prompt: '\nReturn exactly one JSON object with a boolean field named "ok" set to true. Do not include any other text.',
-        stream: false,
+        stream: true,
         format: 'json',
         options: { temperature: 0, num_ctx: 8192 }
     });

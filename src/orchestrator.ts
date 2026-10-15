@@ -81,7 +81,7 @@ import { mergeTestSnippets, mergeTestSnippetsPreservingBaseline, mergeWriterTest
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
 import { buildOllamaPromptEnvelope } from './llm/ollamaPrompt';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
-import { SerialRequestQueue } from './llm/serialRequestQueue';
+import { SerialRequestQueue, SerialRequestQueueError } from './llm/serialRequestQueue';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { findModelProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
@@ -126,11 +126,12 @@ import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification }
 import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText } from './llm/ollamaResponse';
+import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
-import { boundedRoleStageDeadline, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent, type TransportAttemptTiming } from './llm/requestTiming';
+import { boundedRoleStageDeadline, createRequestProgress, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent, type TransportAttemptTiming } from './llm/requestTiming';
 import { createOutputRecoveryStage, outputRecoveryAttemptDeadline, outputRecoveryTokenLimit, planOutputRecoveryRetry } from './llm/outputRecoveryTiming';
 import { buildSupplementalProbeInputs, SupplementalProbeInput } from './tier/supplementalProbeInputs';
 import { traceSubsetForCaller } from './tier/callerTracePartition';
@@ -952,12 +953,34 @@ async function requestLlmApi(
 ): Promise<string> {
     const queuedAt = Date.now();
     const deadlineAt = sharedDeadlineAt ?? deadlineAtFromTimeoutSeconds(params.timeoutSeconds, queuedAt);
-    return llmRequestQueue.run(() => {
-        const queueTiming = createRequestQueueTiming(queuedAt, Date.now());
-        onTiming?.({ ...queueTiming, format: outputFormat });
-        return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, outputFormat, deadlineAt,
-            onTiming, { transportAttempt: 0, queueWaitMs: queueTiming.queueWaitMs });
-    });
+    const controller = new AbortController();
+    const release = currentExecution()?.onCancel(() => controller.abort());
+    try {
+        onTiming?.({ ...createRequestProgress('queued', queuedAt), format: outputFormat });
+        return await llmRequestQueue.run(() => {
+            throwIfExecutionCancelled();
+            const queueTiming = createRequestQueueTiming(queuedAt, Date.now());
+            onTiming?.({ ...queueTiming, format: outputFormat });
+            onTiming?.({ ...createRequestProgress('dispatch', queuedAt), format: outputFormat });
+            return requestLlmApiUnlocked(params, systemPrompt, userPrompt, log, outputFormat, deadlineAt,
+                onTiming, { transportAttempt: 0, queueWaitMs: queueTiming.queueWaitMs });
+        }, { deadlineAt, signal: controller.signal, onQueueExit: exit => {
+            if (exit.reason !== 'started') {
+                onTiming?.({ ...createRequestQueueTiming(queuedAt, exit.exitedAt), format: outputFormat });
+                onTiming?.({ ...createRequestProgress(exit.reason === 'timeout' ? 'queue-timeout' : 'queue-cancelled',
+                    queuedAt, {}, exit.exitedAt), format: outputFormat });
+            }
+        } });
+    } catch (error) {
+        throwIfExecutionCancelled();
+        if (error instanceof SerialRequestQueueError) {
+            throw new AnalysisStageError('timeout', 'model-request',
+                localize('模型請求在排隊時已達期限，尚未開始 HTTP 傳輸。'),
+                { cause: 'deadline', phase: 'queue', queueWaitMs: error.queueWaitMs,
+                    deadlineAt, transportStarted: false, reasonCode: 'queue-timeout' });
+        }
+        throw error;
+    } finally { release?.(); }
 }
 
 async function requestLlmApiUnlocked(
@@ -995,7 +1018,7 @@ async function requestLlmApiUnlocked(
         bodyData = {
             model: params.modelName,
             ...buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt),
-            stream: false,
+            stream: true,
             options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
                 ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}) },
             ...(expectsJsonObject ? { format: ['semantic-json', 'review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
@@ -1051,13 +1074,19 @@ async function requestLlmApiUnlocked(
                 throwIfExecutionCancelled();
                 requestPhase = 'http-wait';
                 attemptTiming = { transportAttempt: ++timingState.transportAttempt, startedAt: Date.now() };
+                const wireBody = JSON.stringify(request?.body || bodyData);
+                onTiming?.({ ...createRequestProgress('http-request', attemptTiming.startedAt,
+                    { transportAttempt: attemptTiming.transportAttempt,
+                        requestBodyBytes: Buffer.byteLength(wireBody, 'utf8'), requestBodyHash: evidenceHash(wireBody) }), format: outputFormat });
                 try {
                     const response = await fetch(request?.url || apiUrl, {
                         method: 'POST', headers: request?.headers || headers,
-                        body: JSON.stringify(request?.body || bodyData), signal: controller.signal
+                        body: wireBody, signal: controller.signal
                     });
                     attemptTiming.headersAt = Date.now();
                     attemptTiming.httpStatus = response.status;
+                    onTiming?.({ ...createRequestProgress('http-headers', attemptTiming.startedAt,
+                        { transportAttempt: attemptTiming.transportAttempt, httpStatus: response.status }), format: outputFormat });
                     if (!response.ok) { reportTiming('http-error'); }
                     return response;
                 } catch (error) {
@@ -1081,7 +1110,7 @@ async function requestLlmApiUnlocked(
             () => log(localize("[思考量回退] 供應商明確不支援低思考量，沿原時限使用服務預設。"))) : await send();
         throwIfExecutionCancelled();
         if (!response.ok) {
-            await response.body?.cancel();
+            try { void response.body?.cancel().catch(() => {}); } catch { /* Preserve the HTTP failure and original deadline. */ }
             if (shouldRetryStructuredOutputAsText(response.status, outputFormat)) {
                 log(localize("[格式回退] 供應商拒絕結構化輸出（HTTP {0}），沿原時限改用一般文字輸出。", response.status));
                 return requestLlmApiUnlocked(params, contractedSystemPrompt, userPrompt, log, 'text', deadlineAt, onTiming, timingState);
@@ -1092,8 +1121,20 @@ async function requestLlmApiUnlocked(
 
         requestPhase = 'response-read';
         if (attemptTiming) { attemptTiming.responseReadStartedAt = Date.now(); }
-        const resJson = await response.json() as Record<string, unknown>;
+        let firstTextAt: number | undefined;
+        const resJson = params.envType === 'local'
+            ? await readOllamaGenerationResponse(response, progress => {
+                if (progress.phase === 'first-text') { firstTextAt = Date.now(); }
+                onTiming?.({ ...createRequestProgress(progress.phase === 'completed' ? 'response-completed' : progress.phase,
+                    attemptTiming?.startedAt ?? Date.now(), { transportAttempt: attemptTiming?.transportAttempt,
+                        httpStatus: attemptTiming?.httpStatus, receivedChunks: progress.receivedChunks,
+                        receivedBytes: progress.receivedBytes, responseCharacters: progress.responseCharacters,
+                        firstTextMs: firstTextAt === undefined ? null
+                            : Math.max(0, firstTextAt - (attemptTiming?.startedAt ?? firstTextAt)) }), format: outputFormat });
+            }) : await response.json() as Record<string, unknown>;
         if (attemptTiming) { attemptTiming.responseReadFinishedAt = Date.now(); }
+        throwIfExecutionCancelled();
+        if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) { throw new Error('Model request deadline expired'); }
         reportTiming('completed', resJson);
 
         let responseText: string;
@@ -1137,9 +1178,10 @@ async function requestLlmApiUnlocked(
             && attemptTiming.responseReadFinishedAt === undefined) {
             attemptTiming.responseReadFinishedAt = Date.now();
         }
+        const invalidStream = error instanceof AnalysisStageError && error.stage === 'model-response';
         reportTiming(isExecutionCancelled() ? 'cancelled'
             : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 ? 'timeout'
-                : invalidProviderJson ? 'response-error' : 'network-error');
+                : invalidProviderJson || invalidStream ? 'response-error' : 'network-error');
         throwIfExecutionCancelled();
         if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) {
             throw new AnalysisStageError('timeout', 'model-request', localize("API 請求超時 (超過 {0} 秒總時限)", params.timeoutSeconds),
@@ -1978,11 +2020,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             return response;
         } catch (error) {
             const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
-                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown } : undefined;
+                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; phase?: unknown; transportStarted?: unknown } : undefined;
             recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
                 category: error instanceof AnalysisStageError ? error.category : 'unknown',
                 ...(diagnostic?.reasonCode === 'output-token-limit'
                     ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit } : {}),
+                ...(typeof diagnostic?.phase === 'string' && ['queue', 'http-wait', 'response-read', 'backoff'].includes(diagnostic.phase)
+                    ? { phase: diagnostic.phase } : {}),
+                ...(diagnostic?.reasonCode === 'queue-timeout' && diagnostic.phase === 'queue' && diagnostic.transportStarted === false
+                    ? { reasonCode: 'queue-timeout', transportStarted: false } : {}),
                 ...(modelRequestHttpStatus(error) !== undefined ? { httpStatus: modelRequestHttpStatus(error) } : {}),
                 reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
             if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
@@ -2065,6 +2111,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             runtimeContextSource: selectedModelProfile.runtimeContextSource,
             metadataDiagnostic: modelSnapshot.localRuntimeMetadata,
             qualificationApplicable: currentQualification });
+        const observedContext = selectedModelProfile.effectiveRuntimeContextTokens;
+        if (selectedModelProfile.runtimeContextSource === 'ollama-ps' && Number.isSafeInteger(observedContext)
+            && (observedContext as number) > 0 && observedContext !== requestContextWindow) {
+            recordRole('model-runtime', 'allocation-differs', { contextWindow: requestContextWindow,
+                lastObservedRuntimeContextTokens: observedContext, savedChoicePreserved: true });
+        }
     }
     const targetDir = path.dirname(params.filePath);
     let astContext: AstContext | null = null;

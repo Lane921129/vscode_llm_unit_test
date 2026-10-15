@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## Ollama 串流、排隊期限與傳輸證據（2026-10-15）
+
+`requestLlmApi` 從入隊開始沿用原絕對期限；`SerialRequestQueue` 將呼叫者的等待結果與實際工作生命週期分開。等待時過期或取消會立即返回且之後不啟動該項；已啟動的工作仍須真正結束，不能用提早 rejected 的 Promise 釋放序列槽位。未發 HTTP 的排隊失敗只記 queue 證據，不虛構 transport 或模型數字。
+
+正式 Local 與側欄三角色資格探針皆請求 `stream:true`，經 `ollamaGenerationResponse.ts` 有界接收 NDJSON。只有唯一 `done:true` 終端與 EOF 都成立，才能交既有 length、格式、敏感內容及候選 gate；UTF-8 分段、錯誤、截斷與大小上限均不授權前綴。普通 JSON 保留歷史 missing-done 相容，明示 `done:false` 仍拒絕。資格 deadline 覆蓋標頭及 body；失敗清理不等待可能永不完成的 cancel。
+
+`model-request-progress-v1` 記錄 queued／dispatch／HTTP 提交／標頭／首 bytes／首回答／完整讀取及排隊失敗，只投影數字、固定標籤及實際送交 fetch 的 body hash／bytes，不記完整提示或供應商回應。HTTP 提交不是伺服器收件證明，讀取完成不是品質批准；首回答時間與 HTTP 等待、模型實測耗時分列。最近載入與請求容量不同時提示可能重載，使用者的容量偏好仍保留。
+
+10/15 12:47、13:05 兩批 BMI 都在首個 Analyst 的 HTTP 等待約300秒後停止，queue只有0／1毫秒，尚未進 Writer／審查／突變；沒有 length 回覆，不能歸因1024輸出額度。短生成兩端成功不證明完整 schema／提示也成功。容量差異及舊 build 是追查事實，尚無 DGX 服務日誌或新版完整實測，不能將本機整合通過寫成70B驗收通過。
+
 ## Mock 與工具契約修復（2026-10-15）
 
 首次與修訂 Writer 都收到已核驗來源的必要 iterable／索引消費指引；可省略 raw topology，不能連帶丟掉 actionable setup。`source_setup_call_contract.py` 提供有界、同目標雜湊的參數屬性讀／寫／呼叫拼字，讓 UI 替身支援實際 dot 屬性與方法，並保留實際 module-global 呼叫參數。這些事實不供具體型別、值、斷言答案或 patch 權限，重綁與未知控制流保持未知。

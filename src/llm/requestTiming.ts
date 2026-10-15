@@ -111,7 +111,41 @@ export interface TransportAttemptTiming {
     ollama: OllamaGenerationTiming;
 }
 
-export type RequestTimingEvent = RequestQueueTiming | TransportAttemptTiming;
+export const REQUEST_PROGRESS_PHASES = ['queued', 'dispatch', 'queue-timeout', 'queue-cancelled',
+    'http-request', 'http-headers', 'first-bytes', 'first-text', 'response-completed'] as const;
+export type RequestProgressPhase = typeof REQUEST_PROGRESS_PHASES[number];
+export interface RequestProgressEvent {
+    version: 'model-request-progress-v1';
+    kind: 'progress';
+    phase: RequestProgressPhase;
+    elapsedMs: number | null;
+    transportAttempt: number | null;
+    httpStatus: number | null;
+    receivedChunks: number | null;
+    receivedBytes: number | null;
+    responseCharacters: number | null;
+    firstTextMs: number | null;
+    requestBodyBytes: number | null;
+    requestBodyHash: string | null;
+}
+export type RequestTimingEvent = RequestQueueTiming | TransportAttemptTiming | RequestProgressEvent;
+
+/** Progress is a client observation, never proof of server receipt or GPU work. */
+export function createRequestProgress(phase: RequestProgressPhase, startedAt: number,
+    details: Partial<Pick<RequestProgressEvent, 'transportAttempt' | 'httpStatus' | 'receivedChunks'
+        | 'receivedBytes' | 'responseCharacters' | 'firstTextMs' | 'requestBodyBytes' | 'requestBodyHash'>> = {}, now = Date.now()): RequestProgressEvent {
+    if (!REQUEST_PROGRESS_PHASES.includes(phase)) { throw new TypeError('Unknown request progress phase'); }
+    const status = nonNegativeInteger(details.httpStatus);
+    const attempt = nonNegativeInteger(details.transportAttempt);
+    return { version: 'model-request-progress-v1', kind: 'progress', phase, elapsedMs: elapsed(startedAt, now),
+        transportAttempt: attempt !== null && attempt > 0 ? attempt : null,
+        httpStatus: status !== null && status >= 100 && status <= 599 ? status : null,
+        receivedChunks: nonNegativeInteger(details.receivedChunks), receivedBytes: nonNegativeInteger(details.receivedBytes),
+        responseCharacters: nonNegativeInteger(details.responseCharacters), firstTextMs: nonNegativeNumber(details.firstTextMs),
+        requestBodyBytes: nonNegativeInteger(details.requestBodyBytes),
+        requestBodyHash: typeof details.requestBodyHash === 'string' && /^[0-9a-f]{64}$/.test(details.requestBodyHash)
+            ? details.requestBodyHash : null };
+}
 
 function elapsed(start: unknown, end: unknown): number | null {
     const validStart = nonNegativeNumber(start);

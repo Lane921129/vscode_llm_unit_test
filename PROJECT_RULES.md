@@ -4,6 +4,9 @@
 
 ## 目前驗收優先順序
 
+- Local Ollama 正式角色與連線資格探針使用同一串流接收器；NDJSON 必須有唯一 `done:true` 終端且完整讀至 EOF 才能採用，`length` 仍交既有有界輸出恢復，不採用前綴。明示 `done:false`、畸形／超界／重複終端或中斷皆停止；歷史普通 JSON 缺少 `done` 的相容不等於允許明示未完成。資格探針的原期限須涵蓋 HTTP 標頭與完整 body，清理不能因等待 `cancel()` 再次卡住。排隊自入隊就受原絕對期限及取消約束，過期項永不發送；active 工作真正結束後才能放行下一項。
+- `model-request-progress-v1` 只保存固定階段、安全數字與實際 wire 的 SHA-256／byte 數；提交傳輸層不代表伺服器收到、首段資料不等於首段回答、完整回覆也不等於測試通過。HTTP／模型耗時缺值保持未知。最近觀測容量與本次請求不同時明示重載風險，不自行覆寫已保存容量或將容量當成實際輸入 token 數。
+
 - 2026-10-15 起，Local 初始 Analyst 的 `num_predict=1024` 是起始輸出額度，不是模型 Context 上限。明確 `done_reason=length` 可在同一完整提示下增加輸出並至多重送一次，Analyst 與 Writer 的學習額度各自限定本目標；Reviewer、品質分析師、Fixer 與資格探針不借該額度。Analyst 明傳首問期限及原規劃階段期限：首問仍受原單次額度，length 重送可使用首問前已保留的階段餘額，並受原 target／family／計數限制；未明傳雙期限的呼叫端保留原 shared hard cap。缺少耗時資料時須保留完整單次時間，時間或完整輸入／輸出容量不足即記錄原因停止；不得在失敗後新建階段或猜測生成速度。必要增容仍須已核實上限與新容量角色資格，不採用截斷前綴、不重設保存偏好。
 
 - 品質補測任務使用 `quality-task-v4` 綁定本次 run／source／qualified target／focus 與已執行的精確輸入族；模型只能引用 scenario ID 與 `verify-observed-behavior`。模型的預期值及例外假設不送入 Writer 的已核實觀測欄位。空任務、無效契約或分析暫停可使用相同實測觀測繼續要求 Writer，但不造分析批准或品質通過。

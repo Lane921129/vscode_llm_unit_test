@@ -10,7 +10,7 @@ import { BatchScopeSelection } from '../pipeline/batchScope';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, googleThinkingSession, normalizeGoogleModelName } from '../llm/cloudApi';
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, LOCAL_RUNTIME_QUALIFICATION_VERSION, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
-import { buildOllamaPlainTestGenerationProbe, buildOllamaRoleQualificationProbe } from '../llm/ollamaCapability';
+import { buildOllamaPlainTestGenerationProbe, buildOllamaRoleQualificationProbe, requestOllamaQualification } from '../llm/ollamaCapability';
 import { readLocalRuntimeMetadata } from '../llm/localRuntimeMetadata';
 import { resolveLocalRuntimeContext } from '../prompts/promptBudget';
 import { findModelProfile, restoreModelProfiles, StoredModelProfile } from '../llm/modelProfileRegistry';
@@ -668,22 +668,17 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                     try {
-                                        const plainResponse = await timedFetch(`${baseUrl}/api/generate`, {
-                                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify(buildOllamaPlainTestGenerationProbe(message.modelName, runtime.contextWindow))
-                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                        const plainResponse = await requestOllamaQualification(baseUrl,
+                                            buildOllamaPlainTestGenerationProbe(message.modelName, runtime.contextWindow));
                                         const capability = await verifyRunnableTestGenerationProbe(
-                                            plainResponse.ok ? await plainResponse.json() : undefined, isolatedProbeExecutor
+                                            plainResponse, isolatedProbeExecutor
                                         );
                                         const roleQualification = await runRoleQualificationProbes(
                                             { state: capability.capability, reason: capability.reason },
                                             async (prompt, format) => {
-                                                const roleResponse = await timedFetch(`${baseUrl}/api/generate`, {
-                                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify(buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow))
-                                                }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                                if (!roleResponse.ok) { return undefined; }
-                                                return (await roleResponse.json() as { response?: string }).response;
+                                                const roleResponse = await requestOllamaQualification(baseUrl,
+                                                    buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow));
+                                                return typeof roleResponse?.response === 'string' ? roleResponse.response : undefined;
                                             }, isolatedProbeExecutor
                                         );
                                         const qualificationProfile = { ...profile, qualificationRuntime,

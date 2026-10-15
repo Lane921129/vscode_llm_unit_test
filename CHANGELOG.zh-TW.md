@@ -4,6 +4,18 @@
 
 ## 2026-10-15
 
+### BMI 300秒超時定位與串流傳輸修復
+
+- 比對 `bmi_2026_10_15_12_47` 與 `13_05`：兩批均在第一個 Analyst `semantic-json` 請求等待約300秒，queue為0／1ms、HTTP標頭／狀態／Ollama統計均未知；估輸入2410、輸出cap1024、請求容量65536。尚未產生候選或進審查／突變，不是這兩批的Mock失敗、queue阻塞或已證實的length截斷。前置約19～21秒加API300秒，也不同於整個專案300秒總額。
+- 舊報告為development build `2026-10-14T09:41:16.524Z`，沒有commit欄位，不能認定正在跑最新修復。使用者DGX／Windows短生成分別HTTP200約0.429／0.512秒，證明當時短生成路徑可用，不證完整提示及schema耗時。DGX為GB10，統一記憶體的N/A不是缺顯卡。
+- 正式Local與側欄資格探針統一 `stream:true` 及有界NDJSON接收；只在唯一done終端與EOF後交既有角色／候選gate。UTF-8拆包、缺完成、重複／尾部紀錄、供應商錯誤及超界皆明確拒絕；length仍由原完整提示增額恢復。普通JSON保留歷史missing-done相容，明示未完成不採用。
+- 修正資格探針收到HTTP標頭即清除timeout、後續body可能無期限的缺口；原期限現在包含完整讀取。失敗及HTTP錯誤清理採非阻塞cancel，不讓永不完成的清理Promise再卡住。
+- 新增安全傳輸進度：排隊／派送／HTTP提交／收到標頭／首資料／首回答／完整讀取，保存真正fetch body的SHA-256與bytes，不保存完整提示／回覆。排隊逾時明示尚未送API，body超時保留response-read階段；缺模型統計維持未知，不把HTTP等待推定成GPU耗時。
+- 另修已確認但非本次根因的queue期限：queued過期或取消即拒絕且永不啟動；active工作真正settle前不釋放槽位。新增deadline／cancel／超長timer／observer例外及舊run draining時新run過期的回歸。
+- 最近觀測131072與請求65536的容量差異會明示可能重載，保存偏好不覆寫。已核對Ollama 0.33.2的scheduler會比較runner選項；沒有服務端日誌，不能認定重載或schema就是此次300秒原因。正式schema與完整來源均保留，未以timeout放寬格式或品質gate。
+- 本機Ollama未啟動、開發機不能連入DGX；新reader／queue／資格及真流程固定回覆回歸與完整驗證分列，不能宣稱新版70B已完成BMI品質驗收。
+- 完整驗證：Node 1384／1384通過（0 skip），Python 742通過／3 skip；TypeScript、lint、生產建置、Webview語法、追蹤檔及Git歷史密鑰掃描、`git diff --check`皆通過。新增串流真流程固定回覆案例6／6通過；其完整回覆案例實跑隔離Python、Reviewer與builtin突變，仍不代表DGX模型驗收。原有8個未提交修改逐檔SHA-256核對保持不變。
+
 ### Trace 診斷、Mock 必要設定與修復範圍
 
 - 修正車輛三份 `vehicle_card` Trace 的全域 `parameter:null`／`source-node-budget` 診斷被 TypeScript 拒收；保留 `needs-input`／`complete:false`，不產生 oracle。真正無效 JSON／觀測契約以固定 typed `trace-contract` 停止，不被 journal 或 legacy `load_error` 掩蓋；真正載入失敗的結構化診斷仍可恢復。

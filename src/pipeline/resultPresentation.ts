@@ -87,6 +87,15 @@ export function describeStageEvent(stage: string, status: string, detail: unknow
             || candidateDetail.reasonCode === 'response-not-extracted-python')) {
         return localize('回覆未能抽取為 Python 測試候選；尚未進入 import 或測試方法檢查，交 Writer 修正回覆格式。');
     }
+    if (stage === 'model-runtime' && status === 'allocation-differs') {
+        const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
+            ? detail as Record<string, unknown> : {};
+        if (['contextWindow', 'lastObservedRuntimeContextTokens'].every(key => Number.isSafeInteger(metrics[key])
+            && Number(metrics[key]) > 0)) {
+            return localize('本次請求容量 {0} 與最近觀測的已載入容量 {1} 不同，Ollama 可能重載模型；已保留你的容量選擇，這不是實際輸入 token 數。',
+                metrics.contextWindow, metrics.lastObservedRuntimeContextTokens);
+        }
+    }
     if (stage === 'model-runtime' && ['context-grown', 'context-growth-requested'].includes(status)) {
         const metrics = detail && typeof detail === 'object' && !Array.isArray(detail)
             ? detail as Record<string, unknown> : {};
