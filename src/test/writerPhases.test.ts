@@ -1,8 +1,25 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildWriterAdditionRevisionPrompt, buildWriterAdditionSystemPrompt, buildWriterExpansionPrompt,
-    buildWriterSeedPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt } from '../roles/writerPhases';
+    buildWriterSeedPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
+    selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from '../roles/writerPhases';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
+
+test('addition packaging selects stable fresh names across all AST-proven baseline classes', () => {
+    const baselineHash = 'a'.repeat(64);
+    const name = selectWriterAdditionMethodName(baselineHash, 'measured-gap-1', ['Cases.test_seed']);
+    assert.match(name, /^test_add_[a-f0-9]{12}_[a-f0-9]{12}$/);
+    assert.equal(selectWriterAdditionMethodName(baselineHash, 'measured-gap-1', []), name);
+    assert.equal(selectWriterAdditionMethodName(baselineHash, 'measured-gap-1',
+        [`Cases.${name}`, `Other.${name}_2`]), `${name}_3`);
+    assert.notEqual(selectWriterAdditionMethodName('b'.repeat(64), 'measured-gap-1', []), name);
+    assert.notEqual(selectWriterAdditionMethodName(baselineHash, 'measured-gap-2', []), name);
+    const instruction = buildWriterAdditionMethodInstruction(name);
+    assert.ok(instruction.endsWith(`def ${name}(self):\n`));
+    assert.match(instruction, /must author its setup, target calls and assertions/);
+    assert.match(instruction, /does not make a repeated scenario new/);
+    assert.doesNotMatch(instruction, /assertEqual|assertRaises|return_value|pass\n/);
+});
 
 test('seed requests one evidence-supported executable case without changing the output contract', () => {
     const evidence = 'Complete binding and source evidence\nVerified target(1) = 2';

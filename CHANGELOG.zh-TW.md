@@ -4,6 +4,19 @@
 
 ## 2026-10-15
 
+### Trace 診斷、Mock 必要設定與修復範圍
+
+- 修正車輛三份 `vehicle_card` Trace 的全域 `parameter:null`／`source-node-budget` 診斷被 TypeScript 拒收；保留 `needs-input`／`complete:false`，不產生 oracle。真正無效 JSON／觀測契約以固定 typed `trace-contract` 停止，不被 journal 或 legacy `load_error` 掩蓋；真正載入失敗的結構化診斷仍可恢復。
+- 首次 Writer 的 `includeTopology=false` 原本連帶省略 iterable／常數索引的可操作消費指引。現在必要 setup 在初次與修訂都保留，只有 raw topology 可整份省略；完整來源與 wire 預算閘不變。舊批每份 wire 是否省略 topology 尚未逐份證明，既有 `_connect` 的 `DB_NAME` 事實原本正確。
+- 同來源的 setup 契約新增有界參數屬性讀／寫／呼叫拼字，明示 dot 屬性不能用字典 key 取代、參數物件不應 patch 成 module-global；呼叫参数另列實際模組使用點。只供 setup，不供具體型別、值、expected 或 patch 權限；重綁、反射與未知控制流不猜。
+- 修正合法巢狀 `types.SimpleNamespace` 內 Mock 的來源追蹤誤拒，以明確物件／成員身分圖保留真正注入目標的 Mock；別名修改撤回舊成員證據。未知物件、假工廠、反射、動態 kwargs、手動預呼叫、偽斷言及目標 patch 仍拒絕；新 UI 正例已通過結構、AST bindings 與真實隔離執行。
+- Bug Fixer 移除三處 raw import 行數誤拒，由 Python AST 統一計算真正新增的 import binding；重複、既有與同來源拆行不占 NEW 額度，四個真正新增、名稱遮蔽、wildcard、fixture／其他方法變動仍拒絕，未通過範圍檢查不能執行。
+- 普通 Writer 增量與修訂依真正 AST 盤點選擇新方法名，未知盤點 typed 停止；生成與 wire 預算都納入同一簽名。模型仍寫完整 body／expected，新名字不能繞過情境去重、保留、實跑與同版審查。
+- builtin／Mutatest 共用試驗器在排程及 setup 後核對 stage 餘額：少於成功 baseline 的實測成本就保持 NOT_RUN／partial；已起跑而掛住仍 TIMEOUT，不改原期限、killed 或分母。新執行既有預設60秒，明確設定不覆蓋。
+- 真本機 `qwen2.5-coder:3b-instruct` 三目標驗收187秒完成，採最新 production、full／Tier2／五輪／指定Mutatest／60秒；重新公開資格探針後 Writer／Reviewer verified，Fixer未verified據實保留。`_connect` 真實執行、審查及目標行1/1完成，但Mutatest零候選，分數N/A；`_table_columns`仍把受控row的名稱放第0欄、型別放第1欄卻預期名稱，修訂未改正；`open_dialog`仍用dict／lambda或patch未注入的module-global，應拒，沒有新的合法Namespace誤拒證據。不能宣稱三目標完整品質通過。
+- 三目標來源／已批准fixture／production來源及編譯摘要前後相符，設定與SecretStorage存取0，隔離資源清理完成；唯一全src/out差異是命名回歸測試TS／JS，沒有假稱全樹未變。保存原生final／failure／events及安全摘要；同版builder重建能證明產生必要setup指引，舊wire沒有prompt hash，不宣稱逐字封包證明。13B／70B尚未新驗收，完整單元驗證與真模型品質分列。
+- 最終普通 Windows 完整回歸：Node 1,332／1,332 通過（35分48秒，0 skipped）；Python 745項，742通過／3 skipped，無失敗。針對性 Mock Node35／35、Python98／98，Trace直接呼叫及流程54／54、核心11／11，import修復Node25／25及Python13／13，Writer命名整合3／3，突變V2 23／23皆通過。TypeScript、lint、生產建置、Webview語法、含新檔的追蹤檔／可達歷史密鑰掃描與差異檢查通過；原八個WIP位元組保留並排除提交。這些是工具與流程驗證，不能取代真模型品質驗收。
+
 ### 角色期限與完整 Writer 預算修復、車輛整批實測
 
 - 後續發現：初版恢復層把 Analyst 的首問60秒期限當成整個 shared stage，未使用已保留的120秒規劃階段；首問耗時後，缺少生成統計便必然不足完整60秒重送。現在明傳 `initialAttemptDeadlineAt` 與原 `stageDeadlineAt`，首問期限不變，最多一次同提示 length 重送使用原階段餘額；target／family／資格探針及計數不續期，舊呼叫端的 shared hard cap 不放寬，也不捏造 token 速度。

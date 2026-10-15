@@ -847,8 +847,14 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                       effectiveMutantTimeoutSeconds=effective_timeout_seconds)
         result['mutants'] = [{**candidate, 'status': 'NOT_RUN', 'output': ''} for candidate, _ in candidates]
 
+        def mutation_budget_exhausted():
+            # Do not launch a fresh interpreter with less time than the same
+            # successful baseline actually needed. Keep that candidate NOT_RUN
+            # rather than producing a predictable stage-limited TIMEOUT.
+            return budget_exhausted() or trial_timeout(effective_timeout_seconds) < result['baselineElapsedMs'] / 1000
+
         def execute_candidate(index):
-            if budget_exhausted():
+            if mutation_budget_exhausted():
                 return None
             candidate, mutant_source = candidates[index]
             trial_started = time.monotonic()
@@ -860,7 +866,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
                         'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
             allocated_seconds = trial_timeout(effective_timeout_seconds)
-            if allocated_seconds <= 0:
+            if allocated_seconds <= 0 or allocated_seconds < result['baselineElapsedMs'] / 1000:
                 return None
             trial_result_path = mutant_root / 'runner-result.json'
             detail = None
@@ -919,7 +925,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         # process tree (taskkill /T on Windows, group kill on POSIX).
         if workers == 1:
             for index in range(len(candidates)):
-                if budget_exhausted():
+                if mutation_budget_exhausted():
                     break
                 save_record(index, execute_candidate(index))
         else:
@@ -927,7 +933,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 pending = {}
                 next_index = 0
                 while pending or next_index < len(candidates):
-                    while len(pending) < workers and next_index < len(candidates) and not budget_exhausted():
+                    while len(pending) < workers and next_index < len(candidates) and not mutation_budget_exhausted():
                         pending[pool.submit(execute_candidate, next_index)] = next_index
                         next_index += 1
                     if not pending:
@@ -941,6 +947,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     result['scoreAvailable'] = bool(counts['selected'] and counts['notRun'] == 0 and counts['error'] == 0 and counts['timeout'] == 0)
     result['status'] = ('failed' if counts['error'] else 'no-candidates' if counts['available'] == 0
                         else 'complete' if result['scoreAvailable'] and counts['selected'] == counts['available'] else 'partial')
+    if counts['notRun']:
+        result['diagnosticCode'] = 'mutation-stage-budget-insufficient'
+        result['diagnostic'] = 'Unstarted candidates retain NOT_RUN; the remaining stage budget cannot fund another baseline-sized trial.'
     result['elapsedMs'] = max(0, round((time.monotonic() - started) * 1000))
     return result
 

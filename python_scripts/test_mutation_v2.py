@@ -241,7 +241,7 @@ class MutationV2Tests(unittest.TestCase):
             self.assertEqual(result['counts']['survived'], 1)
             self.assertEqual(result['counts']['timeout'], 0)
 
-    def test_calibration_never_extends_remaining_stage_or_counts_hanging_mutant_as_killed(self):
+    def test_short_stage_remainder_starts_no_mutant_below_the_successful_baseline_cost(self):
         clock = [0.0]
         def fake_run(args, **kwargs):
             if kwargs['cwd'].name == 'baseline':
@@ -249,21 +249,68 @@ class MutationV2Tests(unittest.TestCase):
                 Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
                                                     'status': 'passed', 'testFailures': []}), encoding='utf-8')
                 return subprocess.CompletedProcess(args, 0, '', '')
-            self.assertEqual(kwargs['timeout'], 2)
-            clock[0] += kwargs['timeout']
-            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+            self.fail('A mutant must not start with only two seconds after a six-second baseline')
         with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
                 patch.object(runner.subprocess, 'run', side_effect=fake_run):
             result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=8)
         self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
-        self.assertEqual(result['mutants'][0]['allocatedSeconds'], 2)
+        self.assertTrue(all('allocatedSeconds' not in mutant for mutant in result['mutants']))
+        self.assertEqual(result['counts']['executed'], 0)
+        self.assertEqual(result['counts']['timeout'], 0)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertGreater(result['counts']['notRun'], 0)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertEqual(result['elapsedMs'], 6000)
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['diagnosticCode'], 'mutation-stage-budget-insufficient')
+
+    def test_a_started_hanging_mutant_still_times_out_without_extending_the_original_stage(self):
+        clock = [0.0]
+        def fake_run(args, **kwargs):
+            if kwargs['cwd'].name == 'baseline':
+                clock[0] += 6
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            self.assertEqual(kwargs['timeout'], 7)
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=13)
+        self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
+        self.assertEqual(result['mutants'][0]['allocatedSeconds'], 7)
         self.assertEqual(result['counts']['timeout'], 1)
         self.assertEqual(result['counts']['killed'], 0)
         self.assertGreater(result['counts']['notRun'], 0)
         self.assertFalse(result['scoreAvailable'])
-        self.assertEqual(result['elapsedMs'], 8000)
-        self.assertIn('after 2.000s', result['mutants'][0]['output'])
-        self.assertTrue(all('allocatedSeconds' not in mutant for mutant in result['mutants'][1:]))
+        self.assertEqual(result['elapsedMs'], 13000)
+
+    def test_mutant_setup_rechecks_admission_against_remaining_stage_after_copying(self):
+        clock = [0.0]
+        prepare = runner.prepare_trial_directory
+        def slow_mutant_setup(*args):
+            prepared = prepare(*args)
+            if args[2].name.startswith('mutant_'):
+                clock[0] += .6
+            return prepared
+        def baseline(args, **kwargs):
+            self.assertEqual(kwargs['cwd'].name, 'baseline')
+            clock[0] += 1
+            Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                'status': 'passed', 'testFailures': []}), encoding='utf-8')
+            return subprocess.CompletedProcess(args, 0, '', '')
+        for workers in (1, 2):
+            clock[0] = 0
+            with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(runner, 'prepare_trial_directory', side_effect=slow_mutant_setup), \
+                    patch.object(runner.subprocess, 'run', side_effect=baseline) as run:
+                result = self.measure(Path(directory), workers=workers, timeout_seconds=5, stage_timeout_seconds=2.5)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(result['counts']['executed'], 0)
+            self.assertEqual(result['counts']['timeout'], 0)
+            self.assertFalse(result['scoreAvailable'])
+            self.assertEqual(result['counts']['notRun'], result['counts']['selected'])
 
     def test_real_fresh_import_cost_no_longer_times_out_every_mutant(self):
         with tempfile.TemporaryDirectory() as directory:

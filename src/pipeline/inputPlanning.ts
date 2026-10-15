@@ -15,7 +15,8 @@ export interface InputPlanSummary {
     schema_version: 'input-plan-v1'; type_shape_version: 'type-shape-v1';
     status: 'ready' | 'partial' | 'needs-input'; generated_cases: number;
     parameter_shapes: Record<string, TypeShape>;
-    diagnostics: Array<{ parameter: string; code: 'needs-input' | 'needs-fixture' | 'budget-exceeded'; reason: string }>;
+    /** null identifies a plan-wide diagnostic, rather than a particular parameter. */
+    diagnostics: Array<{ parameter: string | null; code: 'needs-input' | 'needs-fixture' | 'budget-exceeded'; reason: string }>;
     limits: Record<string, number>; stats: Record<string, number>;
 }
 
@@ -54,7 +55,7 @@ export function validInputPlan(raw: unknown): raw is InputPlanSummary {
         && object(raw.parameter_shapes) && Object.keys(raw.parameter_shapes).length <= 64
         && Object.values(raw.parameter_shapes).every(validTypeShape)
         && Array.isArray(raw.diagnostics) && raw.diagnostics.length <= 128
-        && raw.diagnostics.every((item: unknown) => object(item) && text(item.parameter) && text(item.reason)
+        && raw.diagnostics.every((item: unknown) => object(item) && (item.parameter === null || text(item.parameter)) && text(item.reason)
             && ['needs-input', 'needs-fixture', 'budget-exceeded'].includes(item.code))
         && counters(raw.limits) && counters(raw.stats);
 }

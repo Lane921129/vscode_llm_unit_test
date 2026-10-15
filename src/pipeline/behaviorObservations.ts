@@ -1,11 +1,21 @@
 import { BehaviorObservation, BehaviorObservations, ProbeCaseObservation } from './evidenceContracts';
 import { validTraceInputSnapshot as validInput } from './traceValues';
 import { validInputPlan } from './inputPlanning';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
 const statuses = new Set(['returned', 'raised', 'blocked', 'setup_error', 'timeout', 'not_started', 'worker_error']);
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 1024;
+function invalidContract(message: string, reasonCode: string): never {
+    throw new AnalysisStageError('ast-trace', 'trace-contract', message,
+        { schemaVersion: 'trace-contract-diagnostic-v1', reasonCode });
+}
+const validLoadDiagnostic = (value: unknown): value is NonNullable<BehaviorObservations['load_diagnostic']> => object(value)
+    && identifier(value.stage) && identifier(value.exception_type)
+    && typeof value.message === 'string' && value.message.length <= 1500
+    && (value.missing_module === null || identifier(value.missing_module))
+    && typeof value.traceback === 'string' && value.traceback.length <= 5000;
 const validOrigin = (value: unknown): boolean => object(value)
     && ['caller_literals', 'source_guided', 'semantic_guided', 'unknown'].includes(value.kind);
 const validSourceSites = (value: unknown): boolean => value === undefined
@@ -38,23 +48,28 @@ function validObservation(value: unknown): value is BehaviorObservation {
 
 /** Runtime boundary for live v2 results. Historical v1 reports are not silently upgraded. */
 export function parseBehaviorObservations(raw: string | unknown, target: string): BehaviorObservations {
-    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    let value: unknown;
+    try { value = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+    catch { return invalidContract('Invalid controlled observation JSON', 'invalid-json'); }
     if (!object(value) || value.schema_version !== 'behavior-observations-v2' || value.func_name !== target || !identifier(value.run_id)
         || !strings(value.args) || !Array.isArray(value.examples) || !value.examples.every(validObservation)
         || !Array.isArray(value.errors) || !value.errors.every(validObservation)
         || !Array.isArray(value.cases) || !value.cases.every(validCase)
         || !(value.load_error === null || typeof value.load_error === 'string')
         || value.isolation !== 'fresh-process-per-case' || typeof value.complete !== 'boolean') {
-        throw new Error('Invalid controlled observation contract');
+        return invalidContract('Invalid controlled observation contract', 'invalid-observation-contract');
     }
     if (value.input_plan !== undefined && !validInputPlan(value.input_plan)) {
-        throw new Error('Invalid input planning contract');
+        return invalidContract('Invalid input planning contract', 'invalid-input-plan');
+    }
+    if (value.load_diagnostic !== undefined && !validLoadDiagnostic(value.load_diagnostic)) {
+        return invalidContract('Invalid controlled observation load diagnostic', 'invalid-load-diagnostic');
     }
     if (value.input_deduplication !== undefined && !validDeduplication(value.input_deduplication)) {
-        throw new Error('Invalid probe case planning contract');
+        return invalidContract('Invalid probe case planning contract', 'invalid-probe-case-plan');
     }
     const cases = new Map(value.cases.map((item: ProbeCaseObservation) => [item.case_id, item]));
-    if (cases.size !== value.cases.length) { throw new Error('Duplicate controlled observation case identity'); }
+    if (cases.size !== value.cases.length) { return invalidContract('Duplicate controlled observation case identity', 'duplicate-case-identity'); }
     const observed = new Set<string>();
     for (const [observation, expected] of [
         ...value.examples.map((item: BehaviorObservation) => [item, 'returned'] as const),
@@ -62,18 +77,18 @@ export function parseBehaviorObservations(raw: string | unknown, target: string)
     ]) {
         const item = cases.get(observation.case_id || '') as ProbeCaseObservation | undefined;
         if (!item || item.status !== expected || observed.has(item.case_id)) {
-            throw new Error('Observation has no completed target execution');
+            return invalidContract('Observation has no completed target execution', 'missing-completed-execution');
         }
         observed.add(item.case_id);
         if (expected === 'returned' ? typeof observation.result !== 'string' || observation.exception !== undefined
             : !identifier(observation.exception) || observation.result !== undefined) {
-            throw new Error('Observation outcome does not match completed target execution');
+            return invalidContract('Observation outcome does not match completed target execution', 'outcome-mismatch');
         }
         if (observation.input_before !== undefined && (!validInput(observation.input_before)
             || JSON.stringify(observation.input_before) !== JSON.stringify(item.input_before))
             || observation.input_after !== undefined && (!validInput(observation.input_after)
                 || JSON.stringify(observation.input_after) !== JSON.stringify(item.input_after))) {
-            throw new Error('Observation input snapshot does not match completed target execution');
+            return invalidContract('Observation input snapshot does not match completed target execution', 'input-snapshot-mismatch');
         }
         if (item.input_before.replayable === false) {
             observation.call_assertable = false;
@@ -106,6 +121,10 @@ export function recoverBehaviorProgress(text: string, target: string, reason: st
             if (event.event === 'planning_completed') {
                 if (!strings(event.args) || !(event.load_error === null || typeof event.load_error === 'string')) { return undefined; }
                 result.args = event.args; result.load_error = event.load_error; result.planning = event.planning;
+                if (event.load_diagnostic !== undefined && event.load_diagnostic !== null) {
+                    if (!validLoadDiagnostic(event.load_diagnostic)) { return undefined; }
+                    result.load_diagnostic = event.load_diagnostic;
+                }
                 if (event.input_deduplication !== undefined && event.input_deduplication !== null) {
                     if (!validDeduplication(event.input_deduplication)) { return undefined; }
                     result.input_deduplication = event.input_deduplication;

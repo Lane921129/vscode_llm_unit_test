@@ -1,3 +1,24 @@
+import { createHash } from 'node:crypto';
+
+/** Select packaging only. The model still authors the complete test body. */
+export function selectWriterAdditionMethodName(baselineHash: string, focus: string,
+    existingMethodIds: readonly string[]): string {
+    const focusHash = createHash('sha256').update(focus).digest('hex').slice(0, 12);
+    const prefix = `test_add_${baselineHash.slice(0, 12)}_${focusHash}`;
+    const names = new Set(existingMethodIds.map(id => id.slice(id.lastIndexOf('.') + 1)));
+    let name = prefix;
+    for (let suffix = 2; names.has(name); suffix++) { name = `${prefix}_${suffix}`; }
+    return name;
+}
+
+export function buildWriterAdditionMethodInstruction(methodName: string): string {
+    return '\n\nWRITER_ADDITION_METHOD_V1\n'
+        + 'Use this host-selected NEW method signature; its name is distinct from the AST inventory of the executed baseline. '
+        + 'You must author its setup, target calls and assertions using the supplied evidence. '
+        + 'A fresh name does not make a repeated scenario new or grant execution, review or mutation approval.\n'
+        + `def ${methodName}(self):\n`;
+}
+
 /** Instructions are additive to the existing evidence and Python output contract. */
 export function buildWriterSeedSystemPrompt(systemPrompt: string): string {
     return `${systemPrompt}\n\nWRITER_SEED_V1 OUTPUT SCOPE\n`

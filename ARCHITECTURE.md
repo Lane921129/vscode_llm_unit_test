@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## Mock 與工具契約修復（2026-10-15）
+
+首次與修訂 Writer 都收到已核驗來源的必要 iterable／索引消費指引；可省略 raw topology，不能連帶丟掉 actionable setup。`source_setup_call_contract.py` 提供有界、同目標雜湊的參數屬性讀／寫／呼叫拼字，讓 UI 替身支援實際 dot 屬性與方法，並保留實際 module-global 呼叫參數。這些事實不供具體型別、值、斷言答案或 patch 權限，重綁與未知控制流保持未知。
+
+Trace 合法的全域 `parameter:null` 診斷維持 `needs-input`／`complete:false`；真正 malformed wire 以 `trace-contract` typed 錯誤停止，不以 journal 或 legacy 載入錯誤取代。普通 Writer 增量只由已證明的 AST 盤點決定新方法包裝名稱，未知盤點停止；模型仍寫完整 body，新名字不繞過去重、執行或批准。Bug Fixer 新 import 額度由 Python AST binding 決定，既有／重複不計，遮蔽及原方法保留不放寬。
+
+`mock_behavior.py` 對明確標準 `types.SimpleNamespace` 建立有界物件／成員身分圖，追蹤其中真正注入目標的 Mock；透過別名改動成員會撤回原證據。未知工廠、反射、動態 kwargs、手動預呼叫與偽斷言不授予行為證據，既有目標保真與真實執行門檻不變。
+
+共用突變試驗器在排程及 setup 後確認剩餘 stage 可支付成功 baseline 的實測成本，不足則保持 NOT_RUN／partial。已啟動而掛住仍 TIMEOUT，原期限、分母及同測試審查批准不變。
+
 ## Analyst 輸出長度恢復（2026-10-15）
 
 `num_ctx` 決定請求 Context 容量；`num_predict` 限制單次生成長度。自動容量 `0` 不表示輸出無上限，初始 Analyst 短計畫仍以1,024 tokens開始。`requestBudgetedOne` 對 Local Analyst 的明確 length 回覆使用與 Writer 相同的容量／時間規劃，但持有獨立的本目標輸出額度。至多重送一次同一完整提示，輸入預留與 wire 輸出 cap 成對。`semanticWithContractRepair` 分別傳入原首問期限及原規劃階段期限；例如首問60秒、階段120秒，缺統計且首問耗45秒後，仍可在原階段內保留60秒重送。首問不得因提示組裝或資格探針而續期；重送、格式補正仍共用原階段／target／family期限及計數，未明傳雙期限的呼叫端保留原shared硬限制。未知速度不估量，若不足完整單次時間、容量不足或再次截斷即停止；新容量仍走公開角色重驗，完整候選仍須 Checker、Reviewer 與品質驗證。錯誤訊息列出合法 `num_predict` 數值，避免誤認模型 Context 上限。沒有70B角色事件時，不能直接認定其實際中止原因。

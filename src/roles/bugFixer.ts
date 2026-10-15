@@ -39,7 +39,7 @@ CONTRACT:${isolatedResourceSystemRule()}
 - Expected values may come from reachable literal returns, simple source-supported deterministic relationships, or dependencies explicitly controlled by this test. For a failed assertion, check the concrete inputs, units, arithmetic, rounding and returned fields against that evidence. Correct unsupported expectations; actual output alone is not proof of correctness. Never call the target to compute the expected value or duplicate its implementation as an oracle.
 - Make a substantive change to the failing method. Do not return it unchanged or weaken/remove assertions, use skip/expectedFailure, swallow exceptions, or mock the target to make it pass. If evidence does not justify a change, do not invent one.
 - Observations marked uncontrolled-ambient-read cannot supply expected values or exceptions. Control clock/entropy at its use point instead of copying a captured value.
-- Return one Python code fence containing at most 3 missing import statements followed by exactly the complete named test method. Use real Python newlines and indentation, never JSON strings or escaped newline text.
+- Return one Python code fence containing at most 3 missing import statements followed by exactly the complete named test method. This counts only NEW missing imports: omit existing or repeated imports, and never rebind an existing name to a different import. Use real Python newlines and indentation, never JSON strings or escaped newline text.
 - Keep the original method signature and decorators already owned by the host. Do not repeat decorators or wrap the method in a class. Every unchanged test and fixture is preserved by the host.`;
 }
 
@@ -323,12 +323,9 @@ export function mergeBugFixReplacementDetailed(raw: string, originalCode: string
         if (!fence) { return reject('missing-code-fence'); }
         if (responseShape.classCount) { return reject('class-wrapper'); }
         if (!responseShape.testMethodCount) { return reject('missing-test-method'); }
-        const prefix = fence[1].split('\n').slice(0, fence[1].split('\n')
-            .findIndex(line => /^\s*(?:async\s+)?def\s+test_\w*\s*\(/.test(line))).filter(line => line.trim());
-        return reject(prefix.length > 3 && prefix.every(line => SAFE_IMPORT.test(line.trim())) ? 'import-limit' : 'invalid-import');
+        return reject('invalid-import');
     }
     if (parsed.method !== selected.name) { return reject('method-name-mismatch'); }
-    if (parsed.imports.length > 3) { return reject('import-limit'); }
     if (!parsed.imports.every(line => SAFE_IMPORT.test(line.trim()))) { return reject('invalid-import'); }
     const replacement = normalizedReplacementMethod(parsed.replacement, selected);
     if (!replacement) {
@@ -341,8 +338,12 @@ export function mergeBugFixReplacementDetailed(raw: string, originalCode: string
 
     const lines = originalCode.replace(/\r\n/g, '\n').split('\n');
     lines.splice(selected.start, selected.end - selected.start, ...replacement.split('\n'));
-    const missingImports = parsed.imports.map(line => line.trim())
-        .filter(line => !lines.some(existing => existing.trim() === line));
+    // Only deduplicate identical module-scope spellings here. Equivalence,
+    // aliases, shadowing and the three NEW-import limit belong to the Python
+    // AST scope gate; raw response line counts are not that contract.
+    const existingImports = new Set(lines.filter(line => /^(?:from\s+\S+\s+import\s+|import\s+)/.test(line)));
+    const missingImports = [...new Set(parsed.imports.map(line => line.trim()))]
+        .filter(line => !existingImports.has(line));
     if (missingImports.length) {
         let insertAt = 0;
         for (let index = 0; index < lines.length; index++) {
@@ -367,7 +368,7 @@ function unwrapSingleMethodClass(raw: string, original: string, method: TestMeth
     const classIndex = lines.findIndex(line => /^class\s+\w+\s*\([^\n]+\):\s*$/.test(line));
     if (classIndex < 0) { return undefined; }
     const imports = lines.slice(0, classIndex).filter(line => line.trim());
-    if (imports.length > 3 || !imports.every(line => SAFE_IMPORT.test(line.trim()))) { return undefined; }
+    if (!imports.every(line => SAFE_IMPORT.test(line.trim()))) { return undefined; }
     const host = original.replace(/\r\n/g, '\n').split('\n').slice(0, method.start)
         .filter(line => /^class\s/.test(line)).at(-1);
     if (host?.trim() !== lines[classIndex].trim()) { return undefined; }
@@ -387,7 +388,7 @@ function parsePythonReplacement(raw: string, method: string): BugFixReplacement 
     const start = lines.findIndex(line => /^\s*(?:async\s+)?def\s+test_\w*\s*\(/.test(line));
     if (start < 0) { return undefined; }
     const imports = lines.slice(0, start).map(line => line.trim()).filter(Boolean);
-    if (imports.length > 3 || !imports.every(line => SAFE_IMPORT.test(line))) { return undefined; }
+    if (!imports.every(line => SAFE_IMPORT.test(line))) { return undefined; }
     return { method, replacement: lines.slice(start).join('\n'), imports };
 }
 import { dependencyContextsForPrompt, observationsForPrompt } from '../pipeline/evidenceContracts';

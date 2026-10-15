@@ -138,6 +138,50 @@ class SourceSetupCallContractTests(unittest.TestCase):
             self.assertEqual(result['source_setup_call_contract']['targetSourceHash'], hashlib.sha256(result['code'].encode()).hexdigest())
             self.assertEqual(file.read_text(encoding='utf-8'), source)
 
+    def test_parameter_members_describe_attribute_protocol_without_values_or_module_patches(self):
+        result = self.contract('def target(page, dialog):\n    page.overlay.append(dialog)\n    dialog.open = True\n    page.update()\n')
+        self.assertEqual(result['parameterMembers'], [
+            {'parameter': 'page', 'members': ['overlay', 'append'], 'usage': 'call', 'line': 2},
+            {'parameter': 'dialog', 'members': ['open'], 'usage': 'write', 'line': 3},
+            {'parameter': 'page', 'members': ['update'], 'usage': 'call', 'line': 4},
+        ])
+        self.assertEqual(result['calls'], [], 'parameter methods never become module dependency patch points')
+        self.assertNotIn('True', json.dumps(result['parameterMembers']), 'an assignment value is not a fixture or output oracle')
+        self.assertEqual(self.contract('def target(page):\n    return page.state.name\n')['parameterMembers'], [
+            {'parameter': 'page', 'members': ['state', 'name'], 'usage': 'read', 'line': 2}])
+
+    def test_rebound_parameters_dynamic_names_and_independent_scopes_remain_unknown(self):
+        for source in (
+                'def target(page):\n    page.update()\n    page = replacement\n',
+                'def target(page):\n    globals()["page"] = replacement\n    page.update()\n',
+                'def target(page):\n    def inner():\n        return page.update()\n    return [page.state for page in items]\n',
+                'def target(page):\n    return getattr(page, "state")\n',
+                'def target(page):\n    global page\n    page.update()\n'):
+            with self.subTest(source=source):
+                self.assertEqual(self.contract(source)['parameterMembers'], [])
+
+    def test_target_instance_is_excluded_but_static_parameter_attributes_are_retained(self):
+        for decorator, signature, expected in (('', 'self, /, page', ['page']),
+                                               ('@staticmethod\n    ', 'page', ['page'])):
+            body = 'self.state = page\n        ' if not decorator else ''
+            source = 'class Owner:\n    ' + decorator + 'def target(' + signature + '):\n        ' + body + 'page.update()\n'
+            tree = ast.parse(source)
+            method = tree.body[0].body[0]
+            fragment = '\n'.join(source.splitlines()[method.lineno - 1:method.end_lineno])
+            result = build_source_setup_call_contract(method, fragment, 'Owner.target', tree)
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual([item['parameter'] for item in result['parameterMembers']], expected)
+
+    def test_parameter_member_fact_and_depth_limits_clear_the_whole_contract(self):
+        for source in ('def target(page):\n' + '    page.update()\n' * 65,
+                       'def target(page):\n    return page.' + '.'.join('member' + str(index) for index in range(9)) + '\n'):
+            with self.subTest(source=source):
+                result = self.contract(source)
+                self.assertEqual(result['status'], 'unsupported')
+                self.assertEqual(result['reason'], 'contract-limit-exceeded')
+                for key in ('parameterMembers', 'calls', 'optionalLookups', 'sourceLocations'):
+                    self.assertEqual(result[key], [])
+
 
 if __name__ == '__main__':
     unittest.main()

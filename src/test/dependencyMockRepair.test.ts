@@ -165,14 +165,16 @@ test('neutral scalar-return mock then missing-import failure is repaired by the 
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('repair import guidance preserves parser limits and rejects unrelated method and binding changes', () => {
+test('repair import guidance preserves AST limits and rejects unrelated method and binding changes', () => {
     const failure = 'ERROR: test_transform (Cases.test_transform)\nNameError: name \'patch\' is not defined';
     const tooMany = mergeBugFixReplacementDetailed('```python\nimport a\nimport b\nimport c\nimport d\n'
         + correctedMethod + '\n```', original, failure);
-    assert.deepEqual(tooMany.diagnostic?.reasonCodes, ['import-limit']);
+    assert.ok(tooMany.code, 'new import counts require the existing Python AST scope gate');
+    assert.equal(scope(original, tooMany.code, failure).reasonCode, 'import-limit');
     const withThree = mergeBugFixReplacementDetailed('```python\nimport a\nimport b\nimport c\n'
         + correctedMethod + '\n```', original, failure);
-    assert.ok(withThree.code, 'parsed maximum remains three');
+    assert.ok(withThree.code);
+    assert.equal(scope(original, withThree.code, failure).valid, true, 'the maximum remains three NEW imports');
     const repaired = mergeBugFixReplacementDetailed('```python\n' + correctedMethod + '\n```', original, failure).code!;
     assert.equal(scope(original, repaired.replace("transform('other-input'), 'other'", "transform('other-input'), 'changed'"), failure).reasonCode,
         'unrelated-method-change');

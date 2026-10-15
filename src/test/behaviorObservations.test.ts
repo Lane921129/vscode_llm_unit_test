@@ -8,6 +8,8 @@ import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObserv
 import { BehaviorObservations, ProbeCaseObservation, TraceInputSnapshot, TraceValue } from '../pipeline/evidenceContracts';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { pythonToolPath } from '../pipeline/pythonTools';
+import { InputPlanSummary } from '../pipeline/inputPlanning';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 // Exact snapshot_call([1], {}, [], {}) wire structure; live Python tests below
 // also exercise the real producer, including every supported tagged value.
@@ -27,6 +29,101 @@ const caseRecord = (id: string): ProbeCaseObservation => ({ case_id: id, status:
 const result = (): BehaviorObservations => ({ schema_version: 'behavior-observations-v2', run_id: 'run', func_name: 'target',
     args: ['value'], examples: [{ case_id: 'a', args: ['1'], result: '2', result_assertable: true }],
     errors: [], cases: [caseRecord('a')], load_error: null, isolation: 'fresh-process-per-case', complete: true });
+
+test('malformed Trace contracts have stable tool-owned failure categories rather than module import failures', () => {
+    const inputs: Array<[unknown, string]> = [
+        ['{invalid', 'invalid-json'],
+        [{ ...result(), schema_version: 'legacy' }, 'invalid-observation-contract'],
+        [{ ...result(), input_plan: {} }, 'invalid-input-plan'],
+        [{ ...result(), input_deduplication: {} }, 'invalid-probe-case-plan'],
+        [{ ...result(), load_diagnostic: {} }, 'invalid-load-diagnostic'],
+        [{ ...result(), cases: [caseRecord('a'), caseRecord('a')] }, 'duplicate-case-identity'],
+        [{ ...result(), examples: [{ ...result().examples[0], case_id: 'not-executed' }] }, 'missing-completed-execution'],
+        [{ ...result(), examples: [{ ...result().examples[0], result: undefined }] }, 'outcome-mismatch'],
+        [{ ...result(), examples: [{ ...result().examples[0], input_before: {} }] }, 'input-snapshot-mismatch']
+    ];
+    for (const [input, reasonCode] of inputs) {
+        assert.throws(() => parseBehaviorObservations(input, 'target'), error => {
+            assert.ok(error instanceof AnalysisStageError);
+            assert.equal(error.category, 'ast-trace');
+            assert.equal(error.stage, 'trace-contract');
+            assert.deepEqual(error.diagnostic, { schemaVersion: 'trace-contract-diagnostic-v1', reasonCode });
+            return true;
+        });
+    }
+});
+
+test('plan-wide diagnostics preserve missing input and source budget failures in live and interrupted Trace', () => {
+    const inputPlan: InputPlanSummary = { schema_version: 'input-plan-v1', type_shape_version: 'type-shape-v1',
+        status: 'needs-input', generated_cases: 0,
+        parameter_shapes: { page: { kind: 'unknown', reason: 'missing-annotation' } },
+        diagnostics: [{ parameter: null, code: 'budget-exceeded', reason: 'source-node-budget' },
+            { parameter: 'page', code: 'needs-input', reason: 'missing-annotation' }],
+        limits: { max_nodes: 512 }, stats: { cases: 0, parameters: 1 } };
+    const value: BehaviorObservations = { ...result(), args: ['page'], examples: [], cases: [],
+        complete: false, planning: { status: 'completed' }, input_plan: inputPlan };
+    const parsed = parseBehaviorObservations(value, 'target');
+    assert.deepEqual(parsed.input_plan, inputPlan);
+    assert.equal(parsed.load_error, null);
+    assert.equal(parsed.complete, false);
+    assert.deepEqual(parsed.examples, []);
+    assert.deepEqual(parsed.errors, []);
+    const events = [{ event: 'run_started', schema_version: value.schema_version, func_name: 'target' },
+        { event: 'planning_completed', args: value.args, load_error: null,
+            planning: value.planning, input_plan: inputPlan, planned_cases: [] }]
+        .map(event => JSON.stringify({ run_id: 'run', ...event })).join('\n');
+    const recovered = recoverBehaviorProgress(events, 'target', 'host interrupted')!;
+    assert.deepEqual(recovered.input_plan, inputPlan);
+    assert.equal(recovered.complete, false);
+    assert.equal(recovered.load_error, null);
+    assert.deepEqual(recovered.examples, []);
+    assert.deepEqual(recovered.errors, []);
+    for (const invalid of [undefined, 0, false, {}, []]) {
+        const malformed = structuredClone(value) as any;
+        malformed.input_plan.diagnostics[0].parameter = invalid;
+        assert.throws(() => parseBehaviorObservations(malformed, 'target'), /input planning contract/);
+        const invalidEvents = events.replace(JSON.stringify(inputPlan), JSON.stringify(malformed.input_plan));
+        assert.equal(recoverBehaviorProgress(invalidEvents, 'target', 'interrupted'), undefined);
+    }
+});
+
+test('real Python Trace source budget diagnostics retain global scope without creating observations', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-planning-diagnostics-'));
+    const python = resolvePythonExecutable('', path.resolve(__dirname, '../..'));
+    const file = path.join(directory, 'neutral.py');
+    const progress = path.join(directory, 'trace.jsonl');
+    const script = [
+        'import json, sys',
+        'sys.path.insert(0, sys.argv[1])',
+        'from dynamic_tracer import trace_function',
+        "facts = trace_function(sys.argv[2], 'target', {'schema_version': 'invalid-probe-inputs', 'cases': [{}]}, progress_path=sys.argv[3])",
+        'print(json.dumps(facts))'
+    ].join('\n');
+    try {
+        fs.writeFileSync(file, 'def target(page, row):\n'
+            + Array.from({ length: 150 }, (_, index) => `    value_${index} = ${index}\n`).join('')
+            + '    raise AssertionError("unprepared target must not execute")\n');
+        const run = spawnSync(python, ['-B', '-c', script, path.dirname(pythonToolPath('trace')), file, progress],
+            { cwd: directory, encoding: 'utf8', timeout: 30000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+        assert.equal(run.status, 0, run.stdout + run.stderr);
+        const live = parseBehaviorObservations(run.stdout, 'target');
+        assert.equal(live.load_error, null);
+        assert.equal(live.planning!.status, 'completed');
+        assert.equal(live.complete, false);
+        assert.equal(live.input_plan!.status, 'needs-input');
+        assert.equal(live.input_plan!.generated_cases, 0);
+        assert.ok(live.input_plan!.diagnostics.some(item => item.parameter === null
+            && item.code === 'budget-exceeded' && item.reason === 'source-node-budget'));
+        assert.ok(live.input_plan!.diagnostics.some(item => item.parameter === 'page' && item.code === 'needs-input'));
+        assert.equal(live.examples.length + live.errors.length, 0);
+        assert.ok(live.cases!.every(item => item.status === 'not_started'));
+        const recovered = recoverBehaviorProgress(fs.readFileSync(progress, 'utf8'), 'target', 'host interrupted')!;
+        assert.deepEqual(recovered.input_plan, live.input_plan);
+        assert.equal(recovered.complete, false);
+        assert.equal(recovered.load_error, null);
+        assert.equal(recovered.examples.length + recovered.errors.length, 0);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('deduplicated Trace planning preserves origin sites and rejects inconsistent counts', () => {
     const value = result();
@@ -195,6 +292,20 @@ test('real isolated trace and codec snapshots satisfy the live parser without we
         assert.equal(failed.cases!.length, 2);
         assert.ok(failed.cases!.every(item => item.status === 'not_started'));
         assert.equal(new Set(failed.cases!.map(item => item.case_id)).size, 2);
+        assert.equal(failed.load_diagnostic!.stage, 'module-import');
+        assert.equal(failed.load_diagnostic!.exception_type, 'ValueError');
+        const failedEvents = [
+            { event: 'run_started', schema_version: failed.schema_version, func_name: 'target' },
+            { event: 'planning_completed', args: failed.args, planning: failed.planning,
+                load_error: failed.load_error, load_diagnostic: failed.load_diagnostic, planned_cases: [] }
+        ].map(event => JSON.stringify({ run_id: failed.run_id, ...event })).join('\n');
+        const recoveredImport = recoverBehaviorProgress(failedEvents, 'target', 'interrupted')!;
+        assert.deepEqual(recoveredImport.load_diagnostic, failed.load_diagnostic);
+        assert.equal(recoveredImport.load_error, failed.load_error);
+        assert.equal(recoveredImport.complete, false);
+        assert.equal(recoveredImport.examples.length + recoveredImport.errors.length, 0);
+        const malformedEvents = failedEvents.replace(JSON.stringify(failed.load_diagnostic), '{}');
+        assert.equal(recoverBehaviorProgress(malformedEvents, 'target', 'interrupted'), undefined);
         for (const [index, input] of [live.typed, ...live.diagnostics].entries()) {
             const value = result(); value.cases![0].input_before = input;
             const parsed = parseBehaviorObservations(value, 'target');

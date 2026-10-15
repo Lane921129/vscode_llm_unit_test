@@ -158,6 +158,13 @@ def has_mock_behavior(tree, context):
     use_points, asynchronous = target_use_points(context)
     permitted = use_points - {target_path, f'{module}.{owner}' if owner else ''}
     module_imports = imports(tree.body)
+    # Only the real standard-library constructor may expose explicit members.
+    # Reflective mutation can bypass every lexical alias/path fact below.
+    namespace_allowed = not any(
+        isinstance(node, ast.Attribute) and node.attr in ('__dict__', '__class__', '__getattribute__', '__setattr__')
+        or isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] in
+        ('setattr', 'delattr', 'globals', 'locals', 'vars', 'eval', 'exec', '__import__')
+        for node in ast.walk(tree))
     # A provider member is the same object only while the application's module
     # binding remains intact. A test that replaces that binding cannot borrow
     # this proof for a simultaneous patch on the unrelated provider object.
@@ -210,6 +217,7 @@ def has_mock_behavior(tree, context):
             blocked_paths = set()
             patch_blocked = {}
             mock_roots, configured_children = set(), set()
+            namespace_members = {}
             serial = 0
 
             def resolve(node):
@@ -225,6 +233,12 @@ def has_mock_behavior(tree, context):
                     if name == prefix or name.startswith(prefix + '.'):
                         value = bindings[prefix]
                         suffix = name[len(prefix):].lstrip('.')
+                        # A namespace is an explicit object graph, not an
+                        # auto-creating Mock. Traverse only declared members,
+                        # sharing object IDs across aliases and member writes.
+                        while isinstance(value, tuple) and value[0] == 'namespace' and suffix:
+                            member, _, suffix = suffix.partition('.')
+                            value = namespace_members.get(value, {}).get(member)
                         if any(suffix == item or suffix.startswith(item + '.')
                                for item in patch_blocked.get(value, ())):
                             return None
@@ -233,6 +247,44 @@ def has_mock_behavior(tree, context):
 
             def token(node):
                 return token_name(dotted(node))
+
+            def fixture_value(node, depth=0):
+                nonlocal serial
+                if depth > 8:
+                    return None
+                if isinstance(node, ast.Call) and resolve(node.func) in MOCK_FACTORIES:
+                    if any(keyword.arg is None for keyword in node.keywords):
+                        return None
+                    serial += 1
+                    # Keyword-provided members may replace real Mock methods.
+                    patch_blocked[serial] = {keyword.arg for keyword in node.keywords
+                        if keyword.arg not in ('spec', 'spec_set', 'name', 'unsafe')}
+                    return serial
+                if (namespace_allowed and isinstance(node, ast.Call) and resolve(node.func) == 'types.SimpleNamespace'
+                        and not node.args and len(node.keywords) <= 64
+                        and all(keyword.arg is not None for keyword in node.keywords)
+                        and len({keyword.arg for keyword in node.keywords}) == len(node.keywords)):
+                    serial += 1
+                    value = ('namespace', serial)
+                    namespace_members[value] = {keyword.arg: fixture_value(keyword.value, depth + 1)
+                                                for keyword in node.keywords}
+                    return value
+                return token(node)
+
+            def injected_tokens(value):
+                result, pending, visited = set(), [value], set()
+                while pending:
+                    item = pending.pop()
+                    if item is None:
+                        continue
+                    if not isinstance(item, tuple):
+                        result.add(item)
+                    elif item not in visited:
+                        visited.add(item)
+                        if len(visited) > 512:
+                            return set()  # no partial graph proof on overflow
+                        pending.extend(namespace_members.get(item, {}).values())
+                return result
 
             def configuration_path(node, calls):
                 """Follow only proven Mock return chains, never arbitrary calls.
@@ -303,8 +355,8 @@ def has_mock_behavior(tree, context):
                     if asynchronous and not awaited:
                         return False
                     observed.update(active)
-                    observed.update(value for arg in [*node.args, *(k.value for k in node.keywords)]
-                                    if (value := token(arg)) is not None)
+                    for arg in [*node.args, *(k.value for k in node.keywords)]:
+                        observed.update(injected_tokens(token(arg)))
                     return found
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ASSERTIONS:
                     value = token(node.func.value)
@@ -336,7 +388,11 @@ def has_mock_behavior(tree, context):
                         rhs = node.value
                         found = expression(rhs, active) or found
                         value = token(rhs)
-                        if isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
+                        namespace_rhs = (namespace_allowed and isinstance(rhs, ast.Call)
+                                         and resolve(rhs.func) == 'types.SimpleNamespace')
+                        if namespace_rhs:
+                            value = fixture_value(rhs)
+                        elif isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
                             serial += 1
                             value = serial
                         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -351,6 +407,17 @@ def has_mock_behavior(tree, context):
                                 # the test itself. It cannot prove target work.
                                 configured_children.update(token_name(call) for call in calls)
                                 blocked_paths.update(calls)
+                            parent = token(lhs.value) if isinstance(lhs, ast.Attribute) else None
+                            if isinstance(parent, tuple) and parent[0] == 'namespace':
+                                # Mutating through any alias changes this same
+                                # object. Unknown values revoke that member's
+                                # provenance without borrowing a sibling Mock.
+                                if isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
+                                    value = fixture_value(rhs)
+                                namespace_members[parent][lhs.attr] = value
+                                bindings.pop(name, None)
+                                blocked_paths.discard(name)
+                                continue
                             mock_roots.discard(name)
                             if isinstance(lhs, ast.Attribute) and isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
                                 value = token(lhs.value) or value

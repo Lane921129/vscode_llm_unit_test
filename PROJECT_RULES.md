@@ -22,7 +22,7 @@
 - 2026-10-14 起，Local 單測／批次在取得執行所有權後、任何目標開始前，核對同端點／模型的 `/api/show` 與 `/api/ps`，再建立本次容量快照；UI 與正式請求使用同份 metadata。只沿用合法且同身分的舊上限，明示 fresh／cached／unavailable 及安全原因碼；探索不授予角色資格、不修改手動或 captured 偏好。取消不得開始目標或保存新觀測。
 - Writer 的長度恢復分開「同容量增加輸出」與「提高 num_ctx」。上限未知時只能在本次已核對容量內配置完整輸入、輸出與128 tokens餘裕；增容仍要求同模型可信上限與新容量資格。只在相同完整提示的 completed length transport 採數值 prompt_eval_count／耗時，以 max(估量, 實測) 保留輸入；按容量及時間限額選有意義的增量，沒有空間就保存原因停止。首問前固定階段、shared及target期限；探針與正式請求各建一次單次期限，正式重送前再核對探針後餘額，已送出請求不續期，計數不重設，截斷內容不執行。
 - Reviewer 維持 review-v7，純指令回聲與沒有具體問題的泛用核實要求屬無效 assessment；完整重複的 import／assertion／patch 修改提議只依同候選 AST 事實拒收。不同測試方法、字串 literal 差異、patch 配置及附帶未知語意不得借機械事實否定。無效審查只有限重審，不刪 finding 冒充批准；Trace 支持案例一致性，仍不證明獨立業務需求。
-- Mock fixture 的結果消費形狀只描述來源實際需要的 iterable／常數索引，不生成 expected、資料內容或例外；重綁、動態索引、filter及未知控制流保持未知。唯一實測 unittest ERROR 的 patch 初始化失敗，須標準 mock 堆疊與本次失敗測試的 patch 使用行一致，才交 Writer；目標內部錯誤及類別 self／cls 不借此當成外部 protocol fixture。
+- Mock fixture 的結果消費形狀只描述來源實際需要的 iterable／常數索引，不生成 expected、資料內容或例外。初次與修訂皆保留已核驗的可操作 setup 指引，raw topology 可整份省略但不能連帶省略必要指引；參數屬性拼字不證明值、具體型別或 patch 權限。重綁、反射、動態索引、filter及未知控制流保持未知。唯一實測 unittest ERROR 的 patch 初始化失敗，須標準 mock 堆疊與本次失敗測試的 patch 使用行一致，才交 Writer；目標內部錯誤及類別 self／cls 不借此當成外部 protocol fixture。
 
 - 依使用者 2026-10-12 要求持續建立跨 Python 專案的 P0／P1 相容能力，不以專案或模型名稱特化。Tier 降級只接受已耗盡的候選／修復契約失敗；環境、AST 工具、來源漂移、模型傳輸、提示預算與 Reviewer 未完成保持其獨立失敗，不用更低 Tier 掩蓋。
 - 批次局部續跑為下方「仍受阻即停止」的窄例外：同一選取根、來源閉包、完整目標集合、Python 及實際 fixture ID 經核對，最後一次真正隔離匯入檢查明確 loaded 的來源可以繼續；受阻、未檢或診斷不完整來源的目標單獨列 environment-blocked，模型請求為零且不算通過。只有靜態 planning、取消／拒絕或身分漂移則停止批次，不推定相鄰來源或依賴可執行。批次內保存最後預檢快照及原因，不依賴外部 import_check 目錄。
@@ -45,8 +45,11 @@
 - 靜態 SQLite schema 提案只接受可保真轉成宣告資源的 literal `CREATE TABLE IF NOT EXISTS`，綁定來源摘要、DDL／連線位置及精確資料庫地址；已有資源可補 schema，來源可證明的新資料庫亦可列入同一批准預覽。不可執行來源 SQL、匯入應用或複製正式資料來補 schema；動態路徑、不支援約束、衝突或跨來源證據不足須列診斷。各 worker 只在批准後建立新資料庫。
 - 靜態路徑可追蹤有界的本機 connection helper 與來源宣告的 ConfigParser fallback；若需空白設定才能選用 fallback，必須把空白設定 fixture 一併列入預覽，不能假設原設定不存在或讀取原設定。已批准的非空設定不被覆蓋。跨來源依據保存 `sourceDependencies` 並納入 plan 身分，每個 worker 再核對；依賴漂移或 frozen 程序不符 `pythonSourceMode` 即拒絕。可保真的明確新增欄位遷移須保留，未知 SQL 不猜。突變若改動設定依賴而無法重綁，維持 ERROR／未評分。
 - 宣告 schema 支援 literal default、欄位／複合 UNIQUE、INTEGER PRIMARY KEY AUTOINCREMENT；禁止丟棄來源約束以求建表成功。Writer 的修訂保留完整目標、setup、觀測及候選，只去除完整且相同的重複片段；超預算記為 prompt-budget 並停止，不因此降低 Tier。Analyst 格式失敗最多補正一次，沿用起始時分配的分析階段／目標總期限與相同證據；初問與補正各受單次請求額度限制，傳輸失敗不觸發格式重問。
-- 突變 baseline 冷啟動上限為 `max(20 秒, 設定的 mutant 上限)`。只有成功 baseline 才以 `max(設定值, baseline 實測秒數 × 2 + 1 秒)` 校準單 mutant 上限；序列／並行共用相同政策，實際分配仍不超過階段剩餘時間。保存設定值、校準值、每筆分配及耗時；timeout／error 不算 killed 或有效分數。
-- Writer 只接收目標與必要 setup 使用的 import，未知／wildcard 綁定保守保留；重複規則只呈現一次，optional 範例不能填滿輸入預算。完整目標、來源身分、必要 setup、觀測與修訂候選不截斷。AST `dependency-fixture-contract-v1` 只描述來源實際消費的 receiver／return value／context-manager 形狀，不授予 patch 權限、不提供 expected；重綁與未知控制流須保留診斷。初次生成可因預算省略整份形狀圖與圖例，明示仍須讀完整來源；修訂保留整份契約，不切部分路徑或隱藏 unknown。
+- 突變 baseline 冷啟動上限為 `max(20 秒, 設定的 mutant 上限)`。只有成功 baseline 才以 `max(設定值, baseline 實測秒數 × 2 + 1 秒)` 校準單 mutant 上限；序列／並行共用相同政策，實際分配仍不超過階段剩餘時間。排程及 setup 後餘額若少於成功 baseline 實測成本，保持 NOT_RUN／partial，不啟動可預期逾時的程序或延長 stage。保存設定值、校準值、每筆分配及耗時；timeout／error 不算 killed 或有效分數。
+- Writer 只接收目標與必要 setup 使用的 import，未知／wildcard 綁定保守保留；重複規則只呈現一次，optional 範例不能填滿輸入預算。完整目標、來源身分、必要 setup、觀測與修訂候選不截斷。AST `dependency-fixture-contract-v1` 只描述來源實際消費的 receiver／return value／context-manager 形狀，不授予 patch 權限、不提供 expected；重綁與未知控制流須保留診斷。初次生成可因預算省略整份形狀圖與圖例，但必要消費指引保留；修訂保留整份契約，不切部分路徑或隱藏 unknown。
+- Trace 全域診斷可用 parameter:null；無輸入或規劃不足仍是不完整觀測，不是載入失敗或 oracle。無效 wire 以 trace-contract typed 停止，不以 journal／legacy load_error 替代；取消與 target 預算原樣傳播。
+- 明確標準 SimpleNamespace 的巢狀 Mock 只依有界物件身分圖及真正注入的同一成員追蹤；別名修改撤回舊證據。未知工廠、反射、動態 kwargs、手動預呼叫與偽斷言不授予證據，不因物件結構可解析就跳過目標保真、真實執行與審查。
+- 普通 Writer 增量新方法名只依真正 AST 盤點選取；未知盤點不能當空集合。Host 只供包裝簽名並納入完整預算，不寫 body／expected、不借改名繞過情境去重或審查。Bug Fixer 最多三個 import 由 AST 計真正新增 binding；重複／既有不占額度，遮蔽與方法／fixture 保留契約不放寬。
 - Reviewer 的「Unbound import/name」、「已有 mock assertion 卻指稱缺失」及「替換成完全相同斷言」只在同候選執行與 AST 事實足以反證時標為無效契約；多餘語意主張與新情境需求不由字串規則否定。仍只允許一次契約重審，不刪 finding 冒充批准。
 
 - 依使用者 2026-10-10 確認，初始化先以純靜態 planner 彙整可證明的目錄與外部 callback 啟動入口，涵蓋選取來源的有界本機相依；planner 本身不 import 應用或求值來源。可確定候選直接進入預覽；若出現 `dynamic-directory`（例如由配置或 helper 算出的目錄），Host 先執行一次既有受控匯入掃描，只使用已批准 fixtures，不暫套任何新提案，再把實測目錄建議與後續靜態入口合併成同一清單。靜態候選與實測阻擋須分開標示，不能把規劃完成當成就緒。

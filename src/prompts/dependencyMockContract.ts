@@ -84,7 +84,12 @@ export function formatDependencyMockContract(module: string, context?: any, allo
             + 'for those source paths pass a controlled protocol object, not a string/scalar. Configure the consumed method, not unrelated methods.'] : [];
     }).join('\n');
     const sourceCalls = sourceSetupCallGuidance(module, context);
-    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) { return parameterSetup + sourceCalls; }
+    // Source-bound fixture consumption is necessary setup, including in the
+    // first compact Writer prompt. Only the larger topology remains optional.
+    const consumptionGuidance = formatFixtureConsumptionGuidance(module, context);
+    if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) {
+        return parameterSetup + sourceCalls + consumptionGuidance;
+    }
     // Conservative prompt relevance only; identifiers in source strings can
     // retain extra guidance but never authorize a patch or an assertion.
     const setupSource = [context?.code || '', JSON.stringify(context?.class_context || null),
@@ -109,8 +114,9 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + '\nPatch source-shown use points: from-import alias => target_module.alias; module alias => target_module.alias.member. '
         + 'Check scope/rebindings; locals and constructor-injected objects are not module patch targets. '
         + (allowedMockTargets ? 'Supplied use points are setup hints, not an exhaustive whitelist; verify every patch against the source binding. ' : 'No patch list was supplied; source imports alone do not prove a patch is allowed. ')
-        + (topology ? TOPOLOGY_LEGEND + ' ' + formatFixtureConsumptionGuidance(module, context)
+        + (topology ? TOPOLOGY_LEGEND + ' '
             : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
+        + consumptionGuidance
         + globalsGuidance + conversions + diagnosticGuidance + aliasGuidance
         + optionalGuidance
         + clockGuidance
@@ -121,18 +127,23 @@ export function formatDependencyMockContract(module: string, context?: any, allo
 export function sourceSetupCallGuidance(module: string, context?: any): string {
     const facts = context?.source_setup_call_contract;
     const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
+    const parameterMembers = facts?.parameterMembers ?? [];
     if (!facts || facts.schemaVersion !== 'source-setup-call-contract-v1' || facts.status !== 'complete'
         || facts.sourceHashKind !== 'normalized-target-source' || facts.authority !== 'source-spelling-only'
         || facts.assertionOracle !== false || facts.patchAuthorization !== false || !source
         || facts.targetSourceHash !== createHash('sha256').update(source).digest('hex')
         || facts.target !== (context?.class_name ? `${context.class_name}.${context.name}` : context?.name)
         || !Array.isArray(facts.calls) || !Array.isArray(facts.optionalLookups) || !Array.isArray(facts.sourceLocations)
-        || facts.calls.length + facts.optionalLookups.length > 64 || Buffer.byteLength(JSON.stringify(facts), 'utf8') > 16384) { return ''; }
+        || !Array.isArray(parameterMembers) || facts.calls.length + facts.optionalLookups.length + parameterMembers.length > 64
+        || Buffer.byteLength(JSON.stringify(facts), 'utf8') > 16384) { return ''; }
     const identifier = (value: unknown): value is string => typeof value === 'string'
         && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(value.normalize('NFKC'));
     const spelling = (value: unknown): value is string => typeof value === 'string' && !!value;
     const argument = (value: any): boolean => !!value && spelling(value.source)
         && ['module-global', 'parameter', 'literal', 'unknown'].includes(value.scope);
+    const declaredParameters: unknown[] = Array.isArray(context?.signature)
+        ? context.signature.map((parameter: any) => parameter?.name) : Array.isArray(context?.args) ? context.args : [];
+    const instanceReceiver = context?.class_name && context?.method_kind !== 'static' ? declaredParameters[0] : undefined;
     if (facts.optionalLookups.some((item: any) => !item || !identifier(item.owner) || !identifier(item.attribute)
             || item.ownerScope !== 'module-global' || !spelling(item.defaultSource) || !spelling(item.source)
             || !Number.isSafeInteger(item.line) || item.line <= 0)
@@ -140,8 +151,12 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
             || !Array.isArray(item.keywords) || !item.args.every(argument)
             || item.keywords.some((keyword: any) => !argument(keyword) || keyword.name !== null && !identifier(keyword.name))
             || !Number.isSafeInteger(item.line) || item.line <= 0)
-        || facts.sourceLocations.some((name: unknown) => name !== '__file__')) { return ''; }
-    if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length) { return ''; }
+        || facts.sourceLocations.some((name: unknown) => name !== '__file__')
+        || parameterMembers.some((item: any) => !item || !identifier(item.parameter)
+            || !declaredParameters.includes(item.parameter) || item.parameter === instanceReceiver
+            || !Array.isArray(item.members) || !item.members.length || item.members.length > 8 || !item.members.every(identifier)
+            || !['read', 'write', 'call'].includes(item.usage) || !Number.isSafeInteger(item.line) || item.line <= 0)) { return ''; }
+    if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length && !parameterMembers.length) { return ''; }
     const lines = ['SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts)];
     for (const lookup of facts.optionalLookups) {
         lines.push(`Optional source lookup ${lookup.source}: owner is ${module}.${lookup.owner}. `
@@ -152,6 +167,28 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
         lines.push('Dependency-call assertions must retain the recorded args/keywords, including conversions. '
             + `Read each module-global spelling from ${module}.<source spelling>; do not replace it with its upstream input or imported origin. `
             + 'Parameter/literal inputs are test-controlled; unknown expressions remain unknown. These call spellings do not choose expected target outputs.');
+        for (const call of facts.calls) {
+            const moduleArgument = (item: any): string | undefined => item.scope === 'module-global'
+                && item.source.split('.').every(identifier) ? `${module}.${item.source}` : undefined;
+            const bindings = [...call.args.map((item: any, index: number) => {
+                const binding = moduleArgument(item); return binding ? `arg ${index + 1}: ${binding}` : undefined;
+            }), ...call.keywords.map((item: any) => {
+                const binding = moduleArgument(item); return binding && item.name ? `${item.name}: ${binding}` : undefined;
+            })].filter(Boolean);
+            if (bindings.length) { lines.push(`Call setup ${call.callee}: ${bindings.join('; ')}.`); }
+        }
+        lines.push('Keep these same source bindings; do not substitute an upstream variable or hard-coded path.');
+    }
+    if (parameterMembers.length) {
+        lines.push('Parameter object shape: provide controlled objects with the listed exact attribute paths, callable methods and writable members; '
+            + 'dictionary keys do not satisfy dot attribute access. Preserve the same nested object identity when configuring and checking a consumed method. '
+            + 'The source spelling proves required access only, never an attribute value, concrete type or expected target result.');
+    }
+    for (const parameter of [...new Set<string>(parameterMembers.map((item: any) => item.parameter))]) {
+        const paths = [...new Set<string>(parameterMembers.filter((item: any) => item.parameter === parameter)
+            .map((item: any) => `${parameter}.${item.members.join('.')}${item.usage === 'call' ? '()' : ''} [${item.usage}]`))];
+        lines.push(`Parameter object setup ${parameter}: ${paths.join('; ')}. `
+            + `Pass this object to the target; do not patch ${module}.${parameter} merely because it is a parameter.`);
     }
     if (facts.sourceLocations.length) {
         lines.push(`The source __file__ is ${module}.__file__, never the generated test __file__. `
@@ -211,7 +248,7 @@ export function formatDependencyTopology(context?: any): string {
     if (!topology) { return ''; }
     return 'SOURCE CONSUMPTION TOPOLOGY (source setup only, not an output oracle or patch permission):\n'
         + JSON.stringify({ sourceConsumption: topology })
-        + '\n' + TOPOLOGY_LEGEND + ' ' + formatFixtureConsumptionGuidance(context?.target_import_module || '', context);
+        + '\n' + TOPOLOGY_LEGEND;
 }
 
 /** Source-bound shape instructions. They never supply values or approve an assertion. */

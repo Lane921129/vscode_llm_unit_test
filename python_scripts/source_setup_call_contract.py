@@ -105,10 +105,10 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
                 'sourceHashKind': 'normalized-target-source', 'authority': 'source-spelling-only',
                 'spellingKind': 'ast-normalized',
                 'assertionOracle': False, 'patchAuthorization': False, 'status': 'complete',
-                'optionalLookups': [], 'calls': [], 'sourceLocations': []}
+                'optionalLookups': [], 'calls': [], 'sourceLocations': [], 'parameterMembers': []}
 
     def unsupported(reason):
-        contract.update(status='unsupported', optionalLookups=[], calls=[], sourceLocations=[], reason=reason)
+        contract.update(status='unsupported', optionalLookups=[], calls=[], sourceLocations=[], parameterMembers=[], reason=reason)
         return contract
 
     if not isinstance(module_tree, ast.Module):
@@ -151,8 +151,19 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
     module_names.difference_update(locals_ | declarations | {func_node.name, target_name.split('.')[0]})
     reflective = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                      and node.func.id in DYNAMIC_NAMES for node in nodes)
+    # These are spelling facts about caller-owned objects, never their values.
+    # A rebound parameter, independent scope or target instance cannot grant a
+    # fixture path. Member writes do not rebind the parameter itself.
+    stable_parameters = parameters - declarations - {node.id for node in nodes
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
+    positional_parameters = [*func_node.args.posonlyargs, *func_node.args.args]
+    if '.' in target_name and positional_parameters and not any(
+            isinstance(item, ast.Name) and item.id == 'staticmethod' for item in func_node.decorator_list):
+        stable_parameters.discard(positional_parameters[0].arg)
     if reflective:
         module_names.clear()
+        stable_parameters.clear()
+    parents = {id(child): parent for parent in nodes for child in ast.iter_child_nodes(parent)}
 
     def argument(node):
         scope = ('module-global' if isinstance(node, (ast.Name, ast.Attribute)) and _root_name(node) in module_names
@@ -165,6 +176,24 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == '__file__' and node.id not in locals_ | declarations:
             if '__file__' not in contract['sourceLocations']:
                 contract['sourceLocations'].append('__file__')
+        if isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Del):
+            parent = parents.get(id(node))
+            # The outer path already names every intermediate member. Avoid
+            # repeating page.overlay for page.overlay.append at the same site.
+            if not isinstance(parent, ast.Attribute):
+                members, base = [], node
+                while isinstance(base, ast.Attribute):
+                    members.insert(0, base.attr)
+                    base = base.value
+                if isinstance(base, ast.Name) and base.id in stable_parameters:
+                    if len(members) > 8:
+                        return unsupported('contract-limit-exceeded')
+                    contract['parameterMembers'].append({'parameter': base.id, 'members': members,
+                        'usage': 'write' if isinstance(node.ctx, ast.Store)
+                        else 'call' if isinstance(parent, ast.Call) and parent.func is node else 'read',
+                        'line': node.lineno})
+                    if len(contract['parameterMembers']) + len(contract['calls']) + len(contract['optionalLookups']) > MAX_FACTS:
+                        return unsupported('contract-limit-exceeded')
         if not isinstance(node, ast.Call):
             continue
         root = _root_name(node.func)
@@ -181,7 +210,7 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
             contract['calls'].append({'callee': ast.unparse(node.func), 'args': [argument(arg) for arg in node.args],
                                       'keywords': [{'name': keyword.arg, **argument(keyword.value)} for keyword in node.keywords],
                                       'line': node.lineno})
-        if len(contract['calls']) + len(contract['optionalLookups']) > MAX_FACTS:
+        if len(contract['calls']) + len(contract['optionalLookups']) + len(contract['parameterMembers']) > MAX_FACTS:
             return unsupported('contract-limit-exceeded')
     if len(json.dumps(contract, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
         return unsupported('contract-limit-exceeded')

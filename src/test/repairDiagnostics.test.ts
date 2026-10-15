@@ -23,7 +23,6 @@ test('repair parser assigns concrete format reasons while retaining strict Pytho
         [fence('pass'), 'missing-test-method'],
         [fence(method.replace('test_one', 'test_other')), 'method-name-mismatch'],
         [fence(method + '\n' + method.replace('test_one', 'test_other')), 'multiple-test-methods'],
-        [fence('import a\nimport b\nimport c\nimport d\n' + method), 'import-limit'],
         [fence('# extra setup\n' + method), 'invalid-import'],
         [fence(method + '\nunittest.main()'), 'forbidden-entrypoint'],
         ['{"method":"test_one"}', 'invalid-json-replacement']

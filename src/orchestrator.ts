@@ -23,7 +23,8 @@ import { buildReviewFacts } from './roles/reviewFacts';
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
 import { passingTestIds } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt, buildWriterAdditionRevisionPrompt,
-    buildWriterAdditionSystemPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt } from './roles/writerPhases';
+    buildWriterAdditionSystemPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
+    selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from './roles/writerPhases';
 import { bindQualityTaskObservations, QualityTaskEvidence, qualityTasksForWriter,
     qualityFocusInputDiagnostic, qualityInputAlreadyTested, qualityFocusCasesForPrompt,
     resolveQualityTaskTraceCaseIds } from './pipeline/qualityTaskEvidence';
@@ -897,6 +898,8 @@ async function runBehaviorProbe(
                 if (run.code !== 0) { throw new Error('Trace worker process failed'); }
                 return { ...parseBehaviorObservations(run.stdout.trim(), funcName), trace_timing: startupBudget };
             } catch (error) {
+                throwIfExecutionCancelled();
+                if (error instanceof AnalysisStageError) { throw error; }
                 const recovered = fs.existsSync(progressPath) ? recoverBehaviorProgress(fs.readFileSync(progressPath, 'utf8'),
                     funcName, error instanceof Error ? error.message : 'Trace interrupted') : undefined;
                 if (recovered) { return { ...recovered, trace_timing: startupBudget }; }
@@ -917,6 +920,8 @@ async function runBehaviorProbe(
                 : suppliedInputs?.cases.length ? 'caller_literals' : 'source_guided'
         };
     } catch (e: any) {
+        throwIfExecutionCancelled();
+        if (e instanceof AnalysisStageError) { throw e; }
         console.error(`[Behavior Probe ERROR] ${e.message || e}`);
         return { func_name: funcName, args: [], examples: [], errors: [], load_error: `spawn failed: ${e.message || 'unknown'}` } as BehaviorProbeResult;
     }
@@ -1584,6 +1589,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     // Analyst output needs belong to this target and never raise Writer's floor.
     const analystOutputBudget = new WriterOutputBudget();
     let writerAdditionBaseline: string | undefined;
+    const methodInventories = new Map<string, ScenarioIdentity[]>();
     let activeSeedCaseIds: string[] | undefined;
     let activeSeedCaseFacts = '';
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
@@ -1746,6 +1752,17 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             + 'Observations describe this test setup, not production data, network or GUI startup.'
             + '\n\n' + resourceContext.context;
     };
+    const writerAdditionMethodInstruction = (baseline: string): string => {
+        const baselineHash = evidenceHash(baseline);
+        const methods = methodInventories.get(baselineHash);
+        if (!methods?.length) {
+            throw new AnalysisStageError('validation', 'writer-addition-context',
+                'The executed Writer baseline has no valid AST method inventory.',
+                { reasonCode: 'writer-method-inventory-unavailable' });
+        }
+        return buildWriterAdditionMethodInstruction(selectWriterAdditionMethodName(baselineHash,
+            activeQualityTaskEvidence?.focusId || analystTasks, methods.map(item => item.id)));
+    };
     const requestBudgetedOne = async (
         requestParams: AnalysisParams, system: string, prompt: string,
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
@@ -1785,6 +1802,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (focusCases && !prompt.includes(focusCases)) { prompt += '\n\n' + focusCases; }
             if (writerCaseMode) {
                 prompt += `\n\nREQUIRED NEW METHOD SIGNATURE (body must be authored by you):\ndef ${writerCaseMode.methodName}(self):\n`;
+            } else {
+                const baselineHash = evidenceHash(writerAdditionBaseline);
+                const instruction = writerAdditionMethodInstruction(writerAdditionBaseline);
+                prompt += instruction;
+                recordRole('writer-addition', 'scope-selected', { signatureHash: evidenceHash(instruction), baselineCodeHash: baselineHash,
+                    methodBodyAuthor: 'model', scenarioDeduplicationPreserved: true });
             }
         }
         const contractedSystem = addOutputContract(system, format);
@@ -2107,7 +2130,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     journal.knowledge({ dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
         dependencyVersions: astContext?.sourceVersions || preflight!.sourceVersions });
     const testExecutionEnv = buildGeneratedTestEnvironment(process.env, preflight!.importPaths);
-    const methodInventories = new Map<string, ScenarioIdentity[]>();
     const writerBaselineContexts = new Map<string, Awaited<ReturnType<typeof projectWriterAdditionContext>>>();
     const additionRejections = new Map<string, { reason: string; reasonCode: string; gate: 'revision-scope' | 'unittest-structure' }>();
     const recordCandidateMethods = async (code: string, phase: 'generated' | 'merged', role: string,
@@ -2836,6 +2858,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const generationFormat = mode === 'full' && generationBaseline ? 'text' : testGenerationResponseFormat;
         let generationEnvelope = addOutputContract(generationSystem, generationFormat) + '\n'
             + (seedPending ? buildWriterSeedPrompt('') : buildWriterExpansionPrompt('', generationBaseline, analystTasks));
+        if (mode === 'full' && generationBaseline) {
+            generationEnvelope += writerAdditionMethodInstruction(generationBaseline);
+        }
         if (mode === 'full' && seedPending && activeSeedCaseFacts) { generationEnvelope += '\n\n' + activeSeedCaseFacts; }
         if (qualityObservationEvidence) { generationEnvelope += '\n\n' + qualityObservationEvidence; }
         const generationNumericEvidence = numericEvidencePrompt();

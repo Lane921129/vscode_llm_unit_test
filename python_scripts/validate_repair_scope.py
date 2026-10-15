@@ -54,6 +54,17 @@ def imports(tree):
     }
 
 
+def import_bindings(node):
+    """Compare binding identities without importing or executing model code."""
+    if isinstance(node, ast.Import):
+        return [(alias.asname or alias.name.split('.')[0], ('import', alias.name))
+                for alias in node.names]
+    if isinstance(node, ast.ImportFrom):
+        return [(alias.asname or alias.name, ('from', node.module, node.level, alias.name))
+                for alias in node.names]
+    return []
+
+
 def failed_test_names(failure):
     names = set()
     patterns = [
@@ -95,15 +106,40 @@ def validate_detailed(previous, candidate, failure):
                 names.update(child.id for target in targets for child in ast.walk(target) if isinstance(child, ast.Name))
         return names
 
-    added_imports = [node for node in candidate_tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
-                     and ast.dump(node, include_attributes=False) not in previous_imports]
-    added_names = bound_names(added_imports)
+    previous_bindings = {}
+    for node in previous_tree.body:
+        for name, meaning in import_bindings(node):
+            previous_bindings.setdefault(name, set()).add(meaning)
+    protected_names = bound_names(previous_tree.body)
+    non_import_names = bound_names([node for node in previous_tree.body
+                                  if not isinstance(node, (ast.Import, ast.ImportFrom))])
+    candidate_bindings = dict(previous_bindings)
+    added_imports = {}
+    for node in candidate_tree.body:
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        signature = ast.dump(node, include_attributes=False)
+        if signature in previous_imports:
+            continue
+        truly_missing = False
+        for name, meaning in import_bindings(node):
+            if name == '*':
+                return False, 'Bug Fixer may not add wildcard imports.', 'import-star'
+            if name in non_import_names:
+                return False, 'Bug Fixer imports must not shadow existing bindings.', 'import-conflict'
+            existing = candidate_bindings.get(name)
+            if existing is not None:
+                if existing != {meaning}:
+                    return False, 'Bug Fixer imports must not shadow existing bindings.', 'import-conflict'
+            elif name in protected_names:
+                return False, 'Bug Fixer imports must not shadow existing bindings.', 'import-conflict'
+            else:
+                candidate_bindings[name] = {meaning}
+                truly_missing = True
+        if truly_missing:
+            added_imports[signature] = node
     if len(added_imports) > 3:
-        return False, 'Bug Fixer may add at most three import statements.', 'import-limit'
-    if '*' in added_names:
-        return False, 'Bug Fixer may not add wildcard imports.', 'import-star'
-    if added_names & bound_names(previous_tree.body):
-        return False, 'Bug Fixer imports must not shadow existing bindings.', 'import-conflict'
+        return False, 'Bug Fixer may add at most three NEW missing import statements.', 'import-limit'
 
     before = callable_map(previous_tree)
     after = callable_map(candidate_tree)
