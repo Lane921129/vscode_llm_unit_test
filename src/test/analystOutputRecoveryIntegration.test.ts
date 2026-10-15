@@ -18,7 +18,8 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
     const handlers = new Map<string, (...args: any[]) => any>(), persisted = new Map<string, unknown>();
     const requests: any[] = [];
     const marker = 'TRUNCATED_ANALYST_PREFIX_MUST_NOT_BE_PERSISTED';
-    let scenario: 'recover' | 'repeat-length' | 'missing-counts' | 'expired' = 'recover';
+    let scenario: 'recover' | 'repeat-length' | 'missing-counts-10' | 'missing-counts-45'
+        | 'missing-counts-repeat' | 'expired' = 'recover';
     let analystCalls = 0, timeShift = 0, writes = 0;
     const modelName = 'neutral-analyst-recovery';
     const vscode = {
@@ -48,18 +49,23 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
         if (request.roleInstructions.includes('dependency_behaviors')) {
             analystCalls++;
             assert.ok(request.prompt.includes(sourceText.trimEnd()), 'all selected source survives');
-            if (analystCalls === 1 || scenario === 'repeat-length') {
+            if (analystCalls === 1 || scenario === 'repeat-length' || scenario === 'missing-counts-repeat') {
                 response = marker;
                 reason = 'length';
                 if (scenario === 'expired') { timeShift += 61000; }
+                if (analystCalls === 1 && scenario.startsWith('missing-counts')) {
+                    timeShift += scenario === 'missing-counts-45' ? 45000 : 10000;
+                }
             } else {
                 response = JSON.stringify({ test_strategy: { approach: 'Call increment with the observed input and assert its observed result.' } });
             }
         } else if (request.roleInstructions.includes('You are the test Reviewer')) {
-            assert.equal(scenario, 'recover', 'truncated analysis cannot reach review');
+            assert.ok(['recover', 'missing-counts-10', 'missing-counts-45'].includes(scenario),
+                'only completed recovered analysis can reach review');
             response = '{"findings":[]}';
         } else {
-            assert.equal(scenario, 'recover', 'truncated analysis cannot reach Writer');
+            assert.ok(['recover', 'missing-counts-10', 'missing-counts-45'].includes(scenario),
+                'only completed recovered analysis can reach Writer');
             assert.equal(request.options.num_predict, 1536, 'Analyst floor cannot leak into Writer seed');
             const observed = readObservedSeedCaseForModelFixture(request.prompt, 'increment');
             assert.ok(observed, 'the host must provide a selected executable seed observation');
@@ -68,7 +74,7 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
                     ? `    def test_observed(self):\n        self.assertEqual(increment(${observed.args.join(', ')}), ${observed.observedResult})\n`
                     : `    def test_observed(self):\n        with self.assertRaises(${observed.exception!.qualname}):\n            increment(${observed.args.join(', ')})\n`);
         }
-        const measurements = reason === 'length' && scenario !== 'missing-counts'
+        const measurements = reason === 'length' && !scenario.startsWith('missing-counts')
             ? { eval_count: request.options.num_predict, eval_duration: 1_000_000_000,
                 prompt_eval_count: 1000, prompt_eval_duration: 100_000_000,
                 load_duration: 0, total_duration: 1_100_000_000 } : {};
@@ -85,7 +91,8 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
             testGenerationMode: TEST_GEN_MODE_PYTHON, roleQualification: {
                 writer: { state: 'verified', reason: 'public fixture' }, reviewer: { state: 'verified', reason: 'public fixture' },
                 bugFixer: { state: 'not-run', reason: 'unused' } } });
-        for (scenario of ['recover', 'repeat-length', 'missing-counts', 'expired'] as const) {
+        for (scenario of ['recover', 'repeat-length', 'missing-counts-10', 'missing-counts-45',
+            'missing-counts-repeat', 'expired'] as const) {
             await t.test(scenario, async () => {
                 analystCalls = 0; timeShift = 0; requests.length = 0;
                 const output = path.join(directory, scenario), beforeWrites = writes;
@@ -108,18 +115,24 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
                 }
                 const analysts = requests.filter(request => request.roleInstructions.includes('dependency_behaviors'));
                 assert.equal(analysts[0].options.num_predict, 1024);
-                if (scenario === 'recover' || scenario === 'repeat-length') {
+                if (scenario !== 'expired') {
                     assert.equal(analysts.length, 2, 'at most one output recovery');
                     assert.equal(analysts[1].transmittedPrompt, analysts[0].transmittedPrompt);
                     assert.equal(analysts[1].options.num_predict, 2048);
                     const attempts = events.filter(event => event.stage === 'model-request' && event.status === 'requested'
                         && event.detail.role === 'analyst-planning');
                     assert.equal(attempts[0].detail.stageDeadlineAt, attempts[1].detail.stageDeadlineAt);
+                    const stage = events.find(event => event.status === 'recovery-stage-planned'
+                        && event.detail.role === 'analyst-planning').detail;
+                    assert.equal(attempts[0].detail.deadlineAt, stage.initialAttemptDeadlineAt,
+                        'the original first attempt is not extended by role assembly or recovery');
+                    assert.ok(stage.deadlineAt > stage.initialAttemptDeadlineAt,
+                        'the original semantic stage remains separate from its first attempt');
                     assert.ok(attempts.every(event => event.detail.deadlineAt <= event.detail.stageDeadlineAt));
                     assert.ok(attempts.every(event => event.detail.stageDeadlineAt <= requests[0].owner.deadlineAt));
                     assert.ok(events.some(event => event.status === 'output-budget-grown' && event.detail.role === 'analyst-planning'));
                 } else { assert.equal(analysts.length, 1); }
-                if (scenario === 'recover') {
+                if (['recover', 'missing-counts-10', 'missing-counts-45'].includes(scenario)) {
                     assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify(knowledge.lastFailure));
                     assert.equal(knowledge.mutationScore, 100);
                     const approved = events.findIndex(event => event.stage === 'reviewer' && event.status === 'approved');

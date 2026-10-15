@@ -1,4 +1,4 @@
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { ollamaRuntimeMetadataFixture, readObservedSeedCaseForModelFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory } from '../pipeline/resultLayout';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -39,29 +39,7 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-gate-'));
     const file = path.join(root, 'bmi.py');
     const source = fs.readFileSync(path.join(repo, 'test/test_mut/bmi.py'), 'utf8');
-    const candidate = `import unittest
-from bmi import calculate_bmi
-class Cases(unittest.TestCase):
-    def test_value_0(self):
-        self.assertEqual(calculate_bmi(50, 160), (19.53, "健康體位"))
-    def test_value_1(self):
-        self.assertEqual(calculate_bmi(17, 100), (17.0, "體重過輕"))
-    def test_value_2(self):
-        self.assertEqual(calculate_bmi(18.5, 100), (18.5, "健康體位"))
-    def test_value_3(self):
-        self.assertEqual(calculate_bmi(24, 100), (24.0, "體重過重"))
-    def test_value_4(self):
-        self.assertEqual(calculate_bmi(27, 100), (27.0, "肥胖"))
-    def test_value_5(self):
-        self.assertEqual(calculate_bmi(-1, -1), (-10000.0, "體重過輕"))
-    def test_zero_height(self):
-        with self.assertRaises(ZeroDivisionError):
-            calculate_bmi(0, 0)
-    def test_string(self):
-        with self.assertRaises(TypeError):
-            calculate_bmi("a", "a")
-`;
-    const revised = candidate.replaceAll('self.assertEqual(', 'self.assertTupleEqual(');
+    let candidate = '';
     fs.writeFileSync(file, source);
     const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, language: 'en' };
     const handlers = new Map<string, (...args: any[]) => any>();
@@ -83,7 +61,12 @@ class Cases(unittest.TestCase):
         } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async (_url, options) => {
+    globalThis.fetch = async (url, options) => {
+        // This fixture intentionally exercises the captured 8572-token allocation,
+        // without treating metadata exploration as a generation or role request.
+        const metadata = ollamaRuntimeMetadataFixture(url, options,
+            { modelName: 'neutral-fixture', metadataAvailable: false });
+        if (metadata) { return metadata; }
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         assert.equal(request.options.num_ctx, 8572,
             'the fixture runtime allocation, not the model maximum, owns the input budget');
@@ -106,8 +89,25 @@ class Cases(unittest.TestCase):
             revisions++;
             assert.equal(scenario, 'quality');
             assert.match(request.prompt, /assertTupleEqual/);
-            response = '```python\n' + revised + '\n```';
-        } else { writers++; response = '```python\n' + candidate + '\n```'; }
+            assert.ok(candidate, 'a real executed seed precedes its review-driven revision');
+            response = '```python\n' + candidate.replaceAll('self.assertEqual(', 'self.assertTupleEqual(') + '\n```';
+        } else {
+            writers++;
+            const observed = readObservedSeedCaseForModelFixture(request.prompt, 'calculate_bmi');
+            assert.ok(observed, 'the fixed-response Writer needs the exact source-bound selected seed observation');
+            assert.equal(observed.observedOutcome, 'returned', 'this review-quality fixture strengthens a verified tuple assertion');
+            const callArguments = [...observed.args,
+                ...Object.entries(observed.kwargs).map(([name, value]) => `${name}=${value}`)].join(', ');
+            // Match the formal first-case contract. Expected values come from the
+            // supplied executed observation, never a fixture-side calculation.
+            candidate = `import unittest
+from bmi import calculate_bmi
+class Cases(unittest.TestCase):
+    def test_value_0(self):
+        self.assertEqual(calculate_bmi(${callArguments}), ${observed.observedResult})
+`;
+            response = '```python\n' + candidate + '\n```';
+        }
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
     };
     try {
@@ -118,7 +118,7 @@ class Cases(unittest.TestCase):
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768,
             effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-num-ctx' });
         for (const selected of ['invalid', 'quality'] as const) {
-            scenario = selected; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
+            scenario = selected; candidate = ''; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
             const outputPath = path.join(root, 'results-' + scenario);
             // The builtin-v2 full universe contains 96 candidates here. This
             // fixture verifies review/approval ordering, not a 30-second speed
@@ -131,7 +131,10 @@ class Cases(unittest.TestCase):
             const directory = path.dirname(path.join(outputPath, report));
             const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
             const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
-            const checkpoint = JSON.parse(fs.readFileSync(path.join(directory, 'executable_baseline.json'), 'utf8'));
+            const checkpointPath = path.join(directory, 'executable_baseline.json');
+            assert.ok(fs.existsSync(checkpointPath), 'the selected seed must really execute before review: '
+                + safeReviewFlowDiagnostic(scenario, knowledge, events, { writers, revisions, fixes, reviews }));
+            const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
             const final = fs.readFileSync(path.join(functionReportDirectory(directory), 'final_report.md'), 'utf8');
             assert.equal(writers, 1);
             assert.equal(fixes, 0);

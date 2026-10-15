@@ -1751,7 +1751,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
         sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string,
-        writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }
+        writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }, initialAttemptDeadlineAt?: number
     ): Promise<string> => {
         if (role === 'writer' && mode === 'full' && !writerCaseMode) {
             writerAdditionBaseline = seedPending ? undefined : checkpoints.executable?.code || bestCode || undefined;
@@ -1791,7 +1791,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
             && localRuntime?.ok === true;
         const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
-            sharedDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
+            sharedDeadlineAt, initialAttemptDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
         if (recoveryAllowed) {
             recordRole('model-request', 'recovery-stage-planned', { role, ...outputStage, targetDeadlinePreserved: true });
         }
@@ -2156,7 +2156,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             baselineMethods: methodInventories.get(evidenceHash(baseline)) });
     };
     const requestBudgeted: typeof requestBudgetedOne = async (requestParams, system, prompt, requestLog,
-        format = 'text', role = 'writer', sharedDeadlineAt, reservedInputTokens = 0, revisionCurrentCode) => {
+        format = 'text', role = 'writer', sharedDeadlineAt, reservedInputTokens = 0, revisionCurrentCode,
+        writerCaseMode, initialAttemptDeadlineAt) => {
         const evidence = activeQualityTaskEvidence;
         const baseline = checkpoints.executable?.code || bestCode;
         // Candidate revisions must retain their exact execution/Reviewer finding
@@ -2166,7 +2167,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             || !baseline || !evidence || evidence.cases.length < 2
             || astContext?.class_name !== null || astContext.is_async !== false || astContext.method_kind !== 'module') {
             return requestBudgetedOne(requestParams, system, prompt, requestLog, format, role,
-                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode);
+                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt);
         }
         writerAdditionBaseline = baseline;
         // Every case and its bounded correction shares this family's original
@@ -2630,8 +2631,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 targetParameters: Array.isArray(astContext.args) ? astContext.args : undefined,
                 deadlineAt: boundedRoleStageDeadline(params.timeoutSeconds, 2, currentTargetBudget()?.deadlineAt),
                 attemptTimeoutSeconds: params.timeoutSeconds,
-                request: (prompt, deadline, reserve) => requestBudgeted(params, semSys, prompt, log,
-                    analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning', deadline, reserve),
+                request: (prompt, attemptDeadline, reserve, stageDeadline) => requestBudgeted(params, semSys, prompt, log,
+                    analysisResponseFormat === 'text' ? 'text' : 'semantic-json', 'analyst-planning', stageDeadline, reserve,
+                    undefined, undefined, attemptDeadline),
                 checkCurrent: () => {
                     throwIfExecutionCancelled();
                     if (!evidenceStillCurrent()) {
@@ -2817,14 +2819,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // and the selected task once; the source and observations already live in evidence.
         let systemPrompt = getSystemPrompt(currentLoop, evalStrategy as 'small' | 'large', undefined, params.modelName);
         const focusContext = '';
-        const phasePrompt = seedPending ? buildWriterSeedPrompt('')
-            : buildWriterExpansionPrompt('', checkpoints.executable?.code || bestCode || '', analystTasks);
-        const generationRoleBudget = roleRequestBudget({ envType: params.envType, mode, role: 'writer', seedPending,
-            contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens });
-        const generationBudget = Math.max(1, generationRoleBudget.inputBudget
-            - estimateTokens(addOutputContract(systemPrompt, testGenerationResponseFormat))
-            - estimateTokens(phasePrompt) - estimateTokens(qualityObservationEvidence)
-            - estimateTokens(numericEvidencePrompt()) - estimateTokens(importResourcePrompt()));
         // Select one complete observed case for initial generation only. Original
         // artifacts and the contexts used by validation/review/repair stay complete.
         const seedCaseIds = seedPending ? selectWriterSeedCaseIds(astContext?.traceResult) : undefined;
@@ -2834,6 +2828,27 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             observations: astContext?.traceResult ? { ...seedIdentity, value: astContext.traceResult } : undefined,
             ...(astContext?.class_name === null && astContext.is_async === false && astContext.method_kind === 'module'
                 ? { targetKind: 'sync-top-level-function' as const } : {}) }) : '';
+        // Reserve the same phase system, complete facts and output floor that the
+        // final request will carry before optional Writer materials use this allowance.
+        const generationBaseline = seedPending ? '' : checkpoints.executable?.code || bestCode || '';
+        const generationSystem = mode === 'full' && seedPending ? buildWriterSeedSystemPrompt(systemPrompt)
+            : mode === 'full' && generationBaseline ? buildWriterAdditionSystemPrompt(systemPrompt) : systemPrompt;
+        const generationFormat = mode === 'full' && generationBaseline ? 'text' : testGenerationResponseFormat;
+        let generationEnvelope = addOutputContract(generationSystem, generationFormat) + '\n'
+            + (seedPending ? buildWriterSeedPrompt('') : buildWriterExpansionPrompt('', generationBaseline, analystTasks));
+        if (mode === 'full' && seedPending && activeSeedCaseFacts) { generationEnvelope += '\n\n' + activeSeedCaseFacts; }
+        if (qualityObservationEvidence) { generationEnvelope += '\n\n' + qualityObservationEvidence; }
+        const generationNumericEvidence = numericEvidencePrompt();
+        if (mode === 'full' && numericEvidence.hasEvidence && generationNumericEvidence) {
+            generationEnvelope += '\n\n' + generationNumericEvidence;
+        }
+        generationEnvelope += importResourcePrompt();
+        const generationFocusCases = mode === 'full' && generationBaseline ? qualityFocusCasesForPrompt(activeQualityTaskEvidence) : '';
+        if (generationFocusCases) { generationEnvelope += '\n\n' + generationFocusCases; }
+        const generationRoleBudget = roleRequestBudget({ envType: params.envType, mode, role: 'writer', seedPending,
+            contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
+            minimumOutputTokens: writerOutputBudget.minimumTokens });
+        const generationBudget = Math.max(1, generationRoleBudget.inputBudget - estimateTokens(generationEnvelope));
         const writerContext = seedCaseIds ? { ...astContext, writerScenarioCaseIds: seedCaseIds } : astContext;
         if (seedCaseIds) {
             recordRole('writer-context', 'selected', { phase: 'seed', caseIds: seedCaseIds,

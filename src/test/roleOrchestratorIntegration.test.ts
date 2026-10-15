@@ -1,4 +1,4 @@
-import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
+import { ollamaRuntimeMetadataFixture, readObservedSeedCaseForModelFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import { functionReportDirectory, resultArtifactPath, roundDirectory } from '../pipeline/resultLayout';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import * as assert from 'node:assert/strict';
@@ -19,8 +19,8 @@ test('orchestrator carries measured quality into Writer and verifies improvement
     const originalEngine = utilities.detectMutationEngine;
     const processRunner = require('../utils/processRunner');
     const originalSpawn = processRunner.runSpawn;
-    // This scenario exercises a second improvement round, so explicitly use
-    // strict quality. The product's standard 80% policy may stop after round one.
+    // The single-case seed is followed by separate coverage and precision additions.
+    // Strict quality keeps both measured improvements instead of stopping at 80%.
     const policies = require('../pipeline/qualityPolicy');
     const originalPolicy = policies.createDefaultQualityPolicy;
     policies.createDefaultQualityPolicy = policies.createStrictQualityPolicy;
@@ -91,19 +91,18 @@ class Cases(unittest.TestCase):
     def test_true(self):
         with patch('sample.read', return_value={'ready': True, 'kind': 'plain'}):
             self.assertTrue(target())
-    def test_false(self):
-        with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):
-            self.assertFalse(target())
 `;
-    // New exact assertions kill the weak false-result survivors while the
-    // already executed methods remain byte-for-byte unchanged.
-    const stronger = code + `
-    def test_mixed(self):
-        with patch('sample.read', return_value={'ready': True, 'kind': 'other'}):
-            self.assertIs(target(), False)
-    def test_kind_after_plain(self):
-        with patch('sample.read', return_value={'ready': True, 'kind': 'zebra'}):
-            self.assertIs(target(), False)
+    const falseAddition = `def test_false(self):
+    with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):
+        self.assertFalse(target())
+`;
+    // One new method kills the remaining truthiness and comparison survivors;
+    // the host retains both already executed methods byte-for-byte.
+    const stronger = `def test_mixed(self):
+    with patch('sample.read', return_value={'ready': True, 'kind': 'other'}):
+        self.assertIs(target(), False)
+    with patch('sample.read', return_value={'ready': True, 'kind': 'zebra'}):
+        self.assertIs(target(), False)
 `;
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 },
@@ -164,10 +163,22 @@ class Cases(unittest.TestCase):
             } });
         } else {
             roles.push('writer'); writers++;
-            assert.match(request.prompt, scaffoldMode ? /Complete Writer evidence/ : /^compact-writer-v2/);
-            assert.match(request.prompt, scaffoldMode ? /def read/ : /RETRIEVED DEPENDENCY read/);
-            if (writers > 1 && !scaffoldMode) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
-            response = '```python\n' + (writers === 1 ? code : stronger) + '\n```';
+            const seedRequest = request.roleInstructions.includes('WRITER_SEED_V1');
+            const scaffoldRequest = scaffoldMode && seedRequest;
+            assert.match(request.prompt, scaffoldRequest ? /Complete Writer evidence/ : /^compact-writer-v2/);
+            assert.match(request.prompt, scaffoldRequest ? /def read/ : /RETRIEVED DEPENDENCY read/);
+            if (!seedRequest && !scaffoldMode) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
+            if (seedRequest) {
+                const selected = readObservedSeedCaseForModelFixture(request.prompt, 'target');
+                assert.ok(selected, 'a formal seed must use the selected executed case');
+                assert.deepEqual(selected.args, []);
+                assert.equal(selected.observedOutcome, 'returned');
+                assert.equal(selected.observedResult, 'True');
+                response = '```python\n' + code + '\n```';
+            } else {
+                assert.match(request.prompt, /WRITER_ADDITION_V1/);
+                response = '```python\n' + (/def test_false\(/.test(request.prompt) ? stronger : falseAddition) + '\n```';
+            }
         }
         return new Response(JSON.stringify({ response }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
@@ -211,7 +222,10 @@ class Cases(unittest.TestCase):
         assert.ok(firstStage('analyst-planning') < firstStage('rule-dispatcher'),
             JSON.stringify({ stages: events.map(event => ({ stage: event.stage, status: event.status })), roles }));
         assert.ok(firstStage('rule-dispatcher') < firstStage('writer-handoff'));
-        assert.ok(firstStage('writer-handoff') < firstStage('writer'));
+        assert.ok(firstStage('writer-handoff') < firstStage('writer'), JSON.stringify(events.map(event => ({
+            stage: event.stage, status: event.status, reasonCode: event.detail?.reasonCode,
+            methodCount: event.detail?.methodCount, callCount: event.detail?.literalTargetCallCount
+        }))));
         assert.equal(events[firstStage('rule-dispatcher')].detail.provenance, 'deterministic');
         assert.equal(events[firstStage('evidence-collection')].detail.dependencyCount, 1);
         assert.ok(firstStage('validation') < firstStage('reviewer'));
@@ -232,11 +246,14 @@ class Cases(unittest.TestCase):
         const seedCheckpoint = events.slice(seedStart, seedAccepted).find(event => event.stage === 'executable-baseline');
         assert.equal(seedCheckpoint.detail.reviewStatus, 'incomplete');
         const mutations = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
-        assert.equal(mutations.length, 2, logs.join('\n'));
-        assert.equal(mutationRuns.length, 2);
+        assert.equal(mutations.length, 3, logs.join('\n'));
+        assert.equal(mutationRuns.length, 3);
         assert.ok(mutations[0].detail.score < 100);
-        assert.equal(mutations[1].detail.score, 100);
-        assert.deepEqual(roles.filter(role => role !== 'analyst-planning'), ['writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer']);
+        assert.ok(mutations[1].detail.score > mutations[0].detail.score);
+        assert.ok(mutations[1].detail.score < 100);
+        assert.equal(mutations[2].detail.score, 100);
+        assert.deepEqual(roles.filter(role => role !== 'analyst-planning'),
+            ['writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer']);
         const knowledge = JSON.parse(fs.readFileSync(path.join(output, 'function_knowledge.json'), 'utf8'));
         assert.equal(knowledge.schemaVersion, 2);
         assert.equal(knowledge.selectedRules.schemaVersion, 'rule-selection-v2');
@@ -505,9 +522,20 @@ class Cases(unittest.TestCase):
             writerPrompts.getUserPrompt = originalWriterPrompt;
         }
         assert.equal(optionalBudgetUsed, true, 'the fixture exercises a nearly full advertised Writer allowance');
-        assert.equal(resourceWriterRequests, 1, 'a fitting Writer request reaches transport, then stops on the deliberate non-retryable HTTP response');
-        const resourceEvents = fs.readFileSync(path.join(outputFor(resourceBudgetRoot), 'role_events.jsonl'), 'utf8')
+        const resourceOutput = outputFor(resourceBudgetRoot);
+        const resourceEvents = fs.readFileSync(path.join(resourceOutput, 'role_events.jsonl'), 'utf8')
             .trim().split('\n').map(line => JSON.parse(line));
+        const resourceKnowledge = JSON.parse(fs.readFileSync(path.join(resourceOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(resourceWriterRequests, 1, JSON.stringify({
+            expectation: 'a fitting Writer request reaches transport, then stops on the deliberate non-retryable HTTP response',
+            terminalStatus: resourceKnowledge.terminalStatus,
+            failureStage: resourceKnowledge.failureStage, failureCategory: resourceKnowledge.failureCategory,
+            stages: resourceEvents.map(event => ({ stage: event.stage, status: event.status, role: event.detail?.role,
+                estimatedInputTokens: event.detail?.estimatedInputTokens, inputBudget: event.detail?.inputBudget,
+                reservedInputTokens: event.detail?.reservedInputTokens, contextWindow: event.detail?.contextWindow,
+                category: event.detail?.category, httpStatus: event.detail?.httpStatus,
+                reasonCode: typeof event.detail?.reasonCode === 'string' && /^[a-z][a-z0-9-]*$/.test(event.detail.reasonCode)
+                    ? event.detail.reasonCode : undefined })) }));
         assert.ok(!resourceEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
         assert.ok(resourceEvents.some(event => event.stage === 'model-request' && event.status === 'error'
             && event.detail.role === 'writer' && event.detail.httpStatus === 400));
@@ -520,13 +548,14 @@ class Cases(unittest.TestCase):
         expectedMutationSeconds = 60;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
             filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
-            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
+            maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
         const scaffoldRoot = path.join(directory, 'scaffold-results');
         const scaffoldOutput = outputFor(scaffoldRoot);
         const scaffoldKnowledge = JSON.parse(fs.readFileSync(path.join(scaffoldOutput, 'function_knowledge.json'), 'utf8'));
         assert.equal(scaffoldKnowledge.terminalStatus, 'passed', scaffoldKnowledge.failure);
         assert.equal(scaffoldKnowledge.resolvedTier, 3);
-        assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer'], 'complete scaffold output needs no wrapping repair or Tier fallback');
+        assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer',
+            'analyst-quality', 'writer', 'reviewer'], 'complete scaffold seed and additions need no wrapping repair or Tier fallback');
 
         // Partial progress must survive even while coverage/mutation remain below 100.
         fs.writeFileSync(path.join(directory, 'partial.py'), `def read(): return {'mode': 'a'}
@@ -654,8 +683,12 @@ class Cases(unittest.TestCase):
                         : '```python\nfrom datetime import datetime\n' + fragment + '\n```';
                 } else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
                 else {
+                    const failingMethod = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
+                        + 'class Cases(unittest.TestCase):\n    def test_false(self):\n'
+                        + "        with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):\n"
+                        + '            self.assertTrue(target())\n';
                     response = '```python\n' + (mode === 'scope' ? 'import datetime\n' : '')
-                        + code.replace('self.assertFalse(target())', 'self.assertTrue(target())') + '\n```';
+                        + failingMethod + '\n```';
                 }
                 return new Response(JSON.stringify({ response }), { status: 200 });
             };

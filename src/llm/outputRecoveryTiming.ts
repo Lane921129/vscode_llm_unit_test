@@ -5,12 +5,14 @@ export interface OutputRecoveryStage {
     readonly deadlineAt: number;
     readonly timeoutSeconds: number;
     readonly maximumAttempts: 1 | 2;
+    /** The caller's first-request deadline remains separate from the whole stage. */
+    readonly initialAttemptDeadlineAt?: number;
 }
 
 /** Reserve the complete stage once, before requesting any output. No retry renews it. */
 export function createOutputRecoveryStage(input: {
     timeoutSeconds: number; recoveryAllowed: boolean; targetDeadlineAt?: number;
-    sharedDeadlineAt?: number; now?: number;
+    sharedDeadlineAt?: number; initialAttemptDeadlineAt?: number; now?: number;
 }): OutputRecoveryStage {
     const now = input.now ?? Date.now();
     const maximumAttempts = input.recoveryAllowed ? 2 : 1;
@@ -18,15 +20,23 @@ export function createOutputRecoveryStage(input: {
     if (input.sharedDeadlineAt !== undefined && !Number.isFinite(input.sharedDeadlineAt)) {
         throw new TypeError('Shared output stage deadline must be finite');
     }
+    if (input.initialAttemptDeadlineAt !== undefined && !Number.isFinite(input.initialAttemptDeadlineAt)) {
+        throw new TypeError('Initial output attempt deadline must be finite');
+    }
+    const deadlineAt = Math.min(reserved, input.sharedDeadlineAt ?? Infinity);
     return Object.freeze({ version: 'output-recovery-timing-v1', timeoutSeconds: input.timeoutSeconds,
-        maximumAttempts, deadlineAt: Math.min(reserved, input.sharedDeadlineAt ?? Infinity) });
+        maximumAttempts, deadlineAt,
+        ...(input.initialAttemptDeadlineAt === undefined ? {} : {
+            initialAttemptDeadlineAt: Math.min(input.initialAttemptDeadlineAt, deadlineAt)
+        }) });
 }
 
 export function outputRecoveryAttemptDeadline(stage: OutputRecoveryStage, attempt: number, now = Date.now()): number {
     if (!Number.isSafeInteger(attempt) || attempt < 0 || attempt >= stage.maximumAttempts) {
         throw new RangeError('Output recovery attempt is outside its reserved stage');
     }
-    return boundedRoleAttemptDeadline(stage.deadlineAt, stage.timeoutSeconds, now);
+    const deadlineAt = boundedRoleAttemptDeadline(stage.deadlineAt, stage.timeoutSeconds, now);
+    return attempt === 0 ? Math.min(deadlineAt, stage.initialAttemptDeadlineAt ?? Infinity) : deadlineAt;
 }
 
 export interface OutputRecoveryDecision {

@@ -4,6 +4,18 @@
 
 ## 2026-10-15
 
+### 角色期限與完整 Writer 預算修復、車輛整批實測
+
+- 後續發現：初版恢復層把 Analyst 的首問60秒期限當成整個 shared stage，未使用已保留的120秒規劃階段；首問耗時後，缺少生成統計便必然不足完整60秒重送。現在明傳 `initialAttemptDeadlineAt` 與原 `stageDeadlineAt`，首問期限不變，最多一次同提示 length 重送使用原階段餘額；target／family／資格探針及計數不續期，舊呼叫端的 shared hard cap 不放寬，也不捏造 token 速度。
+- 固定回覆回歸補入首問耗10／45秒且缺統計的恢復、再次length停止、原stage／target／family剩餘不足及取消傳播；截斷前綴不保存，Writer仍用獨立額度，恢復完成後仍須實跑與同版審查才突變。這是流程驗證，不是70B實測。
+- 完整Node首輪發現兩個既有fixture還一次生成2／8個測試，與單案種子契約不相容；改為精確觀測的單案種子及真正新增／修訂，保留Reviewer阻擋、同雜湊批准、完整突變及三輪品質改善斷言。續跑邊界案例確證另一個程式缺口：宣告給Writer生成器的可用額度漏算seed system與案例事實（實際7,433 > 7,036），因此被最後安全閘正確阻擋。現按完整seed／addition system、phase／baseline、facts、資源、觀測、換行及已學習輸出floor預留，不截斷必要來源或放寬安全閘，逐案補測仍不帶回全域觀測。
+- 使用真 `qwen2.5-coder:3b-instruct`、Tier2、五輪及指定Mutatest，在隔離副本完整處理車輛八檔212個目標：1完整通過、21保留可執行基線、19零候選、171失敗。正式三檔80個目標無完整通過；通過的測試版本 `update_vehicle_loading` 為目標行6/6、真Mutatest 5/6，同測試／執行／Reviewer／突變雜湊一致。整批完成不表示整個專案品質通過。
+- 本批使用期限分離修補前的固定來源；與新修補驗證分列，不借整批宣稱新Analyst恢復或13B／70B已驗收。來源8檔、503項應用來源、499項編譯產物及host／probe未變；finally設定寫入與SecretStorage呼叫皆0，worker租約目錄清空。未讀原DB位元組，不宣稱完成原DB雜湊比對。
+- 全批耗時5小時40分42.578秒；212份final report與211份非通過failure report皆完整存在。沒有環境預檢受阻；209個目標進Writer，41個有真實可執行基線、同版Reviewer批准並進Mutatest，19次有正候選完整量測、19次零候選、3次部分量測。41份保留測試與批准身分相符，38份保存的突變量測與來源／測試批准相符。模型容量由8,192有界增至20,480，可信上限32,768，沒有改寫偏好。
+- 全批Analyst209次正式請求皆completed，無length恢復；Writer與修訂共44次length及27次有界增額，17個終態model-format目標各在增額後再次length。主要拒絕事件為結構325、名稱未定義103、執行失敗134、重複候選132及Fixer class-wrapper48；這些是事件次數，不是互斥目標數。現有Mock消費形狀／來源呼叫契約並非不存在，候選仍有DB參數、cursor／row形狀及UI物件使用錯誤，不以AST推測當斷言答案。
+- 下一階段先修Trace全域`parameter:null`診斷與TypeScript契約衝突（三個版本的`vehicle_card`皆出現），保留typed失敗而不轉legacy載入錯誤；其次核對Writer實際收到的DB／UI setup與修訂契約，再處理輸出範圍、重複方法與Fixer既有／新增import計數。另有20秒突變stage在末案分配小於成功baseline的證據，應於新執行提高時間並保留partial／timeout，不借此調整killed或分母。這些仍是改進目標，本次期限修補未宣稱已完成。
+- 最終普通Windows驗證：完整Node 1,311／1,311通過（約32分52秒，0 skipped），完整Python 707項無失敗（3 skipped），TypeScript、lint、生產建置、Webview語法、追蹤檔／可達歷史密鑰掃描與差異檢查通過。Writer直接相關四組24／24、Reviewer及角色整合單檔也先獨立通過，再以最終同一份production與fixture重跑全套Node；原八個WIP位元組保留且不納入提交。Python程式未變，707項結果不借用為真模型品質；遠端CI與實驗室70B未執行。
+
 ### Analyst 輸出上限恢復與容量診斷
 
 - 檢查使用者回報的預設1,024-token中止：現行程式初始 Analyst 明確設定 `num_predict=1024`，原長度恢復只有Writer；自動 `num_ctx=0` 與此输出限制為不同設定。未取得該次70B角色事件，不能把已找到的預算缺口說成該次實驗的確定根因。

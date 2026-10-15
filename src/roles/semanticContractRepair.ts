@@ -45,7 +45,9 @@ interface SemanticContractOptions {
      * and target deadlines. Omitted for legacy callers with one shared deadline. */
     attemptTimeoutSeconds?: number;
     targetParameters?: readonly string[];
-    request(prompt: string, deadlineAt: number, reservedInputTokens: number): Promise<string>;
+    /** Supply both deadlines: length recovery may use the original stage, but
+     * the first transport must still honor this logical request's deadline. */
+    request(prompt: string, initialAttemptDeadlineAt: number, reservedInputTokens: number, stageDeadlineAt: number): Promise<string>;
     checkCurrent(): void;
     event(status: 'parsed' | 'invalid-response' | 'repair-requested', detail: unknown): void;
     now?: () => number;
@@ -78,7 +80,8 @@ export async function semanticWithContractRepair(options: SemanticContractOption
             : boundedRoleAttemptDeadline(deadlineAt, options.attemptTimeoutSeconds, requestStartedAt);
         const attemptAllowanceMs = Math.max(0, requestDeadlineAt - requestStartedAt);
         // Transport, cancellation and prompt-budget errors propagate; no repair request follows them.
-        const raw = await options.request(prompt, requestDeadlineAt, attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0);
+        const raw = await options.request(prompt, requestDeadlineAt,
+            attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0, deadlineAt);
         check();
         const { analysis: normalized, diagnostic } = parseSemanticAnalysisDetailed(raw);
         const scoped = normalized && restrictSemanticInputHintsToTargetParameters(normalized, options.targetParameters);

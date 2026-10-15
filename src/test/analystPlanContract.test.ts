@@ -13,6 +13,39 @@ const shortPlan = JSON.stringify({ test_strategy: {
     input_hints: [], assertion_style: 'assertEqual', mock_needed: false, key_rules: []
 } });
 
+test('semantic callbacks carry their original attempt and stage deadlines independently through format correction', async () => {
+    let clock = 0;
+    const deadlines: Array<{ initial: number; stage: number }> = [];
+    const result = await semanticWithContractRepair({ prompt: 'Complete unchanged evidence', deadlineAt: 120000,
+        attemptTimeoutSeconds: 60, now: () => clock, checkCurrent: () => {}, event: () => {},
+        request: async (_prompt, initial, _reserve, stage) => {
+            deadlines.push({ initial, stage });
+            clock += deadlines.length === 1 ? 45000 : 1000;
+            return deadlines.length === 1 ? '{}' : shortPlan;
+        } });
+    assert.ok(result);
+    assert.deepEqual(deadlines, [{ initial: 60000, stage: 120000 }, { initial: 105000, stage: 120000 }]);
+});
+
+test('semantic dual deadlines preserve a tighter original target and propagate cancellation unchanged', async () => {
+    let clock = 0;
+    const budget = new TargetBudget({ now: () => clock, timeoutMs: 90000 });
+    const cancellation = new Error('owned-cancellation');
+    let requests = 0;
+    await assert.rejects(runWithTargetBudget(budget, () => semanticWithContractRepair({
+        prompt: 'Complete unchanged evidence', deadlineAt: 120000, attemptTimeoutSeconds: 60,
+        now: () => clock, checkCurrent: () => {}, event: () => assert.fail('cancelled transport must not request format correction'),
+        request: async (_prompt, initial, _reserve, stage) => {
+            requests++;
+            assert.equal(initial, 60000);
+            assert.equal(stage, 90000);
+            clock += 10000;
+            throw cancellation;
+        } })), error => error === cancellation);
+    assert.equal(requests, 1);
+    assert.equal(budget.deadlineAt, 90000);
+});
+
 test('Writer Python compatibility never turns Analyst structured output into general text', () => {
     for (const testGenerationReady of [undefined, false, true]) {
         for (const testGenerationMode of [undefined, 'python', 'plain-python', '純 Python unittest', '結構化 JSON unittest']) {

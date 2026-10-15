@@ -96,3 +96,59 @@ test('provider residual processing time is retained when calculating a retry cap
     assert.ok(cap > 1536 && cap < 2335, 'the BMI observation fits a bounded increase, not the full 2560 growth');
     assert.equal(planOutputRecoveryRetry(stage, cap, timing, 47000).allowed, true);
 });
+
+test('separate initial and stage deadlines allow missing-statistics recovery after ten or forty-five seconds', () => {
+    for (const elapsedMs of [10000, 45000]) {
+        const stage = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true,
+            sharedDeadlineAt: 120000, initialAttemptDeadlineAt: 60000, now: 0 });
+        assert.equal(outputRecoveryAttemptDeadline(stage, 0, 0), 60000);
+        const decision = planOutputRecoveryRetry(stage, 2048, undefined, elapsedMs);
+        assert.equal(decision.allowed, true);
+        assert.equal(decision.estimatedRetryMs, null, 'missing statistics never invent generation speed');
+        assert.equal(decision.reasonCode, 'unmeasured-full-allowance');
+        assert.equal(outputRecoveryAttemptDeadline(stage, 1, elapsedMs), elapsedMs + 60000);
+        assert.equal(stage.deadlineAt, 120000);
+        assert.throws(() => outputRecoveryAttemptDeadline(stage, 2, elapsedMs), RangeError);
+    }
+});
+
+test('prompt assembly and qualification cannot extend the original first-attempt deadline', () => {
+    const stage = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true,
+        sharedDeadlineAt: 120000, initialAttemptDeadlineAt: 60000, now: 5000 });
+    assert.equal(stage.deadlineAt, 120000);
+    assert.equal(outputRecoveryAttemptDeadline(stage, 0, 20000), 60000);
+    assert.equal(outputRecoveryAttemptDeadline(stage, 1, 115000), 120000);
+    assert.equal(planOutputRecoveryRetry(stage, 2048, undefined, 70000).allowed, false);
+});
+
+test('stage, target and family limits still stop an unmeasured retry without a full sixty seconds', () => {
+    for (const input of [
+        { sharedDeadlineAt: 60000 },
+        { sharedDeadlineAt: 120000, targetDeadlineAt: 90000 },
+        { sharedDeadlineAt: 90000, targetDeadlineAt: 120000 }
+    ]) {
+        const stage = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true,
+            initialAttemptDeadlineAt: 60000, now: 0, ...input });
+        const decision = planOutputRecoveryRetry(stage, 2048, undefined, 45000);
+        assert.equal(decision.allowed, false);
+        assert.equal(decision.reasonCode, 'insufficient-output-retry-time');
+        assert.equal(decision.estimatedRetryMs, null);
+        assert.ok(outputRecoveryAttemptDeadline(stage, 1, 45000) <= stage.deadlineAt);
+    }
+    const legacy = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true,
+        sharedDeadlineAt: 60000, now: 0 });
+    assert.equal(legacy.initialAttemptDeadlineAt, undefined);
+    assert.equal(planOutputRecoveryRetry(legacy, 2048, undefined, 10000).allowed, false,
+        'callers without two deadlines retain their existing shared hard cap');
+});
+
+test('invalid initial attempt deadlines fail before transport and cannot override a tighter stage', () => {
+    for (const initialAttemptDeadlineAt of [NaN, Infinity, -Infinity]) {
+        assert.throws(() => createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true,
+            sharedDeadlineAt: 120000, initialAttemptDeadlineAt, now: 0 }), TypeError);
+    }
+    const stage = createOutputRecoveryStage({ timeoutSeconds: 60, recoveryAllowed: true,
+        sharedDeadlineAt: 120000, targetDeadlineAt: 55000, initialAttemptDeadlineAt: 60000, now: 0 });
+    assert.equal(stage.initialAttemptDeadlineAt, 55000);
+    assert.equal(outputRecoveryAttemptDeadline(stage, 0, 0), 55000);
+});
