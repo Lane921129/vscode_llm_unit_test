@@ -16,6 +16,16 @@ const numeric = (value: unknown): value is number => typeof value === 'number' &
 const duration = (value: unknown): string => numeric(value) ? `${value.toFixed(1)} ms` : localize('未知');
 const count = (value: unknown): string => numeric(value) && Number.isSafeInteger(value) ? String(value) : localize('未知');
 
+/** A shared role/target deadline can expire before the configured per-request
+ * limit. Describe the allowance this transport actually received, not a new
+ * deadline or an inference about server processing. */
+export function formatModelRequestTimeout(configuredSeconds: unknown, effectiveAllowanceMs: unknown): string {
+    const configured = numeric(configuredSeconds) && configuredSeconds > 0 ? String(configuredSeconds) : localize('未知');
+    const effective = numeric(effectiveAllowanceMs) ? (effectiveAllowanceMs / 1000).toFixed(3) : localize('未知');
+    return localize('API 請求已達有效期限：本次傳輸可用 {0} 秒；設定的單次上限 {1} 秒，仍受原角色／目標期限限制。',
+        effective, configured);
+}
+
 /** Only the timing protocol's fixed labels and safe numbers enter UI/reports.
  * Client HTTP wait can include server inference; it is not network latency. */
 export function formatModelRequestTiming(detail: unknown): string | undefined {

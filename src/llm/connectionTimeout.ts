@@ -13,6 +13,85 @@ export type FetchLike<TResponse> = (
 
 export interface StatusResponse {
     status: number;
+    /** A discarded retry must release its connection without awaiting cleanup. */
+    body?: { cancel(): Promise<unknown> } | null;
+}
+
+export interface JsonResponse extends StatusResponse {
+    ok: boolean;
+    json(): Promise<unknown>;
+}
+
+/** Never let a broken or locked response body extend the caller's deadline. */
+export function discardProviderResponse(response: StatusResponse): void {
+    try { void response.body?.cancel().catch(() => undefined); } catch { /* Preserve the original result. */ }
+}
+
+/** One allowance covers dispatch, any retries/fallbacks, and the complete JSON
+ * body. The race also bounds transports which ignore AbortSignal. Only successful
+ * responses are decoded; rejected provider bodies never become diagnostics. */
+export async function requestJsonWithTimeout<TResponse extends JsonResponse>(
+    request: (signal: AbortSignal) => Promise<TResponse>, timeoutMs: number,
+    signal?: AbortSignal | null
+): Promise<{ response: TResponse; payload?: unknown }> {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+        throw new TypeError('Provider response timeout must be a bounded positive integer.');
+    }
+    const controller = new AbortController();
+    const deadlineAt = Date.now() + timeoutMs;
+    let response: TResponse | undefined;
+    let discarded: TResponse | undefined;
+    const discard = () => {
+        if (response && discarded !== response) { discarded = response; discardProviderResponse(response); }
+    };
+    let rejectAbort!: (error: Error) => void;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const cancel = () => {
+        if (controller.signal.aborted) { return; }
+        controller.abort();
+        discard();
+        rejectAbort(new DOMException('Provider response was cancelled or exceeded its deadline.', 'AbortError'));
+    };
+    const timer = setTimeout(cancel, timeoutMs);
+    signal?.addEventListener('abort', cancel, { once: true });
+    const operation = async () => {
+        if (controller.signal.aborted) { return aborted; }
+        response = await request(controller.signal);
+        if (Date.now() >= deadlineAt) { cancel(); }
+        if (controller.signal.aborted) { discard(); return aborted; }
+        if (!response.ok) { discard(); return { response }; }
+        let payload: unknown;
+        try { payload = await response.json(); }
+        catch {
+            if (Date.now() >= deadlineAt) { cancel(); }
+            if (controller.signal.aborted) { return aborted; }
+            // Native JSON parser errors may contain the provider's private text.
+            throw new Error('Provider returned an invalid JSON response.');
+        }
+        if (Date.now() >= deadlineAt) { cancel(); }
+        if (controller.signal.aborted) { return aborted; }
+        return { response, payload };
+    };
+    try {
+        if (signal?.aborted) { cancel(); }
+        return await Promise.race([operation(), aborted]);
+    } catch (error) {
+        if (!controller.signal.aborted) {
+            controller.abort();
+            discard();
+        }
+        throw error;
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
+    }
+}
+
+/** JSON counterpart of fetchWithTimeout: the timer outlives HTTP headers. */
+export function fetchJsonWithTimeout<TResponse extends JsonResponse>(
+    fetcher: FetchLike<TResponse>, input: string, init: RequestInit, timeoutMs: number
+): Promise<{ response: TResponse; payload?: unknown }> {
+    return requestJsonWithTimeout(signal => fetcher(input, { ...init, signal }), timeoutMs, init.signal);
 }
 
 export const RETRYABLE_PROVIDER_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -118,6 +197,7 @@ export async function retryTransientProviderRequest<TResponse extends StatusResp
             if (!RETRYABLE_PROVIDER_STATUS_CODES.has(response.status) || attempt >= maxAttempts) {
                 return response;
             }
+            discardProviderResponse(response);
             const delayMs = retryDelay(attempt, random);
             options.onRetry?.({
                 retryAttempt: attempt + 1,

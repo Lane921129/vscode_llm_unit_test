@@ -6,9 +6,15 @@ export const ROLE_CONTRACT_VERSIONS = {
     semanticPlan: 'semantic-plan-v3',
     reviewer: 'review-v7',
     qualityAnalyst: 'quality-task-v3',
+    qualityAnalystGrounded: 'quality-task-v4',
     writerRevision: 'writer-revision-v2',
     bugFix: 'bug-fix-v5'
 } as const;
+
+/** The ungrounded and executed-focus paths share a shape, not a scenario contract. */
+export function qualityAnalystContractVersion(grounded: boolean): 'quality-task-v3' | 'quality-task-v4' {
+    return grounded ? ROLE_CONTRACT_VERSIONS.qualityAnalystGrounded : ROLE_CONTRACT_VERSIONS.qualityAnalyst;
+}
 
 /** Replace only a complete, byte-identical fenced file; never trim or slice Python. */
 export function referenceRepeatedTestFile(evidence: string, code: string): string {

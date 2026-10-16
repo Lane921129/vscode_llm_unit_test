@@ -20,7 +20,7 @@ import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualifi
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText, responseSchemaForOutputFormat } from '../llm/customApi';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchWithServerRetry, fetchWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, retryTransientProviderRequest } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchJsonWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, requestJsonWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
 import { configuredPythonForResource } from '../environment/pythonEnvironmentController';
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
 
@@ -609,13 +609,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         cancellable: false
                     }, async () => {
                         try {
-                            const timedFetch = (url: string, init: RequestInit, timeoutMs: number) =>
-                                fetchWithTimeout<Response>(
-                                    (input, options) => fetch(input, options),
-                                    url,
-                                    init,
-                                    timeoutMs
-                                );
+                            const timedJson = (url: string, init: RequestInit, timeoutMs: number) =>
+                                fetchJsonWithTimeout<Response>((input, options) => fetch(input, options), url, init, timeoutMs);
                             const projectRoot = message.projectRoot || this.lastFolder('project');
                             const pythonExecutable = configuredPythonForResource(message.filePath || projectRoot, projectRoot);
                             const isolatedProbeExecutor = (code: string) => runIsolatedProbe(
@@ -625,7 +620,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             if (message.envType === 'local') {
                                 const config = vscode.workspace.getConfiguration('llmUnitTest');
                                 const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-                                const response = await timedFetch(
+                                const { response } = await timedJson(
                                     `${baseUrl}/api/tags`,
                                     {},
                                     CONNECTION_DISCOVERY_TIMEOUT_MS
@@ -726,13 +721,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 let nextPageToken: string | undefined;
                                 for (let page = 0; page < 10; page++) {
                                     const listRequest = buildGoogleListModelsRequest(credential.key, nextPageToken);
-                                    const listResponse = await timedFetch(listRequest.url, {
+                                    const { response: listResponse, payload } = await timedJson(listRequest.url, {
                                         headers: listRequest.headers
                                     }, CONNECTION_DISCOVERY_TIMEOUT_MS);
                                     if (!listResponse.ok) {
                                         throw new Error(localize("無法讀取 Google 可用模型清單（HTTP {0}）", listResponse.status));
                                     }
-                                    const modelList = await listResponse.json() as { models?: unknown[]; nextPageToken?: string };
+                                    const modelList = payload as { models?: unknown[]; nextPageToken?: string };
                                     listedModels.push(...(modelList.models || []));
                                     nextPageToken = modelList.nextPageToken;
                                     if (!nextPageToken) { break; }
@@ -746,24 +741,23 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const connectionMetadata = getGoogleModelConnectionMetadata(listedModels as any[], credential.model);
                                 
                                 const cloudProbe = async (prompt: string, format: 'text' | 'review-json' = 'text') => {
-                                    const controller = new AbortController();
-                                    const timer = setTimeout(() => controller.abort(), MODEL_QUALIFICATION_TIMEOUT_MS);
-                                    try {
-                                        const request = buildGoogleGenerateContentRequest(credential.model, credential.key, prompt, {
-                                            temperature: 0,
-                                            thinkingMode: vscode.workspace.getConfiguration('llmUnitTest').get('cloudThinkingMode', 'minimal') === 'minimal'
-                                                ? 'minimal' : 'provider-default',
-                                            ...(format === 'review-json' ? { responseMimeType: 'application/json' as const,
-                                                responseSchema: responseSchemaForOutputFormat(format) } : {})
-                                        });
-                                        const response = await googleThinkingSession.send(request, next => retryTransientProviderRequest(
-                                            () => fetch(next.url, { method: 'POST', headers: next.headers,
-                                                body: JSON.stringify(next.body), signal: controller.signal }),
-                                            { maxAttempts: 2, isCancelled: () => controller.signal.aborted }
-                                        ));
-                                        if (!response.ok) { await response.body?.cancel(); return undefined; }
-                                        return getGoogleGeneratedText(await response.json());
-                                    } finally { clearTimeout(timer); }
+                                    const request = buildGoogleGenerateContentRequest(credential.model, credential.key, prompt, {
+                                        temperature: 0,
+                                        thinkingMode: vscode.workspace.getConfiguration('llmUnitTest').get('cloudThinkingMode', 'minimal') === 'minimal'
+                                            ? 'minimal' : 'provider-default',
+                                        ...(format === 'review-json' ? { responseMimeType: 'application/json' as const,
+                                            responseSchema: responseSchemaForOutputFormat(format) } : {})
+                                    });
+                                    const { response, payload } = await requestJsonWithTimeout(signal =>
+                                        googleThinkingSession.send(request, next => retryTransientProviderRequest(
+                                            () => {
+                                                if (signal.aborted) { throw new DOMException('Provider response deadline expired.', 'AbortError'); }
+                                                return fetch(next.url, { method: 'POST', headers: next.headers,
+                                                    body: JSON.stringify(next.body), signal });
+                                            },
+                                            { maxAttempts: 2, isCancelled: () => signal.aborted }
+                                        )), MODEL_QUALIFICATION_TIMEOUT_MS);
+                                    return response.ok ? getGoogleGeneratedText(payload) : undefined;
                                 };
                                 const capability = await verifyRunnableTestGenerationProbe(
                                     { response: await cloudProbe(PLAIN_TEST_GENERATION_PROBE_PROMPT) },
@@ -805,7 +799,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
                                 if (message.customKey) {headers['Authorization'] = `Bearer ${message.customKey}`;}
                                 
-                                const response = await timedFetch(message.customUrl, {
+                                const { response, payload } = await timedJson(message.customUrl, {
                                     method: 'POST',
                                     headers: headers,
                                     body: JSON.stringify(buildCustomChatCompletionBody(
@@ -816,19 +810,19 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     ))
                                 }, MODEL_QUALIFICATION_TIMEOUT_MS);
                                 const capability = await verifyRunnableTestGenerationProbe(
-                                    response.ok ? { response: getCustomChatCompletionText(await response.json()) } : undefined,
+                                    response.ok ? { response: getCustomChatCompletionText(payload) } : undefined,
                                     isolatedProbeExecutor
                                 );
                                 const roleQualification = await runRoleQualificationProbes(
                                     { state: capability.capability, reason: capability.reason },
                                     async (prompt, format) => {
-                                        const roleResponse = await timedFetch(message.customUrl, {
+                                        const { response: roleResponse, payload: rolePayload } = await timedJson(message.customUrl, {
                                             method: 'POST', headers,
                                             body: JSON.stringify(buildCustomChatCompletionBody(
                                                 message.modelName, 'Return only the requested role artifact.', prompt, format
                                             ))
                                         }, MODEL_QUALIFICATION_TIMEOUT_MS);
-                                        return roleResponse.ok ? getCustomChatCompletionText(await roleResponse.json()) : undefined;
+                                        return roleResponse.ok ? getCustomChatCompletionText(rolePayload) : undefined;
                                     }, isolatedProbeExecutor
                                 );
                                 const profile = {
@@ -946,14 +940,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         try {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
             const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
-            const response = await fetchWithTimeout<Response>(
+            const { response, payload } = await fetchJsonWithTimeout<Response>(
                 (input, options) => fetch(input, options),
                 `${baseUrl}/api/tags`,
                 {},
                 CONNECTION_DISCOVERY_TIMEOUT_MS
             );
             if (response.ok) {
-                const data = await response.json() as any;
+                const data = payload as any;
                 if (data && data.models) {
                     return data.models.map((m: any) => m.name);
                 }

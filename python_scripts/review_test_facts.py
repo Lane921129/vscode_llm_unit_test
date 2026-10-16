@@ -338,6 +338,10 @@ def build_review_facts(payload):
         for node in cls.body:
             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 overrides.update(item.id for item in ast.walk(node) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store))
+        # Exact source/input observations cannot establish what an unknown
+        # fixture or dispatch override changed before this test's target call.
+        # Calls and their assertions must share the same existing setup gate.
+        observation_setup_known = not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'})
         for method in cls.body:
             if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) or not method.name.startswith('test_'):
                 continue
@@ -353,7 +357,7 @@ def build_review_facts(payload):
                 assertion_syntax, patch_syntax = review_syntax_details(code, method, aliases, facts['standardAssertions'])
                 facts['standardAssertionCalls'] = assertion_syntax
                 facts['dependencyPatchSyntax'] = patch_syntax
-            if not custom_loader and not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'}):
+            if not custom_loader and observation_setup_known:
                 facts['mockAssertions'] = mock_call_assertions(method, aliases, target)
             # All assigned local names shadow module aliases, including assignments later in the method.
             local = {node.id: None for node in ast.walk(method) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
@@ -404,7 +408,7 @@ def build_review_facts(payload):
                     # This is a source-bound exact-input return observation, not proof
                     # that a fixture/unknown setup produces the same behavior.
                     if matches and all(item['result_snapshot'] == matches[0]['result_snapshot'] for item in matches) \
-                            and not overrides.intersection({'setUp', 'setUpClass', 'run', '__getattribute__', '__getattr__'}):
+                            and observation_setup_known:
                         fact['observationReturned'] = True
                     facts['calls'].append(fact)
                     return ('result', call, [], node.lineno)
@@ -457,7 +461,7 @@ def build_review_facts(payload):
                         equal = abs(value - expected[1]) <= keywords['delta'] if 'delta' in keywords else round(abs(value - expected[1]), places) == 0
                     else:
                         equal = value == expected[1]
-                    if equal:
+                    if equal and observation_setup_known:
                         fact['observationVerified'] = True
                 except (Unknown, ValueError, TypeError, IndexError, OverflowError):
                     return

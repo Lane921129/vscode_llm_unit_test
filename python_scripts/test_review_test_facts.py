@@ -49,6 +49,44 @@ class ReviewFactsTests(unittest.TestCase):
         result = self.facts('', [self.observed([1], 2)], code)['methods'][0]
         self.assertNotIn('observationReturned', result['calls'][0])
 
+    def test_default_setup_protects_both_the_exact_call_and_matching_tuple_assertion(self):
+        method = self.facts('self.assertEqual(score(1), (2, "same"))',
+                            [self.observed([1], (2, 'same'))])['methods'][0]
+        self.assertTrue(method['calls'][0]['observationReturned'])
+        self.assertTrue(method['assertions'][0]['observationVerified'])
+        self.assertEqual(method['assertions'][0]['targetCallLine'], method['calls'][0]['line'])
+
+    def test_set_up_override_preserves_syntax_but_never_certifies_an_observed_assertion(self):
+        code = suite('self.assertEqual(score(1), 2)').replace(
+            '    def test_value', '    def setUp(self):\n        self.resource = object()\n    def test_value')
+        method = self.facts('', [self.observed([1], 2)], code)['methods'][0]
+        self.assertTrue(method['assertions'][0]['targetResult'])
+        self.assertNotIn('observationReturned', method['calls'][0])
+        self.assertNotIn('observationVerified', method['assertions'][0])
+
+    def test_set_up_class_override_does_not_inherit_a_default_setup_observation(self):
+        code = suite('self.assertEqual(score(1), 2)').replace(
+            '    def test_value', '    @classmethod\n    def setUpClass(cls):\n        cls.resource = object()\n    def test_value')
+        method = self.facts('', [self.observed([1], 2)], code)['methods'][0]
+        self.assertTrue(method['assertions'][0]['targetResult'])
+        self.assertNotIn('observationReturned', method['calls'][0])
+        self.assertNotIn('observationVerified', method['assertions'][0])
+
+    def test_custom_run_or_dispatch_override_cannot_certify_matching_literal_assertions(self):
+        overrides = [
+            '    def run(self, result=None):\n        return super().run(result)\n',
+            '    def __getattribute__(self, name):\n        return super().__getattribute__(name)\n',
+            '    def __getattr__(self, name):\n        return None\n',
+            '    setUp = prepare_fixture\n',
+        ]
+        for override in overrides:
+            with self.subTest(override=override):
+                code = suite('self.assertEqual(score(1), 2)').replace('    def test_value', override + '    def test_value')
+                method = self.facts('', [self.observed([1], 2)], code)['methods'][0]
+                self.assertTrue(method['assertions'][0]['targetResult'])
+                self.assertNotIn('observationReturned', method['calls'][0])
+                self.assertNotIn('observationVerified', method['assertions'][0])
+
     def test_conditional_and_rebound_imports_stay_unknown(self):
         for body in ('if True:\n    self.assertEqual(score(1), 2)', 'score = lambda value: 2\nself.assertEqual(score(1), 2)'):
             result = self.facts(body, [self.observed([1], 2)])

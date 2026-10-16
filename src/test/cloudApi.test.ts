@@ -240,3 +240,56 @@ test('minimal thinking uses a capability response, shares cancellation and remem
         return new Response(JSON.stringify({ error: { message: 'unknown field thinkingConfig' } }), { status: 400 });
     }), /abort/i);
 });
+
+test('explicit unsupported thinking falls back even when response cancellation never settles', async () => {
+    const request = buildGoogleGenerateContentRequest('neutral-model', 'fixture-only-key', 'public fixture', {
+        thinkingMode: 'minimal', responseMimeType: 'application/json', responseSchema: { type: 'object' }
+    });
+    const accepted = Response.json({ accepted: true });
+    let sends = 0, cancellations = 0;
+    const fallbackArguments: unknown[][] = [];
+    const rejected = { status: 400,
+        clone: () => ({ json: async () => ({ error: { message:
+            'thinkingConfig is unsupported. PRIVATE_PROVIDER_DETAIL' } }) }),
+        body: { cancel: () => { cancellations++; return new Promise(() => undefined); } }
+    } as unknown as Response;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const result = await Promise.race([
+            new GoogleThinkingSession().send(request, async next => {
+                sends++;
+                if (sends === 1) { return rejected; }
+                assert.strictEqual(next.headers, request.headers);
+                assert.strictEqual(next.body.contents, request.body.contents);
+                assert.deepStrictEqual(next.body.generationConfig, {
+                    responseMimeType: 'application/json', responseSchema: { type: 'object' }
+                });
+                return accepted;
+            }, (...args: unknown[]) => { fallbackArguments.push(args); }),
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error('Fallback waited for response cleanup.')), 500);
+            })
+        ]);
+        assert.strictEqual(result, accepted);
+        assert.strictEqual(sends, 2);
+        assert.strictEqual(cancellations, 1);
+        assert.deepStrictEqual(fallbackArguments, [[]], 'fallback telemetry cannot carry provider text');
+        assert.ok(request.body.generationConfig?.thinkingConfig, 'the caller request remains unchanged');
+    } finally { if (timer !== undefined) { clearTimeout(timer); } }
+});
+
+test('a server error mentioning unsupported thinking never triggers the capability fallback', async () => {
+    const request = buildGoogleGenerateContentRequest('neutral-model', 'fixture-only-key', 'public fixture', { thinkingMode: 'minimal' });
+    let sends = 0, clones = 0, cancellations = 0, fallbacks = 0;
+    const unavailable = { status: 500,
+        clone: () => { clones++; throw new Error('PRIVATE_PROVIDER_DETAIL'); },
+        body: { cancel: () => { cancellations++; return new Promise(() => undefined); } }
+    } as unknown as Response;
+    const result = await new GoogleThinkingSession().send(request, async () => { sends++; return unavailable; },
+        () => { fallbacks++; });
+    assert.strictEqual(result, unavailable, 'the caller retains the original HTTP failure');
+    assert.strictEqual(sends, 1);
+    assert.strictEqual(clones, 0);
+    assert.strictEqual(cancellations, 0);
+    assert.strictEqual(fallbacks, 0);
+});

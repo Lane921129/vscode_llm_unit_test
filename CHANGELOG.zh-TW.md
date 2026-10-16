@@ -2,6 +2,20 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-16
+
+### BMI 角色溝通、完整回應期限與 Reviewer 證據診斷
+
+- 分析 `bmi_2026_10_16_01_03`：Local／llama3.3:70b、full／Tier2，`num_ctx=65536`，七次完整提示皆可容納；六次收到完整 stop 回覆，最後一次 Reviewer 在讀取 body 時達到原 target 期限。不是所有角色沒送出，也不是2K Context不足。目標總額600秒，最後一次送出時只剩151.986秒；錯誤卻展示設定的6,000秒，現已分列實際傳輸額度與設定上限，不延長原期限。
+- 首次 Reviewer 因引用不相關行而正確拒收；補正提出已觀測結果未重新核算的泛稱。當前 facts builder 重播確認該斷言的 `observationVerified`，但歷史 wire 未保存 facts DTO，不能混稱歷史原文已核對。Reviewer 明示逐行觀測旗標的含義，移除舊的 `quote TEST_FILE` 指令；與同候選實跑／精確觀測明確矛盾的重複核算要求走有限補正，不刪 finding 冒充批准，獨立需求、新輸入與具體改善仍可審查。
+- 完整回歸另捕捉到新增固定說明重複出現、令8K整合案例先增容的問題；已刪除重複說明欄位並僅保留一次精簡指令，該完整 Reviewer 提示5841→5649 tokens、`num_ctx`維持8192。來源、原facts、Trace、schema、品質gate及原測試的容量斷言均未更改；原失敗的stop／length與相關定向回歸74／74通過。
+- 新增安全 `reviewer-evidence/assembled`：只保存版本、source／test hash、計數與有界逐行 assertion 種類及驗證旗標；不含輸入、expected、來源或 provider 原文。事件只證明組裝，不證明伺服器收件、審查批准或業務需求正確。品質角色登錄分開 ungrounded v3 與 grounded v4，維持歷史相容。
+- 獨立重現並修正 AST facts 的 setup 旗標缺口：自訂 `setUp`／`setUpClass`／`run` 或未知 dispatch 時，原本呼叫不授予觀測核實、斷言卻仍可能標真；現在呼叫、斷言及 mock 事實共用既有保守 setup 條件。新增矛盾檢查也要求同方法／同 `targetCallLine` 的 returned-call 核實，不借其他案例或缺失旗標；語法上的 targetResult 不冒充觀測。此缺口不是已證實的原BMI原因。
+- 第一份 Writer 修訂把整 tuple 精確相等改成近似數值與索引斷言，削弱保護；現行 AST 保留工具重播正確拒絕，第二份完整保留原斷言則通過。未修改此 gate。批次保留五個可執行測試、目標行覆蓋80%，Reviewer未完成且突變未量測，不能列品質通過。
+- 修正另外查證的傳輸缺口：Custom 資格與 Cloud 模型探索不能收到 HTTP 標頭就清除期限；Cloud 資格及 Local 模型探索一併使用涵蓋完整 body 的共用 JSON helper。原期限涵蓋重試／回退，忽略 abort 的晚到回應也按期返回；丟棄的 body 非阻塞取消，HTTP錯誤不讀私有內容，JSON解析錯誤不回顯原文。這些側欄缺口不混稱本批 Local 正式流程的根因。
+- Cloud thinking 能力回退另有等待 `body.cancel()` 的同型卡住，已以永不完成清理的中性回覆重現，改成非阻塞清理；回退沿用原 schema、提示及 caller deadline，HTTP500不當作能力不支援。已核對正式程式無其他等待 provider body cancel 完成的路徑。
+- 完整驗證：Node 1,485／1,485通過、0略過；Python共749項，746通過、3項平台／權限條件略過。TypeScript嚴格編譯、全src lint、production package、Webview語法、追蹤檔與Git歷史密鑰掃描及差異格式檢查通過。採原生C槽短暫存區與UTF-8，原子檔案整合在沙箱外驗證；五角色×三種provider的傳輸矩陣59／59通過。固定回覆BMI整合保留8個方法、目標行10／10、真實Mutatest 39／39；這驗證工具閉環，不代表DGX真模型或遠端CI已驗收。原有8個工作區修改完整保留且不納入本次提交。
+
 ## 2026-10-15
 
 ### BMI 送出前容量不足、角色容量診斷與提示精簡

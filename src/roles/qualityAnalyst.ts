@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { coverageGapIds } from '../pipeline/qualityRegression';
 import type { QualityTaskEvidence, QualityTaskIdentity } from '../pipeline/qualityTaskEvidence';
+import { qualityAnalystContractVersion } from './roleContracts';
 
 export interface QualityTask {
     evidence: string;
@@ -88,7 +89,7 @@ export async function requestFocusedQualityTask(input: {
     observations?: QualityTaskEvidence;
     identity?: QualityTaskIdentity;
 }): Promise<QualityTask[] | undefined> {
-    const contractVersion = input.observations ? 'quality-task-v4' : 'quality-task-v3';
+    const contractVersion = qualityAnalystContractVersion(Boolean(input.observations));
     const prompt = `${input.observations ? 'QUALITY_TASK_V4' : 'QUALITY_TASK_V3'}\nFOCUS\n${JSON.stringify(input.focus)}\n${input.context}`
         + (input.observations ? '\nBOUND FOCUS OBSERVATIONS (executed inputs, not model proposals)\n'
             + JSON.stringify({ scenario_id: input.observations.scenarioId, cases: input.observations.cases })

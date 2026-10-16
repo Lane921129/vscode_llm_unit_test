@@ -19,7 +19,8 @@ import { validateSeedThenCandidate } from './pipeline/seedCandidatePipeline';
 import { RejectedCandidateStore, CandidateRejectionGate } from './pipeline/rejectedCandidateStore';
 import { reviewWithContractRepair } from './roles/reviewContractRepair';
 import { semanticWithContractRepair } from './roles/semanticContractRepair';
-import { buildReviewFacts } from './roles/reviewFacts';
+import { buildReviewFacts, buildReviewerEvidenceDiagnostic } from './roles/reviewFacts';
+import { formatModelRequestTimeout } from './pipeline/modelRequestTimingPresentation';
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
 import { passingTestIds } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt, buildWriterAdditionRevisionPrompt,
@@ -998,7 +999,7 @@ async function requestLlmApiUnlocked(
 ): Promise<string> {
     const remainingTimeoutMs = remainingDeadlineMs(deadlineAt);
     if (remainingTimeoutMs <= 0) {
-        throw new AnalysisStageError('timeout', 'model-request', localize("API 請求已超過 {0} 秒總時限。", params.timeoutSeconds),
+        throw new AnalysisStageError('timeout', 'model-request', formatModelRequestTimeout(params.timeoutSeconds, 0),
             { cause: 'deadline', phase: 'queue', queueWaitMs: timingState.queueWaitMs });
     }
     let apiUrl = "";
@@ -1067,7 +1068,7 @@ async function requestLlmApiUnlocked(
     const timeoutId = setTimeout(() => {
         deadlineExpired = true;
         controller.abort();
-        log(localize("[警告] API 請求超時 (超過 {0} 秒)", params.timeoutSeconds));
+        log(formatModelRequestTimeout(params.timeoutSeconds, remainingTimeoutMs));
     }, remainingTimeoutMs);
     try {
         const send = (request?: GoogleGenerateContentRequest) => retryTransientProviderRequest(
@@ -1186,9 +1187,10 @@ async function requestLlmApiUnlocked(
                 : invalidProviderJson || invalidStream ? 'response-error' : 'network-error');
         throwIfExecutionCancelled();
         if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) {
-            throw new AnalysisStageError('timeout', 'model-request', localize("API 請求超時 (超過 {0} 秒總時限)", params.timeoutSeconds),
+            throw new AnalysisStageError('timeout', 'model-request', formatModelRequestTimeout(params.timeoutSeconds, remainingTimeoutMs),
                 { cause: 'deadline', outputFormat, deadlineAt, phase: requestPhase,
-                    requestAllowanceMs: remainingTimeoutMs, queueWaitMs: timingState.queueWaitMs });
+                    requestAllowanceMs: remainingTimeoutMs, configuredRequestAllowanceMs: params.timeoutSeconds * 1000,
+                    queueWaitMs: timingState.queueWaitMs });
         }
         if (error instanceof AnalysisStageError) { throw error; }
         if (invalidProviderJson) {
@@ -3467,6 +3469,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         numericEvidencePrompt: numericEvidencePrompt(), knownSecrets,
                         observations: astContext?.traceResult ? { ...identity, value: astContext.traceResult } : undefined });
                     throwIfExecutionCancelled();
+                    recordRole('reviewer-evidence', 'assembled', buildReviewerEvidenceDiagnostic(facts));
                     const prompt = fitReviewPrompt({ tests: code, evidence: roleEvidence + '\n' + numericEvidencePrompt(), executionVerified: true, facts },
                         Number.MAX_SAFE_INTEGER);
                     // The shared final gate owns growth and includes all resources,

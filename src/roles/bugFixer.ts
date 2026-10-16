@@ -201,7 +201,7 @@ export function getReviewEvidence(
             observations: observationsForPrompt(_astContext?.traceResult)
         })}`,
         references.note(),
-        'Every finding must quote TEST_FILE; these constraints cannot be quoted as evidence.'
+        'Cite a VALID_TEST_LINE_IDS line from TEST_FILE in test_line. Do not cite REVIEW_CONTEXT or add test_excerpt.'
     ].join('\n');
 }
 

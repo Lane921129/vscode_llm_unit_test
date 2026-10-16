@@ -1,4 +1,5 @@
 import { localize } from '../i18n/core';
+import { discardProviderResponse } from './connectionTimeout';
 export interface GoogleGenerateContentRequest {
     url: string;
     headers: Record<string, string>;
@@ -157,7 +158,7 @@ export class GoogleThinkingSession {
             || !/not supported|does not support|unsupported|unknown (?:name|field)|unrecognized|invalid (?:value|enum)|not (?:allowed|available|enabled)/i.test(message)) {
             return response;
         }
-        await response.body?.cancel();
+        discardProviderResponse(response);
         if (this.unsupported.size >= 128) { this.unsupported.delete(this.unsupported.values().next().value!); }
         this.unsupported.add(request.url);
         onFallback?.();

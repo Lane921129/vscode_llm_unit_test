@@ -2,8 +2,24 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { getLanguage, setLanguage } from '../i18n/core';
 import { createRequestQueueTiming, createTransportAttemptTiming } from '../llm/requestTiming';
-import { formatModelRequestTiming } from '../pipeline/modelRequestTimingPresentation';
+import { formatModelRequestTiming, formatModelRequestTimeout } from '../pipeline/modelRequestTimingPresentation';
 import { describeStageEvent } from '../pipeline/resultPresentation';
+
+test('timeout distinguishes the effective transport allowance from the configured request limit', () => {
+    const previous = getLanguage();
+    try {
+        setLanguage('zh-tw');
+        assert.match(formatModelRequestTimeout(6000, 151986), /151\.986 秒.*單次上限 6000 秒.*原角色／目標期限/);
+        setLanguage('en');
+        const text = formatModelRequestTimeout(6000, 151986);
+        assert.match(text, /151\.986 seconds.*per-request limit is 6000 seconds.*original role\/target deadline/);
+        assert.doesNotMatch(text, /\p{Script=Han}/u);
+        assert.match(formatModelRequestTimeout(60, 0), /0\.000 seconds/);
+        const unknown = formatModelRequestTimeout('private-provider-value', Infinity);
+        assert.match(unknown, /unknown/i);
+        assert.doesNotMatch(unknown, /private|Infinity/);
+    } finally { setLanguage(previous); }
+});
 
 test('model timing displays measured phases in both languages without attributing HTTP wait to GPU', () => {
     const previous = getLanguage();

@@ -568,6 +568,7 @@ export const englishMessages: Record<string, string> = {
     "[批次結果] {0}": "[Batch result] {0}",
     "[系統] 批次狀態與環境問題摘要：{0}（執行結束不代表全部通過）": "[System] Batch status and environment summary: {0} (workflow completion does not mean all targets passed)",
     "\n[系統] 已中止本次分析，可重新開始。": "\n[System] Analysis cancelled. You can start again.",
+    "API 請求已達有效期限：本次傳輸可用 {0} 秒；設定的單次上限 {1} 秒，仍受原角色／目標期限限制。": "API request reached its effective deadline: this transport had {0} seconds; the configured per-request limit is {1} seconds, still bounded by the original role/target deadline.",
     "API 請求已超過 {0} 秒總時限。": "API request exceeded the total {0}-second deadline.",
     "找不到 Google AI Studio API Key。請在側邊欄儲存對應模型的 key，或設定 LLM_UNIT_TEST_GOOGLE_API_KEY。": "No Google AI Studio API Key found. Save the model's key in the sidebar or set LLM_UNIT_TEST_GOOGLE_API_KEY.",
     "[警告] API 請求超時 (超過 {0} 秒)": "[Warning] API request timed out (over {0} seconds)",

@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## 角色傳輸與 Reviewer 證據核對（2026-10-16）
+
+五個正式模型角色共用 `requestBudgetedOne → requestLlmApi → SerialRequestQueue → provider adapter`。Analyst 使用 `semantic-json`，Writer 與 Bug Fixer 使用 Python text，Reviewer 使用 `review-json`，QualityAnalyst 使用 `quality-json`；Mocker 是 Python scaffold 工具，沒有另一條 LLM 傳輸。連線資格只核對固定樣本，不能代替正式角色的完整來源、候選與執行證據。
+
+側欄 JSON 探索與 Custom／Cloud 資格使用 `requestJsonWithTimeout`，原絕對期限涵蓋標頭、重試／思考量回退及完整 body。忽略 AbortSignal 的 transport 也不能讓呼叫者無限等待；晚到回應與被重試捨棄的 body 以非阻塞方式釋放，HTTP 錯誤不解析供應商原文。正式請求延續既有 shared／role／target 期限；超時文案分列本次傳輸實際可用額度及設定的單次上限，不把 6,000 秒設定說成當次仍有 6,000 秒。
+
+10/16 01:03 BMI 已有六次完整回覆與一次 Reviewer body 超時，65,536 Context 下完整提示均可容納。第一份審查引用不相關行，補正仍以泛稱要求重新核算已觀測結果；第一份 Writer 修訂又把整個 tuple 精確相等改成近似值與索引斷言，保留 gate 正確拒絕。最後保留五個可執行測試，但未完成同候選審查，突變未量測。歷史資料沒有完整 Reviewer facts DTO，當前來源重建不等於歷史 wire 原文；新安全證據事件用來區分未組裝證據和模型忽略證據，不能當作批准。
+
+`review_test_facts.py` 對 call、assertion 及 mock 證據共用原有 setup 保守條件；自訂 fixture／run／未知 dispatch 不授予精確觀測旗標。Reviewer 的重複核算矛盾檢查另要求同方法、同 `targetCallLine` 的 returned-call 與 assertion 核實及同候選成功執行，缺失保持可審查。具體程式／數值、不同輸入與獨立需求不借泛稱檢查否定，無效 assessment 只能有限補正，不能自動批准。
+
 ## 正式角色容量診斷與延後引擎預檢（2026-10-15）
 
 `requestBudgetedOne` 在組裝完整 phase、來源、必要 setup、觀測、資源與 output contract 後呼叫 `assessPromptCapacity`。`prompt-capacity-v1` 的範圍固定為 `current-role-prompt`，記錄保守輸入估量、同完整請求的實測輸入、補正預留、可用輸入、輸出預留、已核實模型上限及來源。有效輸入採兩種數字的較大值；`minimumContextTokens` 在每個候選容量重新套用既有 `roleRequestBudget`，包含各角色輸出 cap、完整修訂候選大小與本角色 learned floor，不把起始容量較小的輸出預留帶到更大容量。DTO 只含固定標籤、數字與 null，不含程式或 provider 回應。

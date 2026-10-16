@@ -7,6 +7,7 @@ import { pythonToolPath } from '../pipeline/pythonTools';
 import { validTraceValueSnapshot } from '../pipeline/traceValues';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { runSpawn } from '../utils/processRunner';
+import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
 
 export interface ReviewFactIdentity { runId: string; sourceHash: string; target: string }
 export interface ReviewAssertionFact {
@@ -33,6 +34,68 @@ export interface ReviewFacts extends ReviewFactIdentity {
     importStatements?: Array<{ line: number; module: string; wildcard: boolean }>;
     classes: Array<{ line: number; name: string; kind: 'unittest-harness' }>;
     methods: ReviewMethodFacts[]; limitations: string;
+}
+
+const REVIEW_EVIDENCE_ASSERTION_LIMIT = 256;
+const REVIEW_EVIDENCE_ASSERTION_KINDS = new Set([
+    'assertEqual', 'assertNotEqual', 'assertAlmostEqual', 'assertNotAlmostEqual',
+    'assertTrue', 'assertFalse', 'assertIs', 'assertIsNot', 'assertIsNone', 'assertIsNotNone',
+    'assertIn', 'assertNotIn', 'assertGreater', 'assertGreaterEqual', 'assertLess', 'assertLessEqual',
+    'assertIsInstance', 'assertNotIsInstance', 'assertCountEqual', 'assertSequenceEqual',
+    'assertListEqual', 'assertTupleEqual', 'assertDictEqual', 'assertSetEqual', 'assertMultiLineEqual',
+    'assertRaises', 'assertRaisesRegex'
+]);
+
+/** Safe event data only. This describes supplied implementation observations;
+ * it neither approves a review nor proves independent product requirements. */
+export interface ReviewerEvidenceDiagnostic {
+    schemaVersion: 'reviewer-evidence-v1';
+    contractVersion: typeof ROLE_CONTRACT_VERSIONS.reviewer;
+    factsVersion: 'review-test-facts-v1';
+    sourceHash: string;
+    testHash: string;
+    executionVerified: boolean;
+    methodCount: number;
+    assertionCount: number;
+    targetAssertionCount: number;
+    observationVerifiedCount: number;
+    returnedCallCount: number;
+    assertionDetailsComplete: boolean;
+    assertions: Array<{ line: number; kind: string; targetResult: boolean; observationVerified: boolean }>;
+}
+
+/** Do not spread facts here: target names, module paths, call arguments,
+ * expected values, source spellings and provider text are artifact data. */
+export function buildReviewerEvidenceDiagnostic(facts: ReviewFacts): ReviewerEvidenceDiagnostic {
+    const fail = (): never => { throw new TypeError('Invalid reviewer evidence diagnostic input'); };
+    if (facts.schemaVersion !== 'review-test-facts-v1' || typeof facts.sourceHash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(facts.sourceHash) || typeof facts.testHash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(facts.testHash) || !Array.isArray(facts.methods)) { fail(); }
+    let assertionCount = 0;
+    let targetAssertionCount = 0;
+    let observationVerifiedCount = 0;
+    let returnedCallCount = 0;
+    const assertions: ReviewerEvidenceDiagnostic['assertions'] = [];
+    for (const method of facts.methods) {
+        if (!method || !Array.isArray(method.assertions) || !Array.isArray(method.calls)) { fail(); }
+        returnedCallCount += method.calls.filter(call => call?.observationReturned === true).length;
+        for (const assertion of method.assertions) {
+            if (!assertion || !Number.isSafeInteger(assertion.line) || assertion.line < 1) { fail(); }
+            assertionCount++;
+            if (assertion.targetResult === true) { targetAssertionCount++; }
+            if (assertion.observationVerified === true) { observationVerifiedCount++; }
+            if (assertions.length < REVIEW_EVIDENCE_ASSERTION_LIMIT) {
+                assertions.push({ line: assertion.line,
+                    kind: REVIEW_EVIDENCE_ASSERTION_KINDS.has(assertion.kind) ? assertion.kind : 'other',
+                    targetResult: assertion.targetResult === true, observationVerified: assertion.observationVerified === true });
+            }
+        }
+    }
+    return { schemaVersion: 'reviewer-evidence-v1', contractVersion: ROLE_CONTRACT_VERSIONS.reviewer,
+        factsVersion: 'review-test-facts-v1', sourceHash: facts.sourceHash, testHash: facts.testHash,
+        executionVerified: facts.executionVerified === true, methodCount: facts.methods.length,
+        assertionCount, targetAssertionCount, observationVerifiedCount, returnedCallCount,
+        assertionDetailsComplete: assertionCount === assertions.length, assertions };
 }
 interface Observation { call: TraceValueSnapshot; result_snapshot: TraceValueSnapshot }
 export interface BuildReviewFactsOptions extends ReviewFactIdentity {
