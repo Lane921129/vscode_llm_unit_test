@@ -4,6 +4,7 @@
 
 ## 目前驗收優先順序
 
+- Reviewer 斷言觀測使用 verified／contradicted／unknown；只有同型別輸入、完整唯一觀測與保守 setup 下的可支援比較才授予前兩者。未知預期值不是已證明錯誤，解析失敗也不能抹掉獨立可證明的目標結果綁定。直線 literal 容器內局部變數可靜態還原，禁止執行任意表達式；mutation、未知副作用與 fixture 不借用原觀測。對已核實同候選的機械矛盾只能有限重審，不刪 finding 冒充批准。
 - `prompt-capacity-v1` 只診斷 `current-role-prompt` 的完整輸入容量，保守字元估算不是 tokenizer 實測或整個流程可執行保證。相同完整請求已有合法觀測時，以 `max(estimatedInputTokens, observedInputTokens)` 加補正預留；逐容量重算既有 `roleRequestBudget` 的實際輸出政策與本角色 learned floor，才能反算最小容量，不沿用較小舊輸出額度低估需求。只保存固定 enum、數字與 null，不把來源或候選原文放入容量 DTO。
 - 模型上限須來自同端點／模型的已核實 metadata，明示 `ollama-show`／`stored-model-profile`；未知保持 null／`unknown`，不得以 fallback、參數量或模型名稱補造。`num_ctx`、Modelfile 預設與 `/api/ps` 最近分配另列，不等於所有同系列模型的上限。短角色探針通過只認證固定樣本；正式 Analyst、Writer、Reviewer 仍各核完整提示，容量足夠也不代表品質通過。
 - full 非 stub 流程先組好當前角色的完整提示並確認可容納，再對指定突變引擎執行本目標唯一一次預檢；所有增容資格探針與正式角色生成都須在該預檢成功後才能送出。預檢結果與失敗共用同一 Promise，不因換角色、重試或降階重跑；取消、來源版本核對、原單次／階段／target 期限及計數保持有效。即使增至已核實上限仍無法容納時，不得啟動引擎探測、截斷必要證據或放寬 schema。
@@ -114,7 +115,7 @@
 - 本機輸入預算必須使用當次 wire `num_ctx`，不得按 2B／3B／13B 等參數量另設小上限。明確設定及真正手動保存值優先；自動模式在模型上限已核實時選其一半（向下取整且至少 1），不把舊自動捕捉值或舊資格容量當作手動選擇。上限未知時才沿用保存／合格容量、同模型實際分配／Modelfile `num_ctx` 或保守 fallback。自動選擇是請求設定，不冒稱實際 allocation；兩者與模型上限分開顯示。連線探針與生成請求使用同一選擇，容量變更須重驗各角色，批次維持啟動時快照。使用者可手動修改或保存 0 清除；未知上限不能由 fallback 證明手填值可用。
 - 相同請求內可引用完全相同且完整的 source／setup 欄位，引用位置必須唯一；各相依身分、來源雜湊與觀測不得合併。structured small／large Writer 使用相同完整必要證據投影。初次 seed 可選完整、可重播且無同呼叫衝突的一案，原證據產物保留；結構重試與修訂必須恢復全部原觀測及完整候選，超額仍在傳輸前停止。
 - 本機初始 Analyst 短計畫輸出上限為 1,024 tokens，full 初次 Writer 單測試 seed 上限為 1,536 tokens；小容量均不超過原三成預留，輸入上限採同一 `num_ctx` 減輸出預留，wire 同步設定 `num_predict`。不增加使用者容量、不按模型名稱特化；其他角色與擴充保留原政策。輸出因長度中止不可當作完整回覆。相同呼叫站 setup 可群組但保留全部位置；相同完整資源 schema 可引用但每個資源保留自己的來源、種子與狀態，不代表共用資料庫或 assertion oracle。
-- local/full Writer 修訂只有顯式提供當次完整候選時，才以 `max(1536, ceil(候選 token 估量 × 1.25) + 256)` 分配輸出 cap；僅低於原預留量時調整輸入及 wire `num_predict`。大候選、未知候選、execution與遠端維持原政策，不從 prompt 或其他checkpoint猜候選。結構及Trace失敗的修訂須正確標為writer-revision，不重新包成初次seed；分區基線與passing案例保持完整。後續擴充的結構／Trace重試另要求保留完整基線，不能只依無效片段縮限輸出，這兩條重試沿用原預留量。這是有界估量，非完成保證，長度中止及全部驗證gate不放寬。
+- local/full Writer 修訂須顯式提供當次完整候選及宿主結構化工作量。基礎輸出為 `max(1536, ceil(候選 token 估量 × 1.25) + 256)`，小候選再加 `512 × max(findingCount - 1, missingScenarioCount)`，最多原三成預留且不得降低本角色 learned floor。Reviewer 工作量須綁定同候選與同一份有效 findings，使用後消耗；明確單一結構／執行修補採 `{1,0}`。未知／非法工作量、大候選、未知候選、execution及遠端保留原政策，不從 prompt、自然語言或其他 checkpoint 猜測。每個候選容量的輸入、wire `num_predict`、增容與診斷使用相同工作量。finding 數量不是新增測試數量保證；結構／Trace修訂不得重包為seed，分區及passing基線仍完整，擴充重試不能按短片段縮限。這是有界估量，非完成保證，原期限／計數及全部 gate 不放寬。
 - Analyst 的初問與最多一次格式補正預先保留兩個使用者單次 API 額度；每次邏輯請求仍不超過該額度，整個階段受啟動時固定的階段／target deadline 限制。HTTP 重試、格式／思考量回退與排隊不得重新取得額度，傳輸失敗或取消不啟動格式補正。舊直接呼叫未指定單次額度仍共用原 deadline。
 - 耗時紀錄只保存固定欄位與安全數值：排隊、每次 HTTP 等待／讀取／總耗時、狀態，以及 Ollama 回報的 load／prompt_eval／eval／total duration、token 數與完成原因。缺值為 unknown／null，不把客戶端等待推定為網路或 GPU 耗時，不保存 provider 原文、憑證或端點；逐輪與失敗報告呈現同次事件。
 - Writer 的輸出契約必須對所有 provider、模型與 Tier 使用相同的純 Python code fence；包括 Tier 3 Scaffold、Tier 4 與 Self-repair。不得依模型名稱插入或移除 `<thinking>` 等分析標籤，以免分析文字混入可執行測試。

@@ -1,5 +1,5 @@
 import { contextInputBudget } from './promptBudget';
-import { roleRequestBudget, type BudgetedModelRole } from './roleRequestBudget';
+import { roleRequestBudget, type BudgetedModelRole, type WriterRevisionWorkload } from './roleRequestBudget';
 
 export type ModelContextLimitSource = 'ollama-show' | 'stored-model-profile' | 'unknown';
 export interface PromptCapacityInput {
@@ -12,6 +12,7 @@ export interface PromptCapacityInput {
     observedInputTokens?: number;
     reservedInputTokens?: number;
     revisionCurrentCode?: string;
+    revisionWorkload?: WriterRevisionWorkload;
     minimumOutputTokens?: number;
     modelContextLimit?: number;
     modelContextLimitVerified: boolean;
@@ -67,7 +68,7 @@ export function assessPromptCapacity(input: PromptCapacityInput): PromptCapacity
     const budgetAt = (contextWindow: number) => roleRequestBudget({ envType: input.envType, mode: input.mode,
         role: input.role, seedPending: input.seedPending, contextWindow,
         inputBudget: contextInputBudget('', contextWindow), revisionCurrentCode: input.revisionCurrentCode,
-        minimumOutputTokens: input.minimumOutputTokens });
+        revisionWorkload: input.revisionWorkload, minimumOutputTokens: input.minimumOutputTokens });
     const fitsAt = (capacity: number) => {
         const budget = budgetAt(capacity);
         return budget.reservedOutputTokens <= capacity && budget.inputBudget >= requiredInputTokens;

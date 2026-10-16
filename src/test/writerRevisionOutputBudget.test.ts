@@ -8,7 +8,7 @@ import { getCompletedOllamaText } from '../llm/ollamaResponse';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 const revision = { envType: 'local', mode: 'full', role: 'writer-revision', seedPending: true,
-    contextWindow: 8192, inputBudget: 5734 } as const;
+    contextWindow: 8192, inputBudget: 5734, revisionWorkload: { findingCount: 1, missingScenarioCount: 0 } } as const;
 const original = { inputBudget: 5734, reservedOutputTokens: 2458 };
 const code = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
     + '    def test_existing(self):\n        self.assertEqual(increment(1), 2)\n';
@@ -30,6 +30,41 @@ test('larger complete candidates reserve growth instead of using a fixed seed li
     }
     assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: '#'.repeat(1762 * 3.5) }), original,
         'a larger candidate retains the old allowance and has no tighter wire cap');
+});
+
+test('multiple concrete findings reserve their revision work without adding prompt text or changing capacity', () => {
+    const capacity = { contextWindow: 16384, inputBudget: 11468 };
+    const budget = roleRequestBudget({ ...revision, ...capacity, revisionCurrentCode: code,
+        revisionWorkload: { findingCount: 5, missingScenarioCount: 2 } });
+    assert.deepEqual(budget, { inputBudget: 12800, reservedOutputTokens: 3584, requestOutputTokens: 3584 });
+    const missing = roleRequestBudget({ ...revision, ...capacity, revisionCurrentCode: code,
+        revisionWorkload: { findingCount: 3, missingScenarioCount: 3 } });
+    assert.equal(missing.requestOutputTokens, 3072, 'missing-scenario findings need room even if they share one category');
+    const bounded = roleRequestBudget({ ...revision, revisionCurrentCode: code,
+        revisionWorkload: { findingCount: 5, missingScenarioCount: 5 } });
+    assert.deepEqual(bounded, { ...original, requestOutputTokens: original.reservedOutputTokens });
+    for (const value of [budget, missing, bounded]) {
+        assert.equal(value.inputBudget + value.reservedOutputTokens,
+            value === bounded ? revision.contextWindow : capacity.contextWindow);
+        assert.equal(value.reservedOutputTokens, value.requestOutputTokens);
+    }
+});
+
+test('unknown or invalid work retains the original reserve and learned floors never shrink', () => {
+    for (const workload of [undefined, null, {}, { findingCount: 0, missingScenarioCount: 0 },
+        { findingCount: 6, missingScenarioCount: 0 }, { findingCount: 1, missingScenarioCount: 2 },
+        { findingCount: 2, missingScenarioCount: -1 }, { findingCount: 1.5, missingScenarioCount: 0 },
+        { findingCount: 1, missingScenarioCount: NaN }, { findingCount: Infinity, missingScenarioCount: 0 },
+        { findingCount: '5', missingScenarioCount: 0 }]) {
+        assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: code, revisionWorkload: workload as any }), original);
+    }
+    for (const revisionWorkload of [undefined, { findingCount: 1, missingScenarioCount: 0 },
+        { findingCount: 5, missingScenarioCount: 2 }]) {
+        const learned = roleRequestBudget({ ...revision, revisionCurrentCode: code, revisionWorkload, minimumOutputTokens: 4000 });
+        assert.equal(learned.requestOutputTokens, 4000);
+        assert.equal(learned.reservedOutputTokens, 4000);
+        assert.equal(learned.inputBudget, 4192);
+    }
 });
 
 test('remote, execution, other roles, missing and invalid current candidates retain the prior policy', () => {

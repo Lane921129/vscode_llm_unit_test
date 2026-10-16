@@ -75,7 +75,8 @@ test('numeric observations guide a single-input AI seed revision which is review
         else if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviews++;
             assert.match(request.prompt, /HOST_VERIFIED_REVIEW_FACTS_V1/);
-            assert.match(request.prompt, /"observationVerified":true/);
+            assert.match(request.prompt, /"observationStatus":"verified"/);
+            assert.doesNotMatch(request.prompt, /"observationVerified":/);
             // The 2026-10-07 failure: review contradicts an exact numeric result
             // already verified by independent isolated execution.
             const line = corrected.split('\n').findIndex(value => value.includes('self.assertEqual(bmi,')) + 1;

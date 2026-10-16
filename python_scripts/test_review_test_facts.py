@@ -29,6 +29,179 @@ class ReviewFactsTests(unittest.TestCase):
         self.assertEqual([item.get('observationVerified') for item in assertions], [True, True])
         self.assertEqual(facts['classes'][0]['kind'], 'unittest-harness')
 
+    def test_bmi_tuple_of_expected_names_is_verified_without_rewriting_the_test(self):
+        method = self.facts('weight_kg = 1\nheight_cm = 1\nexpected_bmi = 10000.0\nexpected_status = "肥胖"\nresult = score(weight_kg, height_cm)\nself.assertEqual(result, (expected_bmi, expected_status))',
+                            [self.observed([1, 1], (10000.0, '肥胖'))])['methods'][0]
+        fact = method['assertions'][0]
+        self.assertTrue(fact['targetResult'])
+        self.assertTrue(fact['observationVerified'])
+        self.assertEqual(fact['observationStatus'], 'verified')
+        self.assertEqual(fact['targetCallLine'], method['calls'][0]['line'])
+        self.assertEqual(fact['expected'], snapshot_value((10000.0, '肥胖')))
+
+    def test_nested_literal_containers_resolve_local_names_and_preserve_types(self):
+        cases = [
+            ('(number, [label, {key: amount}], {number, amount})', (2, ['same', {'x': 3.0}], {2, 3.0})),
+            ('[number, (label, {key: amount})]', [2, ('same', {'x': 3.0})]),
+            ('{key: [number, amount], label: (number,)}', {'x': [2, 3.0], 'same': (2,)}),
+        ]
+        for expected, observed in cases:
+            with self.subTest(expected=expected):
+                fact = self.facts('number = 2\namount = 3.0\nlabel = "same"\nkey = "x"\nresult = score(1)\nself.assertEqual(result, ' + expected + ')',
+                                  [self.observed([1], observed)])['methods'][0]['assertions'][0]
+                self.assertEqual(fact['expected'], snapshot_value(observed))
+                self.assertEqual(fact['observationStatus'], 'verified')
+
+    def test_nested_container_inputs_keep_typed_positional_and_keyword_identity(self):
+        body = 'value = 1\nexpected = 2\nself.assertEqual(score((value, [value]), config={"n": value}), expected)'
+        def observed(value):
+            return {'call': snapshot_value({'args': ((value, [value]),), 'kwargs': {'config': {'n': value}}}),
+                    'result_snapshot': snapshot_value(2)}
+        good = self.facts(body, [observed(1)])['methods'][0]
+        self.assertEqual(good['assertions'][0]['observationStatus'], 'verified')
+        self.assertEqual(good['calls'][0]['call'], snapshot_value(
+            {'args': [(1, [1])], 'kwargs': {'config': {'n': 1}}}))
+        for mismatch in (1.0, True):
+            with self.subTest(mismatch=repr(mismatch)):
+                fact = self.facts(body, [observed(mismatch)])['methods'][0]['assertions'][0]
+                self.assertEqual(fact['observationStatus'], 'unknown')
+                self.assertNotIn('observationVerified', fact)
+
+    def test_wrong_known_expected_is_contradicted_but_missing_or_conflicting_observation_is_unknown(self):
+        fact = self.facts('self.assertEqual(score(1), (3, "wrong"))',
+                          [self.observed([1], (2, 'same'))])['methods'][0]['assertions'][0]
+        self.assertEqual(fact['observationStatus'], 'contradicted')
+        self.assertTrue(fact['targetResult'])
+        self.assertNotIn('observationVerified', fact)
+        for observations in ([], [self.observed([True], 2)],
+                             [self.observed([1], 2), self.observed([1], 3)]):
+            with self.subTest(observations=observations):
+                fact = self.facts('self.assertEqual(score(1), 3)', observations)['methods'][0]['assertions'][0]
+                self.assertEqual(fact['observationStatus'], 'unknown')
+
+    def test_unsupported_expected_stays_a_target_assertion_with_unknown_status(self):
+        expressions = ['calculate_expected()', 'unknown', '(number, unknown)', '(number + 1,)',
+                       '(value.attribute,)', '(*[number],)', '{**mapping}', '[item for item in values]']
+        for expected in expressions:
+            with self.subTest(expected=expected):
+                method = self.facts('number = 2\nresult = score(1)\nself.assertEqual(result, ' + expected + ')',
+                                    [self.observed([1], (2,))])['methods'][0]
+                fact = method['assertions'][0]
+                self.assertTrue(fact['targetResult'])
+                self.assertEqual(fact['targetCallLine'], method['calls'][0]['line'])
+                self.assertEqual(fact['observationStatus'], 'unknown')
+                self.assertNotIn('observationVerified', fact)
+
+    def test_literal_rebinding_uses_the_current_value_without_borrowing_an_older_expected(self):
+        body = 'expected = 2\nresult = score(1)\nexpected = 3\nself.assertEqual(result, expected)'
+        fact = self.facts(body, [self.observed([1], 2)])['methods'][0]['assertions'][0]
+        self.assertEqual(fact['expected'], snapshot_value(3))
+        self.assertEqual(fact['observationStatus'], 'contradicted')
+        body = body.replace('expected = 3', 'expected = unknown_expected()')
+        fact = self.facts(body, [self.observed([1], 2)])['methods'][0]['assertions'][0]
+        self.assertTrue(fact['targetResult'])
+        self.assertEqual(fact['observationStatus'], 'unknown')
+
+    def test_mutation_deletion_and_aliases_never_reuse_a_pre_mutation_container(self):
+        mutations = ['expected[0] = 3', 'del expected[0]', 'expected += [3]',
+                     'expected.append(3)', 'alias = expected\nalias[0] = 3',
+                     'alias = (expected,)\nalias[0][0] = 3', 'holder.value = expected']
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                body = 'expected = [2]\nresult = score(1)\n' + mutation + '\nself.assertEqual(result, expected)'
+                assertions = self.facts(body, [self.observed([1], [2])])['methods'][0]['assertions']
+                self.assertEqual(len(assertions), 1)
+                self.assertEqual(assertions[0]['observationStatus'], 'unknown')
+                self.assertNotIn('observationVerified', assertions[0])
+
+    def test_mutated_target_result_alias_is_not_verified_from_its_original_return(self):
+        body = 'result = score(1)\nalias = result\nalias[0] = 3\nself.assertEqual(result, [2])'
+        fact = self.facts(body, [self.observed([1], [2])])['methods'][0]['assertions'][0]
+        self.assertEqual(fact['observationStatus'], 'unknown')
+        self.assertNotIn('observationVerified', fact)
+
+    def test_target_can_mutate_named_input_and_its_expected_alias_in_either_argument_order(self):
+        observation = self.observed([[2]], [2])
+        for assertion in ('self.assertEqual(score(items), alias)', 'self.assertEqual(alias, score(items))',
+                          'result = score(items)\nself.assertEqual(result, alias)'):
+            with self.subTest(assertion=assertion):
+                fact = self.facts('items = [2]\nalias = items\n' + assertion,
+                                  [observation])['methods'][0]['assertions'][0]
+                self.assertTrue(fact['targetResult'])
+                self.assertEqual(fact['observationStatus'], 'unknown')
+                self.assertNotIn('observationVerified', fact)
+
+    def test_unknown_calls_and_assertion_arguments_cannot_mutate_a_later_verified_result(self):
+        operations = ['side_effect = mutate(result)', 'self.assertTrue(mutate(result))',
+                      'self.assertEqual(result, unknown)', 'self.assertEqual(result, [2], msg=mutate(result))']
+        for operation in operations:
+            with self.subTest(operation=operation):
+                body = 'result = score(1)\n' + operation + '\nself.assertEqual(result, [2])'
+                fact = self.facts(body, [self.observed([1], [2])])['methods'][0]['assertions'][-1]
+                self.assertEqual(fact['observationStatus'], 'unknown')
+                self.assertNotIn('observationVerified', fact)
+
+    def test_unwalked_standard_assertions_have_explicit_unknown_status_but_decorators_stay_unbound(self):
+        code = suite('if flag:\n    self.assertEqual(score(1), 2)\nself.assertEqual(score(2), 3)')
+        assertions = self.facts('', [self.observed([1], 2)], code)['methods'][0]['assertions']
+        self.assertEqual([item['observationStatus'] for item in assertions], ['unknown', 'unknown'])
+        self.assertTrue(all('targetResult' not in item and 'observationVerified' not in item for item in assertions))
+        code = suite('self.assertEqual(score(1), 2)').replace('    def test_value', '    @decorate\n    def test_value')
+        self.assertEqual(self.facts('', [self.observed([1], 2)], code)['methods'][0]['assertions'], [])
+
+    def test_unknown_setup_and_nonreplayable_or_mixed_return_observations_are_unknown(self):
+        code = suite('self.assertEqual(score(1), 3)').replace('    def test_value',
+                    '    def setUp(self):\n        self.value = object()\n    def test_value')
+        fact = self.facts('', [self.observed([1], 2)], code)['methods'][0]['assertions'][0]
+        self.assertEqual(fact['observationStatus'], 'unknown', 'unknown setup cannot prove even a contradiction')
+        unavailable = {'call': self.observed([1], 2)['call'], 'result_snapshot': snapshot_value(object())}
+        exception = {'call': self.observed([1], 2)['call'], 'exception': 'ValueError'}
+        for observations in ([unavailable], [self.observed([1], 2), exception]):
+            with self.subTest(observations=observations):
+                method = self.facts('self.assertEqual(score(1), 2)', observations)['methods'][0]
+                self.assertNotIn('observationReturned', method['calls'][0])
+                self.assertEqual(method['assertions'][0]['observationStatus'], 'unknown')
+
+    def test_supported_comparisons_distinguish_real_conflicts_from_unsupported_semantics(self):
+        for assertion, result, status in [
+            ('self.assertAlmostEqual(score(1), 2.0, delta=0.1)', 2.05, 'verified'),
+            ('self.assertAlmostEqual(score(1), 2.0, delta=0.1)', 2.5, 'contradicted'),
+            ('self.assertAlmostEqual(score(1), 2.0, places=2, delta=0.1)', 2.0, 'unknown'),
+            ('self.assertTupleEqual(score(1), (2,))', (3,), 'contradicted'),
+            ('self.assertTupleEqual(score(1), (2,))', [2], 'unknown'),
+            ('self.assertSequenceEqual(score(1), [2])', (2,), 'verified'),
+            ('self.assertListEqual(score(1), [2])', [3], 'contradicted'),
+            ('self.assertDictEqual(score(1), {"n": 2})', {'n': 3}, 'contradicted'),
+            ('self.assertEqual(score(1), 2, unexpected=True)', 2, 'unknown'),
+        ]:
+            with self.subTest(assertion=assertion, result=result):
+                fact = self.facts(assertion, [self.observed([1], result)])['methods'][0]['assertions'][0]
+                self.assertEqual(fact['observationStatus'], status)
+                self.assertEqual(fact.get('observationVerified', False), status == 'verified')
+
+    def test_literal_resolution_budget_rejects_deep_or_large_values_without_execution(self):
+        for expected in ('[' * 10 + 'number' + ']' * 10, '[' + ','.join(['number'] * 101) + ']'):
+            with self.subTest(expected=expected[:40]):
+                fact = self.facts('number = 2\nresult = score(1)\nself.assertEqual(result, ' + expected + ')',
+                                  [self.observed([1], 2)])['methods'][0]['assertions'][0]
+                self.assertTrue(fact['targetResult'])
+                self.assertEqual(fact['observationStatus'], 'unknown')
+
+    def test_module_target_binding_survives_two_proven_assertions(self):
+        code = suite('self.assertEqual(mod.score(1), 2)\nself.assertEqual(mod.score(2), 3)').replace(
+            'from sample import score', 'import sample as mod')
+        assertions = self.facts('', [self.observed([1], 2), self.observed([2], 3)], code)['methods'][0]['assertions']
+        self.assertEqual([item['observationStatus'] for item in assertions], ['verified', 'verified'])
+
+    def test_unreplayable_combined_call_and_duplicate_keywords_never_supply_return_evidence(self):
+        value = '[' + ','.join(str(item) for item in range(80)) + ']'
+        for call in ('score(' + ','.join([value] * 7) + ')', 'score(value=1, value=1)'):
+            with self.subTest(call=call[:50]):
+                method = self.facts('self.assertEqual(' + call + ', 2)')['methods'][0]
+                self.assertEqual(method['calls'], [])
+                self.assertTrue(method['assertions'][0]['targetResult'])
+                self.assertEqual(method['assertions'][0]['observationStatus'], 'unknown')
+
     def test_typed_inputs_and_conflicting_results_do_not_promote_observation(self):
         for observations in ([self.observed([True], 2)], [self.observed([1], 2), self.observed([1], 3)]):
             result = self.facts('self.assertEqual(score(1), 2)', observations)
@@ -98,6 +271,18 @@ class ReviewFactsTests(unittest.TestCase):
         self.assertTrue(fact['targetResult'])
         self.assertEqual(fact['expectedType'], 'str')
         self.assertNotIn('observationVerified', fact)
+
+    def test_unknown_target_inputs_keep_target_identity_without_a_dangling_call_reference(self):
+        for call in ('score(self.value)', 'score(unknown)', 'score(*[1])', 'score(**{"value": 1})'):
+            with self.subTest(call=call):
+                method = self.facts('result = ' + call + '\nself.assertEqual(result, 2)',
+                                    [self.observed([1], 2)])['methods'][0]
+                self.assertEqual(method['calls'], [])
+                fact = method['assertions'][0]
+                self.assertTrue(fact['targetResult'])
+                self.assertEqual(fact['observationStatus'], 'unknown')
+                self.assertNotIn('targetCallLine', fact)
+                self.assertNotIn('observationVerified', fact)
 
     def test_expected_exception_is_an_explicit_guard_not_an_execution_claim(self):
         result = self.facts('with self.assertRaises(ZeroDivisionError):\n    score(1, 0)')
@@ -202,10 +387,12 @@ class ReviewFactsTests(unittest.TestCase):
                 '            self.assertEqual(score(), 2)\n')
         method = self.facts('', code=code)['methods'][0]
         self.assertEqual(method['standardAssertions'], [{'line': 10, 'kind': 'assertEqual'}])
-        self.assertFalse(method['assertions'], 'syntax cannot certify a patched return value')
+        self.assertEqual(method['assertions'], [{'line': 10, 'kind': 'assertEqual', 'observationStatus': 'unknown'}],
+                         'syntax must remain explicitly unknown for a patched return value')
         conditional = self.facts('if flag:\n    self.assertIs(score(1), None)')['methods'][0]
         self.assertEqual(conditional['standardAssertions'], [{'line': 6, 'kind': 'assertIs'}])
-        self.assertFalse(conditional['assertions'], 'syntax does not prove the branch ran')
+        self.assertEqual(conditional['assertions'], [{'line': 6, 'kind': 'assertIs', 'observationStatus': 'unknown'}],
+                         'syntax does not prove the branch ran')
 
     def test_rebound_receiver_or_custom_methods_do_not_gain_standard_assertion_authority(self):
         base = suite('self.assertEqual(score(1), 2)')
@@ -243,7 +430,8 @@ class ReviewFactsTests(unittest.TestCase):
         self.assertIn('self.assertEqual(score(), "肥胖")', result['standardAssertionCalls'][0]['spellings'])
         self.assertEqual(result['dependencyPatchSyntax'][0]['origin'], 'unittest.mock.patch')
         self.assertEqual(result['dependencyPatchSyntax'][0]['binding'], 'clock')
-        self.assertEqual(result['assertions'], [], 'presence cannot verify the expected return value')
+        self.assertEqual(result['assertions'], [{'line': 8, 'kind': 'assertEqual', 'observationStatus': 'unknown'}],
+                         'presence cannot verify the expected return value')
         rebound = code.replace('        with patch', '        patch = other\n        with patch')
         self.assertFalse(self.facts('', code=rebound)['methods'][0]['dependencyPatchSyntax'])
 

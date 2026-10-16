@@ -19,6 +19,8 @@ const seed = 'import unittest\nfrom sample import increment\n'
 const candidate = seed
     + '    def test_new(self):\n        self.assertEqual(increment(MISSING_INPUT), 3)\n';
 const corrected = candidate.replace('increment(MISSING_INPUT)', 'increment(2)');
+const manyCandidate = candidate + [3, 4, 5, 6].map(value =>
+    `    def test_new_${value}(self):\n        self.assertEqual(increment(${value}), ${value + 1})\n`).join('');
 
 test('formal full Writer revision preserves an oversized prior-policy envelope and enforces its paired wire cap', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-revision-output-'));
@@ -41,7 +43,8 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
     const requests: any[] = [];
-    let completion: 'stop' | 'length' = 'stop', reviews = 0;
+    let completion: 'stop' | 'length' = 'stop', reviews = 0, multiFinding = false;
+    let currentCandidate = candidate, currentCorrected = corrected;
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
@@ -89,7 +92,7 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
             if (!/NameError|undefined name/.test(request.prompt)) {
                 assert.equal(reviews, 1, 'the seed executes and receives concrete review findings before expansion');
                 assert.match(request.prompt, /increment\(2\)/);
-                response = '```python\n' + candidate + '\n```';
+                response = '```python\n' + currentCandidate + '\n```';
                 request.reviewExpansion = true;
             } else {
                 request.failureRevision = true;
@@ -99,15 +102,15 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                 assert.ok(estimate <= request.options.num_ctx - request.options.num_predict,
                     'the paired output reserve makes the complete unchanged envelope sendable');
                 if (request.options.num_predict === 1536) {
-                    assert.equal(request.options.num_ctx, 8192);
-                    assert.ok(estimate <= 6656);
+                    if (!multiFinding) { assert.equal(request.options.num_ctx, 8192); }
+                    assert.ok(estimate <= request.options.num_ctx - 1536);
                 }
-                assert.equal(request.prompt.split(candidate).length - 1, 1);
+                assert.equal(request.prompt.split(currentCandidate).length - 1, 1);
                 assert.ok(request.prompt.includes(targetSource.trimEnd()), 'the complete target source survives');
                 assert.match(request.prompt, /NameError|undefined name/);
                 assert.match(request.prompt, /VERIFIED OBSERVATIONS/);
                 assert.doesNotMatch(request.prompt, /WRITER_SEED_V1/);
-                response = '```python\n' + corrected + '\n```';
+                response = '```python\n' + currentCorrected + '\n```';
                 reason = completion;
             }
         } else if (request.roleInstructions.includes('You are the test Reviewer')) {
@@ -115,9 +118,10 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
             if (reviews === 1) {
                 assert.match(request.prompt, /self\.assertEqual\(increment\(1\), 2\)/);
                 assert.doesNotMatch(request.prompt, /def test_new/);
-                response = JSON.stringify({ findings: [{ category: 'missing-scenario', test_line: 'L7',
-                    reason: 'This executed case covers increment(1); the separate controlled Trace input increment(2) returned 3 and has no test method.',
-                    action: 'Add a separate method asserting self.assertEqual(increment(2), 3), preserving the executed increment(1) assertion.' }] });
+                response = JSON.stringify({ findings: (multiFinding ? [2, 3, 4, 5, 6] : [2]).map(value => ({
+                    category: 'missing-scenario', test_line: 'L7',
+                    reason: `This executed case covers increment(1); the separate source-supported increment(${value}) input has no test method.`,
+                    action: `Add a separate method asserting self.assertEqual(increment(${value}), ${value + 1}), preserving the executed increment(1) assertion.` })) });
             } else {
                 assert.equal(completion, 'stop', 'a length-stopped repair cannot reach a new Reviewer approval');
                 response = '{"findings":[]}';
@@ -139,10 +143,14 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON,
             roleQualification: { writer: { state: 'verified', reason: 'fixed fixture' },
                 reviewer: { state: 'verified', reason: 'fixed fixture' }, bugFixer: { state: 'verified', reason: 'fixed fixture' } } });
-        for (completion of ['stop', 'length'] as const) {
-            await t.test(completion, async () => {
+        for (const scenario of ['stop', 'length', 'multi-finding'] as const) {
+            completion = scenario === 'length' ? 'length' : 'stop';
+            multiFinding = scenario === 'multi-finding';
+            currentCandidate = multiFinding ? manyCandidate : candidate;
+            currentCorrected = currentCandidate.replace('increment(MISSING_INPUT)', 'increment(2)');
+            await t.test(scenario, async () => {
                 requests.length = 0; reviews = 0;
-                const output = path.join(directory, completion);
+                const output = path.join(directory, scenario);
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-revision-output',
                     filePath: source, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full',
                     maxLoops: 1, timeoutSeconds: 45, mutationEngine: 'builtin', mutpyTimeout: 20, outputPath: output });
@@ -164,7 +172,8 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                     && event.detail.role === 'writer-revision');
                 const sent = allRevisionAttempts[1];
                 assert.ok(sent);
-                assert.equal(sent.detail.inputBudget, 6656);
+                assert.equal(sent.detail.inputBudget, revisions[0].options.num_ctx - 1536);
+                if (!multiFinding) { assert.equal(sent.detail.inputBudget, 6656); }
                 assert.equal(sent.detail.reservedOutputTokens, 1536);
                 assert.equal(sent.detail.requestOutputTokens, revisions[0].options.num_predict);
                 assert.equal(sent.detail.estimatedInputTokens, estimatePromptTokens(revisions[0].transmittedPrompt));
@@ -176,11 +185,30 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                     assert.ok(!events.some(event => event.stage === 'passing-tests' && event.status === 'preservation-rejected'));
                     const savedTests = artifacts.filter(name => /^(?:loop\d+_test|test)\.py$/.test(path.basename(name)))
                         .map(name => fs.readFileSync(path.join(output, name), 'utf8'));
-                    assert.ok(savedTests.some(saved => saved.includes(corrected.trimEnd())),
+                    assert.ok(savedTests.some(saved => saved.includes(currentCorrected.trimEnd())),
                         'the actually saved corrected suite retains the original passing method verbatim');
                     assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'approved'),
                         JSON.stringify(events.filter(event => event.stage === 'reviewer' || event.status === 'budget-exceeded')));
                     assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'));
+                    if (multiFinding) {
+                        const expansion = requests.find(request => request.reviewExpansion);
+                        const requested = allRevisionAttempts[0].detail;
+                        assert.deepEqual(requested.revisionWorkload, { findingCount: 5, missingScenarioCount: 5 });
+                        assert.ok(expansion.options.num_predict > 1536);
+                        assert.ok(expansion.options.num_predict <= Math.ceil(expansion.options.num_ctx * .3));
+                        assert.equal(requested.requestOutputTokens, expansion.options.num_predict);
+                        assert.equal(requested.inputBudget, expansion.options.num_ctx - expansion.options.num_predict);
+                        assert.ok(requested.estimatedInputTokens <= requested.inputBudget);
+                        assert.deepEqual(sent.detail.revisionWorkload, { findingCount: 1, missingScenarioCount: 0 },
+                            'a later NameError cannot inherit the previous candidate review workload');
+                        const knowledge = artifacts.filter(name => path.basename(name) === 'function_knowledge.json')
+                            .map(name => JSON.parse(fs.readFileSync(path.join(output, name), 'utf8')))[0];
+                        const targetBudget = knowledge.targetBudget;
+                        assert.ok(targetBudget);
+                        assert.ok(allRevisionAttempts.every(event => event.detail.stageDeadlineAt <= targetBudget.deadlineAt));
+                        assert.ok(events.some(event => event.stage === 'validation' && event.status === 'failed'
+                            && /test_new_6 \([^\n)]+\) \.\.\. ok/.test(event.detail.out || '')));
+                    }
                 } else {
                     assert.equal(revisions[0].options.num_predict, 1536);
                     assert.ok(revisions[1].options.num_predict >= 2560);

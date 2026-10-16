@@ -4,6 +4,14 @@
 
 `test/verification.js` 提供 `fast`、`integration`、`full` 與明確測試篩選的 `related` 入口。快速清單由來源行為與成本審查決定，不按舊耗時動態略過；其餘 Node／Python 測試全部納入整合，兩集合互斥且聯集完整。完整入口包含嚴格型別、lint、全部測試、Webview、歷史密鑰掃描與 production build。`--list` 只列計畫，空 related／未命中 selector 不能成功。舊 `test:unit` 仍對應完整驗證，低階 Node／Python runner 無參數保留原全量相容。此分層只調整開發回饋速度，不改產品內的 Checker、Reviewer、來源身份、assertion 保全、隔離或突變 gate。
 
+## 容器預期值與三態審查證據（2026-10-16）
+
+`review_test_facts.py` 先辨認真實目標結果及對應呼叫，再獨立解析預期值。直線局部 literal 變數可用於有界 tuple／list／dict／set；不執行來源、模型碼或任意運算。預期值無法解析仍保留可證明的 targetResult，未知輸入不附加懸空呼叫行號。容器修改、可變別名、未知副作用／fixture 或不完整及衝突觀測不授予核實。
+
+每個斷言使用 `observationStatus=verified|contradicted|unknown`，分別表示與同 typed call 的完整受控觀測一致、已證明衝突或尚無法證明。這不是獨立業務需求的正確性判定。舊資料只有 `observationVerified=true` 才視為 verified，其餘缺值保持 unknown；非法或互相矛盾的旗標停止處理。正式提示只傳三態取代舊布林，安全 `reviewer-evidence-v1` 保留舊欄位並增加三態與計數，不新增完整 Trace 副本。
+
+Reviewer 若只泛稱同一個已實跑、同呼叫核實斷言「沒有經觀測確認」，整份 assessment 視為契約矛盾，走既有一次補正；不刪 finding 或自動批准。具體修改、新輸入、獨立需求與真正缺少的證據仍可審查。AST 只是證據綁定工具，不能自行產生 assertion oracle。
+
 ## 角色傳輸與 Reviewer 證據核對（2026-10-16）
 
 五個正式模型角色共用 `requestBudgetedOne → requestLlmApi → SerialRequestQueue → provider adapter`。Analyst 使用 `semantic-json`，Writer 與 Bug Fixer 使用 Python text，Reviewer 使用 `review-json`，QualityAnalyst 使用 `quality-json`；Mocker 是 Python scaffold 工具，沒有另一條 LLM 傳輸。連線資格只核對固定樣本，不能代替正式角色的完整來源、候選與執行證據。
@@ -136,7 +144,9 @@ Local `/api/generate.format` 帶此 schema；Custom 保留 JSON mode，Cloud 共
 
 本機短計畫輸出 cap 為1,024 tokens，不高於原輸出預留；輸入預算與實際 wire `num_predict` 成對。已儲存的手動容量保持原值；完整提示超額時，僅本次執行可依上述流程增容。`model-request-timing-v1` 分開保存 queue／transport 事件及 Ollama 的數值 timing／token metadata，未知為null。`modelRequestTimingPresentation.ts` 將同次紀錄呈現在日誌、逐輪與失敗流程表；HTTP 等待可能包含服務推論，不能稱為網路延遲或GPU耗時。完整 provider 回覆不持久保存。
 
-車輛 `_connect` 真實實跑的修訂提示為6,125 tokens，完整候選僅160 tokens；原修訂輸入額度5,734而初次seed可用6,656。`roleRequestBudget.ts` 對有明確完整候選的 local/full Writer 修訂，輸出 cap 採 `max(1536, ceil(候選估量 × 1.25) + 256)`，只有低於原預留量才調整輸入／wire；大候選、未知候選、execution及遠端維持原政策。各修訂入口明傳自己正在修的候選，不猜checkpoint或從prompt擷取。結構／Trace修訂亦正確標為writer-revision；分區已有的完整baseline及擴充指引保留。後續擴充的結構／Trace重試可能只收到短的無效片段，但修訂仍須輸出完整基線，因此沿用原預留量，不按片段縮限。預算調整不截斷來源、setup、資源或測試，也不保證模型能完成；長度中止與所有執行／審查gate仍保留。
+車輛 `_connect` 曾以6,125-token修訂提示修補160-token候選，因此明確單一小修補保留1,536輸出額度，避免無條件占用原三成預留。10/16 BMI 另證明短候選仍可能有多項 Reviewer finding，不能以候選長度當全部工作量。`roleRequestBudget.ts` 現以完整候選估量為基礎 `max(1536, ceil(候選估量 × 1.25) + 256)`，對已知小候選再加 `512 × max(findingCount - 1, missingScenarioCount)`，最多使用原輸出預留，且 learned floor 不降。這是保守字元估量，finding 不等於案例配額。
+
+正式 Reviewer 工作量只由有效 assessment 結構計數，綁定同候選 hash 及同 feedback hash，在修訂時消耗；不解析任意 prompt 或自然語言。明確單一結構／執行修補採 `{1,0}`；未知／非法工作量、未知或大候選維持原預留政策。`promptCapacity`、增容估算及實際輸入／wire `num_predict` 使用同一份工作量，execution及遠端不改。各入口明傳自己正在修的候選；後續擴充的短無效片段不能用來縮限完整基線。來源、setup、資源、passing案例、期限及計數都保留；輸出中止、實跑與同版審查 gate 不放寬。
 
 ## Schema、角色契約與冷啟動修復（2026-10-10）
 

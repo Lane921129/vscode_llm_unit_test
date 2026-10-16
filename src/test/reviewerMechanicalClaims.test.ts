@@ -28,7 +28,8 @@ const claims = [
 test('executed candidate facts reject old vehicle mechanical claims without removing findings', async () => {
     const current = await facts();
     assert.deepEqual(current.methods[0].standardAssertions, [{ line: 13, kind: 'assertEqual' }]);
-    assert.deepEqual(current.methods[0].assertions, [], 'method syntax is not result evidence');
+    assert.deepEqual(current.methods[0].assertions, [{ line: 13, kind: 'assertEqual', observationStatus: 'unknown' }],
+        'method syntax has an explicit unknown state, without target-result or verified evidence');
     for (const [line, category, reason, action, diagnostic] of claims) {
         const parsed = parseTestReviewDetailed(response(line, category, reason, action), code, true, constraints(current));
         assert.equal(parsed.review, undefined, reason);

@@ -4,6 +4,14 @@
 
 ## 2026-10-16
 
+### BMI 容器斷言證據、Reviewer 三態與修訂工作量
+
+- 分析 `bmi_2026_10_16_18_28`：Local／qwen2.5-coder:32b-base-q8_0 的四次請求均 HTTP200 且完整讀取，最後 Writer 修訂以1,536-token輸出 length 中止；不是已證明的網路超時或 Context 超額。原批只保留一個可執行測試、目標行7/10、Reviewer未完成，突變未量測。保留原期限的較長重送因預估時間不足受阻，不將此批重標成功。
+- 根因之一是 AST facts 能辨認目標結果，卻不能還原 `(expected_bmi, expected_status)` 內的局部 literal 變數，導致觀測綁定遺失。現在有界解析 tuple／list／dict／set，先獨立綁定目標結果，再解析 expected；未知參數不產生懸空呼叫行號。mutation、可變別名、未知副作用／fixture、不完整或衝突觀測保持未知，不執行任意程式或產生 oracle。原測試原文及保存22筆觀測的靜態重播現為 verified；只在記憶體改錯 expected 的反例為 contradicted，原結果檔未改。
+- Reviewer 使用 verified／contradicted／unknown；舊缺值維持未知，非法或矛盾狀態停止處理。提示以三態取代舊布林，不再附加完整Trace；安全組裝診斷增加固定狀態與計數。原批有／無引號的「未經觀測」泛稱只在同候選實跑、同呼叫及同斷言已核實時反證，整份assessment走既有一次補正；不刪finding、不自動批准。真正缺少證據、新輸入、具體修改及獨立需求仍可審查。
+- 完整 Writer 修訂依有效 assessment 的 finding／missing-scenario 結構計數分配輸出，以同候選與同feedback摘要綁定並消耗，不解析自然語言。單一小修補仍為1,536；多項工作增加有界預留、最多原三成Context，learned floor不降。未知／非法工作量保留原預留；容量診斷、增容與wire輸入／輸出完全配對。沒有新增Tier、Agent、Trace副本、期限或重試，finding數不是測試數量保證。
+- 驗證：快測Node732／732、Python42／42，型別、全src lint、Webview語法及production建置通過。9檔定向整合初輪82項中80通過，兩個舊fixture仍要求空斷言或wire布林；改為精確unknown列／三態後，只補跑受影響兩檔，8／8通過，原審查次數及突變斷言未放寬，產品未再修改；其餘7檔74項的通過證據沿用同一份產品來源。相關Python44／44通過。固定回覆BMI完整閉環保留8個方法、目標行10／10、真實Mutatest39／39；多finding wire cap與下一單一NameError修補整合通過。追蹤檔及可達歷史密鑰掃描、差異檢查通過，原8個WIP逐檔摘要未變且排除提交。本次未重跑完整回歸、VS Code／Mocha、遠端CI或DGX真模型；不以固定回覆及局部通過宣稱實驗室模型驗收完成。
+
 ### 快速、整合、完整驗證入口與 Context 數字釐清
 
 - 新增 `test:fast`、`test:integration`、`test:full` 與 `test:related`；小修改先執行明確相關回歸及快測，流程變更補受影響整合，里程碑／Demo 前完整驗證。快速與整合測試檔案互斥且聯集完整，保留所有既有回歸，未知新 Node suite 預設整合；`test:unit` 及低階無參數 runner 保留全量相容。

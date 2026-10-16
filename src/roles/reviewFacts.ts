@@ -10,9 +10,21 @@ import { runSpawn } from '../utils/processRunner';
 import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
 
 export interface ReviewFactIdentity { runId: string; sourceHash: string; target: string }
+export type ReviewObservationStatus = 'verified' | 'contradicted' | 'unknown';
 export interface ReviewAssertionFact {
     line: number; kind: string; targetResult?: boolean; expectedType?: string;
-    expected?: TraceValueSnapshot; observationVerified?: boolean; targetCallLine?: number;
+    expected?: TraceValueSnapshot; observationVerified?: boolean; observationStatus?: ReviewObservationStatus; targetCallLine?: number;
+}
+
+/** Missing legacy flags mean unknown, never a contradicted expected value. */
+export function reviewAssertionObservationStatus(assertion: ReviewAssertionFact): ReviewObservationStatus | undefined {
+    if (assertion.observationVerified !== undefined && typeof assertion.observationVerified !== 'boolean') { return undefined; }
+    const status = assertion.observationStatus;
+    if (status === undefined) { return assertion.observationVerified === true ? 'verified' : 'unknown'; }
+    if (!['verified', 'contradicted', 'unknown'].includes(status)
+        || status === 'verified' && assertion.observationVerified === false
+        || status !== 'verified' && assertion.observationVerified === true) { return undefined; }
+    return status;
 }
 export interface ReviewMethodFacts {
     line: number; endLine: number; name: string; assertions: ReviewAssertionFact[];
@@ -59,9 +71,11 @@ export interface ReviewerEvidenceDiagnostic {
     assertionCount: number;
     targetAssertionCount: number;
     observationVerifiedCount: number;
+    observationContradictedCount: number;
+    observationUnknownCount: number;
     returnedCallCount: number;
     assertionDetailsComplete: boolean;
-    assertions: Array<{ line: number; kind: string; targetResult: boolean; observationVerified: boolean }>;
+    assertions: Array<{ line: number; kind: string; targetResult: boolean; observationVerified: boolean; observationStatus: ReviewObservationStatus }>;
 }
 
 /** Do not spread facts here: target names, module paths, call arguments,
@@ -74,6 +88,8 @@ export function buildReviewerEvidenceDiagnostic(facts: ReviewFacts): ReviewerEvi
     let assertionCount = 0;
     let targetAssertionCount = 0;
     let observationVerifiedCount = 0;
+    let observationContradictedCount = 0;
+    let observationUnknownCount = 0;
     let returnedCallCount = 0;
     const assertions: ReviewerEvidenceDiagnostic['assertions'] = [];
     for (const method of facts.methods) {
@@ -81,20 +97,23 @@ export function buildReviewerEvidenceDiagnostic(facts: ReviewFacts): ReviewerEvi
         returnedCallCount += method.calls.filter(call => call?.observationReturned === true).length;
         for (const assertion of method.assertions) {
             if (!assertion || !Number.isSafeInteger(assertion.line) || assertion.line < 1) { fail(); }
+            const observationStatus = reviewAssertionObservationStatus(assertion) ?? fail();
             assertionCount++;
             if (assertion.targetResult === true) { targetAssertionCount++; }
-            if (assertion.observationVerified === true) { observationVerifiedCount++; }
+            if (observationStatus === 'verified') { observationVerifiedCount++; }
+            else if (observationStatus === 'contradicted') { observationContradictedCount++; }
+            else { observationUnknownCount++; }
             if (assertions.length < REVIEW_EVIDENCE_ASSERTION_LIMIT) {
                 assertions.push({ line: assertion.line,
                     kind: REVIEW_EVIDENCE_ASSERTION_KINDS.has(assertion.kind) ? assertion.kind : 'other',
-                    targetResult: assertion.targetResult === true, observationVerified: assertion.observationVerified === true });
+                    targetResult: assertion.targetResult === true, observationVerified: observationStatus === 'verified', observationStatus });
             }
         }
     }
     return { schemaVersion: 'reviewer-evidence-v1', contractVersion: ROLE_CONTRACT_VERSIONS.reviewer,
         factsVersion: 'review-test-facts-v1', sourceHash: facts.sourceHash, testHash: facts.testHash,
         executionVerified: facts.executionVerified === true, methodCount: facts.methods.length,
-        assertionCount, targetAssertionCount, observationVerifiedCount, returnedCallCount,
+        assertionCount, targetAssertionCount, observationVerifiedCount, observationContradictedCount, observationUnknownCount, returnedCallCount,
         assertionDetailsComplete: assertionCount === assertions.length, assertions };
 }
 interface Observation { call: TraceValueSnapshot; result_snapshot: TraceValueSnapshot }
@@ -186,6 +205,8 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
                 || !Array.isArray(method.calls) || !method.calls.some((call: Record<string, unknown>) => call.line === assertion.targetCallLine)))) {
             invalid('ast-assertion-call-shape');
         }
+        if (object(method) && Array.isArray(method.assertions) && method.assertions.some((assertion: ReviewAssertionFact) =>
+            reviewAssertionObservationStatus(assertion) === undefined)) { invalid('ast-assertion-observation-shape'); }
         if (!object(method) || method.standardAssertions === undefined) { continue; }
         if (!Array.isArray(method.standardAssertions) || method.standardAssertions.length > 12000
             || !Number.isSafeInteger(method.line) || !Number.isSafeInteger(method.endLine)
@@ -221,6 +242,11 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
 export function reviewFactsForPrompt(facts: ReviewFacts): string {
     return 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...facts,
         methods: facts.methods.map(method => ({ ...method, calls: method.calls.map(({ line, observationReturned }) => ({ line, observationReturned })),
+            assertions: method.assertions.map(({ observationVerified: _legacy, observationStatus: _status, ...assertion }) => {
+                const observationStatus = reviewAssertionObservationStatus({ ...assertion, observationVerified: _legacy, observationStatus: _status });
+                if (observationStatus === undefined) { invalid('ast-assertion-observation-shape'); }
+                return { ...assertion, observationStatus };
+            }),
             standardAssertionCalls: method.standardAssertionCalls?.map(({ line, kind }) => ({ line, kind })),
             dependencyPatchSyntax: method.dependencyPatchSyntax?.map(({ line, origin, target, binding }) => ({ line, origin, target, binding })) })) });
 }

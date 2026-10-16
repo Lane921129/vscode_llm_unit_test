@@ -119,7 +119,7 @@ import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
 import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
-import { roleRequestBudget } from './prompts/roleRequestBudget';
+import { roleRequestBudget, type WriterRevisionWorkload } from './prompts/roleRequestBudget';
 import { assessPromptCapacity } from './prompts/promptCapacity';
 import { formatPromptCapacity } from './pipeline/promptCapacityPresentation';
 import { CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS, planContextGrowth } from './prompts/contextGrowth';
@@ -1547,6 +1547,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let reviewWarnings: string[] = [];
     let reviewStatus: ReviewStatus = 'incomplete';
     const reviewSession = new ReviewSession();
+    const reviewerRevisionWorkloads = new Map<string, { feedbackHash: string; workload: WriterRevisionWorkload }>();
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
@@ -1857,7 +1858,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         requestLog: (text: string) => void, format: CustomOutputFormat = 'text',
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
         sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string,
-        writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }, initialAttemptDeadlineAt?: number
+        writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }, initialAttemptDeadlineAt?: number,
+        revisionWorkload?: WriterRevisionWorkload
     ): Promise<string> => {
         if (role === 'writer' && mode === 'full' && !writerCaseMode) {
             writerAdditionBaseline = seedPending ? undefined : checkpoints.executable?.code || bestCode || undefined;
@@ -1925,7 +1927,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const correctionReserve = reservedInputTokens + (outputAttempt > 0 ? CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS : 0);
         const capacityAt = (contextWindow: number) => assessPromptCapacity({ envType: requestParams.envType, mode,
             role, seedPending, contextWindow, estimatedInputTokens, observedInputTokens,
-            reservedInputTokens: correctionReserve, revisionCurrentCode, minimumOutputTokens,
+            reservedInputTokens: correctionReserve, revisionCurrentCode, revisionWorkload, minimumOutputTokens,
             modelContextLimit: activeModelProfile.contextLength,
             modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
             modelContextLimitSource: modelSnapshot.localRuntimeMetadata?.source ?? 'unknown' });
@@ -1934,7 +1936,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         recordRole('model-capacity', 'assessed', initialCapacity);
         const currentRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode,
             role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
-            revisionCurrentCode, minimumOutputTokens });
+            revisionCurrentCode, revisionWorkload, minimumOutputTokens });
         if (requestParams.envType === 'local'
             && (!promptFits(contractedSystem, prompt, currentRoleBudget.inputBudget, correctionReserve)
                 || requiredInputTokens + correctionReserve > currentRoleBudget.inputBudget)) {
@@ -1943,7 +1945,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const limitBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
                 contextWindow: activeModelProfile.contextLength,
                 inputBudget: contextInputBudget(activeModelProfile.paramSize, activeModelProfile.contextLength),
-                revisionCurrentCode, minimumOutputTokens });
+                revisionCurrentCode, revisionWorkload, minimumOutputTokens });
             const growth = planContextGrowth({ currentContextTokens: requestContextWindow,
                 modelContextLimit: activeModelProfile.contextLength,
                 modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
@@ -1953,7 +1955,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const grownRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
                     contextWindow: growth.contextTokens,
                     inputBudget: contextInputBudget(activeModelProfile.paramSize, growth.contextTokens),
-                    revisionCurrentCode, minimumOutputTokens });
+                    revisionCurrentCode, revisionWorkload, minimumOutputTokens });
                 if (!promptFits(contractedSystem, prompt, grownRoleBudget.inputBudget, correctionReserve)
                     || requiredInputTokens + correctionReserve > grownRoleBudget.inputBudget) {
                     const capacity = capacityAt(growth.contextTokens);
@@ -2046,13 +2048,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         const contextWindow = requestContextWindow;
         const roleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
-            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, minimumOutputTokens });
+            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, revisionWorkload, minimumOutputTokens });
         // Probes are separate logical requests. Start this formal request's allowance
         // once after prerequisites, still within the original stage/shared/target cap.
         const formalAttemptStartedAt = Date.now();
         const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt, formalAttemptStartedAt);
         const metrics = { role, format, estimatedInputTokens,
             ...roleBudget, reservedInputTokens: correctionReserve,
+            ...(role === 'writer-revision' && revisionWorkload ? { revisionWorkload } : {}),
             capacity: capacityAt(contextWindow),
             ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
             contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt,
@@ -2308,7 +2311,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     };
     const requestBudgeted: typeof requestBudgetedOne = async (requestParams, system, prompt, requestLog,
         format = 'text', role = 'writer', sharedDeadlineAt, reservedInputTokens = 0, revisionCurrentCode,
-        writerCaseMode, initialAttemptDeadlineAt) => {
+        writerCaseMode, initialAttemptDeadlineAt, revisionWorkload) => {
         const evidence = activeQualityTaskEvidence;
         const baseline = checkpoints.executable?.code || bestCode;
         // Candidate revisions must retain their exact execution/Reviewer finding
@@ -2318,7 +2321,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             || !baseline || !evidence || evidence.cases.length < 2
             || astContext?.class_name !== null || astContext.is_async !== false || astContext.method_kind !== 'module') {
             return requestBudgetedOne(requestParams, system, prompt, requestLog, format, role,
-                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt);
+                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt, revisionWorkload);
         }
         writerAdditionBaseline = baseline;
         // Every case and its bounded correction shares this family's original
@@ -2554,7 +2557,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const raw = await requestBudgeted(params, system, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision', undefined, 0,
-                        role === 'writer' ? code : undefined);
+                        role === 'writer' ? code : undefined, undefined, undefined,
+                        role === 'writer' ? { findingCount: 1, missingScenarioCount: 0 } : undefined);
                     if (role !== 'bug-fixer') { return sanitizeLlmResponse(raw); }
                     const merged = mergeBugFixReplacementDetailed(raw, code, failure);
                     if (merged.diagnostic) {
@@ -3133,7 +3137,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             // its short rejected partition cannot size that full output.
                             subRaw = await requestBudgeted(params, systemPrompt, subGenerationPrompt, log, testGenerationResponseFormat,
                                 subRevisionCode === undefined ? 'writer' : 'writer-revision', undefined, 0,
-                                seedPending ? subRevisionCode : undefined);
+                                seedPending ? subRevisionCode : undefined, undefined, undefined,
+                                subRevisionCode === undefined ? undefined : { findingCount: 1, missingScenarioCount: 0 });
                             const subClean = await prepareWriterCandidate(subRaw,
                                 subRevisionCode === undefined ? 'writer' : 'writer-revision', retry);
                             if (subClean) {
@@ -3216,7 +3221,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         // candidate, so only a pending seed can size a bounded output.
                         rawCode = await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat,
                             generationRevisionCode === undefined ? 'writer' : 'writer-revision', undefined, 0,
-                            seedPending ? generationRevisionCode : undefined);
+                            seedPending ? generationRevisionCode : undefined, undefined, undefined,
+                            generationRevisionCode === undefined ? undefined : { findingCount: 1, missingScenarioCount: 0 });
                     } catch (err: any) {
                         if (err instanceof AnalysisStageError) { throw err; }
                         if (llmRetry === 0) {
@@ -3458,6 +3464,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         gate: 'assertion-evidence', reasonCode: 'trace-evidence-rejected' } : undefined;
                 },
                 review: async (code) => {
+                    reviewerRevisionWorkloads.delete(evidenceHash(code));
                     if (!mayUseModelAuthoredReview) {
                         recordRole('reviewer', 'unqualified', {});
                         return undefined;
@@ -3482,7 +3489,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             reason: localize('完整審查證據超過預算；已保留測試，突變測試未執行。') });
                         return undefined;
                     }
-                    return reviewSession.review(evidenceHash(sys + '\n' + prompt + '\n' + (importFixtures?.id || '')), async () => {
+                    const assessment = await reviewSession.review(evidenceHash(sys + '\n' + prompt + '\n' + (importFixtures?.id || '')), async () => {
                         try {
                             return await reviewWithContractRepair({ tests: code, prompt, knownSecrets,
                                 constraints: { target: params.funcName || targetFuncName, facts, identity,
@@ -3501,6 +3508,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             throw error;
                         }
                     }, (status, detail) => recordRole('reviewer', status, detail));
+                    if (assessment?.issues.length) {
+                        reviewerRevisionWorkloads.set(evidenceHash(code), {
+                            feedbackHash: evidenceHash(JSON.stringify(assessment.issues)),
+                            workload: { findingCount: assessment.issues.length,
+                                missingScenarioCount: assessment.issues.filter(issue => issue.category === 'missing-scenario').length }
+                        });
+                    }
+                    return assessment;
                 },
                 repairRole: (code, failure) => selectCandidateRepairRole(mayUseModelAuthoredRepair, canRepairTestMethod(code, failure)),
                 revise: async (code, failure, role, attempt) => {
@@ -3524,12 +3539,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     }
                     // requestBudgeted checks the final prompt, including numeric/resource
                     // evidence, and records a stage-owned failure without Tier fallback.
+                    const workloadKey = evidenceHash(code);
+                    const reviewedWork = reviewerRevisionWorkloads.get(workloadKey);
+                    const revisionWorkload = reviewedWork?.feedbackHash === evidenceHash(failure)
+                        ? reviewedWork.workload : { findingCount: 1, missingScenarioCount: 0 };
+                    reviewerRevisionWorkloads.delete(workloadKey);
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision', undefined, 0,
-                        role === 'writer' ? code : undefined
+                        role === 'writer' ? code : undefined, undefined, undefined,
+                        role === 'writer' ? revisionWorkload : undefined
                     );
                     if (role === 'bug-fixer') {
                         const merged = mergeBugFixReplacementDetailed(raw, code, failure);

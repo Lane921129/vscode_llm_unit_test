@@ -61,6 +61,27 @@ test('minimum capacities honor each real role policy and learned output floors w
     }
 });
 
+test('revision workload uses the same complete input/output allowance at current and maximum capacity', () => {
+    const input: PromptCapacityInput = { envType: 'local', mode: 'full', role: 'writer-revision', seedPending: false,
+        contextWindow: 8192, estimatedInputTokens: 6000, reservedInputTokens: 100,
+        revisionCurrentCode: 'PRIVATE_COMPLETE_TEST_FILE', revisionWorkload: { findingCount: 5, missingScenarioCount: 2 },
+        modelContextLimitVerified: true, modelContextLimit: 16384 };
+    const result = assessPromptCapacity(input);
+    assert.equal(result.state, 'growth-required');
+    for (const contextWindow of [8192, result.minimumContextTokens!, 16384]) {
+        const expected = roleRequestBudget({ ...input, contextWindow, inputBudget: contextInputBudget('', contextWindow) });
+        const actual = assessPromptCapacity({ ...input, contextWindow });
+        assert.equal(actual.inputBudget, expected.inputBudget);
+        assert.equal(actual.reservedOutputTokens, expected.reservedOutputTokens);
+        assert.equal(actual.requestOutputTokens, expected.requestOutputTokens ?? null);
+    }
+    assert.equal(result.requestOutputTokens, 2458);
+    assert.equal(result.limitReservedOutputTokens, 3584);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_COMPLETE|findingCount|revisionWorkload/);
+    assert.equal(assessPromptCapacity({ ...input, modelContextLimit: 8192 }).state, 'model-limit-insufficient');
+    assert.equal(assessPromptCapacity({ ...input, modelContextLimitVerified: false }).state, 'model-limit-unknown');
+});
+
 test('capacity calculations reject unsafe input and terminate when no safe capacity can reserve the output', () => {
     for (const patch of [{ contextWindow: 0 }, { estimatedInputTokens: NaN }, { reservedInputTokens: -1 },
         { estimatedInputTokens: Number.MAX_SAFE_INTEGER, reservedInputTokens: 1 },

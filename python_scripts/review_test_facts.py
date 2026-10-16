@@ -362,20 +362,75 @@ def build_review_facts(payload):
             # All assigned local names shadow module aliases, including assignments later in the method.
             local = {node.id: None for node in ast.walk(method) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
             local[receiver] = None
+            standard_calls = {(item['line'], item['kind']) for item in facts['standardAssertions']}
+            observation_flow_known = True
 
             def literal(node):
-                if isinstance(node, ast.Name) and node.id in local and isinstance(local[node.id], tuple) and local[node.id][0] == 'literal':
-                    return local[node.id][1]
+                remaining = [512]
+
+                def read(item, depth=0):
+                    remaining[0] -= 1
+                    if remaining[0] < 0 or depth > 8:
+                        raise Unknown()
+                    if isinstance(item, ast.Name):
+                        value = local.get(item.id)
+                        if not isinstance(value, tuple) or value[0] != 'literal':
+                            raise Unknown()
+                        return value[1]
+                    if isinstance(item, ast.Constant):
+                        return item.value
+                    if isinstance(item, (ast.Tuple, ast.List, ast.Set)):
+                        values = [read(child, depth + 1) for child in item.elts]
+                        return {ast.Tuple: tuple, ast.List: list, ast.Set: set}[type(item)](values)
+                    if isinstance(item, ast.Dict) and all(key is not None for key in item.keys):
+                        return {read(key, depth + 1): read(value, depth + 1)
+                                for key, value in zip(item.keys, item.values)}
+                    # Signed numeric literals are syntax, not general arithmetic.
+                    if isinstance(item, ast.UnaryOp) and isinstance(item.op, (ast.UAdd, ast.USub)) \
+                            and isinstance(item.operand, ast.Constant) and type(item.operand.value) in (int, float):
+                        return ast.literal_eval(item)
+                    # Calls, attributes, unpacking, comprehensions and operators
+                    # are deliberately not evaluated, including inside containers.
+                    raise Unknown()
+
                 try:
-                    result = ast.literal_eval(node)
-                except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                    result = read(node)
+                    snap = snapshot_value(result)
+                except (Unknown, ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
                     raise Unknown() from None
-                snap = snapshot_value(result)
                 if not snap['replayable']:
                     raise Unknown()
                 return result
 
+            def mutable_literal(value):
+                if type(value) in (list, dict, set):
+                    return True
+                return type(value) is tuple and any(mutable_literal(child) for child in value)
+
+            def forget_mutable_inputs(call):
+                nonlocal observation_flow_known
+                # A target may mutate a caller-owned container. Preserve its
+                # captured typed input, but do not reuse pre-call aliases as an
+                # expected value after that call. Clearing all mutable literals
+                # is conservative and also covers aliases nested in tuples.
+                names = {item.id for arg in [*call.args, *(entry.value for entry in call.keywords)]
+                         for item in ast.walk(arg) if isinstance(item, ast.Name)}
+                if any(isinstance(local.get(name), tuple) and local[name][0] == 'literal'
+                       and mutable_literal(local[name][1]) for name in names):
+                    observation_flow_known = False
+                    for name, value in local.items():
+                        if isinstance(value, tuple) and value[0] == 'literal' and mutable_literal(value[1]):
+                            local[name] = None
+
+            def observed_result(call):
+                matches = [item for item in observations if same_call(item.get('call'), call)]
+                if not matches or any('result_snapshot' not in item for item in matches) \
+                        or any(item['result_snapshot'] != matches[0]['result_snapshot'] for item in matches):
+                    raise Unknown()
+                return restore_value(matches[0]['result_snapshot'])
+
             def expression(node):
+                nonlocal observation_flow_known
                 if isinstance(node, ast.Await):
                     return expression(node.value)
                 if isinstance(node, ast.Name) and isinstance(local.get(node.id), tuple):
@@ -391,26 +446,34 @@ def build_review_facts(payload):
                         if imported['binding'] == binding:
                             imported['targetUseLines'] = sorted({*imported.get('targetUseLines', []), node.lineno})
                     if any(isinstance(arg, ast.Starred) for arg in node.args) or any(item.arg is None for item in node.keywords):
+                        observation_flow_known = False
                         return ('result', None, [], node.lineno)
                     try:
                         args = [literal(arg) for arg in node.args]
                         kwargs = {item.arg: literal(item.value) for item in node.keywords}
                     except Unknown:
+                        observation_flow_known = False
                         return ('result', None, [], node.lineno)
                     call = snapshot_value({'args': args, 'kwargs': kwargs})
+                    if len(kwargs) != len(node.keywords) or not call['replayable']:
+                        observation_flow_known = False
+                        return ('result', None, [], node.lineno)
                     literal_call = ast.Call(func=node.func,
                                             args=[ast.parse(repr(arg), mode='eval').body for arg in args],
                                             keywords=[ast.keyword(arg=name, value=ast.parse(repr(value), mode='eval').body)
                                                       for name, value in kwargs.items()])
                     fact = {'line': node.lineno, 'call': call,
                             'spellings': list(dict.fromkeys(filter(None, [ast.get_source_segment(code, node), ast.unparse(literal_call)])))}
-                    matches = [item for item in observations if same_call(item.get('call'), call) and 'result_snapshot' in item]
                     # This is a source-bound exact-input return observation, not proof
                     # that a fixture/unknown setup produces the same behavior.
-                    if matches and all(item['result_snapshot'] == matches[0]['result_snapshot'] for item in matches) \
-                            and observation_setup_known:
-                        fact['observationReturned'] = True
+                    try:
+                        observed_result(call)
+                        if observation_setup_known and observation_flow_known:
+                            fact['observationReturned'] = True
+                    except (Unknown, ValueError, TypeError):
+                        pass
                     facts['calls'].append(fact)
+                    forget_mutable_inputs(node)
                     return ('result', call, [], node.lineno)
                 return ('literal', literal(node))
 
@@ -430,56 +493,101 @@ def build_review_facts(payload):
                 kind = node.func.attr
                 if not kind.startswith('assert') or kind in overrides:
                     return
-                fact = {'line': node.lineno, 'kind': kind}
+                fact = {'line': node.lineno, 'kind': kind, 'observationStatus': 'unknown'}
                 facts['assertions'].append(fact)
                 if kind not in ('assertEqual', 'assertAlmostEqual', 'assertTupleEqual', 'assertListEqual', 'assertDictEqual', 'assertSequenceEqual') or len(node.args) < 2:
                     return
                 try:
-                    left, right = expression(node.args[0]), expression(node.args[1])
-                    actual, expected = (left, right) if left[0] == 'result' and right[0] == 'literal' else (right, left)
-                    if actual[0] != 'result' or expected[0] != 'literal':
+                    sides = []
+                    for arg in node.args[:2]:
+                        try:
+                            sides.append(expression(arg))
+                        except Unknown:
+                            sides.append(None)
+                    actual_index = next((index for index, side in enumerate(sides) if side and side[0] == 'result'), None)
+                    if actual_index is None:
                         return
-                    fact.update({'targetResult': True, 'expectedType': type(expected[1]).__name__, 'expected': snapshot_value(expected[1])})
-                    if actual[1] is not None:
+                    actual, expected = sides[actual_index], sides[1 - actual_index]
+                    # Binding the assertion to the target is independent from
+                    # understanding its expected expression or having Trace data.
+                    fact['targetResult'] = True
+                    if actual[1] is not None and any(item['line'] == actual[3] and item['call'] == actual[1]
+                                                     for item in facts['calls']):
                         fact['targetCallLine'] = actual[3]
-                    matches = [item for item in observations if same_call(item.get('call'), actual[1]) and 'result_snapshot' in item]
-                    if not matches or any(item['result_snapshot'] != matches[0]['result_snapshot'] for item in matches):
+                    if not expected or expected[0] != 'literal':
                         return
-                    value = restore_value(matches[0]['result_snapshot'])
+                    fact.update({'expectedType': type(expected[1]).__name__, 'expected': snapshot_value(expected[1])})
+                    if not observation_setup_known or not observation_flow_known \
+                            or (node.lineno, kind) not in standard_calls:
+                        return
+                    value = observed_result(actual[1])
                     for index in actual[2]:
                         if type(value) not in (tuple, list):
                             raise Unknown()
                         value = value[index]
                     if kind == 'assertAlmostEqual':
-                        places = literal(node.args[2]) if len(node.args) > 2 else 7
-                        keywords = {item.arg: literal(item.value) for item in node.keywords}
-                        if set(keywords) - {'places', 'delta', 'msg'}:
+                        if len(node.args) > 5:
                             raise Unknown()
-                        places = keywords.get('places', places)
+                        positional = {name: literal(arg) for name, arg in zip(('places', 'msg', 'delta'), node.args[2:])}
+                        keywords = {item.arg: literal(item.value) for item in node.keywords}
+                        if set(keywords) - {'places', 'delta', 'msg'} or set(keywords).intersection(positional) \
+                                or len(keywords) != len(node.keywords):
+                            raise Unknown()
+                        options = {**positional, **keywords}
+                        places, delta = options.get('places'), options.get('delta')
+                        if places is not None and delta is not None:
+                            raise Unknown()
+                        places = 7 if places is None else places
                         if type(value) not in (float, int) or type(expected[1]) not in (float, int) or type(places) is not int or abs(places) > 12:
                             raise Unknown()
-                        equal = abs(value - expected[1]) <= keywords['delta'] if 'delta' in keywords else round(abs(value - expected[1]), places) == 0
+                        if delta is not None and (type(delta) not in (float, int) or delta < 0):
+                            raise Unknown()
+                        equal = value == expected[1] or (abs(value - expected[1]) <= delta if delta is not None
+                                                        else round(abs(value - expected[1]), places) == 0)
                     else:
-                        equal = value == expected[1]
-                    if equal and observation_setup_known:
+                        if len(node.args) > 3 or any(item.arg != 'msg' for item in node.keywords) \
+                                or len(node.keywords) > 1 or len(node.args) == 3 and node.keywords:
+                            raise Unknown()
+                        for arg in [*node.args[2:], *(item.value for item in node.keywords)]:
+                            literal(arg)
+                        required_type = {'assertTupleEqual': tuple, 'assertListEqual': list, 'assertDictEqual': dict}.get(kind)
+                        if required_type and (type(value) is not required_type or type(expected[1]) is not required_type):
+                            raise Unknown()
+                        if kind == 'assertSequenceEqual':
+                            if type(value) not in (tuple, list) or type(expected[1]) not in (tuple, list):
+                                raise Unknown()
+                            equal = list(value) == list(expected[1])
+                        else:
+                            equal = value == expected[1]
+                    fact['observationStatus'] = 'verified' if equal else 'contradicted'
+                    if equal:
                         fact['observationVerified'] = True
                 except (Unknown, ValueError, TypeError, IndexError, OverflowError):
                     return
 
             def walk(statements):
+                nonlocal observation_flow_known
                 for stmt in statements:
                     try:
                         if isinstance(stmt, ast.Assign):
+                            if any(not isinstance(binding, (ast.Name, ast.Tuple, ast.List))
+                                   or any(isinstance(item, (ast.Attribute, ast.Subscript, ast.Starred)) for item in ast.walk(binding))
+                                   for binding in stmt.targets):
+                                break
                             try:
                                 value = expression(stmt.value)
                             except Unknown:
+                                observation_flow_known = False
                                 value = None
                             for binding in stmt.targets:
                                 assign(binding, value, stmt.lineno)
                         elif isinstance(stmt, ast.AnnAssign):
+                            if not isinstance(stmt.target, ast.Name):
+                                break
                             try:
                                 value = expression(stmt.value) if stmt.value else None
                             except Unknown:
+                                observation_flow_known = False
                                 value = None
                             assign(stmt.target, value, stmt.lineno)
                         elif isinstance(stmt, ast.Expr):
@@ -489,6 +597,19 @@ def build_review_facts(payload):
                             # Unknown arbitrary calls may mutate prior results; do not propagate them.
                             if not (isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute) and dotted(stmt.value.func.value) == receiver and stmt.value.func.attr.startswith('assert')):
                                 break
+                            if not facts['assertions'] or facts['assertions'][-1].get('observationStatus') != 'verified':
+                                observation_flow_known = False
+                            # Unsupported assertion arguments may invoke hooks or
+                            # mutate earlier results before a later assertion.
+                            for arg in [*stmt.value.args, *(item.value for item in stmt.value.keywords)]:
+                                target_functions = {id(part) for item in ast.walk(arg)
+                                                    if isinstance(item, ast.Call) and resolve(item.func, local) == target
+                                                    for part in ast.walk(item.func)}
+                                if any(isinstance(item, (ast.Call, ast.Await, ast.Yield, ast.NamedExpr, ast.Attribute))
+                                       and not (isinstance(item, ast.Call) and resolve(item.func, local) == target)
+                                       and id(item) not in target_functions
+                                       for item in ast.walk(arg)):
+                                    observation_flow_known = False
                         elif isinstance(stmt, ast.With) and len(stmt.items) == 1:
                             guard = stmt.items[0].context_expr
                             if not isinstance(guard, ast.Call) or not isinstance(guard.func, ast.Attribute) or dotted(guard.func.value) != receiver or guard.func.attr not in ('assertRaises', 'assertRaisesRegex') or guard.func.attr in overrides or not guard.args:
@@ -516,6 +637,11 @@ def build_review_facts(payload):
                         break
             if not custom_loader and not method.decorator_list and len(params) == 1:
                 walk(method.body)
+            present = {(item['line'], item['kind']) for item in facts['assertions']}
+            for item in facts['standardAssertions']:
+                if (item['line'], item['kind']) not in present:
+                    facts['assertions'].append({**item, 'observationStatus': 'unknown'})
+            facts['assertions'].sort(key=lambda item: item['line'])
             methods.append(facts)
     return {'schemaVersion': 'review-test-facts-v1', 'runId': payload['runId'], 'sourceHash': payload['sourceHash'],
             'target': payload['target'], 'module': payload['module'], 'testHash': hashlib.sha256(code.encode()).hexdigest(),
