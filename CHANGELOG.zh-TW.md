@@ -4,6 +4,13 @@
 
 ## 2026-10-16
 
+### 快速、整合、完整驗證入口與 Context 數字釐清
+
+- 新增 `test:fast`、`test:integration`、`test:full` 與 `test:related`；小修改先執行明確相關回歸及快測，流程變更補受影響整合，里程碑／Demo 前完整驗證。快速與整合測試檔案互斥且聯集完整，保留所有既有回歸，未知新 Node suite 預設整合；`test:unit` 及低階無參數 runner 保留全量相容。
+- `--list` 只列計畫，不要求已有 out 產物；related 依測試檔名／路徑明確篩選，空選取或任何 selector 未命中皆非零。程序使用參數陣列及固定 cwd，失敗保留非零 exit，不用 shell 拼接指令。快速／局部通過不冒充完整驗證或真模型品質。
+- 更正 Code Llama 70B 的數字解釋：Analyst 初始 `num_predict=1024` 是輸出額度；當套件 metadata 回報2048時，目前 Auto `num_ctx` 也會因取半而得到1024。[Meta 70B Instruct 模型卡](https://huggingface.co/meta-llama/CodeLlama-70b-Instruct-hf)宣告最高16K微調且不支援100K，[Ollama特定70b blob](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)卻回報2048。套件宣告、請求／實配與輸出 cap 必須分列，不能把1024概括為模型本身上限；本次未依模型名稱覆寫容量或將短探針當長 Context 證明。
+- 實測：入口回歸16／16（含於快測），`test:fast` 為Node725／725、Python42／42、0略過，含嚴格型別、lint、編譯及Webview，共69.651秒。related 定向真實Mutatest與Writer修訂stop／length為Node4／4、Python45／45、0略過，共82.734秒。full／integration／舊unit／related的npm `--list` 通過，Node96＋148＝244、Python4＋45＝49；原Python49條有序清單摘要不變。production bundle、包含新增追蹤檔的歷史密鑰掃描與diff檢查通過。本次依加速開發規則未重跑約50分鐘完整回歸、VS Code／Mocha、遠端CI或真模型，不以清單／局部通過宣稱全量驗收；原有8個工作區修改完整保留且不提交。
+
 ### BMI 角色溝通、完整回應期限與 Reviewer 證據診斷
 
 - 分析 `bmi_2026_10_16_01_03`：Local／llama3.3:70b、full／Tier2，`num_ctx=65536`，七次完整提示皆可容納；六次收到完整 stop 回覆，最後一次 Reviewer 在讀取 body 時達到原 target 期限。不是所有角色沒送出，也不是2K Context不足。目標總額600秒，最後一次送出時只剩151.986秒；錯誤卻展示設定的6,000秒，現已分列實際傳輸額度與設定上限，不延長原期限。

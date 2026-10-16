@@ -6,9 +6,11 @@
 
 1. 讀取 `PROJECT_RULES.md` 與目前的 `CHANGELOG.zh-TW.md`。
 2. 實作可獨立驗證的一個變更單位。
-3. 執行 `npm run check-types`、`npm run lint`、`npm run test:unit`、`npm run compile` 與 `git diff --check`；其中 `test:unit` 已包含 Python AST pipeline。
+3. 小修改先用 `npm run test:related -- --node <測試檔名> --python <Python測試檔名>` 執行直接相關回歸，再跑 `npm run test:fast` 與 `git diff --check`。兩種 selector 可分別使用或重複；空選取或任何 selector 沒有命中皆失敗。流程調整再跑相關整合或 `npm run test:integration`；里程碑／Demo／交付前跑 `npm run test:full`。完整入口包含全部 Node／Python、型別、lint、Webview、追蹤檔與歷史密鑰掃描及 production build，不另重跑同一組檢查。純文件修改仍按 `PROJECT_RULES.md` 只檢查差異。
 4. 將改動、測試結果與限制寫入中文 Log。
-5. 建立一則含英文與繁體中文的 Git commit。
+5. 建立一則含英文與繁體中文的 Git commit，再 push 至目前 upstream；分開記錄本次通過、失敗與未執行的範圍。
+
+`test:fast` 與 `test:integration` 的測試檔案集合互斥且聯集等於完整清單；新 Node suite 預設納入整合，不依舊耗時自動跳過。`test:unit` 保留完整驗證相容入口。可加 `-- --list` 只列計畫；list、快速或局部通過不表示全套通過，開發驗證分層不影響產品執行時的安全與品質 gate。
 
 ## GitHub 持續整合建議
 

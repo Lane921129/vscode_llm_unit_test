@@ -52,8 +52,7 @@ npm ci
 python -m venv .venv
 # Windows: .venv/Scripts/python -m pip install -r requirements.txt
 # macOS/Linux: .venv/bin/python -m pip install -r requirements.txt
-npm run test:unit
-npm run compile
+npm run test:fast
 ```
 
 Then open this folder in VS Code and press `F5` to launch an Extension Development Host.
@@ -78,6 +77,18 @@ For a traceable function such as `increment(value)`, Tier 1 executes safe inputs
 
 ### Local Ollama
 
+- Capacity numbers have different meanings: `num_predict` limits output,
+  `num_ctx` requests context, and `model_info.*.context_length` is the installed
+  package's advertised capacity. The initial Analyst output cap is 1,024;
+  separately, Auto selects 1,024 context when a package advertises 2,048.
+  Neither means the whole Code Llama 70B family has a 1,024-token maximum.
+  The [Meta 70B Instruct card](https://huggingface.co/meta-llama/CodeLlama-70b-Instruct-hf)
+  describes fine-tuning up to 16K, while this specific
+  [Ollama 70b package](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)
+  advertises 2,048. Check the exact server tag, variant and package when these
+  differ. Current capacity validation still uses the package metadata;
+  entering a larger `num_ctx` does not override it, and a short probe cannot
+  prove long-context support. See the [Ollama parameter definitions](https://docs.ollama.com/modelfile).
 - Start the Ollama server and use its base URL, normally `http://127.0.0.1:11434`.
 - Select an installed model and run **Test Connection**.
 - If the model cannot enforce JSON output but can write Python, the extension retries with a plain-Python contract.
@@ -108,14 +119,23 @@ New results use `batch / source-file folder / function folder`, with bounded nam
 
 For existing results that Windows Explorer cannot ZIP, use the standard-library export helper, then copy the single ZIP over RDP. It preserves source bytes and relative paths, verifies every archived file, and reports missing source reports. See [結果匯出與短路徑](docs/結果匯出與短路徑.md).
 
-Run the same core checks locally as CI:
+Choose the development verification scope explicitly:
 
 ```bash
-npm run test:unit
-npm run compile
+npm run test:fast
+npm run test:related -- --node reviewerCommunicationContract --python test_review_test_facts
+npm run test:integration
+npm run test:full
 ```
 
-`npm run test:unit` includes TypeScript regression tests, Python AST/trace tests, and high-confidence secret scanning of tracked files and reachable Git history.
+Start small changes with related regressions and fast checks. Integration runs
+the remaining worker/Trace/mutation suites; full includes every Node/Python
+suite, strict TypeScript, lint, Webview syntax, tracked/history secret scanning
+and the production build. Add `-- --list` to preview a tier. Fast and integration
+are disjoint test-file sets whose union is full; new Node suites default to
+integration. `test:unit` remains a full-verification compatibility alias.
+An empty related request or any unmatched selector fails. A focused/fast pass
+does not establish a full-suite pass. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Each analysis run creates an output session. The main `final_report.md` records the selected model, Tier, trace facts, validation failures, coverage, mutation baseline, survived mutants, and bounded repair attempts. A mutation score is only reported after the original baseline passes in the same isolated import environment.
 
@@ -193,8 +213,7 @@ npm ci
 python -m venv .venv
 # Windows：.venv/Scripts/python -m pip install -r requirements.txt
 # macOS/Linux：.venv/bin/python -m pip install -r requirements.txt
-npm run test:unit
-npm run compile
+npm run test:fast
 ```
 
 接著以 VS Code 開啟此資料夾，按 `F5` 啟動 Extension Development Host。
@@ -217,6 +236,7 @@ npm run compile
 
 ### Local Ollama
 
+- `num_predict` 是輸出上限、`num_ctx` 是請求 Context，`model_info.*.context_length` 是已安裝套件回報的容量。初始 Analyst 輸出額度為1,024；當套件回報2,048時，Auto Context也會因取半得到1,024，兩者不能混稱模型上限。[Meta 70B Instruct模型卡](https://huggingface.co/meta-llama/CodeLlama-70b-Instruct-hf)記載最高16K微調，而[此Ollama 70b套件](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)回報2,048；不一致時須核對服務端同一tag、variant與套件。目前容量校驗仍採套件metadata，手填較大 `num_ctx` 不會覆寫該值，短探針也不能證明長Context支援。參數意義見[Ollama官方文件](https://docs.ollama.com/modelfile)。
 - 啟動 Ollama server，通常使用 `http://127.0.0.1:11434`。
 - 選取已安裝模型後按 **Test Connection**。
 - 若模型無法強制 JSON、但可生成 Python，系統會改用純 Python 輸出契約重試。
@@ -241,12 +261,16 @@ npm run compile
 - 生成測試可使用 `mock.patch`、`mock_open` 或 SQLite `:memory:`；若直接執行命令、碰觸真實檔案、使用共享 SQLite 或不安全操弄私有 helper，驗證器會拒絕。
 - 連線成功不代表模型合格；測試連線會要求模型生成無副作用 unittest fixture，並在隔離 Python 實際執行。
 
-本機可執行與 CI 相同的核心檢查：
+開發時依改動範圍選擇驗證入口：
 
 ```bash
-npm run test:unit
-npm run compile
+npm run test:fast
+npm run test:related -- --node reviewerCommunicationContract --python test_review_test_facts
+npm run test:integration
+npm run test:full
 ```
+
+小修改先相關回歸及快速檢查；流程調整增加受影響整合，里程碑／Demo 前跑完整驗證。快速入口包含嚴格 TypeScript、lint、明確低成本 Node／Python 清單與 Webview；整合入口執行其餘 worker／Trace／突變／批次案例；完整入口另含全部測試、追蹤檔與歷史密鑰掃描及 production build。可加 `-- --list` 只列計畫。快速與整合的測試檔案集合互斥且聯集完整，新 Node suite 預設納整合；`test:unit` 保留完整相容入口。related 的 selector 使用測試檔名／路徑，可重複；空選取或未命中即失敗，局部通過不能宣稱全套通過。詳見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 每次分析的 `final_report.md` 會記錄模型、Tier、Trace、驗證失敗、coverage、mutation baseline、survived mutant 與修補嘗試。只有原始 baseline 在相同隔離匯入環境通過後，才會報告 mutation score。
 

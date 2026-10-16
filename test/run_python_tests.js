@@ -1,77 +1,30 @@
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const { workspaceRoot, pythonTests, partitionTests, selectTests } = require('./verificationConfig');
+const { parseRunnerArguments } = require('./run_unit_tests');
+const { pythonExecutable } = require('./verificationRunner');
 
-const workspaceRoot = path.resolve(__dirname, '..');
-const pythonExecutable = process.platform === 'win32'
-    ? path.join(workspaceRoot, '.venv', 'Scripts', 'python.exe')
-    : path.join(workspaceRoot, '.venv', 'bin', 'python');
-
-if (!fs.existsSync(pythonExecutable)) {
-    console.error('Project virtual environment is missing. Create .venv and install requirements.txt before running Python tests.');
-    process.exitCode = 1;
-} else {
-    const unittestFiles = [
-        'python_scripts/test_rescue_unittest.py',
-        'python_scripts/test_ast_pipeline.py',
-        'python_scripts/test_static_type_shape.py',
-        'python_scripts/test_probe_case_plan.py',
-        'python_scripts/test_probe_fixture_builder.py',
-        'python_scripts/test_mock_source_contract.py',
-        'python_scripts/test_mock_namespace_behavior.py',
-        'python_scripts/test_source_setup_call_contract.py',
-        'python_scripts/test_dependency_fixture_contract.py',
-        'python_scripts/test_pipeline_reliability.py',
-        'python_scripts/test_target_result_imports.py',
-        'python_scripts/test_target_state_evidence.py',
-        'python_scripts/test_generated_test_runner.py',
-        'python_scripts/test_environment_probe.py',
-        'python_scripts/test_trace_observation_guard.py',
-        'python_scripts/test_trace_case_isolation.py',
-        'python_scripts/test_trace_timing.py',
-        'python_scripts/test_typed_caller_transport.py',
-        'python_scripts/test_assertion_evidence.py',
-        'python_scripts/test_source_expectations.py',
-        'python_scripts/test_validate_repair_scope.py',
-        'python_scripts/test_numeric_skill.py',
-        'python_scripts/test_passing_test_preservation.py',
-        'python_scripts/test_merge_test_snippets.py',
-        'python_scripts/test_review_test_facts.py',
-        'python_scripts/test_mutation_baseline_repair.py',
-        'python_scripts/test_mutation_import_layout.py',
-        'python_scripts/test_mutation_improvement.py',
-        'python_scripts/test_mutation_v2.py',
-        'python_scripts/test_mutation_engine_policy.py',
-        'python_scripts/test_mutation_code_change.py',
-        'python_scripts/test_external_mutation_runner.py',
-        'python_scripts/test_quality_experiments.py',
-        'python_scripts/test_quality_policy.py',
-        'python_scripts/test_runtime_policy.py',
-        'python_scripts/test_isolated_resources.py',
-        'python_scripts/test_external_isolated_resources.py',
-        'python_scripts/test_unc_virtual_resources.py',
-        'python_scripts/test_import_fixtures.py',
-        'python_scripts/test_import_setup_advisor.py',
-        'python_scripts/test_plan_import_initialization.py',
-        'python_scripts/test_sqlite_schema_plan.py',
-        'python_scripts/test_export_results.py',
-        'python_scripts/test_caller_artifacts.py',
-        'python_scripts/test_writer_retrieval.py',
-        'python_scripts/test_fixture_corpus.py',
-        'python_scripts/test_lab_batch_plan.py',
-        'python_scripts/test_fixture_scorecard.py',
-        'python_scripts/test_secret_scan.py'
-    ];
-    const run = (arguments_) => spawnSync(pythonExecutable, arguments_, {
-        cwd: workspaceRoot,
-        stdio: 'inherit',
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-    });
-    const unittestResult = run(['-m', 'unittest', ...unittestFiles]);
-    if (unittestResult.status === 0) {
+function runPythonTests(argv = process.argv.slice(2), { root = workspaceRoot, spawn = spawnSync,
+    log = console.log, error = console.error, fileSystem = fs, env = process.env, platform = process.platform } = {}) {
+    try {
+        const options = parseRunnerArguments(argv);
+        const files = options.selectors.length ? selectTests(pythonTests, options.selectors, root)
+            : partitionTests({ node: [], python: pythonTests }, options.tier || 'full').python;
+        if (files.length === 0) { throw new Error('No Python test files selected.'); }
+        const scan = !options.skipSecretScan && !options.selectors.length && (!options.tier || options.tier === 'full');
+        log(`[Python:${options.tier || (options.selectors.length ? 'related' : 'full')}] ${files.length} files; history secret scan ${scan ? 'included' : 'not included'}.`);
+        if (options.list) { files.forEach(file => log(file)); return 0; }
+        const executable = pythonExecutable(root, platform);
+        if (!fileSystem.existsSync(executable)) { throw new Error('Project virtual environment is missing. Create .venv and install requirements.txt before running Python tests.'); }
+        const run = args => spawn(executable, args, { cwd: root, stdio: 'inherit', shell: false,
+            env: { ...env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } });
+        const result = run(['-m', 'unittest', ...files]);
+        if (result.status !== 0) { return typeof result.status === 'number' && result.status > 0 ? result.status : 1; }
+        if (!scan) { return 0; }
         const scanResult = run(['python_scripts/secret_scan.py', '--history']);
-        process.exitCode = scanResult.status === 0 ? 0 : 1;
-    } else {
-        process.exitCode = 1;
-    }
+        return scanResult.status === 0 ? 0 : typeof scanResult.status === 'number' && scanResult.status > 0 ? scanResult.status : 1;
+    } catch (failure) { error(failure.message); return 1; }
 }
+
+if (require.main === module) { process.exitCode = runPythonTests(); }
+module.exports = { runPythonTests };

@@ -1,5 +1,9 @@
 # 專案閱讀入口
 
+## 開發驗證分層（2026-10-16）
+
+`test/verification.js` 提供 `fast`、`integration`、`full` 與明確測試篩選的 `related` 入口。快速清單由來源行為與成本審查決定，不按舊耗時動態略過；其餘 Node／Python 測試全部納入整合，兩集合互斥且聯集完整。完整入口包含嚴格型別、lint、全部測試、Webview、歷史密鑰掃描與 production build。`--list` 只列計畫，空 related／未命中 selector 不能成功。舊 `test:unit` 仍對應完整驗證，低階 Node／Python runner 無參數保留原全量相容。此分層只調整開發回饋速度，不改產品內的 Checker、Reviewer、來源身份、assertion 保全、隔離或突變 gate。
+
 ## 角色傳輸與 Reviewer 證據核對（2026-10-16）
 
 五個正式模型角色共用 `requestBudgetedOne → requestLlmApi → SerialRequestQueue → provider adapter`。Analyst 使用 `semantic-json`，Writer 與 Bug Fixer 使用 Python text，Reviewer 使用 `review-json`，QualityAnalyst 使用 `quality-json`；Mocker 是 Python scaffold 工具，沒有另一條 LLM 傳輸。連線資格只核對固定樣本，不能代替正式角色的完整來源、候選與執行證據。

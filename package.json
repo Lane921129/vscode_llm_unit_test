@@ -358,7 +358,11 @@
     "lint": "eslint src",
     "test": "vscode-test",
     "test:python": "node test/run_python_tests.js",
-    "test:unit": "npm run compile-tests && node test/run_unit_tests.js && npm run test:webview && npm run test:python",
+    "test:fast": "node test/verification.js fast",
+    "test:integration": "node test/verification.js integration",
+    "test:full": "node test/verification.js full",
+    "test:related": "node test/verification.js related",
+    "test:unit": "node test/verification.js full",
     "test:webview": "node test/extract_script.js"
   },
   "devDependencies": {
