@@ -2,7 +2,7 @@
   "schemaVersion": "mutation-engines-v1",
   "executionBackend": "isolated-unittest-v1",
   "operatorSets": {
-    "builtin": ["builtin-ast-v1", "builtin-ast-v2"],
+    "builtin": ["builtin-ast-v1", "builtin-ast-v2", "builtin-ast-v3"],
     "mutatest": ["mutatest-ast-3.1.0-v1", "mutatest-ast-3.1.0-v2"],
     "mutmut": []
   }

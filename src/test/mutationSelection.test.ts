@@ -10,10 +10,10 @@ const validProbe = { schemaVersion: 'external-mutation-probe-v1', engine: 'mutat
 test('builtin selection is explicit and does not launch an external probe', async () => {
     const selected = await selectMutationEngine(undefined, undefined, async () => { throw Error('unexpected probe'); });
     assert.deepEqual(selected, { requested: 'builtin', actual: 'builtin', workers: 2,
-        operatorSetVersion: 'builtin-ast-v2', executionBackend: 'isolated-unittest-v1' });
+        operatorSetVersion: 'builtin-ast-v3', executionBackend: 'isolated-unittest-v1' });
     const args = mutationArguments(selected, 'source with spaces.py', 'test with spaces.py', 'compute', 'Calculator', 30);
     assert.equal(path.basename(args[0]), 'basic_mutation_runner.py');
-    assert.deepEqual(args.slice(1), ['source with spaces.py', 'test with spaces.py', '0', '5', 'compute', 'Calculator', '30', '2', 'builtin-ast-v2']);
+    assert.deepEqual(args.slice(1), ['source with spaces.py', 'test with spaces.py', '0', '5', 'compute', 'Calculator', '30', '2', 'builtin-ast-v3']);
 });
 
 test('external selection retains requested engine and builds the real adapter command', async () => {

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { MutationContext, MutationRun, mutationCandidateSetId, parseIsolatedMutationRun, readStoredMutationRun } from '../mutation/mutationResult';
 import { createDefaultQualityPolicy, evaluateQuality } from '../pipeline/qualityPolicy';
+import { mutationArguments, selectMutationEngine } from '../mutation/mutationSelection';
 
 const context: MutationContext = { sourcePath: path.resolve('sample.py'), sourceHash: 'a'.repeat(64), testHash: 'b'.repeat(64),
     targetScope: { kind: 'function', qualifiedName: 'combine' }, stageTimeoutSeconds: 30 };
@@ -34,10 +35,10 @@ function qualityFixture(run: MutationRun, identity: MutationContext) {
                 targetExecuted: true, targetFullyCovered: true, missingTargetLines: [], targetBranchesCovered: true, missingTargetBranches: [] } } } };
 }
 
-test('historical builtin v1 remains readable and new v2/external evidence retains attribution', () => {
+test('historical builtin versions remain readable and v3/external evidence retains attribution', () => {
     const historical = evidence('builtin', 'builtin-ast-v1');
     delete historical.executionBackend; delete historical.mutants[0].killedBy;
-    for (const raw of [historical, evidence(), evidence('mutatest', 'mutatest-ast-3.1.0-v1')]) {
+    for (const raw of [historical, evidence(), evidence('builtin', 'builtin-ast-v3'), evidence('mutatest', 'mutatest-ast-3.1.0-v1')]) {
         const run = parseIsolatedMutationRun(raw, context, raw.engine);
         assert.equal(run.status, 'complete', run.diagnostic);
         const stored = readStoredMutationRun(JSON.stringify(run), context);
@@ -46,6 +47,55 @@ test('historical builtin v1 remains readable and new v2/external evidence retain
         assert.deepEqual(stored.run.mutants[0].killedBy, raw.mutants[0].killedBy);
         const fixture = qualityFixture(run, context);
         assert.equal(evaluateQuality(fixture.policy, fixture.evidence).fullyPassed, true);
+    }
+});
+
+test('builtin v3 measures real call omissions and both readers preserve kills and survivors', async () => {
+    const python = path.resolve(process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
+    const selected = await selectMutationEngine('builtin', 2, async () => { throw new Error('No external probe expected'); });
+    assert.equal(selected.operatorSetVersion, 'builtin-ast-v3');
+    const prefix = path.join(os.tmpdir(), 'builtin-v3-contract-');
+    const directory = fs.mkdtempSync(prefix);
+    try {
+        const source = path.join(directory, 'sample.py'), tests = path.join(directory, 'test_sample.py');
+        fs.writeFileSync(source, 'def dispatch(first, second):\n    first()\n    second()\n');
+        let previousIds: string[] | undefined;
+        for (const strong of [true, false]) {
+            // The weak control intentionally supplies no effect assertion. The
+            // mutation runner must report survivors rather than invent kills.
+            fs.writeFileSync(tests, 'import unittest\nfrom sample import dispatch\nclass Cases(unittest.TestCase):\n'
+                + '    def test_effects(self):\n        events = []\n'
+                + '        dispatch(lambda: events.append("first"), lambda: events.append("second"))\n'
+                + (strong ? '        self.assertEqual(events, ["first", "second"])\n' : '        self.assertIsInstance(events, list)\n'));
+            const actual: MutationContext = { sourcePath: source, sourceHash: createHash('sha256').update(fs.readFileSync(source)).digest('hex'),
+                testHash: createHash('sha256').update(fs.readFileSync(tests)).digest('hex'),
+                targetScope: { kind: 'function', qualifiedName: 'dispatch' }, stageTimeoutSeconds: 30 };
+            const args = mutationArguments(selected, source, tests, 'dispatch', '', 30);
+            const trial = spawnSync(python, ['-B', ...args], { encoding: 'utf8', timeout: 35000 });
+            assert.equal(trial.status, 0, trial.stderr || trial.error?.message);
+            const run = parseIsolatedMutationRun(trial.stdout, actual, 'builtin');
+            assert.equal(run.status, 'complete', run.diagnostic);
+            assert.equal(run.counts.available, 2);
+            assert.equal(run.counts.killed, strong ? 2 : 0);
+            assert.equal(run.counts.survived, strong ? 0 : 2);
+            assert.ok(readStoredMutationRun(JSON.stringify(run), actual).ok);
+            assert.ok(run.mutants.every(item => item.kind === 'call_statement_omission'
+                && (strong ? item.killedBy?.includes('test_sample.Cases.test_effects') : !item.killedBy)));
+            if (previousIds) { assert.deepEqual(run.candidateIds, previousIds); }
+            previousIds = run.candidateIds;
+            const script = 'import json,sys;sys.path.insert(0,sys.argv[1]);from quality_policy import read_stored_mutation_run;'
+                + 'data=json.load(sys.stdin);print(json.dumps(read_stored_mutation_run(data["run"],data["context"])))';
+            const checked = spawnSync(python, ['-X', 'utf8', '-B', '-c', script, path.dirname(args[0])],
+                { encoding: 'utf8', input: JSON.stringify({ run, context: actual }), timeout: 15000 });
+            assert.equal(checked.status, 0, checked.stderr || checked.error?.message);
+            const stored = JSON.parse(checked.stdout);
+            assert.equal(stored.ok, true);
+            assert.deepEqual(stored.run.counts, run.counts);
+        }
+    } finally {
+        assert.ok(directory.startsWith(prefix));
+        assert.equal(path.dirname(directory), path.dirname(prefix));
+        fs.rmSync(directory, { recursive: true, force: true });
     }
 });
 

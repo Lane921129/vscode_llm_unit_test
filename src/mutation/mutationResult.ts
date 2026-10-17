@@ -5,7 +5,7 @@ import { sameRecordedFile } from '../utils/fileIdentity';
 
 export type MutationEngine = ExternalMutationEngine | 'builtin';
 export type MutationOutcome = 'KILLED' | 'SURVIVED' | 'TIMEOUT' | 'ERROR' | 'NOT_RUN';
-export const BUILTIN_MUTATION_OPERATOR_SET_VERSION = 'builtin-ast-v2';
+export const BUILTIN_MUTATION_OPERATOR_SET_VERSION = 'builtin-ast-v3';
 const mutationEngines = require('../../contracts/mutation-engines-v1.json') as {
     executionBackend: string; operatorSets: Record<MutationEngine, string[]>;
 };

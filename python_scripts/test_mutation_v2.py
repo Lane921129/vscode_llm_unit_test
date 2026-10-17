@@ -441,5 +441,98 @@ class StructuredTestResultsTests(unittest.TestCase):
         self.assertEqual(result['testFailures'], [])
 
 
+class MutationV3Tests(unittest.TestCase):
+    def test_v3_keeps_every_v2_variant_and_adds_only_the_standalone_call(self):
+        from mutation_operators_v3 import iter_mutations as variants_v3
+        tree = ast.parse('def target(items):\n    record(items)\n    return 1\n')
+        previous = [(record, ast.dump(variant)) for record, variant in iter_mutations(tree, tree.body[0])]
+        current = [(record, ast.dump(variant)) for record, variant in variants_v3(tree, tree.body[0])]
+        self.assertEqual(current[:len(previous)], previous)
+        self.assertEqual(len(current), len(previous) + 1)
+        self.assertEqual(current[-1][0]['kind'], 'call_statement_omission')
+        self.assertEqual(current[-1][0]['line'], 2)
+
+    def test_call_omission_respects_body_scope_and_does_not_duplicate_argument_evaluation(self):
+        from mutation_operators_v3 import iter_mutations as variants_v3
+        text = ('@decorate(build())\ndef target(sink=setup()):\n'
+                '    """preserved docs"""\n    def nested(): hidden()\n'
+                '    class Nested:\n        def method(self): hidden()\n'
+                '    sink.append(make())\n')
+        tree = ast.parse(text)
+        omissions = [(record, variant) for record, variant in variants_v3(tree, tree.body[0])
+                     if record['kind'] == 'call_statement_omission']
+        self.assertEqual(len(omissions), 1)
+        record, variant = omissions[0]
+        self.assertEqual(record['line'], 7)
+        calls = []
+        namespace = {'decorate': lambda _value: lambda function: function, 'build': lambda: None,
+                     'setup': lambda: None, 'make': lambda: calls.append('argument')}
+        exec(compile(variant, '<neutral-call-omission>', 'exec'), namespace)
+        sink = []
+        namespace['target'](sink)
+        self.assertEqual((sink, calls), ([], []))
+        self.assertEqual(ast.dump(variant.body[0].body[1]), ast.dump(tree.body[0].body[1]))
+        self.assertEqual(ast.dump(variant.body[0].body[2]), ast.dump(tree.body[0].body[2]))
+
+    def measure(self, *, strong=True, workers=2, version='builtin-ast-v3', async_method=False, no_calls=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, tests = root / 'sample.py', root / 'test_sample.py'
+            helpers = ('def first(items): items.append("first")\n'
+                       'def second(items): items.append("second")\n')
+            call = 'target(items)'
+            imports = 'from sample import target\n'
+            target = 'target'
+            if async_method:
+                helpers = helpers.replace('def ', 'async def ')
+                body = ('class Worker:\n    def __init__(self, items): self.items = items\n'
+                        '    async def target(self):\n        await first(self.items)\n        await second(self.items)\n')
+                call, imports, target = 'asyncio.run(Worker(items).target())', 'import asyncio\nfrom sample import Worker\n', 'Worker.target'
+            else:
+                body = 'def target(items):\n' + ('    pass\n' if no_calls else '    first(items)\n    second(items)\n')
+            source.write_text(helpers + body, encoding='utf-8')
+            assertion = ('self.assertEqual(items, ["first", "second"])' if strong and not no_calls
+                         else 'self.assertIsInstance(items, list)')
+            tests.write_text('import unittest\n' + imports + 'class Cases(unittest.TestCase):\n'
+                             '    def test_effects(self):\n        items = []\n        ' + call + '\n        ' + assertion + '\n',
+                             encoding='utf-8')
+            before = source.read_bytes()
+            result = runner.run_mutation_trials(source, tests, max_mutations=0, target_function=target,
+                                                operator_version=version, workers=workers, stage_timeout_seconds=30)
+            self.assertEqual(source.read_bytes(), before)
+            return result
+
+    def test_real_call_omissions_are_killed_with_unique_attribution_and_stable_ids(self):
+        serial = self.measure(workers=1)
+        parallel = self.measure(workers=2)
+        for run in (serial, parallel):
+            self.assertEqual(run['operatorSetVersion'], 'builtin-ast-v3')
+            self.assertEqual(run['status'], 'complete', run.get('baseline_output'))
+            self.assertEqual((run['counts']['available'], run['counts']['killed']), (2, 2))
+            self.assertTrue(all(item['killedBy'] == ['test_sample.Cases.test_effects'] for item in run['mutants']))
+        self.assertEqual(serial['candidateIds'], parallel['candidateIds'])
+
+    def test_weak_effect_assertions_leave_real_survivors_and_legacy_v2_stays_empty(self):
+        weak = self.measure(strong=False)
+        self.assertEqual(weak['status'], 'complete')
+        self.assertEqual((weak['counts']['killed'], weak['counts']['survived']), (0, 2))
+        old = self.measure(version='builtin-ast-v2')
+        self.assertEqual(old['status'], 'no-candidates')
+        self.assertEqual(old['counts']['available'], 0)
+        self.assertFalse(old['scoreAvailable'])
+
+    def test_async_instance_method_with_required_constructor_executes_each_omission(self):
+        result = self.measure(async_method=True)
+        self.assertEqual(result['status'], 'complete', result.get('baseline_output'))
+        self.assertEqual((result['counts']['available'], result['counts']['killed']), (2, 2))
+        self.assertTrue(all(item['from'] == 'await_call' for item in result['mutants']))
+
+    def test_v3_noop_body_remains_unscored(self):
+        result = self.measure(no_calls=True)
+        self.assertEqual(result['status'], 'no-candidates')
+        self.assertEqual(result['counts']['available'], 0)
+        self.assertFalse(result['scoreAvailable'])
+
+
 if __name__ == '__main__':
     unittest.main()

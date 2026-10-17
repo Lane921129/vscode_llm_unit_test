@@ -25,6 +25,7 @@ from pathlib import Path
 from import_fixtures import mutation_environment, read_plan as import_fixture_plan
 from isolated_resources import validate_resources
 from mutation_operators_v2 import VERSION as OPERATOR_SET_VERSION_V2, iter_mutations
+from mutation_operators_v3 import VERSION as OPERATOR_SET_VERSION_V3, iter_mutations as iter_mutations_v3
 
 
 COMPARISON_REPLACEMENTS = {
@@ -610,7 +611,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         raise ValueError('max_mutations must be a non-negative integer (zero selects all candidates)')
     if type(workers) is not int or not 1 <= workers <= 4:
         raise ValueError('workers must be an integer from 1 to 4')
-    if candidate_provider is None and operator_version not in (OPERATOR_SET_VERSION, OPERATOR_SET_VERSION_V2):
+    if candidate_provider is None and operator_version not in (OPERATOR_SET_VERSION, OPERATOR_SET_VERSION_V2, OPERATOR_SET_VERSION_V3):
         raise ValueError('Unsupported builtin operator version')
     for label, value in [('timeout_seconds', timeout_seconds), ('stage_timeout_seconds', stage_timeout_seconds)]:
         if value is None and label == 'timeout_seconds':
@@ -701,6 +702,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     elif operator_version == OPERATOR_SET_VERSION:
         candidate_stream = ((candidate, apply_mutation(tree, index, target_function, target_class), None)
                             for index, candidate in enumerate(mutation_candidates(tree, scope)))
+    elif operator_version == OPERATOR_SET_VERSION_V3:
+        candidate_stream = ((candidate, variant, None) for candidate, variant in iter_mutations_v3(tree, scope))
     else:
         candidate_stream = ((candidate, variant, None) for candidate, variant in iter_mutations(tree, scope))
     try:
