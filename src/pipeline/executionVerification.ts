@@ -13,7 +13,7 @@ import { throwIfExecutionCancelled } from './executionContext';
 import { pythonToolPath } from './pythonTools';
 import { currentImportFixtures } from './importFixtures';
 import { readResourceSetupFailure } from './resourceSetupFailure';
-import { readGeneratedRunnerDiagnostics } from './generatedRunnerDiagnostics';
+import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics } from './generatedRunnerDiagnostics';
 
 interface ExecutionVerificationOptions {
     directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
@@ -116,7 +116,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                     throw new AnalysisStageError('validation', 'generated-test-runner',
                         'Generated test runner could not establish a repairable candidate load failure.', diagnostic);
                 }
-                return { ok: false, out: (run.stdout + run.stderr).trim() || diagnostic.reasonCode,
+                return { ok: false, out: generatedLoadRepairFeedback((run.stdout + run.stderr).trim() || diagnostic.reasonCode),
                     qualityGaps: [], testModule: path.basename(testFile, '.py'), repairRole: 'writer' as const };
             }
             const ok = run.code === 0 && verifyExecutionEvidence(directory, file, baseline, expected);

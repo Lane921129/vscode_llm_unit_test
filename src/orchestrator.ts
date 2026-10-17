@@ -1,7 +1,7 @@
 import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
 import { loadTargetProbeFixtures, ProbeFixtureIdentity } from './pipeline/probeInputFixtures';
 import { traceTimingPreferences } from './pipeline/traceStartupBudget';
-import { readGeneratedRunnerDiagnostics } from './pipeline/generatedRunnerDiagnostics';
+import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics } from './pipeline/generatedRunnerDiagnostics';
 import { localize, withLanguage } from './i18n/core';
 import { initI18n } from './i18n';
 import * as vscode from 'vscode';
@@ -3628,8 +3628,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             throw new AnalysisStageError('validation', 'generated-test-runner',
                                 localize('生成測試的載入或身分證據無效；停止修復，未計入通過。'), runnerDiagnostic);
                         }
-                        return { ok: false, out: 'GENERATED_TEST_LOAD_FAILED: Repair the generated test imports using the canonical target module; '
-                            + 'do not guess packages or change application source.\n' + `${run.stdout}${run.stderr}`.trim(),
+                        return { ok: false, out: generatedLoadRepairFeedback(`${run.stdout}${run.stderr}`),
                             qualityGaps: [], repairRole: 'writer' as const };
                     }
                     const scenarios = await inventory(code);

@@ -24,6 +24,14 @@ const localPath = (value: unknown): value is string => typeof value === 'string'
 const invalid = (): never => { throw new AnalysisStageError('validation', 'generated-test-runner',
     'Generated test runner diagnostics could not be verified.', { reasonCode: 'generated-test-diagnostics-invalid' }); };
 
+/** Call only after the current runner artifacts authorize whole-candidate Writer repair. */
+export function generatedLoadRepairFeedback(output: string): string {
+    return 'GENERATED_TEST_LOAD_FAILED: Repair the generated test imports or module/class setup shown in the actual failure. '
+        + 'Check decorator arguments and fixture construction, using the canonical target binding. '
+        + 'Do not guess packages, change application source or treat this load failure as a target exception oracle.\n'
+        + output.trim();
+}
+
 function boundedJson(file: string): unknown {
     const size = fs.statSync(file).size;
     if (size <= 0 || size > 131072) { return invalid(); }

@@ -59,6 +59,45 @@ test('real Python generated import failure routes only to Writer and retains sep
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test('a real candidate decorator initialization error reaches Writer with failing load evidence before any baseline exists', async () => {
+    const f = fixture(), roles: string[] = [], failures: string[] = [];
+    let methodRouterCalls = 0;
+    const initial = 'import unittest\nfrom unittest.mock import patch\nfrom sqlite3 import Connection\nfrom sample import target\n'
+        + 'class Cases(unittest.TestCase):\n'
+        + '    @patch("sample.connection", return_value=Connection())\n'
+        + '    def test_value(self, connection):\n        self.assertEqual(target(2), 3)\n';
+    try {
+        const baseline = await runExecutionVerification({ ...f.options, generate: async () => initial, hooks: {
+            validate: async () => undefined, repairRole: () => { methodRouterCalls++; return 'bug-fixer'; },
+            revise: async (_code, failure, role) => {
+                roles.push(role); failures.push(failure);
+                assert.equal(fs.existsSync(path.join(f.directory, 'execution_baseline.json')), false);
+                return good;
+            }, event: () => {}
+        } });
+        assert.deepEqual(roles, ['writer']);
+        assert.equal(methodRouterCalls, 0);
+        assert.match(failures[0], /TypeError/);
+        assert.match(failures[0], /module\/class setup shown in the actual failure/);
+        assert.match(failures[0], /decorator arguments and fixture construction/);
+        assert.doesNotMatch(failures[0], /Target invocation test identity mismatch/);
+        const results = fs.readdirSync(f.directory).filter(name => /^runner_\d+\.jsonl$/.test(name))
+            .map(name => JSON.parse(fs.readFileSync(path.join(f.directory, name), 'utf8')));
+        assert.equal(results.length, 2);
+        assert.equal(results[0].status, 'runner-error');
+        assert.equal(results[0].loadDiagnostics.reasonCode, 'generated-test-load-failed');
+        assert.equal(results[0].testsRun, 1);
+        assert.deepEqual(results[0].testFailures, [{ testId: null, kind: 'error', phase: 'fixture-or-load' }]);
+        assert.equal(results[1].status, 'passed');
+        assert.notEqual(results[0].identity.testRunId, results[1].identity.testRunId);
+        assert.notEqual(results[0].identity.testHash, results[1].identity.testHash);
+        assert.equal(results[1].identity.testHash, baseline.testHash);
+        assert.equal(verifyExecutionEvidence(f.directory, f.file, baseline,
+            { runId: f.journal.runId, sourceHash: f.journal.sourceHash, target: 'target' }), true);
+        assert.equal(fs.readFileSync(f.file, 'utf8'), source);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test('verified pure loader classification bypasses method guessing and arithmetic rewrites, then resets on a genuine test failure', async () => {
     const roles: string[] = [];
     let executions = 0, arithmeticCalls = 0;

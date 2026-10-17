@@ -4,6 +4,14 @@
 
 ## 2026-10-17
 
+### 車輛完整批次結果與候選載入錯誤的 Writer 修訂
+
+- 固定管線全批已完成八檔／212目標，耗時6小時47分18.359秒、實際Ollama生成呼叫1189次：6完整通過、24保留可執行成果、182失敗。失敗包括候選驗證157、模型格式18、來源歧義3、generated runner 3與pipeline timeout 1；保留成果包括品質停滯19與候選驗證5。來源與520項管線產物摘要未變，設定及SecretStorage寫入0。這是全數處理完成，不是整個車輛專案品質通過；本批使用前一個種子／投影修正，沒有包含下列載入修補。
+- 三份runner失敗候選在decorator建立 `Connection()`／patch參數時拋錯，卻被當成不可修訂的loader工具錯誤。現在核對目前測試檔的native身分、module globals及有界traceback，在候選的實際setup呼叫點成立時，以unittest既有 `_FailedTest` 路徑保留真正例外與一筆載入失敗證據，交Writer整份修訂。純來源import失敗、錯檔、無候選frame或真正loader問題不借此取得修訂路由；隔離錯誤與黏著違規維持原阻擋。
+- 初版最深frame判斷漏掉runtime guard包裝的SQLite呼叫，新增真實decorator整合先重現失敗，再以候選中最後的實際執行位置區分setup呼叫及來源import；不憑例外文字猜所有者。full／execution共用回饋同時列imports、module/class setup、decorator與fixture，不再把這些失敗全說成缺import；實際錯誤保留，載入錯誤不是目標例外oracle。
+- 驗證：三檔相關Node15／15（含full真實執行、同候選Reviewer及builtin突變），Python runner24／24，快測Node736／736、Python42／42，均0略過。三份原始車輛失敗候選以新runner重播皆交Writer，刻意在模型修訂前停止，原候選與來源摘要不變；重播不算測試或品質通過。runner修補後、回饋文字修訂前的兩個真實3B目標共15次請求，仍因未定義名稱、無效patch及重複修訂失敗，未進突變。
+- 後續以獨立本機服務及測試暫存模型快取建立7B對照，角色資格與正式車輛驗證分開記錄；本節不宣稱7B或新版212目標已成功。尚未重跑修補後完整開發回歸、VS Code／Mocha、遠端CI或DGX；原有八個WIP保留，不納入本次提交。未修改車輛來源中的三處重複定義，也未放寬執行、身分、Reviewer或突變品質門檻。
+
 ### Writer 種子契約與不可斷言回傳診斷
 
 - 本機車輛重現發現：沒有 grounded seed case 時，固定指令仍宣稱「One verified case」；生成與預執行修訂現在共用單一方法、單一真目標呼叫的範圍，明確區分已選實跑案例與同測試控制的依賴情境。完整來源、既有 Python 輸出及安全契約保留，不由 Host 代寫 fixture、expected 或 assertion。

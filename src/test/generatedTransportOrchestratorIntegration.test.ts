@@ -19,7 +19,7 @@ test('formal candidate transport preserves literals and routes real loader failu
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
     const roles: string[] = [];
-    let scenario: 'indented-fence' | 'loader-error' = 'indented-fence';
+    let scenario: 'indented-fence' | 'loader-error' | 'decorator-error' = 'indented-fence';
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
@@ -46,16 +46,27 @@ test('formal candidate transport preserves literals and routes real loader failu
             roles.push('reviewer'); response = '{"findings":[]}';
         } else if (request.prompt.startsWith('WRITER_REVISION_REQUEST_V2')) {
             roles.push('writer-revision');
-            assert.equal(scenario, 'loader-error');
+            assert.notEqual(scenario, 'indented-fence');
             assert.match(request.prompt, /GENERATED_TEST_LOAD_FAILED/);
-            assert.match(request.prompt, /ModuleNotFoundError/);
-            assert.match(request.prompt, /missing_generated_helper/);
+            assert.match(request.prompt, /module\/class setup shown in the actual failure/);
+            if (scenario === 'loader-error') {
+                assert.match(request.prompt, /ModuleNotFoundError/);
+                assert.match(request.prompt, /missing_generated_helper/);
+            } else {
+                assert.match(request.prompt, /TypeError/);
+                assert.match(request.prompt, /decorator arguments and fixture construction/);
+            }
             assert.doesNotMatch(request.prompt, /Target invocation test identity mismatch/);
             response = candidate;
         } else {
             roles.push('writer');
             assert.match(request.prompt, /WRITER_SEED_V1/);
-            response = scenario === 'loader-error'
+            response = scenario === 'decorator-error'
+                ? candidate.replace('from sample import compute\n',
+                    'from sample import compute\nfrom unittest.mock import patch\nfrom sqlite3 import Connection\n')
+                    .replace('    def test_actual_result(self):',
+                        '    @patch("builtins.open", return_value=Connection())\n    def test_actual_result(self, opened):')
+                : scenario === 'loader-error'
                 ? candidate.replace('from sample import compute\n', 'from sample import compute\nimport missing_generated_helper\n')
                 : '```python\n' + candidate.split('\n').map(line => '  ' + line).join('\n') + '\n```';
         }
@@ -70,7 +81,7 @@ test('formal candidate transport preserves literals and routes real loader failu
             testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON,
             roleQualification: { writer: { state: 'verified', reason: 'fixed fixture' },
                 reviewer: { state: 'verified', reason: 'fixed fixture' }, bugFixer: { state: 'verified', reason: 'fixed fixture' } } });
-        for (scenario of ['indented-fence', 'loader-error'] as const) {
+        for (scenario of ['indented-fence', 'loader-error', 'decorator-error'] as const) {
             await t.test(scenario, async () => {
                 roles.length = 0;
                 const output = path.join(directory, scenario);
@@ -82,15 +93,15 @@ test('formal candidate transport preserves literals and routes real loader failu
                 const events = fs.readFileSync(find('role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                 const knowledge = JSON.parse(fs.readFileSync(find('function_knowledge.json'), 'utf8'));
                 assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify(knowledge.lastFailure));
-                assert.deepEqual(roles, scenario === 'loader-error' ? ['analyst', 'writer', 'writer-revision', 'reviewer']
-                    : ['analyst', 'writer', 'reviewer']);
+                assert.deepEqual(roles, scenario === 'indented-fence' ? ['analyst', 'writer', 'reviewer']
+                    : ['analyst', 'writer', 'writer-revision', 'reviewer']);
                 const checkpoint = JSON.parse(fs.readFileSync(find('quality_baseline.json'), 'utf8'));
                 assert.ok(checkpoint.code.includes(candidate.trimEnd()));
                 const approved = events.findIndex(event => event.stage === 'reviewer' && event.status === 'approved');
                 const mutated = events.findIndex(event => event.stage === 'mutation' && event.status === 'measured');
                 assert.ok(approved >= 0 && mutated > approved);
                 assert.equal(events[approved].detail.approvedCodeHash, checkpoint.codeHash);
-                if (scenario === 'loader-error') {
+                if (scenario !== 'indented-fence') {
                     const failed = events.find(event => event.stage === 'validation' && event.status === 'load-failed');
                     assert.equal(failed.detail.reasonCode, 'generated-test-load-failed');
                     assert.equal(failed.detail.repairRole, 'writer');

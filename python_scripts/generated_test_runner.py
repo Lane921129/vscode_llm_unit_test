@@ -5,12 +5,13 @@ extensions. Coverage starts/saves outside the guarded application execution.
 """
 import argparse
 from contextlib import contextmanager, nullcontext
+import dis
 import json
 import os
 import sys
 import unittest
 from uuid import uuid4
-from target_invocation import TargetInvocationTracker
+from target_invocation import TargetInvocationTracker, canonical_path
 from import_fixtures import evidence as import_fixture_evidence
 from isolated_resources import set_generated_test_file
 from runtime_policy import ISOLATION_EXIT_CODE, ISOLATION_MARKER, POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, guarded_runtime
@@ -63,6 +64,34 @@ def suite_load_diagnostics(suite):
                    'failedTests': min(failed, 32), 'truncated': truncated}
                   if failed else None)
     return diagnostic, bool(failed and only_failed and not pending)
+
+
+def candidate_load_failure(error, module_name, test_file):
+    """Recognize this candidate's setup call, never an imported source failure."""
+    trace = error.__traceback__
+    candidate = None
+    for _ in range(256):
+        if trace is None:
+            break
+        frame = trace.tb_frame
+        filename = frame.f_code.co_filename
+        if (frame.f_globals.get('__name__') == module_name
+                and os.path.isabs(filename)
+                and not filename.startswith(('\\\\', '//', '\\??\\'))
+                and canonical_path(filename) == test_file):
+            candidate = trace
+        trace = trace.tb_next
+    if trace is not None or candidate is None:
+        return False
+    # An API invoked by candidate setup may raise inside a library or guard
+    # wrapper. A plain import whose dependency failed belongs to that source.
+    # Skip inline bytecode caches by retaining the last logical instruction.
+    operation = None
+    for instruction in dis.get_instructions(candidate.tb_frame.f_code):
+        if instruction.offset > candidate.tb_lasti:
+            break
+        operation = instruction.opname
+    return operation is not None and operation not in ('IMPORT_NAME', 'IMPORT_FROM', 'IMPORT_STAR')
 
 
 class StructuredTestResult(unittest.TextTestResult):
@@ -183,11 +212,17 @@ def main(argv=None):
                     suite = unittest.TestLoader().loadTestsFromName(args.test_module)
                 except RuntimePolicyError:
                     raise
-                except Exception:
-                    load_diagnostics = {'version': 'generated-test-load-diagnostics-v1',
-                                        'reasonCode': 'generated-test-loader-error',
-                                        'failedTests': 0, 'truncated': False}
-                    raise
+                except Exception as error:
+                    if tracker and candidate_load_failure(error, args.test_module, tracker.test_file):
+                        # unittest wraps ImportError in _FailedTest, but other
+                        # candidate import/decorator errors can escape its loader.
+                        # Preserve the real error in the same failing-suite path.
+                        suite = unittest.TestSuite([unittest.loader._FailedTest(args.test_module, error)])
+                    else:
+                        load_diagnostics = {'version': 'generated-test-load-diagnostics-v1',
+                                            'reasonCode': 'generated-test-loader-error',
+                                            'failedTests': 0, 'truncated': False}
+                        raise
                 load_diagnostics, only_load_failures = suite_load_diagnostics(suite)
                 if tracker:
                     if not tracker.matches_test_module(args.test_module):

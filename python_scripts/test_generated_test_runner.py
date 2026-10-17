@@ -79,17 +79,63 @@ class GeneratedRunnerTests(unittest.TestCase):
         self.assertNotIn('private-loader-detail', json.dumps(result.structured_result))
         self.assertFalse(result.target_evidence['observed'])
 
-    def test_uncaught_source_loader_exception_has_bounded_diagnostic(self):
+    def test_candidate_module_exception_preserves_failing_load_evidence(self):
         result, _ = self.run_case('self.assertTrue(True)\n', 'def target(): return 2\n',
-                                  setup='raise ValueError("private-direct-loader-detail")\n',
+                                  setup='raise ValueError("private-candidate-loader-detail")\n',
                                   target_name='target', result_json=True)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertNotIn('Target invocation test identity mismatch', result.stderr)
         self.assertEqual(result.structured_result['status'], 'runner-error')
-        self.assertEqual(result.structured_result['loadDiagnostics']['reasonCode'], 'generated-test-loader-error')
-        self.assertNotIn('private-direct-loader-detail', json.dumps(result.structured_result))
-        self.assertEqual(result.structured_result['testsRun'], 0)
+        self.assertEqual(result.structured_result['loadDiagnostics'], {
+            'version': 'generated-test-load-diagnostics-v1', 'reasonCode': 'generated-test-load-failed',
+            'failedTests': 1, 'truncated': False,
+        })
+        self.assertNotIn('private-candidate-loader-detail', json.dumps(result.structured_result))
+        self.assertIn('private-candidate-loader-detail', result.stderr)
+        self.assertEqual(result.structured_result['testsRun'], 1)
+        self.assertEqual(result.structured_result['testFailures'],
+                         [{'testId': None, 'kind': 'error', 'phase': 'fixture-or-load'}])
+        self.assertEqual(result.target_evidence['testResult']['errors'], 1)
         self.assertFalse(result.target_evidence['observed'])
+        self.assertTrue(result.target_evidence['profileIntact'])
+
+    def test_uncaught_source_loader_exception_has_bounded_diagnostic(self):
+        result, _ = self.run_case('self.assertTrue(True)\n',
+                                  'def target(): return 2\nraise ValueError("private-source-loader-detail")\n',
+                                  setup='from sample import target\n', target_name='target', result_json=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.structured_result['loadDiagnostics']['reasonCode'], 'generated-test-loader-error')
+        self.assertEqual(result.structured_result['testsRun'], 0)
+        self.assertNotIn('private-source-loader-detail', json.dumps(result.structured_result))
+        self.assertFalse(result.target_evidence['observed'])
+
+    def test_candidate_decorator_error_requires_the_exact_expected_test_file(self):
+        setup = ('from sample import target\nclass BrokenDecorator:\n'
+                 '    @unittest.skipIf(int(None), "unused")\n    def unused(self): pass\n')
+        for expected_file, code, tests_run in [('generated.py', 'generated-test-load-failed', 1),
+                                               ('other_generated.py', 'generated-test-loader-error', 0)]:
+            with self.subTest(expected_file=expected_file):
+                result, _ = self.run_case('self.assertEqual(target(), 2)\n', 'def target(): return 2\n',
+                                          setup=setup, target_name='target', result_json=True,
+                                          expected_test_file=expected_file)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.structured_result['loadDiagnostics']['reasonCode'], code)
+                self.assertEqual(result.structured_result['testsRun'], tests_run)
+                self.assertFalse(result.target_evidence['observed'])
+                if tests_run:
+                    self.assertIn('TypeError', result.stderr)
+                    self.assertEqual(result.target_evidence['testResult']['errors'], 1)
+
+    def test_candidate_load_repair_cannot_hide_a_swallowed_isolation_violation(self):
+        setup = ('try:\n    open("blocked-load.txt", "w")\nexcept Exception:\n    pass\n'
+                 'raise ValueError("candidate setup also failed")\n')
+        result, files = self.run_case('self.assertTrue(True)\n', 'def target(): return 2\n',
+                                      setup=setup, target_name='target', result_json=True)
+        self.assertEqual(result.returncode, 86, result.stderr)
+        self.assertEqual(result.structured_result['status'], 'isolation-blocked')
+        self.assertNotIn('blocked-load.txt', files)
+        self.assertFalse(result.target_evidence['observed'])
+        self.assertNotEqual(result.target_evidence['status'], 'passed')
 
     def test_successfully_loaded_wrong_test_file_still_stops_before_target_execution(self):
         result, _ = self.run_case('self.assertEqual(target(), 2)\n', 'def target(): return 2\n',
