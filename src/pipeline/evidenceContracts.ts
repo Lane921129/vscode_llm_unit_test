@@ -141,7 +141,7 @@ export function summarizeObservationPhase(observations?: BehaviorObservations): 
     return `${observations.examples.length} successful, ${observations.errors.length} exceptional, ${blocked} blocked`;
 }
 
-/** Persist full snapshots in artifacts; prompts consume a lossless projection of assertion facts. */
+/** Keep assertion facts intact; unavailable return representations remain in the full artifacts. */
 export function observationsForPrompt(observations?: BehaviorObservations): unknown {
     if (!observations) { return null; }
     const project = (items: BehaviorObservation[] = []) => {
@@ -149,7 +149,19 @@ export function observationsForPrompt(observations?: BehaviorObservations): unkn
         for (const item of items) {
             const { case_id, source: _source, input_before: _before, input_after: _after, ...fact } = item;
             const key = JSON.stringify(fact);
-            if (!facts.has(key)) { facts.set(key, { ...fact, case_ids: [] }); }
+            if (!facts.has(key)) {
+                const projected: Record<string, unknown> = { ...fact, case_ids: [] };
+                if (fact.result_assertable === false || fact.call_assertable === false || fact.result_truncated === true
+                    || fact.oracle_reason || fact.non_deterministic_operations?.length
+                    || fact.result_type === 'non_assertable' || projected.non_assertable === true) {
+                    if (fact.result !== undefined || fact.result_type !== undefined) {
+                        delete projected.result;
+                        delete projected.result_type;
+                        projected.resultDetails = 'artifact-only; non-assertable return';
+                    }
+                }
+                facts.set(key, projected);
+            }
             if (case_id) { (facts.get(key)!.case_ids as string[]).push(case_id); }
         }
         return [...facts.values()];

@@ -2,7 +2,8 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildCompactWriterContext, buildWriterRevisionContext, partitionWriterObservations } from '../prompts/compactWriterContext';
 import { estimatePromptTokens, promptFits } from '../prompts/promptBudget';
-import { BehaviorObservations, observationsForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
+import { BehaviorObservations, dependencyContextsForPrompt, observationsForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
+import { getSemanticAnalyzerUserPrompt } from '../roles/semanticAnalyzer';
 
 const evidence: WriterEvidenceBundleV3 = { schemaVersion: 'writer-evidence-v3', sourceHash: 'a'.repeat(64), semanticGuidance: '',
     ruleSelection: { schemaVersion: 'rule-selection-v2', sourceHash: 'a'.repeat(64), ids: [], selectedRules: [], guidance: '',
@@ -95,11 +96,73 @@ test('nonassertable and blocked diagnostics never appear under verified target o
     assert.deepEqual(verified.examples.map((item: any) => item.case_ids), [['return']]);
     assert.deepEqual(verified.errors.map((item: any) => item.case_ids), [['error']]);
     assert.doesNotMatch(JSON.stringify([verified, dependencies]), /private tool representation|TraceSafetyError|ambient|non_assertable/);
-    assert.match(JSON.stringify(diagnostics), /private tool representation|non_assertable|uncontrolled-ambient-read|TraceSafetyError/);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /private tool representation|"result_type":"non_assertable"/);
+    for (const reason of ['artifact-only; non-assertable return', 'uncontrolled-ambient-read', 'TraceSafetyError']) {
+        assert.ok(JSON.stringify(diagnostics).includes(reason), reason);
+    }
     assert.deepEqual(diagnostics.target.blocked_operations, ['network connection']);
     assert.equal(diagnostics.dependencies[0].dependencyIndex, 1); assert.equal(diagnostics.dependencies[0].sourceHash, 'b'.repeat(64));
     assert.match(prompt, /never expected values, expected exceptions, fixture returns or fixture types/);
     assert.equal(JSON.stringify(observations), before);
+});
+
+test('opaque return diagnostics cannot become model fixture values or types while original evidence stays intact', () => {
+    const observations = trace();
+    observations.examples[1] = { case_id: 'opaque-a', args: [], result: '<non_assertable: OpaqueHandleA>',
+        result_type: 'OpaqueHandleA', result_assertable: false, call_assertable: true };
+    observations.examples.push({ ...observations.examples[1], case_id: 'opaque-b',
+        result: '<non_assertable: OpaqueHandleB>', result_type: 'OpaqueHandleB' });
+    observations.examples.push({ ...observations.examples[1], case_id: 'opaque-a-repeat' });
+    const before = JSON.stringify(observations);
+    const projected = observationsForPrompt(observations) as any;
+    assert.deepEqual(projected.examples[0], { args: ['1'], result: '7', call_assertable: true,
+        result_assertable: true, case_ids: ['return'] });
+    assert.equal(projected.examples.length, 3, 'different opaque outcomes remain distinct; only identical facts group');
+    assert.deepEqual(projected.examples.slice(1).map((item: any) => item.case_ids),
+        [['opaque-a', 'opaque-a-repeat'], ['opaque-b']]);
+    projected.examples.slice(1).forEach((item: any) => {
+        assert.equal(Object.hasOwn(item, 'result'), false);
+        assert.equal(Object.hasOwn(item, 'result_type'), false);
+        assert.equal(item.result_assertable, false);
+        assert.equal(item.call_assertable, true);
+        assert.equal(item.resultDetails, 'artifact-only; non-assertable return');
+    });
+    const dependency = { name: 'helper', code: 'def helper(): return connector()\n',
+        sourceHash: 'b'.repeat(64), traceResult: observations };
+    const context = { traceResult: observations, dependencyContexts: [dependency] };
+    const prompts = [render(context), buildWriterRevisionContext({ module: 'sample', name: 'load', source, context, evidence }),
+        getSemanticAnalyzerUserPrompt({ schemaVersion: 'analysis-evidence-v2',
+            target: { moduleName: 'sample', functionName: 'load', source, sourceHash: 'a'.repeat(64) }, callSites: [],
+            initialTargetObservations: observations, dependencies: [{ ...dependency, observations }] }),
+        JSON.stringify(dependencyContextsForPrompt([dependency]))];
+    prompts.forEach(prompt => {
+        assert.doesNotMatch(prompt, /OpaqueHandleA|OpaqueHandleB/);
+        assert.match(prompt, /opaque-a-repeat/);
+        assert.match(prompt, /"result_assertable":false/);
+        assert.match(prompt, /artifact-only; non-assertable return/);
+    });
+    const split = partitionWriterObservations(observations);
+    assert.deepEqual((split.observations!.examples as any[]).map(item => item.case_ids), [['return']]);
+    assert.equal((split.diagnostics!.examples as any[]).length, 2);
+    assert.equal(JSON.stringify(observations), before);
+});
+
+test('assertable literal sentinel text stays exact; explicit unavailable returns keep their safety reasons', () => {
+    const observations = trace();
+    observations.examples = [{ args: [], result: "'<non_assertable: ordinary string>'", result_type: 'str',
+        result_assertable: true, call_assertable: true }];
+    const literal = observationsForPrompt(observations) as any;
+    assert.equal(literal.examples[0].result, observations.examples[0].result);
+    assert.equal(literal.examples[0].result_type, 'str');
+    for (const flags of [{ result_assertable: false }, { call_assertable: false }, { result_truncated: true },
+        { oracle_reason: 'uncontrolled-ambient-read' as const }, { non_deterministic_operations: ['clock'] }]) {
+        const current = { ...observations, examples: [{ ...observations.examples[0], ...flags }] };
+        const before = JSON.stringify(current), result = (observationsForPrompt(current) as any).examples[0];
+        assert.equal(Object.hasOwn(result, 'result'), false);
+        assert.equal(Object.hasOwn(result, 'result_type'), false);
+        for (const [key, value] of Object.entries(flags)) { assert.deepEqual(result[key], value); }
+        assert.equal(JSON.stringify(current), before);
+    }
 });
 
 test('observation partition is lossless for producer safety flags and complete phase metadata', () => {

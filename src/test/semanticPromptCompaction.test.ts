@@ -62,7 +62,11 @@ test('the complete serialized Analyst wire retains source, setup, every observat
     const facts = JSON.parse(body.prompt.split('=== VERIFIED TARGET EXECUTION OBSERVATIONS ===\n')[1].split('\n')[0]);
     assert.equal(facts.examples.length, 10);
     assert.equal(facts.errors.length, 1);
-    assert.deepEqual(facts.examples, examples.map(({ case_id, ...fact }) => ({ ...fact, case_ids: [case_id] })));
+    assert.deepEqual(facts.examples.slice(0, 9), examples.slice(0, 9).map(({ case_id, ...fact }) => ({ ...fact, case_ids: [case_id] })));
+    assert.deepEqual(facts.examples[9], { args: examples[9].args, kwargs: examples[9].kwargs,
+        constructor_args: examples[9].constructor_args, constructor_kwargs: examples[9].constructor_kwargs,
+        call_assertable: false, result_assertable: false, inputs_mutated: true, case_ids: ['case-9'],
+        resultDetails: 'artifact-only; non-assertable return' });
     assert.deepEqual(facts.errors, errors.map(({ case_id, ...fact }) => ({ ...fact, case_ids: [case_id] })));
     assert.equal(facts.complete, true);
     assert.deepEqual(body.format, SEMANTIC_PLAN_RESPONSE_SCHEMA);

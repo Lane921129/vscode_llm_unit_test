@@ -22,7 +22,7 @@ export function buildWriterAdditionMethodInstruction(methodName: string): string
 /** Instructions are additive to the existing evidence and Python output contract. */
 export function buildWriterSeedSystemPrompt(systemPrompt: string): string {
     return `${systemPrompt}\n\nWRITER_SEED_V1 OUTPUT SCOPE\n`
-        + 'For this formal seed request, replace comprehensive-suite, all-boundary and wider Analyst scenario requirements with exactly ONE test method and ONE target call. '
+        + 'For initial seed generation and every pre-execution repair, replace comprehensive-suite, all-boundary and wider Analyst scenario requirements with exactly ONE test method and ONE target call. '
         + 'When WRITER_SEED_CASE_FACTS_V1 is supplied, use ONLY that selected executed case and its exact input; copy targetCall when provided. '
         + 'Do not select another observed example or substitute an Analyst/model hint, even if it appears more realistic. '
         + 'Expansion happens only after this seed executes successfully. If no selected grounded case is supplied, use one explicitly controlled dependency scenario supported by the existing target and fixture contract; never invent inputs, expected values or exceptions. '
@@ -42,10 +42,11 @@ export function buildWriterAdditionSystemPrompt(systemPrompt: string): string {
 
 export function buildWriterSeedPrompt(evidencePrompt: string): string {
     return `${evidencePrompt}\n\nWRITER_SEED_V1\n`
-        + 'One verified case, exactly one test method; imports/fixtures; real target call. '
-        + 'Assert observed return/exception or explicitly controlled dependency behavior; do not invent an expected value or exception. '
-        + 'No rule-name/speculative tests, copied source or target mocks. '
-        + 'Host must execute this seed successfully before expansion; existing output contract.';
+        + 'One test method and one real target call; explicit imports/fixtures. '
+        + 'Use WRITER_SEED_CASE_FACTS_V1 if supplied; else one source-supported, same-test controlled dependency case. '
+        + 'Diagnostics never supply fixture values/types/imports. '
+        + 'No guesses, speculative tests, copied source or target mocks. '
+        + 'Pass execution before expansion; existing output contract.';
 }
 
 /** A prefix inside a larger unapproved draft is not a complete baseline unit. */

@@ -122,11 +122,17 @@ test('controlled observation projection keeps complete assertion facts while lea
             call_assertable: index !== 5, inputs_mutated: index === 5, input_before: snapshot, input_after: snapshot })),
         errors: [{ case_id: 'error', args: [longRepr], constructor_kwargs: { owner: longRepr }, exception: 'CustomError',
             exception_module: 'sample', exception_qualname: 'Owner.CustomError', message: longRepr, call_assertable: true }] };
+    const original = JSON.stringify(observations);
     const prompt = getSemanticAnalyzerUserPrompt(evidence({ initialTargetObservations: observations }));
     const projected = jsonSection(prompt, '=== VERIFIED TARGET EXECUTION OBSERVATIONS ===');
     assert.equal(projected.examples.length, 6);
+    for (let index = 0; index < 5; index++) {
+        assert.deepEqual(projected.examples[index], { args: [String(index), longRepr], kwargs: { suffix: longRepr },
+            constructor_args: [longRepr], constructor_kwargs: { owner: longRepr }, result: longRepr, result_type: 'str',
+            result_assertable: true, result_truncated: false, call_assertable: true, inputs_mutated: false, case_ids: [`case-${index}`] });
+    }
     assert.deepEqual(projected.examples[5], { args: ['5', longRepr], kwargs: { suffix: longRepr },
-        constructor_args: [longRepr], constructor_kwargs: { owner: longRepr }, result: longRepr, result_type: 'str',
+        constructor_args: [longRepr], constructor_kwargs: { owner: longRepr }, resultDetails: 'artifact-only; non-assertable return',
         result_assertable: false, result_truncated: true, call_assertable: false, inputs_mutated: true, case_ids: ['case-5'] });
     assert.deepEqual(projected.errors[0], { args: [longRepr], constructor_kwargs: { owner: longRepr }, exception: 'CustomError',
         exception_module: 'sample', exception_qualname: 'Owner.CustomError', message: longRepr, call_assertable: true, case_ids: ['error'] });
@@ -136,6 +142,7 @@ test('controlled observation projection keeps complete assertion facts while lea
     assert.match(projected.snapshotDetails, /artifact-only; not state assertions/);
     assert.ok(!prompt.includes(artifactValue));
     assert.match(prompt, /truncated or unassertable records are diagnostics/);
+    assert.equal(JSON.stringify(observations), original, 'raw snapshots and unavailable return details remain in artifacts');
 });
 
 test('all supplied dependency sources, source bindings and caller evidence survive the projection', () => {

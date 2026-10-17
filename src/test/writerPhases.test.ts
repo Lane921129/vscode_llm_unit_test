@@ -25,11 +25,33 @@ test('seed requests one evidence-supported executable case without changing the 
     const evidence = 'Complete binding and source evidence\nVerified target(1) = 2';
     const prompt = buildWriterSeedPrompt(evidence);
     assert.ok(prompt.startsWith(evidence));
-    assert.match(prompt, /exactly one test method/);
-    assert.match(prompt, /execute this seed successfully before/);
-    assert.match(prompt, /do not invent an expected value or exception/i);
+    assert.match(prompt, /One test method and one real target call/);
+    assert.match(prompt, /Pass execution before expansion/);
+    assert.match(prompt, /No guesses/);
     assert.match(prompt, /existing output contract/);
     assert.doesNotMatch(prompt, /Return.*JSON/);
+});
+
+test('an opaque return diagnostic never becomes a claimed verified seed case or a fixture type', () => {
+    const diagnostic = JSON.stringify({ complete: true, examples: [{ args: [], result_assertable: false,
+        result: '<non_assertable: OpaqueHandle>', result_type: 'OpaqueHandle' }] });
+    const evidence = `SOURCE: def acquire(): return client.open()\nDIAGNOSTICS: ${diagnostic}`;
+    const prompt = buildWriterSeedPrompt(evidence);
+    assert.ok(prompt.startsWith(evidence));
+    assert.equal(prompt.split(diagnostic).length - 1, 1, 'the complete diagnostic remains available for audit');
+    assert.doesNotMatch(prompt, /One verified case/);
+    assert.match(prompt, /WRITER_SEED_CASE_FACTS_V1 if supplied; else one source-supported, same-test controlled dependency case/);
+    assert.match(prompt, /Diagnostics never supply fixture values\/types\/imports/);
+    assert.doesNotMatch(prompt, /assertIsInstance|return_value\s*=/, 'the host supplies no fabricated fixture or assertion');
+});
+
+test('the explicit grounded seed packet remains intact under the conditional seed instructions', () => {
+    const packet = 'WRITER_SEED_CASE_FACTS_V1\n' + JSON.stringify({ target: 'increment', targetCall: 'increment(7)',
+        observedOutcome: 'returned', observedResult: '8' });
+    const prompt = buildWriterSeedPrompt(`complete source and setup\n${packet}`);
+    assert.equal(prompt.split(packet).length - 1, 1);
+    assert.match(prompt, /One test method and one real target call/);
+    assert.match(prompt, /WRITER_SEED_CASE_FACTS_V1 if supplied/);
 });
 
 test('formal seed system scope overrides broad scenario requests without changing qualification or safety contracts', () => {
@@ -38,6 +60,7 @@ test('formal seed system scope overrides broad scenario requests without changin
     const seed = buildWriterSeedSystemPrompt(system);
     assert.ok(seed.startsWith(system), 'the original safety and oracle contract remains verbatim');
     assert.match(seed, /WRITER_SEED_V1 OUTPUT SCOPE/);
+    assert.match(seed, /initial seed generation and every pre-execution repair/);
     assert.match(seed, /replace comprehensive-suite, all-boundary and wider Analyst scenario requirements/);
     assert.match(seed, /exactly ONE test method and ONE target call/);
     assert.match(seed, /use ONLY that selected executed case/);

@@ -61,10 +61,10 @@ test('seed compaction preserves complete evidence and the original executable si
     const prompt = buildWriterSeedPrompt(evidence);
     assert.ok(prompt.startsWith(evidence + '\n\nWRITER_SEED_V1\n'));
     assert.equal(prompt.split(evidence).length - 1, 1);
-    for (const constraint of [/One verified case, exactly one test method/, /imports\/fixtures; real target call/,
-        /observed return\/exception or explicitly controlled dependency behavior/,
-        /do not invent an expected value or exception/, /No rule-name\/speculative tests/,
-        /copied source or target mocks/, /Host must execute this seed successfully before expansion/,
+    for (const constraint of [/One test method and one real target call/, /explicit imports\/fixtures/,
+        /WRITER_SEED_CASE_FACTS_V1 if supplied; else one source-supported, same-test controlled dependency case/,
+        /Diagnostics never supply fixture values\/types\/imports/, /No guesses/, /speculative tests/,
+        /copied source or target mocks/, /Pass execution before expansion/,
         /existing output contract/]) { assert.match(prompt, constraint); }
     assert.doesNotMatch(prompt, /Return.*JSON/);
 });
