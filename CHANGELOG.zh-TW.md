@@ -4,6 +4,12 @@
 
 ## 2026-10-18
 
+### 對齊 v3 與受控 patch 的回歸契約
+
+- fea0b13完整開發回歸的Node階段共1518項：1513通過、3失敗、2略過，來源與原有八個WIP摘要未變；因Node非零，後續完整Python及其他步驟未執行。兩項突變整合仍要求v2版本文字，另一項patch事實測試仍要求沒有回傳綁定的舊最小DTO；產品輸出已是目前v3與受控patch契約。
+- 僅更新三份回歸測試的預期：突變資料與報告明確核對v3；patch斷言精確核對targetResult、呼叫行與既有literal，同時保留unknown並禁止借用returned觀測。沒有修改產品邏輯、生成的車輛測試、來源、候選集合、品質政策、worker預設或期限。
+- 四檔相關回歸12／12通過，包含正常工具路徑的受控patch隔離執行；兩項固定回覆突變整合各完整執行96個候選，83 killed／13 survived、0 timeout／error，同候選審查及完整批次reader核對均通過。快測Node736／736、Python42／42、型別、lint、Webview及production build通過，均0略過。這是中性工具回歸，不是真實模型驗收；提交時修正後完整開發回歸仍待執行，VS Code／Mocha、遠端CI、DGX與新版215目標批次未驗收。原有八個WIP保留且不納入提交。
+
 ### 受控 patch 回傳綁定與保全回歸排程
 
 - 車輛_now_text的測試已成功隔離執行，原AST工具卻在with patch之前停止追蹤，Reviewer只收到unknown斷言而缺少目標回傳綁定。現在僅辨識同目標模組下、單一literal路徑、無額外參數且不覆蓋目標／祖先／子成員的標準預設patch；在區塊內保留真目標回傳綁定與有限Mock設定。區塊觀測一律unknown，不借用未patch的Trace，也不把綁定傳出context。重綁Mock、未知寫入／回傳鏈與控制流仍停止追蹤。

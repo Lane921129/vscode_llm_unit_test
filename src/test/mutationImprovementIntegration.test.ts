@@ -180,7 +180,7 @@ class Cases(unittest.TestCase):
         assert.match(report, /### Test cases/);
         assert.match(report, /### Mutation cases/);
         assert.match(report, /threshold ≥ 80%/);
-        assert.match(report, /builtin-ast-v2/);
+        assert.match(report, /builtin-ast-v3/);
         assert.match(report, /## Final outcome: /);
         const measured = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
         assert.ok(measured.length >= 2, logs.join('\n'));

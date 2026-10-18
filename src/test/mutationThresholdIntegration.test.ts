@@ -124,7 +124,7 @@ test('80 percent policy accepts real surviving mutants and verifies the same com
         assert.equal(knowledge.qualityPolicy.policyId, 'standard80-v1');
         assert.equal(knowledge.qualityAssessment.fullyPassed, true);
         assert.equal(knowledge.reviewStatus, 'completed');
-        assert.equal(knowledge.mutation.operatorSetVersion, 'builtin-ast-v2');
+        assert.equal(knowledge.mutation.operatorSetVersion, 'builtin-ast-v3');
         assert.equal(knowledge.mutation.status, 'complete');
         assert.equal(knowledge.mutation.counts.executed, knowledge.mutation.counts.selected);
         const acceptedCode = fs.readFileSync(path.join(directory, knowledge.acceptedTest), 'utf8');
@@ -150,7 +150,7 @@ test('80 percent policy accepts real surviving mutants and verifies the same com
         const final = fs.readFileSync(path.join(functionReportDirectory(directory), 'final_report.md'), 'utf8');
         assert.match(final, /Final outcome: Fully passed/);
         assert.match(final, /threshold ≥ 80%/);
-        assert.match(final, /builtin-ast-v2/);
+        assert.match(final, /builtin-ast-v3/);
         assert.match(final, /Mutation execution diagnostics/);
         assert.match(final, /SURVIVED/);
         const batch = new BatchJournal(outputPath, root, { model: 'local/neutral-fixture', buildTimestamp: 'fixture', python: String(settings.pythonPath) });

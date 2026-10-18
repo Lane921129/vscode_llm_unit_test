@@ -81,8 +81,13 @@ const savedClockClaims = [
 test('saved clock claims are checked against complete candidate AST syntax, not a model/target whitelist', async () => {
     const actual = await facts(clock, 'database', '_now_text');
     assert.deepEqual(actual.methods[0].standardAssertions, [{ line: 10, kind: 'assertEqual' }]);
-    assert.deepEqual(actual.methods[0].assertions, [{ line: 10, kind: 'assertEqual', observationStatus: 'unknown' }],
-        'patched clock syntax remains unknown and cannot become a return oracle');
+    assert.deepEqual(actual.methods[0].assertions, [{ line: 10, kind: 'assertEqual', observationStatus: 'unknown',
+        targetResult: true, targetCallLine: 10, expectedType: 'str',
+        expected: { schema_version: 'trace-value-v1', replayable: true,
+            value: { type: 'str', value: '2026-10-14 15:42:47' } } }],
+    'controlled patch retains the target binding and literal while observations stay unknown');
+    assert.ok(actual.methods[0].calls.every(call => call.observationReturned !== true),
+        'patched calls cannot borrow a returned observation');
     const expected = ['non-actionable-action', 'target-binding-contradiction', 'non-actionable-action', 'non-actionable-reason'];
     savedClockClaims.forEach((claim, index) => {
         const result = parseTestReviewDetailed(envelope(claim), clock, true, constraints(actual));
