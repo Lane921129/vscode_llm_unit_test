@@ -430,8 +430,11 @@ class ReviewFactsTests(unittest.TestCase):
         self.assertIn('self.assertEqual(score(), "肥胖")', result['standardAssertionCalls'][0]['spellings'])
         self.assertEqual(result['dependencyPatchSyntax'][0]['origin'], 'unittest.mock.patch')
         self.assertEqual(result['dependencyPatchSyntax'][0]['binding'], 'clock')
-        self.assertEqual(result['assertions'], [{'line': 8, 'kind': 'assertEqual', 'observationStatus': 'unknown'}],
-                         'presence cannot verify the expected return value')
+        self.assertTrue(result['assertions'][0]['targetResult'])
+        self.assertEqual(result['assertions'][0]['observationStatus'], 'unknown',
+                         'target binding cannot verify the patched expected return value')
+        self.assertNotIn('observationVerified', result['assertions'][0])
+        self.assertNotIn('observationReturned', result['calls'][0])
         rebound = code.replace('        with patch', '        patch = other\n        with patch')
         self.assertFalse(self.facts('', code=rebound)['methods'][0]['dependencyPatchSyntax'])
 
@@ -450,6 +453,81 @@ class ReviewFactsTests(unittest.TestCase):
         method = self.facts('self.assertEqual(score(service.value()), "same")')['methods'][0]
         self.assertEqual([item['kind'] for item in method['standardAssertionCalls']], ['assertEqual'])
         self.assertFalse(any(item.get('observationVerified') for item in method['assertions']))
+
+
+def patch_facts(body, observations=None, imports='from sample import score\n'):
+    code = ('import unittest\nfrom unittest.mock import patch\n' + imports
+            + 'class Cases(unittest.TestCase):\n    def test_value(self):\n'
+            + ''.join('        ' + line + '\n' for line in body.splitlines()))
+    return build_review_facts({'code': code, 'module': 'sample', 'target': 'score',
+                               'runId': 'neutral', 'sourceHash': 'a' * 64,
+                               'executionVerified': True, 'observations': observations or []})['methods'][0]
+
+
+class PatchReturnBindingTests(unittest.TestCase):
+    def test_direct_patch_setup_binds_real_return_without_borrowing_any_observation(self):
+        body = ('with patch("sample.channel") as channel:\n'
+                '    controlled = object()\n'
+                '    channel.reader.return_value = controlled\n'
+                '    result = score(1)\n'
+                '    self.assertEqual(result, 9)\n')
+        for returned in (9, 7):
+            observation = {'call': snapshot_value({'args': (1,), 'kwargs': {}}),
+                           'result_snapshot': snapshot_value(returned)}
+            method = patch_facts(body, [observation])
+            assertion = method['assertions'][0]
+            self.assertTrue(assertion.get('targetResult'))
+            self.assertEqual(assertion['targetCallLine'], method['calls'][0]['line'])
+            self.assertEqual(assertion['observationStatus'], 'unknown')
+            self.assertNotIn('observationReturned', method['calls'][0])
+            self.assertNotIn('observationVerified', assertion)
+
+    def test_module_alias_and_local_result_are_bound_inside_patch(self):
+        method = patch_facts('with patch("sample.channel") as channel:\n'
+                       '    channel.return_value = 9\n'
+                       '    result = mod.score(1)\n'
+                       '    self.assertEqual(result, 9)', imports='import sample as mod\n')
+        self.assertTrue(method['assertions'][0].get('targetResult'))
+        self.assertEqual(method['assertions'][0]['observationStatus'], 'unknown')
+
+    def test_unknown_or_overlapping_patch_cannot_bind_target_returns(self):
+        contexts = ['other()', 'patch("sample.score")', 'patch("sample")',
+                    'patch("sample.score.__code__")', 'patch("unittest.TestCase")',
+                    'patch("sample.channel", new=object())', 'patch.object(mod, "channel")']
+        for context in contexts:
+            with self.subTest(context=context):
+                method = patch_facts(f'with {context} as channel:\n'
+                               '    result = score(1)\n    self.assertEqual(result, 9)')
+                self.assertTrue(all(not item.get('targetResult', False) for item in method['assertions']))
+                self.assertTrue(all(item['observationStatus'] == 'unknown' for item in method['assertions']))
+
+    def test_rebound_mock_unknown_writes_and_changed_results_stop_binding(self):
+        bodies = ['channel = other\nchannel.return_value = 9\nresult = score(1)',
+                  'channel: object = other\nchannel.return_value = 9\nresult = score(1)',
+                  'ignored = (channel := other)\nchannel.return_value = 9\nresult = score(1)',
+                  'channel.return_value = (channel := other)\nresult = score(1)',
+                  'channel.return_value = other\nchannel.return_value.reader.return_value = 9\nresult = score(1)',
+                  'channel.other = 9\nresult = score(1)',
+                  'result = score(1)\nchannel.return_value = result']
+        for setup in bodies:
+            with self.subTest(setup=setup):
+                body = 'with patch("sample.channel") as channel:\n' + ''.join(
+                    '    ' + line + '\n' for line in (setup + '\nself.assertEqual(result, 9)').splitlines())
+                method = patch_facts(body)
+                self.assertFalse(method['assertions'][0].get('targetResult', False))
+
+    def test_context_exit_does_not_propagate_a_return_binding(self):
+        method = patch_facts('with patch("sample.channel") as channel:\n'
+                       '    result = score(1)\nself.assertEqual(result, 9)')
+        self.assertFalse(method['assertions'][0].get('targetResult', False))
+        self.assertEqual(method['assertions'][0]['observationStatus'], 'unknown')
+
+    def test_unknown_branch_inside_patch_remains_unknown(self):
+        method = patch_facts('with patch("sample.channel") as channel:\n'
+                       '    if flag:\n        result = score(1)\n'
+                       '    self.assertEqual(result, 9)')
+        self.assertFalse(method['assertions'][0].get('targetResult', False))
+        self.assertEqual(method['assertions'][0]['observationStatus'], 'unknown')
 
 
 if __name__ == '__main__':

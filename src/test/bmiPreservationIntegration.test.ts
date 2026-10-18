@@ -125,7 +125,9 @@ class Cases(unittest.TestCase):
             const output = path.join(root, 'results-' + scenario);
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: targetFile,
                 funcName: 'calculate_bmi', outputPath: output, promptStrategy: 'tier2', maxLoops: 1,
-                timeoutSeconds: 60, mutpyTimeout: 30, mutationEngine: 'builtin', validationMode: 'full' });
+                // Exercise the full 76-candidate set within the original stage
+                // deadline; preservation correctness does not depend on two workers.
+                timeoutSeconds: 60, mutpyTimeout: 30, mutationWorkers: 4, mutationEngine: 'builtin', validationMode: 'full' });
             const knowledgeFile = fs.readdirSync(output, { recursive: true }).map(String).find(name => path.basename(name) === 'function_knowledge.json');
             assert.ok(knowledgeFile, 'journal must exist');
             const runRoot = path.dirname(path.join(output, knowledgeFile));

@@ -565,15 +565,31 @@ def build_review_facts(payload):
                 except (Unknown, ValueError, TypeError, IndexError, OverflowError):
                     return
 
-            def walk(statements):
+            def walk(statements, patch_mocks=()):
                 nonlocal observation_flow_known
+                patch_mocks = set(patch_mocks)
                 for stmt in statements:
                     try:
                         if isinstance(stmt, ast.Assign):
                             if any(not isinstance(binding, (ast.Name, ast.Tuple, ast.List))
                                    or any(isinstance(item, (ast.Attribute, ast.Subscript, ast.Starred)) for item in ast.walk(binding))
                                    for binding in stmt.targets):
-                                break
+                                paths = [dotted(binding).split('.') for binding in stmt.targets]
+                                if not all(isinstance(binding, ast.Attribute) and 2 <= len(parts) <= 8
+                                           and parts[0] in patch_mocks and parts[-1] in ('return_value', 'side_effect')
+                                           and all(part and not part.startswith('_') for part in parts[1:])
+                                           and not any(part in ('return_value', 'side_effect') for part in parts[1:-1])
+                                           for binding, parts in zip(stmt.targets, paths)):
+                                    break
+                                if any(isinstance(item, (ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)) for item in ast.walk(stmt.value)):
+                                    break
+                                observation_flow_known = False
+                                for name, value in local.items():
+                                    if value and value[0] == 'result':
+                                        local[name] = None
+                                continue
+                            patch_mocks.difference_update(item.id for item in ast.walk(stmt)
+                                                          if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store))
                             try:
                                 value = expression(stmt.value)
                             except Unknown:
@@ -584,6 +600,7 @@ def build_review_facts(payload):
                         elif isinstance(stmt, ast.AnnAssign):
                             if not isinstance(stmt.target, ast.Name):
                                 break
+                            patch_mocks.discard(stmt.target.id)
                             try:
                                 value = expression(stmt.value) if stmt.value else None
                             except Unknown:
@@ -612,6 +629,21 @@ def build_review_facts(payload):
                                     observation_flow_known = False
                         elif isinstance(stmt, ast.With) and len(stmt.items) == 1:
                             guard = stmt.items[0].context_expr
+                            item = stmt.items[0]
+                            path = guard.args[0].value if isinstance(guard, ast.Call) and len(guard.args) == 1 \
+                                and isinstance(guard.args[0], ast.Constant) and type(guard.args[0].value) is str else ''
+                            if isinstance(guard, ast.Call) and resolve(guard.func, local) == 'unittest.mock.patch' \
+                                    and not guard.keywords and isinstance(item.optional_vars, ast.Name) \
+                                    and path.startswith(payload['module'] + '.') \
+                                    and path != target and not path.startswith(target + '.') and not target.startswith(path + '.'):
+                                # Default stdlib patch setup can preserve syntax binding,
+                                # never the unpatched Trace's returned value or oracle.
+                                observation_flow_known = False
+                                for name, value in local.items():
+                                    if value and value[0] == 'result':
+                                        local[name] = None
+                                walk(stmt.body, patch_mocks | {item.optional_vars.id})
+                                break
                             if not isinstance(guard, ast.Call) or not isinstance(guard.func, ast.Attribute) or dotted(guard.func.value) != receiver or guard.func.attr not in ('assertRaises', 'assertRaisesRegex') or guard.func.attr in overrides or not guard.args:
                                 break
                             exception = dotted(guard.args[0])

@@ -4,6 +4,14 @@
 
 ## 2026-10-18
 
+### 受控 patch 回傳綁定與保全回歸排程
+
+- 車輛_now_text的測試已成功隔離執行，原AST工具卻在with patch之前停止追蹤，Reviewer只收到unknown斷言而缺少目標回傳綁定。現在僅辨識同目標模組下、單一literal路徑、無額外參數且不覆蓋目標／祖先／子成員的標準預設patch；在區塊內保留真目標回傳綁定與有限Mock設定。區塊觀測一律unknown，不借用未patch的Trace，也不把綁定傳出context。重綁Mock、未知寫入／回傳鏈與控制流仍停止追蹤。
+- 六項新中性回歸納入既有Python測試檔，與原44項共50／50通過；匹配及矛盾的未patch觀測都不能授證。正式Node整合以正常工具路徑真實執行中性案例，再核同source／run／target／test的隔離與呼叫證據；TypeScript reader及提示投影保留0 verified／0 contradicted／1 unknown／0 returned-call，獨立需求finding仍可審查，沒有產生批准。
+- 本批保存的車輛_now_text兩項測試已重讀native路徑、目前來源／依賴／候選摘要、runner結果、隔離事件及coverage原生資料摘要。靜態比較由0變2個回傳綁定，兩項觀測仍unknown；0模型請求、不重跑車輛，也不計為真模型重審或品質通過。
+- 3210e64完整開發回歸因BMI保全fixture的30秒突變階段partial而中止，來源清單未變；同版單檔及保存產物重現失敗。兩個worker下76個候選全數開始，50 killed、25 survived、1 timeout，最後一項僅餘0.942秒。保留相同來源、測試、76項candidate IDs與原30秒期限，產品已支援的四個worker在23.176秒完成：51 killed、25 survived、0 timeout／error，正式fresh／stored reader均接受。fixture因此明傳mutationWorkers=4，產品預設及當前車輛批次仍為2；原timeout紀錄沒有重分類，51／76也未達80%品質門檻。
+- 主線相關Node28／28、Python50／50，快測Node736／736、Python42／42，均0略過；型別、lint、Webview及production build通過。修補後完整開發回歸待重新啟動，VS Code／Mocha、遠端CI與DGX未重跑。八檔／215目標真實7B批次仍使用6813034的固定副本，未包含後續兩項診斷修補，整批品質尚未驗收。原有八個WIP摘要維持不變，不納入本次提交。
+
 ### Writer 名稱修訂的有界多缺漏診斷
 
 - 車輛真實候選同時漏掉測試 helper 與來源全域名稱，原工具每次只回報第一項。現在保留原首錯判定、reasonCode、method與Writer路由，僅在已拒絕的候選中補列最多七項名稱／方法診斷，補充名稱文字總長限1200字元且不截斷識別字；未知控制流、動態命名空間及巢狀表達式仍不猜測。不自動加入import、改斷言、安裝套件或增加修訂額度。
