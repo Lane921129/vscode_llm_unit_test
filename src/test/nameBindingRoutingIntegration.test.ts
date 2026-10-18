@@ -98,6 +98,21 @@ test('real guarded assertion failure remains a scoped Bug Fixer repair', async (
     assert.equal(result.routing.filter(event => event.reasonCode === 'execution-name-binding').length, 0);
 });
 
+test('one Writer revision receives multiple missing bindings and must still execute the repaired candidate', async () => {
+    const initial = missingDate.replace('date(2024, 1, 1)), 2024', 'date(TEST_YEAR, 1, 1)), TEST_YEAR');
+    const revised = 'from datetime import date\nfrom sample import TEST_YEAR\n' + initial;
+    const result = await runNeutral({ source: 'TEST_YEAR = 2024\n' + yearSource, initial, revised, expectSuccess: true });
+    assert.deepEqual(result.roles, ['writer']);
+    assert.equal(result.revisions, 1); assert.equal(result.gateChecks, 1);
+    assert.match(result.failures[0], /^Writer binding repair: TEST_YEAR is undefined/);
+    assert.match(result.failures[0], /date in test_value/);
+    assert.equal(result.routing.filter(event => event.reasonCode === 'execution-name-binding').length, 0);
+    const incomplete = await runNeutral({ source: 'TEST_YEAR = 2024\n' + yearSource, initial,
+        revised: 'from datetime import date\n' + initial, expectSuccess: false });
+    assert.ok(incomplete.rejected.some(reason => /TEST_YEAR/.test(reason)));
+    assert.ok(incomplete.roles.every(role => role === 'writer'));
+});
+
 test('a target-source NameError may prefer Writer but cannot authorize mocking the target or count as passing', async () => {
     const initial = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
         + '    def test_value(self):\n        self.assertEqual(target(2), 3)\n';

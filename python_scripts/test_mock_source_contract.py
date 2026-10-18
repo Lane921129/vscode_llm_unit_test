@@ -118,6 +118,49 @@ class MockSourceContractTests(unittest.TestCase):
         self.assertEqual(invalid_scope['reasonCode'], 'writer-invalid-name-scope')
         self.assertTrue(validate_bindings('class InputFixture:\n    def test_description(self): return external_name\n', {})['valid'])
 
+    def test_name_feedback_groups_missing_helpers_and_globals_without_changing_primary_rejection(self):
+        code = candidate(body='controlled = MissingFactory(MissingInput)\n'
+                              'self.assertIs(sample.target(), controlled)\n'
+                              'self.assertEqual(MissingModule.value, SOURCE_KEY)\n'
+                              'self.assertEqual(SOURCE_KEY, SOURCE_KEY)\n')
+        result = validate_bindings(code, self.context())
+        self.assertFalse(result['valid'])
+        self.assertEqual((result['name'], result['method'], result['reasonCode'], result['repairRole']),
+                         ('MissingFactory', 'test_target', 'writer-undefined-name', 'writer'))
+        self.assertIn('Additional statically unresolved bindings (bounded scan):', result['reason'])
+        for name in ('MissingInput', 'MissingModule', 'SOURCE_KEY'):
+            self.assertEqual(result['reason'].count(name + ' in test_target'), 1)
+        self.assertNotIn('controlled in test_target', result['reason'])
+        self.assertIn('do not change assertions or install a guessed package', result['reason'])
+
+    def test_name_feedback_includes_local_shadowing_but_stops_at_unknown_control_flow(self):
+        code = ('import unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\nimport sample\n'
+                'class Cases(unittest.TestCase):\n    def test_target(self):\n'
+                '        with patch("sample.sql", return_value=Path("fixture")) as Path:\n'
+                '            controlled = MissingHelper()\n'
+                '            self.assertIs(sample.target(), controlled)\n'
+                '        if False:\n            ConditionalName()\n'
+                '        AfterUnknown()\n')
+        result = validate_bindings(code, {'module': 'sample', 'target': 'target'})
+        self.assertEqual(result['name'], 'Path')
+        self.assertEqual(result['reasonCode'], 'writer-unbound-local-name')
+        self.assertIn('MissingHelper in test_target', result['reason'])
+        self.assertNotIn('ConditionalName', result['reason'])
+        self.assertNotIn('AfterUnknown', result['reason'])
+
+    def test_name_feedback_is_bounded_and_never_truncates_an_identifier(self):
+        code = candidate(body='\n'.join(f'Unresolved_{index}()' for index in range(12)) + '\n')
+        result = validate_bindings(code, {})
+        self.assertEqual(result['name'], 'Unresolved_0')
+        for index in range(1, 8):
+            self.assertIn(f'Unresolved_{index} in test_target', result['reason'])
+        self.assertNotIn('Unresolved_8', result['reason'])
+        huge = 'LongName_' + 'x' * 1200
+        result = validate_bindings(candidate(body=f'FirstMissing()\n{huge}()\n'), {})
+        self.assertEqual(result['name'], 'FirstMissing')
+        self.assertNotIn('LongName_', result['reason'])
+        self.assertNotIn('Additional statically', result['reason'])
+
     def test_missing_real_target_import_is_reported_before_generic_behavior_gates(self):
         missing = candidate().replace('sample.target()', 'target()')
         for mock_required, target_required in ((True, True), (False, True), (True, False)):

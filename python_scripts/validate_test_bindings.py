@@ -19,7 +19,7 @@ def dotted(node):
     return ''
 
 
-def definite_test_name_failure(tree, code):
+def _definite_test_name_failure(tree, code, ignored):
     """Diagnose only direct, statically certain test-owned name failures.
 
     Unknown branches, dynamic namespaces and nested expression scopes are left
@@ -77,6 +77,8 @@ def definite_test_name_failure(tree, code):
 
             def check(expression):
                 for name in reads(expression):
+                    if (method.name, name) in ignored:
+                        continue
                     if name in local and name not in bound:
                         return {'name': name, 'reasonCode': 'writer-unbound-local-name'}
                     if name not in local and name not in globals_:
@@ -121,6 +123,42 @@ def definite_test_name_failure(tree, code):
             if failure:
                 return {**failure, 'method': method.name}
     return None
+
+
+def definite_test_name_failure(tree, code):
+    """Keep the primary rejection independent of supplementary diagnostics."""
+    return _definite_test_name_failure(tree, code, frozenset())
+
+
+def _additional_name_feedback(tree, code, first):
+    """Peel at most seven more failures for feedback, never for acceptance.
+
+    Each scan retains the primary checker's unknown-scope boundaries. Skipping
+    a reported binding only exposes possible next repairs in an already-rejected
+    candidate; it does not execute, import or change the submitted test.
+    """
+    if first['reasonCode'] == 'writer-invalid-name-scope':
+        return ''
+    ignored = {(first['method'], first['name'])}
+    details = []
+    size = 0
+    for _ in range(7):
+        failure = _definite_test_name_failure(tree, code, ignored)
+        if not failure or failure['reasonCode'] == 'writer-invalid-name-scope':
+            break
+        key = (failure['method'], failure['name'])
+        if key in ignored:
+            break
+        detail = f'{failure["name"]} in {failure["method"]}'
+        if size + len(detail) > 1200:
+            break
+        details.append(detail)
+        size += len(detail)
+        ignored.add(key)
+    if not details:
+        return ''
+    return ('Additional statically unresolved bindings (bounded scan): '
+            + '; '.join(details) + '. Repair the listed test bindings together. ')
 
 
 def validate_bindings(code, context):
@@ -247,7 +285,8 @@ def validate_bindings(code, context):
     if failure:
         name = failure['name']
         reason = (f'Writer binding repair: {name} is undefined or read before its local binding in {failure["method"]}. '
-                  'Use a distinct mock alias and explicitly import test helpers or source globals at the canonical target module; '
+                  + _additional_name_feedback(tree, code, failure)
+                  + 'Use a distinct mock alias and explicitly import test helpers or source globals at the canonical target module; '
                   'do not change assertions or install a guessed package.')
         if failure['reasonCode'] == 'writer-invalid-name-scope':
             reason = 'Writer binding repair: generated global/local declarations are inconsistent. Revise the test scope before execution.'
