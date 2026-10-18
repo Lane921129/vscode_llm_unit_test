@@ -151,8 +151,13 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         assert.equal(changed.knowledge.failureStage, 'source-changed');
         assert.equal(changed.knowledge.terminalStatus, 'source-changed');
         const before = requests.length;
-        const unqualified = await run('unqualified', good, source, 'auto');
-        assert.equal(requests.length, before); assert.equal(unqualified.knowledge.failureStage, 'writer-qualification');
+        const unqualifiedOutput = path.join(root, 'unqualified');
+        const beforeFinished = messages.filter(message => message.command === 'analysisFinished').length;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: file,
+            funcName: 'target', outputPath: unqualifiedOutput, promptStrategy: 'auto', maxLoops: 3, timeoutSeconds: 30 });
+        assert.equal(requests.length, before);
+        assert.equal(fs.existsSync(unqualifiedOutput), false, 'missing Auto qualification stops before target analysis');
+        assert.equal(messages.filter(message => message.command === 'analysisFinished').length, beforeFinished + 1);
         cancel = true;
         const cancelled = await run('cancelled'); cancel = false;
         assert.equal(cancelled.knowledge.terminalStatus, 'cancelled');

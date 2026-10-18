@@ -192,7 +192,9 @@ async function runSequentially<T>(
             if (!isExecutionCancelled()) {
                 onError(localize("[順序執行] 任務 {0} 執行失敗: {1}", index + 1, err?.message ?? err));
             }
-            results.push(undefined);
+            // A target has exhausted its own bounded repair loop. Do not
+            // schedule another target after a terminal execution failure.
+            throw err;
         }
     }
     return results;
@@ -275,7 +277,72 @@ interface ModelSnapshot {
 const analysisRuns = new ExecutionManager<ModelSnapshot>();
 interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
 
-async function runAnalysisSession<T extends { envType?: string; modelName?: string; ollamaUrl?: string }>(
+type AnalysisModelSelection = Pick<AnalysisParams, 'envType' | 'modelName' | 'ollamaUrl' | 'customUrl'>;
+
+/** Resolve the exact initial model/context once with the same policy as targets. */
+function initialAnalysisModel(params: AnalysisModelSelection, modelSnapshot: ModelSnapshot) {
+    const selectedEndpointKey = qualificationEndpointKey(params.envType,
+        params.envType === 'local' ? params.ollamaUrl : params.envType === 'custom' ? params.customUrl : undefined);
+    const selectedStoredProfile = findModelProfile(modelSnapshot.stored, {
+        envType: params.envType, modelName: params.modelName, endpointKey: selectedEndpointKey
+    });
+    const selectedModelProfile = selectedStoredProfile ? withBudget(selectedStoredProfile)
+        : (modelSnapshot.current.envType === params.envType && modelSnapshot.current.modelName === params.modelName
+            && (modelSnapshot.current.endpointKey || qualificationEndpointKey(params.envType)) === selectedEndpointKey
+            ? modelSnapshot.current : defaultModelProfile());
+    const contextPreference = getRuntimeContextPreference(modelSnapshot.runtimeContextPreferences,
+        { endpointKey: selectedEndpointKey, modelName: params.modelName });
+    const localRuntime = params.envType === 'local' ? resolveLocalRuntimeContext({
+        paramSize: selectedModelProfile.paramSize, contextLength: selectedModelProfile.contextLength,
+        contextLengthKnown: selectedModelProfile.contextLengthKnown,
+        runtimeContextTokens: modelSnapshot.runtimeContextTokens,
+        preferredRuntimeContextTokens: contextPreference?.tokens,
+        preferredRuntimeContextSource: contextPreference?.source,
+        qualificationRuntime: selectedModelProfile.qualificationRuntime,
+        effectiveRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens
+    }) : undefined;
+    const requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
+        : runtimeContextWindow(selectedModelProfile.paramSize, selectedModelProfile.contextLength);
+    const activeModelProfile = { ...selectedModelProfile,
+        budgetTokens: localRuntime?.ok ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
+    const qualificationRequest = { envType: params.envType, modelName: params.modelName,
+        endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow };
+    return { selectedEndpointKey, selectedModelProfile, contextPreference, localRuntime,
+        requestContextWindow, activeModelProfile, qualificationRequest };
+}
+
+/** Global prerequisites must fail before import setup, Trace or role requests. */
+async function requireInitialAutoRoles(params: AnalysisModelSelection & Partial<Pick<AnalysisParams,
+    'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable'>>, snapshot: ModelSnapshot) {
+    if ((params.promptStrategy || 'auto') !== 'auto') { return; }
+    const mode = verificationMode(params.validationMode);
+    const { activeModelProfile, localRuntime, qualificationRequest } = initialAnalysisModel(params, snapshot);
+    const current = !(localRuntime && !localRuntime.ok)
+        && qualificationAppliesToRequest(activeModelProfile, qualificationRequest);
+    const writer = qualificationForRequest(activeModelProfile, qualificationRequest) === true
+        && qualifiedRole('writer', activeModelProfile.roleQualification, current, true);
+    const reviewer = qualifiedRole('reviewer', activeModelProfile.roleQualification, current);
+    if (writer && (mode === 'execution' || reviewer)) { return; }
+    // Explicit inert/dummy targets have no AI workflow and retain their
+    // diagnostic fast path. Only static AST is read; no application is loaded.
+    if (mode === 'full' && params.filePath && params.funcName) {
+        if (hasDummyFunctionNameMarker(params.funcName)) { return; }
+        const ast = await extractAstContext(params.filePath, params.funcName, normalizePythonExecutable(params.pythonExecutable));
+        throwIfExecutionCancelled();
+        if (isStubFunction(ast)) { return; }
+    }
+    if (localRuntime && !localRuntime.ok) {
+        throw new AnalysisStageError('validation', 'model-runtime',
+            localize('本機 Context 設定無法使用；請檢查 llmUnitTest.runtimeContextTokens，並重新執行模型測試連線。')
+                + ` [${localRuntime.reasonCode}]`, { reasonCode: localRuntime.reasonCode });
+    }
+    throw new AnalysisStageError('validation', 'role-qualification', mode === 'full'
+        ? localize('完整流程的 Auto 需要先完成 Writer 與 Reviewer 角色測試連線。')
+        : localize('Auto 的 Writer 尚未通過此模型的生成探測。請先執行「測試連線」，或明確選擇手動 Tier；執行驗證模式不會改用 Trace 代替生成。'));
+}
+
+async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pick<AnalysisParams,
+    'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable'>>>(
     params: T,
     sidebar: MutationViewProvider,
     operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView,
@@ -331,10 +398,14 @@ async function runAnalysisSession<T extends { envType?: string; modelName?: stri
                 } finally { releaseCancellation(); }
             }
             execution.throwIfCancelled();
+            await requireInitialAutoRoles(runParams, execution.snapshot);
             await operation(runParams, log, view, setup => environmentLease.withSetup(execution, setup));
         }
         catch (error: any) {
-            if (!execution.cancelled) { log(localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error)); }
+            if (!execution.cancelled) {
+                log(error instanceof AnalysisStageError ? `[${error.stage}] ${error.message}`
+                    : localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error));
+            }
         } finally {
             environmentLease.release();
             if (analysisRuns.finish(execution)) {
@@ -1525,6 +1596,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
         ?? { current: currentModelProfile, stored: storedModelProfiles, runtimeContextTokens: 0, runtimeContextPreferences: [] };
     let currentLoop = 1;
+    let terminalFailure: { error: unknown } | undefined;
     let mutationScore = 0;
     let qualityToolsSatisfied = false;
     let bestMutation: MutationRun | undefined;
@@ -1567,36 +1639,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     } else if (dummyNameMarked) {
         log(localize("[快速通道] 偵測到 dummy 名稱標記，跳過複雜度評估與後續 AST 分析。"));
     }
-    const selectedEndpointKey = qualificationEndpointKey(params.envType, params.envType === 'local' ? params.ollamaUrl : params.envType === 'custom' ? params.customUrl : undefined);
-    const selectedStoredProfile = findModelProfile(modelSnapshot.stored, {
-        envType: params.envType,
-        modelName: params.modelName, endpointKey: selectedEndpointKey
-    });
-    const selectedModelProfile = selectedStoredProfile
-        ? withBudget(selectedStoredProfile)
-        : (modelSnapshot.current.envType === params.envType && modelSnapshot.current.modelName === params.modelName
-            && (modelSnapshot.current.endpointKey || qualificationEndpointKey(params.envType)) === selectedEndpointKey
-            ? modelSnapshot.current
-            : defaultModelProfile());
-    const contextPreference = getRuntimeContextPreference(modelSnapshot.runtimeContextPreferences,
-        { endpointKey: selectedEndpointKey, modelName: params.modelName });
-    const localRuntime = params.envType === 'local' ? resolveLocalRuntimeContext({
-        paramSize: selectedModelProfile.paramSize, contextLength: selectedModelProfile.contextLength,
-        contextLengthKnown: selectedModelProfile.contextLengthKnown,
-        runtimeContextTokens: modelSnapshot.runtimeContextTokens,
-        preferredRuntimeContextTokens: contextPreference?.tokens,
-        preferredRuntimeContextSource: contextPreference?.source,
-        qualificationRuntime: selectedModelProfile.qualificationRuntime,
-        effectiveRuntimeContextTokens: selectedModelProfile.effectiveRuntimeContextTokens
-    }) : undefined;
-    let requestContextWindow = localRuntime?.ok ? localRuntime.contextWindow
-        : runtimeContextWindow(selectedModelProfile.paramSize, selectedModelProfile.contextLength);
-    const activeModelProfile = { ...selectedModelProfile,
-        // Both automatic and explicit requests must use the budget resolved
-        // for the exact num_ctx sent on the wire, not a stale cached estimate.
-        budgetTokens: localRuntime?.ok ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
-    const qualificationRequest = { envType: params.envType, modelName: params.modelName,
-        endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow };
+    const initialModel = initialAnalysisModel(params, modelSnapshot);
+    const { selectedEndpointKey, selectedModelProfile, contextPreference, localRuntime, activeModelProfile, qualificationRequest } = initialModel;
+    let requestContextWindow = initialModel.requestContextWindow;
     const runtimeQualifications = currentBatchRuntimeQualification(projectRoot, params.filePath, pythonExecutable);
     const runtimeIdentity = (numCtx: number) => runtimeQualifications.identity({ endpointKey: selectedEndpointKey,
         modelName: params.modelName, numCtx, qualificationVersion: QUALIFICATION_VERSION }, currentImportFixtures()?.id);
@@ -1671,8 +1716,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         : localize("[系統] 策略路由: {0} → Tier {1}", userTierSetting === 'auto' ? localize("Auto 自動") : localize("使用者指定"), resolvedTier));
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {
-        log(localize("[錯誤] 找不到目標檔案路徑"));
-        return;
+        throw new AnalysisStageError('ast-trace', 'static-analysis', localize("[錯誤] 找不到目標檔案路徑"));
     }
 
     let survivedMutants = "";
@@ -4074,6 +4118,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     ? retainedScore !== null ? localize("已保留 {0}% 基準；後續步驟失敗", retainedScore) : localize("已保留可執行測試；突變品質尚未完成")
                     : message.includes('CUDA') ? localize("VRAM 不足") : (message.length > 50 ? message.substring(0, 47) + '...' : message)
             });
+            terminalFailure = { error };
             break;
         }
 
@@ -4290,6 +4335,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 coverage: null, reason: message, reportPath: existingReport });
         }
         log(`[${stage}] ${message}`);
+        // The report is persisted by finally before the caller stops scheduling.
+        throw error;
     } finally {
         releaseResourceObserver?.();
         if (journal.snapshot().terminalStatus === 'running') {
@@ -4300,6 +4347,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
             func: params.funcName || '', reportPath: existingReport, outcome: presentSummaryOutcome(journal.snapshot()) });
     }
+    // Full-mode failures may have restored a valid checkpoint before leaving
+    // the loop. Propagate only after reports/cleanup, without overwriting that
+    // retained-after-failure or review-blocked outcome in the outer catch.
+    if (terminalFailure) { throw terminalFailure.error; }
 }
 
 

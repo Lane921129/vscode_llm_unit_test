@@ -21,6 +21,7 @@ test('formal requests bind context, qualification and whole-file settings to one
     let changePreferenceDuringRequest = false;
     let metadataAvailable = true;
     const requests: Array<{ role: string; numCtx?: number }> = [];
+    const messages: any[] = [];
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 },
         Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -29,7 +30,7 @@ test('formal requests bind context, qualification and whole-file settings to one
                 key === 'pythonPath' ? python : key === 'runtimeContextTokens' ? setting : fallback }),
             openTextDocument: async () => ({}) },
         window: { registerWebviewViewProvider: (_: string, provider: any) => {
-            provider.webview = { postMessage: async () => true }; return { dispose() {} };
+            provider.webview = { postMessage: async (message: any) => { messages.push(message); return true; } }; return { dispose() {} };
         }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
@@ -91,11 +92,11 @@ test('formal requests bind context, qualification and whole-file settings to one
             promptStrategy: 'auto', validationMode: 'full', maxLoops: 1, timeoutSeconds: 30, mutationEngine: 'builtin' };
         const initial = path.join(directory, 'initial');
         await run({ ...params, funcName: '', outputPath: initial });
-        assert.equal(knowledge(initial).length, 2, 'whole-file entry runs both discovered functions');
-        assert.equal(requests.filter(row => row.role === 'writer').length, 2);
-        assert.ok(requests.length >= 4 && requests.every(row => row.numCtx === 8192));
+        assert.equal(knowledge(initial).length, 1, 'whole-file entry stops after the first terminal transport failure');
+        assert.equal(requests.filter(row => row.role === 'writer').length, 1);
+        assert.ok(requests.length >= 2 && requests.every(row => row.numCtx === 8192));
         const initialMetrics = events(initial).filter(row => row.stage === 'model-request' && row.status === 'requested');
-        assert.ok(initialMetrics.length >= 4 && initialMetrics.every(row => row.detail.contextWindow === 8192
+        assert.ok(initialMetrics.length >= 2 && initialMetrics.every(row => row.detail.contextWindow === 8192
             && row.detail.inputBudget + row.detail.reservedOutputTokens === 8192));
         assert.ok(initialMetrics.filter(row => row.detail.role === 'analyst-planning')
             .every(row => row.detail.requestOutputTokens === 1024 && row.detail.inputBudget === 7168));
@@ -107,16 +108,14 @@ test('formal requests bind context, qualification and whole-file settings to one
         const changed = path.join(directory, 'changed');
         await run({ ...params, outputPath: changed });
         assert.equal(requests.length, 0, 'an old context cannot authorize Auto in the next run');
-        assert.equal(knowledge(changed)[0].failureStage, 'role-qualification');
-        assert.equal(knowledge(changed)[0].roleQualification, null);
-        assert.ok(events(changed).some(row => row.stage === 'model-runtime'
-            && row.detail.contextWindow === 16384 && row.detail.qualificationApplicable === false));
+        assert.equal(fs.existsSync(changed), false, 'invalidated qualification stops before target analysis');
+        assert.ok(messages.some(row => row.text?.startsWith('[role-qualification]')));
 
         update(profile(16384, { testGenerationReady: false }));
         const contradictory = path.join(directory, 'contradictory');
         await run({ ...params, outputPath: contradictory });
         assert.equal(requests.length, 0, 'a failed Writer result cannot borrow a stale verified role flag');
-        assert.equal(knowledge(contradictory)[0].failureStage, 'role-qualification');
+        assert.equal(fs.existsSync(contradictory), false);
 
         update(profile(16384));
         const rebound = path.join(directory, 'rebound');
@@ -134,9 +133,8 @@ test('formal requests bind context, qualification and whole-file settings to one
             const output = path.join(directory, reason);
             await run({ ...params, outputPath: output });
             assert.equal(requests.length, 0);
-            assert.equal(knowledge(output)[0].failureStage, 'model-runtime');
-            assert.ok(events(output).some(row => row.detail?.diagnostic?.reasonCode === reason
-                || row.detail?.reasonCode === reason), reason);
+            assert.equal(fs.existsSync(output), false);
+            assert.ok(messages.some(row => row.text?.startsWith('[model-runtime]') && row.text.includes(reason)), reason);
         }
         metadataAvailable = true;
 
@@ -159,16 +157,15 @@ test('formal requests bind context, qualification and whole-file settings to one
         changePreferenceDuringRequest = true;
         const savedSnapshot = path.join(directory, 'saved-snapshot');
         await run({ ...params, funcName: '', outputPath: savedSnapshot });
-        assert.equal(knowledge(savedSnapshot).length, 2);
-        assert.ok(requests.length >= 4 && requests.every(row => row.numCtx === 8192),
+        assert.equal(knowledge(savedSnapshot).length, 1);
+        assert.ok(requests.length >= 2 && requests.every(row => row.numCtx === 8192),
             'saved model choice wins over allocation and remains fixed for the whole-file run');
         requests.length = 0;
         const savedChanged = path.join(directory, 'saved-changed');
         await run({ ...params, outputPath: savedChanged });
         assert.equal(requests.length, 0, 'new saved capacity cannot reuse qualification for the old capacity');
-        assert.equal(knowledge(savedChanged)[0].failureStage, 'role-qualification');
-        assert.ok(events(savedChanged).some(row => row.stage === 'model-runtime'
-            && row.detail.contextWindow === 16384 && row.detail.savedContextSource === 'user-choice'));
+        assert.equal(fs.existsSync(savedChanged), false);
+        assert.equal((persisted.get(RUNTIME_CONTEXT_PREFERENCES_KEY) as any[])[0].tokens, 16384);
         update(profile(8192));
         const retainedAllocation = (persisted.get('llmUnitTest.modelProfiles.v1') as any[])
             .find(row => row.envType === 'local');

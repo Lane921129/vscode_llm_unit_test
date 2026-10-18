@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## Auto 先決條件與批次即停（2026-10-18）
+
+`runAnalysisSession` 完成同次唯讀模型 metadata 探索後，與逐目標流程共用 `initialAnalysisModel` 解析端點、設定快照及確切 `num_ctx`。Auto/full 必須先有本次有效的 Writer／Reviewer 資格，Auto/execution 只要求 Writer；缺資格在資料夾掃描、初始化、Trace 與模型生成前立即結束並釋放 UI／環境鎖。手動 Tier 保留既有嘗試政策；明確單一 dummy 或經靜態 AST 確認的惰性 stub 保留無 AI 診斷通道，不宣稱測試或品質通過。
+
+`executeSingleFileAnalysisWithBudget` 保存失敗 journal／報告並完成 finally 清理後，將終局錯誤傳回 `runSequentially`；整檔與批次不再吞掉錯誤並排下一目標。批次記為 failed，剩餘目標保持 pending。單一候選仍依原有限額修訂，來源掃描診斷與明確批准的局部環境續跑仍分開記錄；沒有增加 timeout、修訂次數或降低品質門檻。
+
 ## 開發驗證分層（2026-10-16）
 
 `test/verification.js` 提供 `fast`、`integration`、`full` 與明確測試篩選的 `related` 入口。快速清單由來源行為與成本審查決定，不按舊耗時動態略過；其餘 Node／Python 測試全部納入整合，兩集合互斥且聯集完整。完整入口包含嚴格型別、lint、全部測試、Webview、歷史密鑰掃描與 production build。`--list` 只列計畫，空 related／未命中 selector 不能成功。舊 `test:unit` 仍對應完整驗證，低階 Node／Python runner 無參數保留原全量相容。此分層只調整開發回饋速度，不改產品內的 Checker、Reviewer、來源身份、assertion 保全、隔離或突變 gate。

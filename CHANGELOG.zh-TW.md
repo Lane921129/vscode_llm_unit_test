@@ -4,6 +4,13 @@
 
 ## 2026-10-18
 
+### Auto 先決條件與首個目標失敗即停
+
+- 分析22:30／22:34車輛批次及兩份匯入檢查：前者選到含爬蟲的父資料夾，仍有網路／檔案載入副作用，且Auto資格失效、模型請求為0；後者7個模組載入成功，19次正式請求仍因漏import、缺assertion、Mock row形狀及單次超時而失敗。所有請求容量均可容納，六份完成的Analyst回覆都解析成功，沒有正式Reviewer或突變量測。首個目標確定失敗後仍排程約10分18秒是主流程問題，不能全歸因3B模型。
+- 分析入口完成同次唯讀metadata探索後，與逐目標共用端點／模型／設定快照／num_ctx解析，提早檢查Auto資格：full需Writer及Reviewer、execution只需Writer。缺資格直接結束並釋放UI與環境鎖，不掃描批次、初始化、Trace或發送角色請求；保留手動Tier及明確單一dummy／靜態惰性stub的診斷政策。
+- 修正兩條吞錯誤路徑：外層目標失敗保存報告後傳回排程器；full內層已保存失敗或恢復可執行基線，也在報告與清理完成後傳回原錯誤，保持retained-after-failure／review-blocked原分類。整檔與批次於首個終局失敗停止，後續目標保持pending；原有單目標有限修訂、明確局部環境續跑、來源與品質gate、期限及計數不變。
+- 新增公開命令整合回歸，核對未探測／缺Reviewer／錯端點／舊容量／舊契約的早停、Writer-only execution、手動Tier、失敗報告、pending目標、analysisFinished與再次啟動；既有execution／Context快照回歸改核提早阻擋及首錯即停。相關回歸分批9檔30項通過，最後核心修補後再驗即停／Context／批次報告3／3；快測Node736／736、Python42／42，型別、lint、Webview及production build通過，無略過。完整回歸、VS Code／Mocha、DGX及真實模型車輛重跑仍未驗收，原有八個WIP保留且不提交。
+
 ### 對齊 v3 與受控 patch 的回歸契約
 
 - fea0b13完整開發回歸的Node階段共1518項：1513通過、3失敗、2略過，來源與原有八個WIP摘要未變；因Node非零，後續完整Python及其他步驟未執行。兩項突變整合仍要求v2版本文字，另一項patch事實測試仍要求沒有回傳綁定的舊最小DTO；產品輸出已是目前v3與受控patch契約。
