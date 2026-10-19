@@ -104,27 +104,42 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         .result-header {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
         }
         .result-title {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 6px;
             font-weight: 600;
             font-size: 12px;
             min-width: 0;
-            flex: 1;
-            word-break: break-all;
+            width: 100%;
+        }
+        .result-title .row-sel {
+            flex: 0 0 auto;
+        }
+        .result-label {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: normal;
+            line-height: 1.45;
+        }
+        .result-label > span {
+            display: block;
+        }
+        .result-metrics {
+            min-width: 0;
+            margin-left: 22px;
         }
         .result-badges {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            flex-shrink: 0;
             flex-wrap: wrap;
-            justify-content: flex-end;
+            justify-content: flex-start;
+            max-width: 100%;
         }
         .result-status {
             font-size: 11px;
@@ -147,6 +162,24 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         details.file-group summary:hover {
             background: var(--vscode-list-hoverBackground);
+        }
+        .file-group-title {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: normal;
+        }
+        .file-group-title small {
+            display: inline-block;
+        }
+        .dashboard-view-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .dashboard-view-toolbar button {
+            white-space: nowrap;
         }
         details.file-group .group-content {
             padding: 6px 4px 4px 10px;
@@ -335,12 +368,12 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         <summary>${t('ui.coverageDashboard')}</summary>
         <div class="content">
             <!-- 顯示模式切換工具列 -->
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div class="dashboard-view-toolbar">
                 <div style="display:inline-flex; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; overflow:hidden;">
                     <button type="button" id="btn-mode-flat" style="margin:0; padding:4px 10px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">${t('ui.flatView')}</button>
                     <button type="button" id="btn-mode-grouped" style="margin:0; padding:4px 10px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">${t('ui.groupedView')}</button>
                 </div>
-                <div id="grouped-tools" style="display:none; gap:4px;">
+                <div id="grouped-tools" style="display:none; flex-wrap:wrap; gap:4px;">
                     <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(true)">${t('ui.expandAll')}</button>
                     <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(false)">${t('ui.collapseAll')}</button>
                 </div>
@@ -397,13 +430,15 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let currentCustomKeys = {};
         let lastTestedProjectPath = '';
         const resultsMap = new Map();
+        const groupOpenState = new Map();
+        let defaultGroupsOpen = true;
         let currentViewMode = 'flat';
         let environmentBusy = false;
         let analysisRunning = false;
         let runtimeContextRevision = 0;
         let runtimeContextEndpointKey;
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         vscode.postMessage({ command: 'getInitialData' });
@@ -431,7 +466,12 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
 
         function setAllGroupsOpen(open) {
-            document.querySelectorAll('#dashboard-container details.file-group').forEach(d => d.open = open);
+            defaultGroupsOpen = open;
+            groupOpenState.forEach((_value, fileName) => groupOpenState.set(fileName, open));
+            document.querySelectorAll('#dashboard-container details.file-group').forEach(details => {
+                details.open = open;
+                groupOpenState.set(details.dataset.fileKey, open);
+            });
         }
 
         function escapeHtml(text) {
@@ -500,9 +540,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             titleBox.appendChild(cb);
 
             const label = document.createElement('span');
+            label.className = 'result-label';
             if (showFileName) {
                 label.innerHTML = '<span title="' + escapeHtml(i18n.targetFile) + escapeHtml(item.file) + '" style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
-                                  (item.func ? '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); margin-left:4px; font-weight:bold;">: ' + escapeHtml(item.func) + '()</span>' : '');
+                                  (item.func ? '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func) + '()</span>' : '');
             } else {
                 label.innerHTML = '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func || item.fileName) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
             }
@@ -510,6 +551,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             header.appendChild(titleBox);
 
             const badgesDiv = document.createElement('div');
+            badgesDiv.className = 'result-metrics';
             badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome);
             header.appendChild(badgesDiv);
             card.appendChild(header);
@@ -536,6 +578,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 return;
             }
 
+            // Read live details before rebuilding: toggle events may still be queued.
+            document.querySelectorAll('#dashboard-container details.file-group').forEach(details => {
+                groupOpenState.set(details.dataset.fileKey, details.open);
+            });
             container.innerHTML = '';
 
             if (currentViewMode === 'flat') {
@@ -554,13 +600,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 groups.forEach((items, fileName) => {
                     const details = document.createElement('details');
                     details.className = 'file-group';
-                    details.open = true;
+                    details.dataset.fileKey = fileName;
+                    details.open = groupOpenState.has(fileName) ? groupOpenState.get(fileName) : defaultGroupsOpen;
+                    details.addEventListener('toggle', () => {
+                        if (details.isConnected) groupOpenState.set(fileName, details.open);
+                    });
                     details.style.marginBottom = '6px';
                     details.style.border = '1px solid var(--vscode-editorGroup-border)';
                     details.style.borderRadius = '4px';
 
                     const summary = document.createElement('summary');
-                    summary.innerHTML = '<span style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + escapeHtml(message('functionCount', items.length)) + ')</small></span>';
+                    summary.innerHTML = '<span class="file-group-title" style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + escapeHtml(message('functionCount', items.length)) + ')</small></span>';
                     details.appendChild(summary);
 
                     const groupContent = document.createElement('div');
@@ -714,17 +764,28 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
                     for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
-                        document.getElementById(id).disabled = environmentBusy;
+                        document.getElementById(id).disabled = environmentBusy || analysisRunning;
                     }
                     updateLocalContextControls();
                     break;
                 case 'environmentPreparationFinished':
                     environmentBusy = false;
                     for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
-                        document.getElementById(id).disabled = false;
+                        document.getElementById(id).disabled = analysisRunning;
                     }
                     updateLocalContextControls();
                     break;
+                case 'analysisStopping': {
+                    analysisRunning = true;
+                    document.getElementById('btn-run').disabled = true;
+                    const stoppingButton = document.getElementById('btn-abort');
+                    stoppingButton.disabled = true;
+                    stoppingButton.style.display = 'block';
+                    if (msg.text) stoppingButton.textContent = msg.text;
+                    updateLocalContextControls();
+                    updateValidationScope();
+                    break;
+                }
                 case 'analysisFinished':
                     analysisRunning = false;
                     document.getElementById('lang-select').disabled = false;
@@ -736,7 +797,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         runBtn.innerText = i18n.runBtn;
                     }
                     const abortBtn = document.getElementById('btn-abort');
-                    if (abortBtn) abortBtn.style.display = 'none';
+                    if (abortBtn) {
+                        abortBtn.style.display = 'none';
+                        abortBtn.disabled = false;
+                        abortBtn.textContent = i18n.abortBtn;
+                    }
                     document.getElementById('btn-prepare-env').disabled = environmentBusy;
                     document.getElementById('btn-prepare-env-scope').disabled = environmentBusy;
                     document.getElementById('btn-import-setup').disabled = environmentBusy;
@@ -749,7 +814,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function updateLocalContextControls() {
             const frozen = analysisRunning || environmentBusy;
-            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local']) {
+            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy']) {
                 document.getElementById(id).disabled = frozen;
             }
             const noSelection = !document.getElementById('model-select').value;
@@ -793,6 +858,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
         
         document.getElementById('prompt-strategy').onchange = (e) => {
+            if (analysisRunning || environmentBusy) return;
             vscode.postMessage({ command: 'setPromptStrategy', strategy: e.target.value });
         };
         function updateValidationScope() {
@@ -983,6 +1049,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('btn-run').disabled = true;
             document.getElementById('btn-run').innerText = isBatch ? '⏳ Testing all...' : '⏳ Testing...';
             document.getElementById('btn-abort').style.display = 'block';
+            document.getElementById('btn-abort').disabled = false;
+            document.getElementById('btn-abort').textContent = i18n.abortBtn;
         }
 
         document.getElementById('btn-run').onclick = () => {
@@ -1001,6 +1069,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const currentProj = document.getElementById('project-path').value;
             if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
                 resultsMap.clear();
+                groupOpenState.clear();
+                defaultGroupsOpen = true;
                 renderDashboard();
             }
             lastTestedProjectPath = currentProj;

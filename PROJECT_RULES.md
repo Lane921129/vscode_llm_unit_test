@@ -5,6 +5,8 @@
 ## 目前驗收優先順序
 
 - Auto 的共同角色資格須在來源批次掃描、初始化、Trace 與生成前檢查；使用同端點／模型／資格版本及本次有效 num_ctx，不借舊容量。full 需要 Writer／Reviewer，execution 只需要 Writer。手動 Tier 與不使用 AI 的明確單一 dummy／靜態惰性 stub 診斷保留既有政策。單一目標耗盡原有有限修訂而終局失敗後，保存證據與報告、完成清理，立即停止整檔／批次排程；未啟動目標保持 pending，不冒充完成。
+- 手動「中止測試」只送出取消與 `analysisStopping`，不能立即宣告 `analysisFinished` 或釋放執行預約。取消後至 HTTP／子程序、報告與隔離資源清理完成前，`ExecutionManager.hasActiveRun` 仍為 true，新分析不得開始；只有持有相同 execution 的 owner 在 finally 完成清理後，才能 `finish` 並通知完成。`canPublish` 在取消後立即拒絕一般結果／進度發布；舊 owner 的 `finish`／`endAnalysis` 不得清除新 run 的執行或 UI 所有權。必要清理不等於繼續生成，取消後不得再發模型請求或排下一目標。
+- 側欄結果以穩定 file-key 保存各檔案分組的手動展開／收合狀態；新結果、分數或狀態更新，以及平鋪／分組切換，不得重新展開已收合分組。全展開／全收合更新既有分組與新分組預設；切換受測專案才重設。結果卡的檔名／函式名與分數分列，保留標題可用寬度及長名稱換行，不能由分數擠成逐字直排。
 - Reviewer 斷言觀測使用 verified／contradicted／unknown；只有同型別輸入、完整唯一觀測與保守 setup 下的可支援比較才授予前兩者。未知預期值不是已證明錯誤，解析失敗也不能抹掉獨立可證明的目標結果綁定。直線 literal 容器內局部變數可靜態還原，禁止執行任意表達式；mutation、未知副作用與 fixture 不借用原觀測。對已核實同候選的機械矛盾只能有限重審，不刪 finding 冒充批准。
 - `prompt-capacity-v1` 只診斷 `current-role-prompt` 的完整輸入容量，保守字元估算不是 tokenizer 實測或整個流程可執行保證。相同完整請求已有合法觀測時，以 `max(estimatedInputTokens, observedInputTokens)` 加補正預留；逐容量重算既有 `roleRequestBudget` 的實際輸出政策與本角色 learned floor，才能反算最小容量，不沿用較小舊輸出額度低估需求。只保存固定 enum、數字與 null，不把來源或候選原文放入容量 DTO。
 - 模型上限須來自同端點／模型的已核實 metadata，明示 `ollama-show`／`stored-model-profile`；未知保持 null／`unknown`，不得以 fallback、參數量或模型名稱補造。`num_ctx`、Modelfile 預設與 `/api/ps` 最近分配另列，不等於所有同系列模型的上限。短角色探針通過只認證固定樣本；正式 Analyst、Writer、Reviewer 仍各核完整提示，容量足夠也不代表品質通過。

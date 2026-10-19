@@ -282,7 +282,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
                 
                 case 'setPromptStrategy': {
+                    if (this.activeAnalysis) { break; }
                     await config.update('promptStrategy', message.strategy, true);
+                    if (this.activeAnalysis) { break; }
                     if (this.webview) {
                         const lang = config.get<string>('language', 'auto');
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
@@ -860,8 +862,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'abortTest': {
-                    vscode.commands.executeCommand('llm-unit-test.abortTest');
-                    this.webview?.postMessage({ command: 'analysisFinished' });
+                    await vscode.commands.executeCommand('llm-unit-test.abortTest');
                     break;
                 }
 

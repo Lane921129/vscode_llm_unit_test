@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { test } from 'node:test';
 import { ExecutionManager, currentExecution, runInExecution, throwIfExecutionCancelled } from '../pipeline/executionContext';
 
-test('cancelled workers retain their context and cannot publish into a replacement run', async () => {
+test('cancelled workers retain the reservation until cleanup and cannot publish into a later run', async () => {
     const manager = new ExecutionManager<{ models: string[] }>();
     const models = ['first'];
     const oldRun = manager.begin({ models })!;
@@ -14,16 +14,21 @@ test('cancelled workers retain their context and cannot publish into a replaceme
         assert.strictEqual(currentExecution(), oldRun);
         assert.throws(throwIfExecutionCancelled, /中止/);
         assert.strictEqual(manager.canPublish(oldRun), false);
-        assert.strictEqual(manager.finish(oldRun), false);
+        assert.strictEqual(manager.hasActiveRun, true);
     });
     assert.strictEqual(manager.cancel(), true);
+    assert.strictEqual(manager.canPublish(oldRun), false);
+    assert.strictEqual(manager.begin({ models }), undefined, 'stopping workers must finish before another analysis starts');
     models[0] = 'second';
+    resume();
+    await oldWorker;
+    assert.strictEqual(manager.finish(oldRun), true, 'the cancelled owner still receives its final cleanup acknowledgement');
+    assert.strictEqual(manager.hasActiveRun, false);
     const newRun = manager.begin({ models })!;
     assert.notStrictEqual(oldRun.id, newRun.id);
     assert.deepStrictEqual(oldRun.snapshot.models, ['first']);
     await runInExecution(newRun, async () => {
-        resume();
-        await oldWorker;
+        assert.strictEqual(manager.finish(oldRun), false, 'a stale finish cannot clear the replacement run');
         assert.strictEqual(currentExecution(), newRun);
         assert.doesNotThrow(throwIfExecutionCancelled);
         assert.strictEqual(manager.canPublish(newRun), true);
@@ -40,6 +45,7 @@ test('cancellation only invokes resources belonging to that run and respects rel
     let firstCalls = 0;
     first.onCancel(() => { firstCalls++; });
     manager.cancel();
+    manager.finish(first);
     const second = manager.begin(null)!;
     let secondCalls = 0;
     second.onCancel(() => { secondCalls++; });

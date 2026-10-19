@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## 手動中止與側欄結果狀態（2026-10-19）
+
+`ExecutionManager` 將取消與完成分開：`cancel()` 只取消目前 `ExecutionContext`，保留 active reservation；`hasActiveRun` 在停止及清理期間仍為 true，`begin()` 不接受另一分析。`canPublish()` 同時核對 owner 與未取消，阻擋晚到的一般進度與結果。取消命令只送出 `analysisStopping`，側欄維持停止中並鎖住重啟；只有該 owner 的 `runAnalysisSession` finally 完成工作與環境清理後，才能 `finish(execution)` 並送出 `analysisFinished`。`finish` 和 `SidebarProvider.endAnalysis` 均核對同一 owner，舊執行不能清除較新的 run。取消後不再發送模型請求或排程下一目標；收尾保存與清理是停止的一部分，不能提早當成執行完成。
+
+`webviewContent.ts` 的結果卡將檔名／函式標題與分數分列，標題可使用完整卡片寬度，長名稱仍可換行。分組重建前讀取 live details 的展開狀態，以 `data-file-key` 維持 `groupOpenState`；toggle 只接受仍連在畫面的節點，避免舊 DOM 的延後事件覆寫目前狀態。新結果更新與平鋪／分組切換都沿用同檔案狀態；全展開／全收合另更新新分組預設，切換受測專案時重設。此狀態屬目前 Webview，不宣稱跨重新載入永久保存。
+
 ## Auto 先決條件與批次即停（2026-10-18）
 
 `runAnalysisSession` 完成同次唯讀模型 metadata 探索後，與逐目標流程共用 `initialAnalysisModel` 解析端點、設定快照及確切 `num_ctx`。Auto/full 必須先有本次有效的 Writer／Reviewer 資格，Auto/execution 只要求 Writer；缺資格在資料夾掃描、初始化、Trace 與模型生成前立即結束並釋放 UI／環境鎖。手動 Tier 保留既有嘗試政策；明確單一 dummy 或經靜態 AST 確認的惰性 stub 保留無 AI 診斷通道，不宣稱測試或品質通過。

@@ -64,12 +64,14 @@ export function throwIfExecutionCancelled(): void {
     currentExecution()?.throwIfCancelled();
 }
 
-/** Cancelled runs may drain in the background while a new run starts. */
+/** An analysis owns its reservation until its workers and cleanup have settled. */
 export class ExecutionManager<Snapshot> {
     private active?: ExecutionContext<Snapshot>;
 
+    get hasActiveRun(): boolean { return this.active !== undefined; }
+
     begin(snapshot: Snapshot): ExecutionContext<Snapshot> | undefined {
-        if (this.active && !this.active.cancelled) { return undefined; }
+        if (this.active) { return undefined; }
         return this.active = new ExecutionContext(snapshot);
     }
 
@@ -86,6 +88,6 @@ export class ExecutionManager<Snapshot> {
     finish(context: ExecutionContext<Snapshot>): boolean {
         if (this.active !== context) { return false; }
         this.active = undefined;
-        return !context.cancelled;
+        return true;
     }
 }

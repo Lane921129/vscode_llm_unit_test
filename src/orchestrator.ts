@@ -350,8 +350,11 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
 ): Promise<void> {
     const environmentLease = AnalysisEnvironmentLease.acquire(pythonEnvironmentActivity);
     if (!environmentLease) {
+        const hadActiveAnalysis = analysisRuns.hasActiveRun;
         await vscode.window.showInformationMessage(localize("Python 環境準備中，請等待完成後再開始測試。"));
-        void sidebar.webview?.postMessage({ command: 'analysisFinished' });
+        if (!hadActiveAnalysis && !analysisRuns.hasActiveRun) {
+            void sidebar.webview?.postMessage({ command: 'analysisFinished' });
+        }
         return;
     }
     const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -805,8 +808,8 @@ export function activate(context: vscode.ExtensionContext) {
     const abortTestCmd = vscode.commands.registerCommand('llm-unit-test.abortTest', () => {
         sidebarProvider.cancelBatchScopePreview();
         if (analysisRuns.cancel()) {
-            sidebarProvider.webview?.postMessage({ command: 'appendLog', text: localize("\n[系統] 已中止本次分析，可重新開始。") });
-            sidebarProvider.webview?.postMessage({ command: 'analysisFinished' });
+            sidebarProvider.webview?.postMessage({ command: 'analysisStopping',
+                text: localize('請等待目前分析或環境準備完成。') });
         }
     });
 

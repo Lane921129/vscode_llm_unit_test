@@ -256,7 +256,7 @@ test('formal Ollama streams preserve complete role contracts and distinguish par
             assert.ok(transport.httpWaitMs >= 0 && transport.responseReadMs >= 0);
             assert.ok(Object.values(transport.ollama).every(value => value === null));
         });
-        await t.test('a new execution expires in queue without HTTP while cancelled old transport is still draining', async () => {
+        await t.test('a stopping analysis rejects restart until its cancelled transport actually settles', async () => {
             scenario = 'draining-queue';
             drainingFetchCalls = 0;
             const started = new Promise<void>(resolve => { notifyDrainingStarted = resolve; });
@@ -270,36 +270,22 @@ test('formal Ollama streams preserve complete role contracts and distinguish par
             handlers.get('llm-unit-test.abortTest')!();
             assert.equal(drainingSignal?.aborted, true, 'the old execution really receives its cancellation');
             try {
-                // This explicit 0.1-second role allowance uses the real clock and
-                // original absolute deadline. No queue timer is shortened or mocked.
-                const result = await run(0.1);
-                assert.equal(result.knowledge.terminalStatus, 'failed');
-                assert.equal(result.knowledge.failureCategory, 'timeout');
-                assert.equal(result.knowledge.failureStage, 'model-request');
+                const blockedOutput = path.join(directory, 'results-stopping-restart');
+                const requestsBeforeRestart = requests.length;
+                await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName,
+                    filePath: source, funcName: 'increment', promptStrategy: 'auto', validationMode: 'full',
+                    maxLoops: 1, timeoutSeconds: 30, mutationEngine: 'builtin', outputPath: blockedOutput });
                 assert.equal(drainingActive, true, 'the cancelled old request has not settled yet');
                 assert.equal(drainingFetchCalls, 1);
-                assert.equal(requests.length, 0, 'the new execution never calls fetch');
-                assert.equal(result.knowledge.targetBudget.used.logicalRequests, 1);
-                assert.equal(result.knowledge.targetBudget.used.transportAttempts, 0);
-                assert.equal(result.knowledge.targetBudget.used.candidateAttempts, 0);
-                const phases = result.progress.map(event => event.detail.phase);
-                assert.ok(phases.includes('queued') && phases.includes('queue-timeout'));
-                assert.equal(phases.includes('dispatch'), false);
-                assert.equal(phases.includes('http-request'), false);
-                const error = result.events.find(event => event.stage === 'model-request' && event.status === 'error');
-                assert.equal(error.detail.phase, 'queue');
-                assert.equal(error.detail.transportStarted, false);
-                assert.equal(error.detail.reasonCode, 'queue-timeout');
-                assert.ok(result.events.some(event => event.status === 'timing'
-                    && event.detail.kind === 'queue' && event.detail.queueWaitMs >= 0));
-                assert.equal(result.events.some(event => event.status === 'timing' && event.detail.kind === 'transport'), false);
+                assert.equal(requests.length, requestsBeforeRestart, 'the rejected restart never calls fetch');
+                assert.equal(fs.existsSync(blockedOutput), false, 'a rejected restart creates no analysis result or queue deadline');
             } finally {
                 finishDraining?.();
                 await oldRun;
                 notifyDrainingStarted = undefined; finishDraining = undefined;
             }
             assert.equal(drainingActive, false);
-            assert.equal(drainingFetchCalls, 1, 'the expired queued task stays skipped after old transport settles');
+            assert.equal(drainingFetchCalls, 1, 'the rejected restart stays skipped after old transport settles');
         });
         await t.test('HTTP 404 failure is reported even when cancelling its unused body never settles', { timeout: 15_000 }, async () => {
             scenario = 'http-error-cancel-stalls';
