@@ -110,5 +110,17 @@ test('Sidebar timing saves merge limits and keep startup snapshots safe across a
             assert.equal(messages.filter(item => item.command === 'analysisFinished').length, 1);
             assert.equal(updates.length, 1);
         });
+        await t.test('settings persistence failure does not block starting analysis and appendLog warns visibly', async () => {
+            reset();
+            saveWait = Promise.reject(new Error('Unable to write to User Settings because llmUnitTest.targetBudget is not a registered configuration.'));
+            saveWait.catch(() => undefined);
+            await start();
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0][0], 'llm-unit-test.runBatchAnalysis');
+            assert.equal(warnings.length, 0);
+            await receive({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
+            assert.equal(warnings.at(-1), 'Please select Env, Model, and Project or File.');
+            assert.deepEqual(messages.at(-1), { command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
+        });
     } finally { Module._load = originalLoad; }
 });

@@ -436,6 +436,26 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let currentKeys = {};
         let currentCustomKeys = {};
         let lastTestedProjectPath = '';
+        const savedUiState = (typeof vscode.getState === 'function' ? vscode.getState() : null) || {};
+        function saveUiState(patch = {}) {
+            Object.assign(savedUiState, {
+                envType: document.getElementById('env-type').value,
+                modelName: document.getElementById('model-select').value || savedUiState.modelName || '',
+                cloudKeyName: document.getElementById('api-key-select').value || savedUiState.cloudKeyName || '',
+                customKeyName: document.getElementById('custom-api-select').value || savedUiState.customKeyName || ''
+            }, patch);
+            if (typeof vscode.setState === 'function') vscode.setState(savedUiState);
+        }
+        function applyEnvTypeUi(val) {
+            document.getElementById('local-ui').style.display = val === 'local' ? 'block' : 'none';
+            document.getElementById('cloud-ui').style.display = val === 'cloud' ? 'block' : 'none';
+            document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
+            saveUiState({ envType: val });
+        }
+        if (savedUiState.envType && ['cloud', 'local', 'custom'].includes(savedUiState.envType)) {
+            document.getElementById('env-type').value = savedUiState.envType;
+            applyEnvTypeUi(savedUiState.envType);
+        }
         const resultsMap = new Map();
         const groupOpenState = new Map();
         let defaultGroupsOpen = true;
@@ -686,9 +706,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     break;
                 case 'setModels': {
                     const select = document.getElementById('model-select');
-                    const previous = select.value;
+                    const previous = select.value || savedUiState.modelName || '';
                     select.innerHTML = '<option value="">-- Select Model --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join('');
                     if (msg.models.includes(previous)) select.value = previous;
+                    else if (msg.models.length > 0) select.value = msg.models[0];
+                    saveUiState({ modelName: select.value });
                     requestLocalRuntimeContext();
                     break;
                 }
@@ -713,12 +735,23 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     updateLocalContextControls();
                     break;
                 }
-                case 'setApiKeys': currentKeys = msg.keys; const keys = Object.keys(msg.keys); document.getElementById('api-key-select').innerHTML = '<option value="">-- Select Setting --</option>' + keys.map(k => \`<option value="\${k}">\${k} (\${currentKeys[k].model})</option>\`).join(''); break;
+                case 'setApiKeys': {
+                    currentKeys = msg.keys;
+                    const select = document.getElementById('api-key-select');
+                    const previous = select.value || savedUiState.cloudKeyName || '';
+                    const keys = Object.keys(msg.keys);
+                    select.innerHTML = '<option value="">-- Select Setting --</option>' + keys.map(k => \`<option value="\${k}">\${k} (\${currentKeys[k].model})</option>\`).join('');
+                    if (keys.includes(previous)) select.value = previous;
+                    else if (keys.length > 0) select.value = keys[0];
+                    saveUiState({ cloudKeyName: select.value });
+                    break;
+                }
                 case 'apiKeySaved':
                     document.getElementById('new-key-name').value = '';
                     document.getElementById('new-key-model').value = '';
                     document.getElementById('new-key-value').value = '';
                     document.getElementById('api-key-select').value = msg.keyName || '';
+                    saveUiState({ cloudKeyName: msg.keyName || '' });
                     break;
                 case 'setFiles':
                     if (msg.projectPath !== document.getElementById('project-path').value) break;
@@ -872,7 +905,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             vscode.postMessage({ command: 'getModelRuntimeContext', modelName,
                 ollamaUrl: document.getElementById('ollama-url').value, revision: runtimeContextRevision });
         }
-        document.getElementById('model-select').onchange = requestLocalRuntimeContext;
+        document.getElementById('model-select').onchange = () => {
+            saveUiState({ modelName: document.getElementById('model-select').value });
+            requestLocalRuntimeContext();
+        };
         document.getElementById('ollama-url').oninput = clearLocalRuntimeContext;
         document.getElementById('btn-save-runtime-context').onclick = () => {
             if (analysisRunning || environmentBusy || !runtimeContextEndpointKey) return;
@@ -938,6 +974,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('local-ui').style.display = val === 'local' ? 'block' : 'none';
             document.getElementById('cloud-ui').style.display = val === 'cloud' ? 'block' : 'none';
             document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
+            saveUiState({ envType: val });
         };
 
         document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
@@ -974,6 +1011,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('new-key-name').value = name || '';
             document.getElementById('new-key-model').value = currentKeys[name]?.model || '';
             document.getElementById('new-key-value').value = '';
+            saveUiState({ cloudKeyName: name || '' });
         };
 
         document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });

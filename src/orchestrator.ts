@@ -413,8 +413,10 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
         }
         catch (error: any) {
             if (!execution.cancelled) {
-                log(error instanceof AnalysisStageError ? `[${error.stage}] ${error.message}`
-                    : localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error));
+                const text = error instanceof AnalysisStageError ? `[${error.stage}] ${error.message}`
+                    : localize("[錯誤] 測試執行發生異常: {0}", error?.message ?? error);
+                log(text);
+                void vscode.window?.showErrorMessage?.(text);
             }
         } finally {
             environmentLease.release();

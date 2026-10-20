@@ -12,7 +12,7 @@
 
 `modelTransport.ts` 將原生 Node／Undici `fetch` 的預設 300 秒 `headersTimeout`／`bodyTimeout` 改為由呼叫端絕對期限與 `AbortSignal` 控制（上限 86,400 秒），透過 `getNativeGlobalDispatcher` 直接取得 Node 內建的 `Symbol.for('undici.globalDispatcher.1')`／`Symbol.for('undici.globalDispatcher.2')` 全域 dispatcher 並於單次請求 `dispatch` 時覆寫 `headersTimeout` 與 `bodyTimeout`，不依賴外部 `undici` npm 套件，並保留測試替身與宿主自訂 `fetch`。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 對傳輸錯誤僅提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。
 
-`executionTimingSettings.ts` 與側欄將「單次 API 等待上限（秒，1–86,400 整數）」與「每個函式總時間上限（秒，0.001–86,400，精確至毫秒）」分開解析、顯示與保存。開始分析前先驗證兩者並建立凍結的 `targetBudget` 快照（保留既有 `logicalRequests`、`transportAttempts`、`estimatedInputTokens`、`candidateAttempts`），各函式開始後固定絕對期限，重試不重新計時；非同步保存期間若執行權移轉、專案變更或取消則中止啟動。
+`executionTimingSettings.ts` 與側欄將「單次 API 等待上限（秒，1–86,400 整數）」與「每個函式總時間上限（秒，0.001–86,400，精確至毫秒）」分開解析、顯示與保存。開始分析前先驗證兩者並建立凍結的 `targetBudget` 快照（保留既有 `logicalRequests`、`transportAttempts`、`estimatedInputTokens`、`candidateAttempts`），各函式開始後固定絕對期限，重試不重新計時；非同步保存期間若執行權移轉、專案變更或取消則中止啟動。若宿主設定寫入失敗（例如未重啟宿主時 `targetBudget` 尚未註冊或資料夾範疇不可寫）僅記錄錯誤而不阻斷測試啟動；側欄並接手 Webview `appendLog` 轉發至系統日誌與 VS Code 警告通知，且於 `setModels`／`setApiKeys` 及跨 Webview 重建時自動保留或預選可用模型與環境狀態。
 
 `dependencyMockContract.ts` 與 `mock_scaffold_generator.py` 依據 `dependency-fixture-contract-v1` 在初次壓縮與修訂提示、以及 Tier 3 scaffold 中保留來源實際消費的回傳與巢狀 receiver 路徑（如 `connect.return_value.cursor.return_value`），避免以 `None` 或純量覆蓋中層 receiver；同時提醒多個呼叫點不等於單次執行，禁止在同一 mock 堆疊多個 `assert_called_once_with`。
 

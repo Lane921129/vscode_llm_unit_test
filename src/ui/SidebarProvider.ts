@@ -23,7 +23,7 @@ import { buildCustomChatCompletionBody, getCustomChatCompletionText, responseSch
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchJsonWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, requestJsonWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
 import { configuredPythonForResource } from '../environment/pythonEnvironmentController';
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
-import { API_TIMEOUT_PREFERENCE_KEY, parseExecutionTimingSettings, snapshotExecutionTargetBudget } from '../pipeline/executionTimingSettings';
+import { API_TIMEOUT_PREFERENCE_KEY, MAX_EXECUTION_TIMEOUT_SECONDS, parseExecutionTimingSettings, snapshotExecutionTargetBudget } from '../pipeline/executionTimingSettings';
 import { DEFAULT_TARGET_BUDGET } from '../pipeline/targetBudget';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
@@ -243,10 +243,17 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
             switch (message.command) {
                 case 'getInitialData': {
-                    const savedBudget = config.get<{ timeoutMs?: number }>('targetBudget', {});
+                    const savedBudget = config.get<{ timeoutMs?: number } | null>('targetBudget', {});
+                    const rawTimeoutMs = savedBudget && typeof savedBudget === 'object' ? savedBudget.timeoutMs : undefined;
+                    const targetTimeoutMs = typeof rawTimeoutMs === 'number' && Number.isFinite(rawTimeoutMs)
+                        && rawTimeoutMs >= 1 && rawTimeoutMs <= MAX_EXECUTION_TIMEOUT_SECONDS * 1000
+                        ? rawTimeoutMs : DEFAULT_TARGET_BUDGET.timeoutMs;
+                    const rawApiTimeout = this.uiState.get<unknown>(API_TIMEOUT_PREFERENCE_KEY, 60);
+                    const timeoutSeconds = typeof rawApiTimeout === 'number' && Number.isSafeInteger(rawApiTimeout)
+                        && rawApiTimeout >= 1 && rawApiTimeout <= MAX_EXECUTION_TIMEOUT_SECONDS ? rawApiTimeout : 60;
                     this.webview?.postMessage({ command: 'executionTimingSettings',
-                        timeoutSeconds: this.uiState.get(API_TIMEOUT_PREFERENCE_KEY, 60),
-                        targetTimeoutSeconds: (savedBudget.timeoutMs ?? DEFAULT_TARGET_BUDGET.timeoutMs) / 1000 });
+                        timeoutSeconds,
+                        targetTimeoutSeconds: targetTimeoutMs / 1000 });
                     const keys = await this.getStoredCloudCredentials();
                     this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(keys) });
 
@@ -529,6 +536,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
+                case 'appendLog': {
+                    if (typeof message.text === 'string' && message.text.trim()) {
+                        this.webview?.postMessage({ command: 'appendLog', text: message.text });
+                        vscode.window.showWarningMessage?.(message.text);
+                    }
+                    break;
+                }
+
                 case 'startAnalysis':
                 case 'startBatchAnalysis': {
                     if (this.activeAnalysis || this.analysisStartPending) { break; }
@@ -561,9 +576,17 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             break;
                         }
                         if (params.targetTimeoutSeconds !== undefined) {
-                            await this.rememberRunPreference(config, 'targetBudget', params.targetBudget);
+                            try {
+                                await this.rememberRunPreference(config, 'targetBudget', { ...params.targetBudget });
+                            } catch (e) {
+                                console.error(localize("更新 targetBudget 設定失敗"), e);
+                            }
                         }
-                        await this.uiState.update(API_TIMEOUT_PREFERENCE_KEY, timing.timeoutSeconds);
+                        try {
+                            await this.uiState.update(API_TIMEOUT_PREFERENCE_KEY, timing.timeoutSeconds);
+                        } catch (e) {
+                            console.error(localize("更新 API 逾時設定失敗"), e);
+                        }
                         if (this.activeAnalysis || this.pendingStartCancelled) { break; }
                         if (revision !== this.projectRevision) {
                             this.webview?.postMessage({ command: 'analysisFinished' });

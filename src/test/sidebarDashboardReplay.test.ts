@@ -239,4 +239,11 @@ test('invalid timing blocks start and delayed initial settings cannot erase edit
     ui.element('btn-run').onclick!();
     assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
     assert.equal(ui.messages.at(-1).targetTimeoutSeconds, 7200);
+    ui.send({ command: 'analysisFinished' });
+    ui.element('model-select').value = '';
+    ui.send({ command: 'setModels', models: ['first-local-model', 'second-local-model'] });
+    assert.equal(ui.element('model-select').value, 'first-local-model');
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
+    assert.equal(ui.messages.at(-1).modelName, 'first-local-model');
 });
