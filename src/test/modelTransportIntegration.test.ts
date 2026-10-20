@@ -2,8 +2,20 @@ import * as assert from 'node:assert/strict';
 import { createServer, Server, ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { Agent } from 'undici';
-import { fetchModelResponse } from '../llm/modelTransport';
+import { fetchModelResponse, getNativeGlobalDispatcher, ModelTransportDispatcher } from '../llm/modelTransport';
+
+interface NativeTestAgent extends ModelTransportDispatcher {
+    destroy(): Promise<void>;
+}
+
+function createNativeTestAgent(options?: { headersTimeout?: number; bodyTimeout?: number }): NativeTestAgent {
+    const globalDispatcher = getNativeGlobalDispatcher();
+    assert.ok(globalDispatcher, 'Expected Node built-in global dispatcher to be available.');
+    const AgentConstructor = globalDispatcher.constructor as new (
+        opts?: { headersTimeout?: number; bodyTimeout?: number }
+    ) => NativeTestAgent;
+    return new AgentConstructor(options);
+}
 
 async function fixture(handler: (response: ServerResponse) => void): Promise<{ server: Server; url: string }> {
     const server = createServer((_request, response) => handler(response));
@@ -14,7 +26,7 @@ async function fixture(handler: (response: ServerResponse) => void): Promise<{ s
     return { server, url: `http://127.0.0.1:${address.port}/generate` };
 }
 
-async function close(server: Server, agent: Agent): Promise<void> {
+async function close(server: Server, agent: NativeTestAgent): Promise<void> {
     await agent.destroy();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
@@ -25,7 +37,7 @@ test('native HTTP transport tolerates delayed headers within the caller deadline
     const { server, url } = await fixture(response => {
         delayed = setTimeout(() => response.end('{"fixture":"headers"}'), 700);
     });
-    const agent = new Agent({ headersTimeout: 30, bodyTimeout: 30 });
+    const agent = createNativeTestAgent({ headersTimeout: 30, bodyTimeout: 30 });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     try {
@@ -47,7 +59,7 @@ test('native HTTP transport also keeps the allowance through a delayed complete 
         response.write('{"fixture":');
         delayed = setTimeout(() => response.end('"body"}'), 700);
     });
-    const agent = new Agent({ headersTimeout: 30, bodyTimeout: 30 });
+    const agent = createNativeTestAgent({ headersTimeout: 30, bodyTimeout: 30 });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     try {
@@ -71,7 +83,7 @@ test('cancelling a native request waiting for headers closes the active connecti
         response.once('close', disconnected);
         received();
     });
-    const agent = new Agent();
+    const agent = createNativeTestAgent();
     const controller = new AbortController();
     try {
         const request = fetchModelResponse(url, { signal: controller.signal }, {
@@ -91,7 +103,7 @@ test('caller deadline still aborts a response body which keeps streaming', { tim
         interval = setInterval(() => response.write('chunk'), 10);
         response.once('close', () => clearInterval(interval));
     });
-    const agent = new Agent();
+    const agent = createNativeTestAgent();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 200);
     try {

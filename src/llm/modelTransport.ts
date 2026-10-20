@@ -1,6 +1,48 @@
-import { Dispatcher, getGlobalDispatcher } from 'undici';
-
 const MAX_TIMER_MS = 2_147_483_647;
+
+const GLOBAL_DISPATCHER_SYMBOLS = [
+    Symbol.for('undici.globalDispatcher.1'),
+    Symbol.for('undici.globalDispatcher.2'),
+] as const;
+
+export interface ModelTransportDispatchOptions {
+    origin?: string | URL;
+    path?: string;
+    method?: string;
+    headersTimeout?: number;
+    bodyTimeout?: number;
+    [key: string]: unknown;
+}
+
+export interface ModelTransportDispatcher {
+    dispatch(options: ModelTransportDispatchOptions, handler: unknown): boolean;
+}
+
+function isModelTransportDispatcher(value: unknown): value is ModelTransportDispatcher {
+    return typeof value === 'object' && value !== null
+        && typeof (value as ModelTransportDispatcher).dispatch === 'function';
+}
+
+/** Retrieve Node's built-in Undici global dispatcher without requiring an
+ * external `undici` npm package or replacing the host's active Agent. */
+export function getNativeGlobalDispatcher(): ModelTransportDispatcher | undefined {
+    const host = globalThis as Record<symbol, unknown>;
+    for (const sym of GLOBAL_DISPATCHER_SYMBOLS) {
+        if (isModelTransportDispatcher(host[sym])) { return host[sym]; }
+    }
+    try {
+        if (typeof Request === 'function') { void new Request('http://127.0.0.1'); }
+    } catch { /* ignore lazy init errors */ }
+    for (const sym of GLOBAL_DISPATCHER_SYMBOLS) {
+        if (isModelTransportDispatcher(host[sym])) { return host[sym]; }
+    }
+    for (const sym of Object.getOwnPropertySymbols(globalThis)) {
+        if (String(sym).startsWith('Symbol(undici.globalDispatcher.') && isModelTransportDispatcher(host[sym])) {
+            return host[sym];
+        }
+    }
+    return undefined;
+}
 
 const SAFE_TRANSPORT_FAILURE_CODES = new Set([
     'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
@@ -39,7 +81,7 @@ export interface ModelTransportOptions {
     deadlineAt: number;
     /** Explicit injection keeps fixtures and host fetch instrumentation intact. */
     fetcher?: typeof fetch;
-    dispatcher?: Pick<Dispatcher, 'dispatch'>;
+    dispatcher?: ModelTransportDispatcher;
 }
 
 /** The caller owns the AbortController and keeps its absolute-deadline timer
@@ -57,15 +99,15 @@ export function fetchModelResponse(
     if (init.signal.aborted || options.deadlineAt <= Date.now()) {
         return Promise.reject(new DOMException('Model request was cancelled or exceeded its deadline.', 'AbortError'));
     }
-    const delegate = options.dispatcher ?? getGlobalDispatcher();
-    const dispatcher = {
-        dispatch(dispatchOptions: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
+    const delegate = options.dispatcher ?? getNativeGlobalDispatcher();
+    const dispatcher: ModelTransportDispatcher | undefined = delegate ? {
+        dispatch(dispatchOptions: ModelTransportDispatchOptions, handler: unknown): boolean {
             const remaining = Math.max(1, Math.min(MAX_TIMER_MS, Math.ceil(options.deadlineAt - Date.now())));
             return delegate.dispatch({ ...dispatchOptions, headersTimeout: remaining, bodyTimeout: remaining }, handler);
         },
-    };
+    } : undefined;
     // Keep the active host/global fetch, including test replacements. The local
     // dispatcher changes no process-wide Undici settings or other HTTP users.
     const fetcher = options.fetcher ?? globalThis.fetch;
-    return fetcher(input, { ...init, dispatcher } as RequestInit);
+    return fetcher(input, (dispatcher ? { ...init, dispatcher } : { ...init }) as RequestInit);
 }

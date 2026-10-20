@@ -10,7 +10,7 @@
 
 ## 模型傳輸逾時覆寫、雙時間上限與相依 Receiver 指引（2026-10-20）
 
-`modelTransport.ts` 將原生 Node／Undici `fetch` 的預設 300 秒 `headersTimeout`／`bodyTimeout` 改為由呼叫端絕對期限與 `AbortSignal` 控制（上限 86,400 秒），僅在 `globalThis.fetch` 仍為預設原生實作時透過 `DelegatingModelDispatcher` 覆寫單次請求的 `headersTimeout` 與 `bodyTimeout`，保留測試替身與宿主自訂 `fetch`。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 對傳輸錯誤僅提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。
+`modelTransport.ts` 將原生 Node／Undici `fetch` 的預設 300 秒 `headersTimeout`／`bodyTimeout` 改為由呼叫端絕對期限與 `AbortSignal` 控制（上限 86,400 秒），透過 `getNativeGlobalDispatcher` 直接取得 Node 內建的 `Symbol.for('undici.globalDispatcher.1')`／`Symbol.for('undici.globalDispatcher.2')` 全域 dispatcher 並於單次請求 `dispatch` 時覆寫 `headersTimeout` 與 `bodyTimeout`，不依賴外部 `undici` npm 套件，並保留測試替身與宿主自訂 `fetch`。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 對傳輸錯誤僅提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。
 
 `executionTimingSettings.ts` 與側欄將「單次 API 等待上限（秒，1–86,400 整數）」與「每個函式總時間上限（秒，0.001–86,400，精確至毫秒）」分開解析、顯示與保存。開始分析前先驗證兩者並建立凍結的 `targetBudget` 快照（保留既有 `logicalRequests`、`transportAttempts`、`estimatedInputTokens`、`candidateAttempts`），各函式開始後固定絕對期限，重試不重新計時；非同步保存期間若執行權移轉、專案變更或取消則中止啟動。
 

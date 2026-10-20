@@ -1,7 +1,13 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Dispatcher, getGlobalDispatcher } from 'undici';
-import { fetchModelResponse, getSafeTransportFailureCode, isSafeTransportFailureCode } from '../llm/modelTransport';
+import {
+    fetchModelResponse,
+    getNativeGlobalDispatcher,
+    getSafeTransportFailureCode,
+    isSafeTransportFailureCode,
+    ModelTransportDispatcher,
+    ModelTransportDispatchOptions,
+} from '../llm/modelTransport';
 
 test('transport diagnostics retain only allowlisted nested failure codes', () => {
     const error = new TypeError('fetch failed: private-url', { cause: {
@@ -21,7 +27,7 @@ test('transport diagnostics retain only allowlisted nested failure codes', () =>
 
 test('model transport preserves the current host fetch replacement and caller signal', async () => {
     const priorFetch = globalThis.fetch;
-    const priorDispatcher = getGlobalDispatcher();
+    const priorDispatcher = getNativeGlobalDispatcher();
     const controller = new AbortController();
     const response = new Response('fixture');
     let calls = 0;
@@ -40,16 +46,16 @@ test('model transport preserves the current host fetch replacement and caller si
             signal: controller.signal,
         }, { deadlineAt: Date.now() + 600_000 }), response);
         assert.equal(calls, 1);
-        assert.equal(getGlobalDispatcher(), priorDispatcher);
+        assert.equal(getNativeGlobalDispatcher(), priorDispatcher);
     } finally { globalThis.fetch = priorFetch; }
 });
 
 test('transport dispatch overrides native 300-second defaults without replacing the delegated policy', async () => {
     let dispatchCount = 0;
-    const priorDispatcher = getGlobalDispatcher();
+    const priorDispatcher = getNativeGlobalDispatcher();
     const deadlineAt = Date.now() + 900_000;
-    const delegate = {
-        dispatch(options: Dispatcher.DispatchOptions): boolean {
+    const delegate: ModelTransportDispatcher = {
+        dispatch(options: ModelTransportDispatchOptions): boolean {
             dispatchCount++;
             assert.equal(options.origin, 'https://fixture.invalid');
             assert.equal(options.path, '/generate');
@@ -61,14 +67,14 @@ test('transport dispatch overrides native 300-second defaults without replacing 
     await fetchModelResponse('https://fixture.invalid/generate', { signal: new AbortController().signal }, {
         deadlineAt, dispatcher: delegate,
         fetcher: async (_input, init) => {
-            const dispatcher = (init as RequestInit & { dispatcher: Pick<Dispatcher, 'dispatch'> }).dispatcher;
+            const dispatcher = (init as RequestInit & { dispatcher: ModelTransportDispatcher }).dispatcher;
             dispatcher.dispatch({ origin: 'https://fixture.invalid', path: '/generate', method: 'POST',
                 headersTimeout: 300_000, bodyTimeout: 300_000 }, {});
             return new Response('fixture');
         },
     });
     assert.equal(dispatchCount, 1);
-    assert.equal(getGlobalDispatcher(), priorDispatcher);
+    assert.equal(getNativeGlobalDispatcher(), priorDispatcher);
 });
 
 test('expired or cancelled model transport does not dispatch another request', async () => {

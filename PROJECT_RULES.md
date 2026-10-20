@@ -6,7 +6,7 @@
 
 - `summarizeRepairOutput` 裁切超長 `FAIL:`／`ERROR:` 區塊時，必須保留失敗測試識別標頭與例外診斷列（如 `AssertionError:`），不得因後方巨量 `Calls:` 清單只取尾端而遺失核心錯誤；`executionFailureRepairGuidance` 僅在執行輸出實際出現對應 `AssertionError`／不可變型別 `TypeError` 時按需補充修復指引。
 - `HOST_ISOLATED_RESOURCE_CONTEXT` 必須明示為提示詞區段標記而非可匯入模組，且由 `validate_test_bindings.py` 靜態拒絕匯入。`validate_test_bindings.py` 與 `mock_behavior.py` 須診斷參數屬性誤作模組屬性 patch、不可變 `datetime`／`date` 型別方法 patch、同模組 helper 與 `moduleSource` 使用點不符，並支援 `setUp`／測試方法內的鏈式子 Mock provenance 追蹤與同方法合法 `@patch` 隔離，不放寬真實目標呼叫或斷言要求。`qualityStrategyHints` 必須相容 `builtin-ast-v3` 單引號格式化的存活突變字串與 `call_statement_omission`。
-- 模型傳輸在 `globalThis.fetch` 為預設原生實作時，須透過 `DelegatingModelDispatcher` 將單次請求的 `headersTimeout`／`bodyTimeout` 對齊呼叫端期限（最高 86,400 秒），避免長耗時本機／共用伺服器推論被 Undici 預設 300 秒靜默切斷；同時保留測試與宿主替換的 `fetch` 及 `AbortSignal`。傳輸錯誤只記錄白名單安全原因碼，不寫入供應商回應原文。
+- 模型傳輸在 `globalThis.fetch` 為預設原生實作時，須透過 `getNativeGlobalDispatcher`（不依賴外部 `undici` npm 套件）將單次請求的 `headersTimeout`／`bodyTimeout` 對齊呼叫端期限（最高 86,400 秒），避免長耗時本機／共用伺服器推論被 Undici 預設 300 秒靜默切斷；同時保留測試與宿主替換的 `fetch` 及 `AbortSignal`。傳輸錯誤只記錄白名單安全原因碼，不寫入供應商回應原文。
 - 側欄與執行設定須明確區分「單次 API 等待上限（1–86,400 整數秒）」與「每個函式總時間上限（0.001–86,400 秒，精確至毫秒）」，啟動前驗證並合併既有 `targetBudget` 計數上限後建立不可變快照；非法單位或範圍直接阻擋啟動，重試不重設函式總期限。
 - 初次壓縮與修訂 Writer 提示及 Tier 3 scaffold 須保留 `dependency-fixture-contract-v1` 已證明的消費 receiver 鏈（不以預設 `None` 覆蓋需繼續呼叫方法的回傳物件），並明示多個來源呼叫點不得堆疊多個 `assert_called_once_with`；此形狀指引不授權任意 patch 或推導預期輸出。
 - Auto 的共同角色資格須在來源批次掃描、初始化、Trace 與生成前檢查；使用同端點／模型／資格版本及本次有效 num_ctx，不借舊容量。full 需要 Writer／Reviewer，execution 只需要 Writer。手動 Tier 與不使用 AI 的明確單一 dummy／靜態惰性 stub 診斷保留既有政策。單一目標耗盡原有有限修訂而終局失敗後，保存證據與報告、完成清理，立即停止整檔／批次排程；未啟動目標保持 pending，不冒充完成。
