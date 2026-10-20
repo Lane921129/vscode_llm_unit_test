@@ -1,4 +1,5 @@
 import { localize } from '../i18n/core';
+import { isSafeTransportFailureCode } from '../llm/modelTransport';
 
 const roles = ['writer', 'writer-revision', 'reviewer', 'bug-fixer', 'analyst-planning', 'analyst-quality'];
 const outcomes = ['completed', 'http-error', 'network-error', 'response-error', 'timeout', 'cancelled'];
@@ -47,9 +48,11 @@ export function formatModelRequestTiming(detail: unknown): string | undefined {
     if (data.kind !== 'transport') { return undefined; }
     const outcome = typeof data.outcome === 'string' && outcomes.includes(data.outcome) ? data.outcome : localize('未知');
     const stats = object(data.ollama);
+    const failure = isSafeTransportFailureCode(data.failureCode)
+        ? ' ' + localize('HTTP 傳輸原因碼：{0}。', data.failureCode) : '';
     return localize('模型請求耗時：{0}，HTTP 第 {1} 次，{2}；總耗時 {3}，HTTP 回應等待 {4}，讀取回覆 {5}。',
         role, count(data.transportAttempt), outcome, duration(data.elapsedMs), duration(data.httpWaitMs), duration(data.responseReadMs))
         + ' ' + localize('Ollama 載入 {0}，提示處理 {1}，生成 {2}；輸入 {3}、輸出 {4} tokens。缺值為未知，不能推定 GPU 耗時。',
             duration(stats.loadDurationMs), duration(stats.promptEvalDurationMs), duration(stats.evalDurationMs),
-            count(stats.promptEvalCount), count(stats.evalCount));
+            count(stats.promptEvalCount), count(stats.evalCount)) + failure;
 }

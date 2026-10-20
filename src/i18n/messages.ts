@@ -1,5 +1,13 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    'HTTP 傳輸原因碼：{0}。': 'HTTP transport failure code: {0}.',
+    'HTTP 傳輸等待逾時（{0}）；未記錄供應商回應內容。': 'HTTP transport wait timed out ({0}); provider response content was not recorded.',
+    '單次 API 等待上限（秒）': 'Per-API wait limit (seconds)',
+    '每個函式總時間上限（秒）': 'Total time limit per function (seconds)',
+    '總時間包含預檢、模型等待、重試、測試與突變；每個函式開始後固定期限，重試不會重新計時。開始測試時保存設定；最多 86400 秒（24 小時）。': 'The total includes preflight, model waiting, retries, tests and mutation. Each function keeps its original deadline; retries do not restart it. Settings are saved when testing starts; maximum 86400 seconds (24 hours).',
+    '當前單次最多 {0} 秒（API {1} 秒、整目標 {2} 秒）；前序工作與排隊會減少實際剩餘時間。': 'A request currently has at most {0} seconds (API {1}, total target {2}); preceding work and queuing reduce the actual time remaining.',
+    'API 上限須為 1 至 86400 的整數秒；整目標上限須為 0.001 至 86400 秒，精確至毫秒。請檢查時間單位。': 'The API limit must be an integer from 1 to 86400 seconds; the target limit must be from 0.001 to 86400 seconds, to millisecond precision. Check the units.',
+    '時間設定無法套用；請確認 API 與整目標時間均在有效範圍，且 targetBudget 的其他預算為有效整數。': 'Time settings could not be applied. Check both time limits and ensure the other targetBudget limits are valid integers.',
     '同一完整請求已觀測輸入 {0}，本次按較大值 {1} 保留。': 'The same complete request reported {0} input tokens; the larger value {1} is reserved for this attempt.',
     '短探針只認證固定樣本；正式函式仍須檢查完整提示容量、實際執行與審查品質。': 'A short probe qualifies only its fixed sample; a real target still requires complete prompt capacity checks, execution and quality review.',
     '角色容量估算：{0}；num_ctx {1}，模型上限 {2}（{3}）；完整輸入 {4} + 補正預留 {5}，可用輸入 {6}，輸出預留 {7}；此角色提示至少需要 {8} tokens。': 'Role capacity estimate: {0}; num_ctx {1}, model limit {2} ({3}); complete input {4} + correction reserve {5}, input budget {6}, output reserve {7}; this role prompt needs at least {8} tokens.',

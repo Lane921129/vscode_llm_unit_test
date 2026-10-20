@@ -4,6 +4,9 @@
 
 ## 目前驗收優先順序
 
+- 模型傳輸在 `globalThis.fetch` 為預設原生實作時，須透過 `DelegatingModelDispatcher` 將單次請求的 `headersTimeout`／`bodyTimeout` 對齊呼叫端期限（最高 86,400 秒），避免長耗時本機／共用伺服器推論被 Undici 預設 300 秒靜默切斷；同時保留測試與宿主替換的 `fetch` 及 `AbortSignal`。傳輸錯誤只記錄白名單安全原因碼，不寫入供應商回應原文。
+- 側欄與執行設定須明確區分「單次 API 等待上限（1–86,400 整數秒）」與「每個函式總時間上限（0.001–86,400 秒，精確至毫秒）」，啟動前驗證並合併既有 `targetBudget` 計數上限後建立不可變快照；非法單位或範圍直接阻擋啟動，重試不重設函式總期限。
+- 初次壓縮與修訂 Writer 提示及 Tier 3 scaffold 須保留 `dependency-fixture-contract-v1` 已證明的消費 receiver 鏈（不以預設 `None` 覆蓋需繼續呼叫方法的回傳物件），並明示多個來源呼叫點不得堆疊多個 `assert_called_once_with`；此形狀指引不授權任意 patch 或推導預期輸出。
 - Auto 的共同角色資格須在來源批次掃描、初始化、Trace 與生成前檢查；使用同端點／模型／資格版本及本次有效 num_ctx，不借舊容量。full 需要 Writer／Reviewer，execution 只需要 Writer。手動 Tier 與不使用 AI 的明確單一 dummy／靜態惰性 stub 診斷保留既有政策。單一目標耗盡原有有限修訂而終局失敗後，保存證據與報告、完成清理，立即停止整檔／批次排程；未啟動目標保持 pending，不冒充完成。
 - 手動「中止測試」只送出取消與 `analysisStopping`，不能立即宣告 `analysisFinished` 或釋放執行預約。取消後至 HTTP／子程序、報告與隔離資源清理完成前，`ExecutionManager.hasActiveRun` 仍為 true，新分析不得開始；只有持有相同 execution 的 owner 在 finally 完成清理後，才能 `finish` 並通知完成。`canPublish` 在取消後立即拒絕一般結果／進度發布；舊 owner 的 `finish`／`endAnalysis` 不得清除新 run 的執行或 UI 所有權。必要清理不等於繼續生成，取消後不得再發模型請求或排下一目標。
 - 側欄結果以穩定 file-key 保存各檔案分組的手動展開／收合狀態；新結果、分數或狀態更新，以及平鋪／分組切換，不得重新展開已收合分組。全展開／全收合更新既有分組與新分組預設；切換受測專案才重設。結果卡的檔名／函式名與分數分列，保留標題可用寬度及長名稱換行，不能由分數擠成逐字直排。

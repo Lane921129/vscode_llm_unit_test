@@ -14,6 +14,7 @@ import json
 import os
 from mock_behavior import imports, dotted
 from ast_extractor import function_scope_bindings, function_scope_usage
+from dependency_fixture_contract import build_dependency_fixture_contract
 
 
 # These are concrete I/O API use points, not guesses based on a helper name.
@@ -258,9 +259,30 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     test_prefix = 'async def' if isinstance(target_func, ast.AsyncFunctionDef) else 'def'
     lines.append(f"{test_prefix} test_{selected_method_name}({mock_param_str}):")
 
-    # Mock return value hints
-    for mock_name in mock_names:
-        lines.append(f"    {mock_name}.return_value = None  # TODO: set appropriate mock return value")
+    # A blanket None contradicts factory().method() and connection/cursor
+    # consumption. Preserve the default mock receiver only when the existing
+    # lexical contract proves that a patched call's result is consumed again.
+    target_source = ast.get_source_segment(source, target_func) or ''
+    fixture_contract = build_dependency_fixture_contract(
+        target_func, target_source, func_name, set(import_bindings) | set(local_helpers))
+    for patch_path, mock_name in zip(patches, mock_names):
+        receivers = set()
+        for flow in fixture_contract['flows']:
+            if flow['root']['kind'] != 'use-point':
+                continue
+            receiver = target_module + '.' + flow['root']['name']
+            for step in flow['steps']:
+                receiver += ('.' + step['name'] if step['kind'] == 'member'
+                             else '.__enter__.return_value' if step['kind'] == 'context-enter' else '.return_value')
+            if receiver.startswith(patch_path + '.return_value'):
+                receivers.add(mock_name + receiver[len(patch_path):])
+        if receivers:
+            paths = sorted(receiver for receiver in receivers
+                           if not any(other.startswith(receiver + '.') for other in receivers))
+            lines.append('    # TODO: configure source-consumed receiver objects: ' + ', '.join(paths))
+            lines.append('    # Keep enclosing return objects; do not replace them with None/string/scalar. No expected output is implied.')
+        else:
+            lines.append(f"    {mock_name}.return_value = None  # TODO: choose an explicit controlled return; source shape is unknown")
 
     lines.append(f"")
 

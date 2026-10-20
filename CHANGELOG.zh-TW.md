@@ -2,6 +2,15 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-20
+
+### 模型傳輸 300 秒逾時覆寫、雙時間設定與相依 Receiver 指引
+
+- 新增 `modelTransport.ts`：當執行環境使用預設原生 `fetch` 時，以 `DelegatingModelDispatcher` 將單次模型請求的 `headersTimeout` 與 `bodyTimeout` 依呼叫端期限放寬（最高 86,400 秒），避免超過 300 秒的長耗時推論遭 Undici 預設值提前切斷；若宿主或測試已替換 `globalThis.fetch` 則原樣委派，且完整保留 `AbortSignal` 取消與串流期間期限。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 新增白名單傳輸原因碼（如 `UND_ERR_HEADERS_TIMEOUT`）擷取與中英雙語呈現，不記錄供應商回應內容。
+- 新增 `executionTimingSettings.ts` 並更新 `SidebarProvider.ts`、`webviewContent.ts` 與 `orchestrator.ts`：將「單次 API 等待上限（1–86,400 整數秒）」與「每個函式總時間上限（0.001–86,400 秒，精確至毫秒）」分列並即時顯示有效單次上限；啟動時先驗證單位與範圍、合併既有 `targetBudget` 其他計數限制並凍結本次執行快照，非同步保存期間若執行權移轉、變更目標或取消則中止啟動。同步更新 `test/extract_script.js` 支援在獨立 VM 語境解析 `webviewContent.ts` 的相對 TypeScript 匯入。
+- 更新 `dependencyMockContract.ts` 與 `mock_scaffold_generator.py`：新增 `formatFixtureReceiverGuidance` 與單次呼叫次數指引，在 optional topology 因預算省略時仍於初次壓縮與修訂提示保留 `dependency-fixture-contract-v1` 的受消費 receiver 路徑（如 `connect.return_value.cursor.return_value`），並在 Tier 3 scaffold 避免將需繼續呼叫方法的回傳物件設為 `None`，同時明示不可對同一 mock 堆疊多個 `assert_called_once_with`。
+- 驗證：相關定向迴歸 Node 17 檔 95／95、Python 4 檔 51／51 通過；`npm run test:fast`（含嚴格型別檢查、ESLint、Node 快測 96 檔 736／736、Webview 語法檢查、Python 快測 4 檔 42／42）全數通過，0 略過；`npm run package`（production build）與 `secret_scan.py` 通過。完整開發回歸（`test:full`）、VS Code／Mocha、遠端 CI、DGX 與真實模型新批次尚未重跑；原有七份其他 WIP 與 Webview 啟用 Mutmut 選項的未提交差異保留且不納入本次提交。
+
 ## 2026-10-19
 
 ### 中止清理與側欄結果狀態

@@ -6,12 +6,22 @@ const ts = require('typescript');
 // Resolve both input and output from this script, independent of the shell cwd.
 const root = path.resolve(__dirname, '..');
 const sourcePath = path.join(root, 'src', 'ui', 'webviewContent.ts');
-const compiled = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
-}).outputText;
-const renderer = { exports: {} };
-vm.runInNewContext(compiled, { module: renderer, exports: renderer.exports }, { filename: sourcePath });
-const html = renderer.exports.getWebviewContent(key => key);
+const cache = new Map();
+function loadTsModule(filePath) {
+    const resolved = fs.existsSync(filePath) ? filePath : `${filePath}.ts`;
+    if (cache.has(resolved)) { return cache.get(resolved).exports; }
+    const compiled = ts.transpileModule(fs.readFileSync(resolved, 'utf8'), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+    }).outputText;
+    const mod = { exports: {} };
+    cache.set(resolved, mod);
+    const localRequire = specifier => specifier.startsWith('.')
+        ? loadTsModule(path.resolve(path.dirname(resolved), specifier))
+        : require(specifier);
+    vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: localRequire }, { filename: resolved });
+    return mod.exports;
+}
+const html = loadTsModule(sourcePath).getWebviewContent(key => key);
 const match = html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i);
 if (!match) { throw new Error('No inline Webview script found'); }
 

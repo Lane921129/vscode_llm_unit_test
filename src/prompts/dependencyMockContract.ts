@@ -22,6 +22,10 @@ export const OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE = "For a source-proven optional ge
 const TOPOLOGY_LEGEND = 'sourceConsumption steps: return_value = preceding call result; member = attribute; context-enter = source-proven with only. '
     + 'Keep each recorded receiver; never add a return_value or __enter__ layer. Unknown steps remain unknown.';
 
+const MOCK_CALL_ASSERTION_GUIDANCE = 'Source call sites are not executed call counts: branches, loops and unpatched helpers may add calls. '
+    + 'Do not guess call_count=1 or put several assert_called_once_with checks on the same mock. '
+    + 'Keep meaningful, independently justified expectations and the exact argument types; do not weaken assertions just to pass.';
+
 const dynamicNamespaceNames = new Set(['globals', 'locals', 'vars', 'eval', 'exec', 'compile', '__import__', 'import_module',
     'getattr', 'setattr', 'delattr', '__dict__', '__builtins__', '__getattribute__', '__getattr__']);
 
@@ -87,8 +91,9 @@ export function formatDependencyMockContract(module: string, context?: any, allo
     // Source-bound fixture consumption is necessary setup, including in the
     // first compact Writer prompt. Only the larger topology remains optional.
     const consumptionGuidance = formatFixtureConsumptionGuidance(module, context);
+    const receiverGuidance = formatFixtureReceiverGuidance(module, context);
     if (!bindings.length && !calls.length && !allowedMockTargets?.length && !topology) {
-        return parameterSetup + sourceCalls + consumptionGuidance;
+        return parameterSetup + sourceCalls + receiverGuidance + consumptionGuidance;
     }
     // Conservative prompt relevance only; identifiers in source strings can
     // retain extra guidance but never authorize a patch or an assertion.
@@ -117,6 +122,8 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + (topology ? TOPOLOGY_LEGEND + ' '
             : 'Configure only return objects and context-manager layers actually consumed in TARGET SOURCE. ')
         + consumptionGuidance
+        + receiverGuidance
+        + (calls.length ? MOCK_CALL_ASSERTION_GUIDANCE + '\n' : '')
         + globalsGuidance + conversions + diagnosticGuidance + aliasGuidance
         + optionalGuidance
         + clockGuidance
@@ -288,6 +295,47 @@ export function formatFixtureConsumptionGuidance(module: string, context?: any):
             + 'Choose fixture contents explicitly; this shape supplies no expected output or exception.');
     }
     return lines.length ? lines.join('\n') + '\n' : '';
+}
+
+/** Keep compact generation's necessary receiver setup even when optional topology does not fit. */
+export function formatFixtureReceiverGuidance(module: string, context?: any): string {
+    const facts = context?.dependency_fixture_contract;
+    const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
+    if (!facts || facts.schemaVersion !== 'dependency-fixture-contract-v1'
+        || !['complete', 'partial'].includes(facts.status) || facts.authority !== 'fixture-shape-only'
+        || facts.assertionOracle !== false || facts.patchAuthorization !== false
+        || facts.sourceHashKind !== 'normalized-target-source' || !source
+        || facts.targetSourceHash !== createHash('sha256').update(source).digest('hex')
+        || facts.target !== (context?.class_name ? `${context.class_name}.${context.name}` : context?.name)
+        || !Array.isArray(facts.flows) || facts.flows.length > 128) { return ''; }
+    const identifier = (value: unknown): value is string => typeof value === 'string'
+        && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(value.normalize('NFKC'));
+    const receivers = new Set<string>();
+    for (const flow of facts.flows) {
+        if (!flow?.root || !identifier(flow.root.name) || !['parameter', 'use-point'].includes(flow.root.kind)
+            || !Array.isArray(flow.steps) || !flow.steps.length || flow.steps.length > 64
+            || flow.steps.some((step: any) => !step || !['return_value', 'member', 'context-enter'].includes(step.kind)
+                || step.kind === 'member' && !identifier(step.name))
+            || !flow.steps.some((step: any) => step.kind === 'return_value' || step.kind === 'context-enter')
+            || flow.method !== null && !identifier(flow.method)) { continue; }
+        if (flow.root.kind === 'use-point' && !module) { continue; }
+        const receiver = (flow.root.kind === 'parameter' ? flow.root.name : module + '.' + flow.root.name)
+            + flow.steps.map((step: any) => step.kind === 'member' ? '.' + step.name
+                : step.kind === 'context-enter' ? '.__enter__.return_value' : '.return_value').join('');
+        receivers.add(receiver);
+    }
+    // A deeper receiver already preserves each prefix. This is lossless path
+    // sharing, not an omission of a distinct source use point or an oracle.
+    const paths = [...receivers].filter(receiver => ![...receivers].some(other => other.startsWith(receiver + '.')));
+    if (!paths.length) { return ''; }
+    const projection = JSON.stringify(paths);
+    if (Buffer.byteLength(projection, 'utf8') > 2048) {
+        return 'Receiver setup projection omitted whole for size, not absence of dependencies. '
+            + 'Read complete TARGET SOURCE for the consumed return objects; unknown stays unknown.\n';
+    }
+    return 'Source-consumed receiver objects: ' + projection
+        + '. Keep these return objects and configure their source-shown methods; replacing an enclosing receiver with None/string/scalar breaks the setup. '
+        + 'These are fixture paths only, not patch authorization or expected target values.\n';
 }
 
 export function formatSourceImport(item: any): string {

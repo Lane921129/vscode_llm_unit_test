@@ -1,3 +1,6 @@
+import { localize } from '../i18n/core';
+import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettings';
+
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2) {
     const selectedEngine = ['builtin', 'mutatest', 'mutmut'].includes(mutationEngine) ? mutationEngine : 'builtin';
     const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
@@ -340,8 +343,12 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <label for="mutation-workers">${t('ui.mutationWorkers')}${t('ui.fullModeSuffix')}</label>
                 <input type="number" id="mutation-workers" value="${selectedWorkers}" min="1" max="4" step="1">
 
-                <label>${t('ui.apiTimeout')}</label>
-                <input type="number" id="timeout-sec" value="60" min="10" max="300" style="width:100%;">
+                <label for="timeout-sec">${localize('單次 API 等待上限（秒）')}</label>
+                <input type="number" id="timeout-sec" value="60" min="1" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="1" style="width:100%;">
+                <label for="target-timeout-sec">${localize('每個函式總時間上限（秒）')}</label>
+                <input type="number" id="target-timeout-sec" value="600" min="0.001" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="0.001" style="width:100%;">
+                <p id="execution-timing-status" role="status" aria-live="polite"></p>
+                <p>${localize('總時間包含預檢、模型等待、重試、測試與突變；每個函式開始後固定期限，重試不會重新計時。開始測試時保存設定；最多 86400 秒（24 小時）。')}</p>
             </div>
         </div>
     </details>
@@ -437,6 +444,29 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let analysisRunning = false;
         let runtimeContextRevision = 0;
         let runtimeContextEndpointKey;
+        let timingSettingsTouched = false;
+        const timingMessages = ${JSON.stringify({ effective: localize('當前單次最多 {0} 秒（API {1} 秒、整目標 {2} 秒）；前序工作與排隊會減少實際剩餘時間。'), invalid: localize('API 上限須為 1 至 86400 的整數秒；整目標上限須為 0.001 至 86400 秒，精確至毫秒。請檢查時間單位。') }).replace(/</g, '\\u003c')};
+
+        function executionTimingSettings() {
+            const timeoutSeconds = Number(document.getElementById('timeout-sec').value);
+            const targetTimeoutSeconds = Number(document.getElementById('target-timeout-sec').value);
+            const milliseconds = targetTimeoutSeconds * 1000;
+            if (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > ${MAX_EXECUTION_TIMEOUT_SECONDS}
+                || !Number.isFinite(targetTimeoutSeconds) || targetTimeoutSeconds <= 0 || targetTimeoutSeconds > ${MAX_EXECUTION_TIMEOUT_SECONDS}
+                || Math.round(milliseconds) < 1 || Math.abs(milliseconds - Math.round(milliseconds)) > 0.000001) return undefined;
+            return { timeoutSeconds, targetTimeoutSeconds };
+        }
+        function updateExecutionTimingStatus() {
+            const settings = executionTimingSettings();
+            document.getElementById('execution-timing-status').textContent = settings
+                ? timingMessages.effective.replace('{0}', String(Math.min(settings.timeoutSeconds, settings.targetTimeoutSeconds)))
+                    .replace('{1}', String(settings.timeoutSeconds)).replace('{2}', String(settings.targetTimeoutSeconds))
+                : timingMessages.invalid;
+        }
+        for (const id of ['timeout-sec', 'target-timeout-sec']) {
+            document.getElementById(id).addEventListener('input', () => { timingSettingsTouched = true; updateExecutionTimingStatus(); });
+        }
+        updateExecutionTimingStatus();
 
         const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
@@ -648,6 +678,12 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         window.addEventListener('message', event => {
             const msg = event.data;
             switch (msg.command) {
+                case 'executionTimingSettings':
+                    if (analysisRunning || timingSettingsTouched) break;
+                    document.getElementById('timeout-sec').value = msg.timeoutSeconds;
+                    document.getElementById('target-timeout-sec').value = msg.targetTimeoutSeconds;
+                    updateExecutionTimingStatus();
+                    break;
                 case 'setModels': {
                     const select = document.getElementById('model-select');
                     const previous = select.value;
@@ -814,7 +850,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function updateLocalContextControls() {
             const frozen = analysisRunning || environmentBusy;
-            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy']) {
+            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy', 'timeout-sec', 'target-timeout-sec']) {
                 document.getElementById(id).disabled = frozen;
             }
             const noSelection = !document.getElementById('model-select').value;
@@ -1028,7 +1064,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 mutationWorkers: mutationWorkerCount(),
                 maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 5,
                 mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 60,
-                timeoutSeconds: parseInt(document.getElementById('timeout-sec').value, 10) || 60,
+                ...executionTimingSettings(),
                 outputPath: document.getElementById('output-path').value,
                 customUrl: document.getElementById('custom-url').value,
                 customKey: document.getElementById('custom-key').value
@@ -1059,6 +1095,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const batchPath = document.getElementById('project-path').value;
             
             if(environmentBusy || document.getElementById('btn-run').disabled) return;
+            if (!executionTimingSettings()) {
+                vscode.postMessage({ command: 'appendLog', text: timingMessages.invalid });
+                return;
+            }
             if(!envType || !modelName || (!filePath && !batchPath) || (envType === 'cloud' && !cloudKeyName)) {
                 vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
                 return;

@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 模型傳輸逾時覆寫、雙時間上限與相依 Receiver 指引（2026-10-20）
+
+`modelTransport.ts` 將原生 Node／Undici `fetch` 的預設 300 秒 `headersTimeout`／`bodyTimeout` 改為由呼叫端絕對期限與 `AbortSignal` 控制（上限 86,400 秒），僅在 `globalThis.fetch` 仍為預設原生實作時透過 `DelegatingModelDispatcher` 覆寫單次請求的 `headersTimeout` 與 `bodyTimeout`，保留測試替身與宿主自訂 `fetch`。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 對傳輸錯誤僅提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。
+
+`executionTimingSettings.ts` 與側欄將「單次 API 等待上限（秒，1–86,400 整數）」與「每個函式總時間上限（秒，0.001–86,400，精確至毫秒）」分開解析、顯示與保存。開始分析前先驗證兩者並建立凍結的 `targetBudget` 快照（保留既有 `logicalRequests`、`transportAttempts`、`estimatedInputTokens`、`candidateAttempts`），各函式開始後固定絕對期限，重試不重新計時；非同步保存期間若執行權移轉、專案變更或取消則中止啟動。
+
+`dependencyMockContract.ts` 與 `mock_scaffold_generator.py` 依據 `dependency-fixture-contract-v1` 在初次壓縮與修訂提示、以及 Tier 3 scaffold 中保留來源實際消費的回傳與巢狀 receiver 路徑（如 `connect.return_value.cursor.return_value`），避免以 `None` 或純量覆蓋中層 receiver；同時提醒多個呼叫點不等於單次執行，禁止在同一 mock 堆疊多個 `assert_called_once_with`。
+
 ## 手動中止與側欄結果狀態（2026-10-19）
 
 `ExecutionManager` 將取消與完成分開：`cancel()` 只取消目前 `ExecutionContext`，保留 active reservation；`hasActiveRun` 在停止及清理期間仍為 true，`begin()` 不接受另一分析。`canPublish()` 同時核對 owner 與未取消，阻擋晚到的一般進度與結果。取消命令只送出 `analysisStopping`，側欄維持停止中並鎖住重啟；只有該 owner 的 `runAnalysisSession` finally 完成工作與環境清理後，才能 `finish(execution)` 並送出 `analysisFinished`。`finish` 和 `SidebarProvider.endAnalysis` 均核對同一 owner，舊執行不能清除較新的 run。取消後不再發送模型請求或排程下一目標；收尾保存與清理是停止的一部分，不能提早當成執行完成。

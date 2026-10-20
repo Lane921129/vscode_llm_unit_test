@@ -196,3 +196,47 @@ test('abort reaches the Host and keeps the sidebar locked until cleanup actually
         }
     } finally { setLanguage('zh-tw'); }
 });
+
+test('timing controls distinguish long API waits from each function total and freeze with the run', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.send({ command: 'executionTimingSettings', timeoutSeconds: 1800, targetTimeoutSeconds: 3600 });
+            assert.equal(Number(ui.element('timeout-sec').value), 1800);
+            assert.equal(Number(ui.element('target-timeout-sec').value), 3600);
+            assert.match(ui.element('execution-timing-status').textContent, /1800/);
+            assert.match(ui.element('execution-timing-status').textContent, /3600/);
+            if (language === 'en') {
+                assert.match(ui.html, /Total time limit per function/);
+                assert.doesNotMatch(ui.element('execution-timing-status').textContent, /[\u3400-\u9fff]/);
+            }
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.at(-1).timeoutSeconds, 1800);
+            assert.equal(ui.messages.at(-1).targetTimeoutSeconds, 3600);
+            assert.equal(ui.element('timeout-sec').disabled, true);
+            assert.equal(ui.element('target-timeout-sec').disabled, true);
+            ui.send({ command: 'analysisFinished' });
+            assert.equal(ui.element('target-timeout-sec').disabled, false);
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('invalid timing blocks start and delayed initial settings cannot erase edited timing', () => {
+    const ui = replay('zh-tw');
+    ui.element('timeout-sec').value = '60000000';
+    ui.element('timeout-sec').dispatch('input');
+    ui.send({ command: 'executionTimingSettings', timeoutSeconds: 60, targetTimeoutSeconds: 600 });
+    assert.equal(ui.element('timeout-sec').value, '60000000');
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'appendLog');
+    assert.match(ui.messages.at(-1).text, /86400/);
+    assert.equal(ui.element('btn-run').disabled, false);
+    ui.element('timeout-sec').value = '1800';
+    ui.element('target-timeout-sec').value = '0';
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'appendLog');
+    ui.element('target-timeout-sec').value = '7200';
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
+    assert.equal(ui.messages.at(-1).targetTimeoutSeconds, 7200);
+});

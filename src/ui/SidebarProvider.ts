@@ -23,6 +23,8 @@ import { buildCustomChatCompletionBody, getCustomChatCompletionText, responseSch
 import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchJsonWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, requestJsonWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
 import { configuredPythonForResource } from '../environment/pythonEnvironmentController';
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
+import { API_TIMEOUT_PREFERENCE_KEY, parseExecutionTimingSettings, snapshotExecutionTargetBudget } from '../pipeline/executionTimingSettings';
+import { DEFAULT_TARGET_BUDGET } from '../pipeline/targetBudget';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -33,6 +35,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
     private readonly batchScope: BatchScopeController;
     private projectRevision = 0;
     private contextPreferenceWrites: Promise<void> = Promise.resolve();
+    private analysisStartPending = false;
+    private pendingStartCancelled = false;
 
     constructor(private readonly secretStorage: vscode.SecretStorage, private readonly uiState: vscode.Memento) {
         this.batchScope = new BatchScopeController(uiState);
@@ -181,7 +185,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         await this.uiState.update(`llmUnitTest.lastFolders.v1.${kind}`, folder);
     }
 
-    private async rememberRunPreference(config: vscode.WorkspaceConfiguration, key: string, value: string | number): Promise<void> {
+    private async rememberRunPreference(config: vscode.WorkspaceConfiguration, key: string, value: unknown): Promise<void> {
         const setting = config.inspect?.(key);
         const target = setting?.workspaceFolderValue !== undefined ? vscode.ConfigurationTarget.WorkspaceFolder
             : setting?.workspaceValue !== undefined ? vscode.ConfigurationTarget.Workspace : true;
@@ -239,6 +243,10 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
             switch (message.command) {
                 case 'getInitialData': {
+                    const savedBudget = config.get<{ timeoutMs?: number }>('targetBudget', {});
+                    this.webview?.postMessage({ command: 'executionTimingSettings',
+                        timeoutSeconds: this.uiState.get(API_TIMEOUT_PREFERENCE_KEY, 60),
+                        targetTimeoutSeconds: (savedBudget.timeoutMs ?? DEFAULT_TARGET_BUDGET.timeoutMs) / 1000 });
                     const keys = await this.getStoredCloudCredentials();
                     this.webview?.postMessage({ command: 'setApiKeys', keys: toCloudCredentialOptions(keys) });
 
@@ -521,37 +529,57 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
 
-                case 'startAnalysis': {
-                    const params = { ...message };
-                    if (params.envType === 'cloud') {
-                        const keys = await this.getStoredCloudCredentials();
-                        const credential = keys[params.cloudKeyName];
-                        if (!credential) {
-                            vscode.window.showErrorMessage(localize("找不到此模型的 Google AI Studio API Key。"));
-                            this.webview?.postMessage({ command: 'analysisFinished' });
-                            break;
-                        }
-                        params.modelName = credential.model;
-                        params.cloudKey = credential.key;
-                    }
-                    vscode.commands.executeCommand('llm-unit-test.runCaptureAndTest', params);
-                    break;
-                }
-
+                case 'startAnalysis':
                 case 'startBatchAnalysis': {
+                    if (this.activeAnalysis || this.analysisStartPending) { break; }
+                    this.analysisStartPending = true;
+                    this.pendingStartCancelled = false;
+                    const revision = this.projectRevision;
                     const params = { ...message };
-                    if (params.envType === 'cloud') {
-                        const keys = await this.getStoredCloudCredentials();
-                        const credential = keys[params.cloudKeyName];
-                        if (!credential) {
-                            vscode.window.showErrorMessage(localize("找不到此模型的 Google AI Studio API Key。"));
+                    try {
+                        // Bind UI values and all other budget counters before any
+                        // asynchronous save or credential lookup can change them.
+                        const savedBudget = config.get('targetBudget', {});
+                        const timing = parseExecutionTimingSettings(params.timeoutSeconds ?? 60,
+                            params.targetTimeoutSeconds ?? (snapshotExecutionTargetBudget(savedBudget).timeoutMs! / 1000));
+                        params.timeoutSeconds = timing.timeoutSeconds;
+                        params.targetBudget = snapshotExecutionTargetBudget(savedBudget, timing.targetTimeoutSeconds);
+                        if (params.envType === 'cloud') {
+                            const keys = await this.getStoredCloudCredentials();
+                            const credential = keys[params.cloudKeyName];
+                            if (!credential) {
+                                vscode.window.showErrorMessage(localize("找不到此模型的 Google AI Studio API Key。"));
+                                this.webview?.postMessage({ command: 'analysisFinished' });
+                                break;
+                            }
+                            params.modelName = credential.model;
+                            params.cloudKey = credential.key;
+                        }
+                        if (this.activeAnalysis || this.pendingStartCancelled) { break; }
+                        if (revision !== this.projectRevision) {
                             this.webview?.postMessage({ command: 'analysisFinished' });
                             break;
                         }
-                        params.modelName = credential.model;
-                        params.cloudKey = credential.key;
+                        if (params.targetTimeoutSeconds !== undefined) {
+                            await this.rememberRunPreference(config, 'targetBudget', params.targetBudget);
+                        }
+                        await this.uiState.update(API_TIMEOUT_PREFERENCE_KEY, timing.timeoutSeconds);
+                        if (this.activeAnalysis || this.pendingStartCancelled) { break; }
+                        if (revision !== this.projectRevision) {
+                            this.webview?.postMessage({ command: 'analysisFinished' });
+                            break;
+                        }
+                        void vscode.commands.executeCommand(params.command === 'startBatchAnalysis'
+                            ? 'llm-unit-test.runBatchAnalysis' : 'llm-unit-test.runCaptureAndTest', params);
+                    } catch {
+                        vscode.window.showWarningMessage(localize('時間設定無法套用；請確認 API 與整目標時間均在有效範圍，且 targetBudget 的其他預算為有效整數。'));
+                        if (!this.activeAnalysis) { this.webview?.postMessage({ command: 'analysisFinished' }); }
+                    } finally {
+                        this.analysisStartPending = false;
+                        if (this.pendingStartCancelled && !this.activeAnalysis) {
+                            this.webview?.postMessage({ command: 'analysisFinished' });
+                        }
                     }
-                    vscode.commands.executeCommand('llm-unit-test.runBatchAnalysis', params);
                     break;
                 }
 
@@ -862,6 +890,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'abortTest': {
+                    if (this.analysisStartPending) { this.pendingStartCancelled = true; }
                     await vscode.commands.executeCommand('llm-unit-test.abortTest');
                     break;
                 }

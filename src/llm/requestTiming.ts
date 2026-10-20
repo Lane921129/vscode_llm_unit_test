@@ -1,4 +1,5 @@
 import { deadlineAtFromTimeoutSeconds } from './connectionTimeout';
+import { isSafeTransportFailureCode } from './modelTransport';
 
 function requestAllowanceMs(timeoutSeconds: number): number {
     if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
@@ -108,6 +109,8 @@ export interface TransportAttemptTiming {
     /** Client body reading/parsing; distinct from provider inference statistics. */
     responseReadMs: number | null;
     httpStatus: number | null;
+    /** Allowlisted transport code only; no provider messages or endpoints. */
+    failureCode?: string;
     ollama: OllamaGenerationTiming;
 }
 
@@ -168,6 +171,7 @@ export interface TransportAttemptTimingInput {
     responseReadFinishedAt?: number;
     queueWaitMs?: number | null;
     httpStatus?: number;
+    failureCode?: unknown;
     ollamaPayload?: unknown;
 }
 
@@ -188,6 +192,7 @@ export function createTransportAttemptTiming(input: TransportAttemptTimingInput)
         httpWaitMs: elapsed(input.startedAt, input.headersAt),
         responseReadMs: elapsed(input.responseReadStartedAt, input.responseReadFinishedAt),
         httpStatus: status !== null && status >= 100 && status <= 599 ? status : null,
+        ...(isSafeTransportFailureCode(input.failureCode) ? { failureCode: input.failureCode } : {}),
         ollama: readOllamaGenerationTiming(input.ollamaPayload)
     };
 }

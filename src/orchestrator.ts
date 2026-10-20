@@ -48,6 +48,7 @@ import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObserv
 import { buildProbeInputs, callerForPrompt, TypedProbeInputsV1 } from './pipeline/probeInputs';
 import { createDefaultQualityPolicy } from './pipeline/qualityPolicy';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
+import { snapshotExecutionTargetBudget } from './pipeline/executionTimingSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
@@ -83,6 +84,7 @@ import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenera
 import { buildOllamaPromptEnvelope } from './llm/ollamaPrompt';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
 import { SerialRequestQueue, SerialRequestQueueError } from './llm/serialRequestQueue';
+import { fetchModelResponse, getSafeTransportFailureCode } from './llm/modelTransport';
 import { extractPythonTestCode, unwrapGeneratedCodeEnvelope, validateUnittestStructure } from './validation/generatedTestValidator';
 import { buildVerifiedConstructorCall } from './tier/tier1TestBuilder';
 import { findModelProfile, restoreModelProfiles, StoredModelProfile, upsertModelProfile } from './llm/modelProfileRegistry';
@@ -272,6 +274,7 @@ interface ModelSnapshot {
     stored: StoredModelProfile[];
     runtimeContextTokens: unknown;
     runtimeContextPreferences: RuntimeContextPreference[];
+    targetBudget?: unknown;
     localRuntimeMetadata?: LocalRuntimeMetadataDiagnostic;
 }
 const analysisRuns = new ExecutionManager<ModelSnapshot>();
@@ -342,7 +345,7 @@ async function requireInitialAutoRoles(params: AnalysisModelSelection & Partial<
 }
 
 async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pick<AnalysisParams,
-    'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable'>>>(
+    'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable' | 'targetBudget'>>>(
     params: T,
     sidebar: MutationViewProvider,
     operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView,
@@ -362,7 +365,8 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
         ollamaUrl: params.ollamaUrl || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434') } : params;
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
         runtimeContextTokens: config.get<unknown>('runtimeContextTokens', 0),
-        runtimeContextPreferences: sidebar.runtimeContextPreferencesSnapshot() });
+        runtimeContextPreferences: sidebar.runtimeContextPreferencesSnapshot(),
+        targetBudget: params.targetBudget ?? config.get<unknown>('targetBudget', {}) });
     if (!execution) {
         environmentLease.release();
         await vscode.window.showInformationMessage(localize("已有分析執行中，請等待完成或先中止。"));
@@ -378,6 +382,9 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
     const runParams = { ...selectedParams, sessionDate: formatSessionDate() };
     await withLanguage(() => runInExecution(execution, async () => {
         try {
+            // Capture once for the entire run; retries and later batch targets
+            // must not borrow changed settings or renew their own counters.
+            runParams.targetBudget = snapshotExecutionTargetBudget(execution.snapshot.targetBudget);
             if (selectedParams.envType === 'local' && selectedParams.modelName) {
                 const identity = { envType: 'local' as const, modelName: selectedParams.modelName,
                     endpointKey: qualificationEndpointKey('local', selectedParams.ollamaUrl) };
@@ -456,6 +463,8 @@ interface AnalysisParams {
     mutationEngine?: MutationEngineSelection;
     mutationWorkers?: number;
     timeoutSeconds: number;
+    /** Immutable run-level limits selected before any target or request starts. */
+    targetBudget?: Partial<TargetBudgetLimits>;
     outputPath: string;
     customUrl?: string;
     customKey?: string;
@@ -1132,12 +1141,15 @@ async function requestLlmApiUnlocked(
     let requestPhase: 'http-wait' | 'response-read' | 'backoff' = 'http-wait';
     let attemptTiming: { transportAttempt: number; startedAt: number; headersAt?: number;
         responseReadStartedAt?: number; responseReadFinishedAt?: number; httpStatus?: number } | undefined;
-    const reportTiming = (outcome: 'completed' | 'http-error' | 'network-error' | 'response-error' | 'timeout' | 'cancelled', ollamaPayload?: unknown) => {
+    const reportTiming = (outcome: 'completed' | 'http-error' | 'network-error' | 'response-error' | 'timeout' | 'cancelled',
+        ollamaPayload?: unknown, failureCode?: string) => {
         if (!attemptTiming) { return; }
         onTiming?.({ ...createTransportAttemptTiming({ ...attemptTiming, outcome, finishedAt: Date.now(),
-            queueWaitMs: timingState.queueWaitMs, ...(params.envType === 'local' ? { ollamaPayload } : {}) }), format: outputFormat });
+            queueWaitMs: timingState.queueWaitMs, failureCode, ...(params.envType === 'local' ? { ollamaPayload } : {}) }), format: outputFormat });
         attemptTiming = undefined;
     };
+    const transportTimeout = (code: string | undefined) => code !== undefined
+        && ['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'ETIMEDOUT'].includes(code);
     const release = currentExecution()?.onCancel(() => controller.abort());
     const timeoutId = setTimeout(() => {
         deadlineExpired = true;
@@ -1156,10 +1168,10 @@ async function requestLlmApiUnlocked(
                     { transportAttempt: attemptTiming.transportAttempt,
                         requestBodyBytes: Buffer.byteLength(wireBody, 'utf8'), requestBodyHash: evidenceHash(wireBody) }), format: outputFormat });
                 try {
-                    const response = await fetch(request?.url || apiUrl, {
+                    const response = await fetchModelResponse(request?.url || apiUrl, {
                         method: 'POST', headers: request?.headers || headers,
                         body: wireBody, signal: controller.signal
-                    });
+                    }, { deadlineAt });
                     attemptTiming.headersAt = Date.now();
                     attemptTiming.httpStatus = response.status;
                     onTiming?.({ ...createRequestProgress('http-headers', attemptTiming.startedAt,
@@ -1167,8 +1179,10 @@ async function requestLlmApiUnlocked(
                     if (!response.ok) { reportTiming('http-error'); }
                     return response;
                 } catch (error) {
+                    const failureCode = getSafeTransportFailureCode(error);
                     reportTiming(isExecutionCancelled() ? 'cancelled'
-                        : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 ? 'timeout' : 'network-error');
+                        : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 || transportTimeout(failureCode)
+                            ? 'timeout' : 'network-error', undefined, failureCode);
                     throw error;
                 }
             },
@@ -1256,23 +1270,32 @@ async function requestLlmApiUnlocked(
             attemptTiming.responseReadFinishedAt = Date.now();
         }
         const invalidStream = error instanceof AnalysisStageError && error.stage === 'model-response';
+        const failureCode = getSafeTransportFailureCode(error);
         reportTiming(isExecutionCancelled() ? 'cancelled'
-            : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 ? 'timeout'
-                : invalidProviderJson || invalidStream ? 'response-error' : 'network-error');
+            : deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0 || transportTimeout(failureCode) ? 'timeout'
+                : invalidProviderJson || invalidStream ? 'response-error' : 'network-error', undefined, failureCode);
         throwIfExecutionCancelled();
         if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) {
             throw new AnalysisStageError('timeout', 'model-request', formatModelRequestTimeout(params.timeoutSeconds, remainingTimeoutMs),
                 { cause: 'deadline', outputFormat, deadlineAt, phase: requestPhase,
                     requestAllowanceMs: remainingTimeoutMs, configuredRequestAllowanceMs: params.timeoutSeconds * 1000,
-                    queueWaitMs: timingState.queueWaitMs });
+                    queueWaitMs: timingState.queueWaitMs, ...(failureCode ? { failureCode } : {}) });
         }
         if (error instanceof AnalysisStageError) { throw error; }
+        if (transportTimeout(failureCode)) {
+            throw new AnalysisStageError('timeout', 'model-request',
+                localize('HTTP 傳輸等待逾時（{0}）；未記錄供應商回應內容。', failureCode),
+                { cause: 'transport-timeout', failureCode, phase: requestPhase, deadlineAt,
+                    requestAllowanceMs: remainingTimeoutMs, configuredRequestAllowanceMs: params.timeoutSeconds * 1000,
+                    queueWaitMs: timingState.queueWaitMs });
+        }
         if (invalidProviderJson) {
             throw new AnalysisStageError('model-format', 'model-response',
                 localize("無法解析的 API 回傳格式；內容可能未完成或缺少可用文字。"),
                 { reasonCode: 'invalid-provider-json', phase: 'response-read' });
         }
-        throw new AnalysisStageError('model-api', 'model-request', localize("API 連線或回應讀取失敗；未記錄供應商回應內容。"));
+        throw new AnalysisStageError('model-api', 'model-request', localize("API 連線或回應讀取失敗；未記錄供應商回應內容。"),
+            { phase: requestPhase, ...(failureCode ? { failureCode } : {}) });
     } finally {
         clearTimeout(timeoutId);
         release?.();
@@ -1574,7 +1597,7 @@ async function resolveAstAndDependencies(
 }
 
 async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
-    const configured = vscode.workspace.getConfiguration('llmUnitTest').get<unknown>('targetBudget', {});
+    const configured = params.targetBudget ?? {};
     const limits = configured && typeof configured === 'object' && !Array.isArray(configured)
         ? configured as Partial<TargetBudgetLimits> : {};
     const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri?.file?.(params.filePath));
