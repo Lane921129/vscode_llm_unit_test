@@ -5,8 +5,10 @@ import sys
 import builtins
 import symtable
 import io
+import textwrap
 import tokenize
-from mock_behavior import has_mock_behavior, imports as mock_imports
+from mock_behavior import (has_mock_behavior, imports as mock_imports,
+                           source_function, source_module_imports, target_use_points)
 from target_result_evidence import has_target_result_assertion
 
 
@@ -161,6 +163,74 @@ def _additional_name_feedback(tree, code, first):
             + '; '.join(details) + '. Repair the listed test bindings together. ')
 
 
+def _source_patch_facts(context):
+    module = context.get('module', '')
+    owner = context.get('className')
+    dependencies = dict(context.get('dependencies') or {})
+    use_points, _ = target_use_points(context)
+    equivalent = source_module_imports(context)
+    parameters = []
+    try:
+        source_tree = ast.parse(textwrap.dedent(context.get('source', '')))
+        selected = source_function(source_tree, context, True)
+    except (SyntaxError, TypeError):
+        selected = None
+    if selected:
+        raw_params = [arg.arg for arg in [*selected.args.posonlyargs, *selected.args.args, *selected.args.kwonlyargs]]
+        if selected.args.vararg:
+            raw_params.append(selected.args.vararg.arg)
+        if selected.args.kwarg:
+            raw_params.append(selected.args.kwarg.arg)
+        is_static = any(dotted(dec).split('.')[-1] == 'staticmethod' for dec in selected.decorator_list)
+        if owner and raw_params and not is_static:
+            raw_params = raw_params[1:]
+        parameters = raw_params
+
+    module_globals = set(dependencies) | set(equivalent)
+    from_imports = {}
+    immutable_datetime = {}
+    for binding, origin in dependencies.items():
+        if origin in ('datetime.datetime', 'datetime.date'):
+            immutable_datetime[binding] = origin
+    raw_module = context.get('moduleSource', '')
+    if isinstance(raw_module, str) and raw_module and len(raw_module) <= 512000:
+        try:
+            mod_tree = ast.parse(textwrap.dedent(raw_module))
+        except (SyntaxError, TypeError):
+            mod_tree = None
+        if mod_tree:
+            for node in mod_tree.body:
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_globals.add(alias.asname or alias.name.split('.')[0])
+                elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                    for alias in node.names:
+                        if alias.name == '*':
+                            continue
+                        bound = alias.asname or alias.name
+                        module_globals.add(bound)
+                        origin = f'{node.module}.{alias.name}'
+                        from_imports.setdefault(bound, origin)
+                        if origin in ('datetime.datetime', 'datetime.date'):
+                            immutable_datetime.setdefault(bound, origin)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    module_globals.add(node.name)
+                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for tgt in targets:
+                        for child in ast.walk(tgt):
+                            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                                module_globals.add(child.id)
+    return {
+        'parameters': [param for param in parameters if param not in module_globals],
+        'use_points': use_points,
+        'equivalent': equivalent,
+        'from_imports': from_imports,
+        'immutable_datetime': immutable_datetime,
+        'module': module,
+    }
+
+
 def validate_bindings(code, context):
     try:
         tree = ast.parse(code)
@@ -181,6 +251,8 @@ def validate_bindings(code, context):
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for item in node.names:
+                if item.name == 'HOST_ISOLATED_RESOURCE_CONTEXT':
+                    return {'valid': False, 'reason': f'HOST_ISOLATED_RESOURCE_CONTEXT is a prompt section heading, not a Python module; remove that import and use {module or "the target module"} directly.'}
                 if item.name in ('target_module', 'module_under_test', 'your_module', 'module_name') and item.name != module:
                     return {'valid': False, 'reason': f'Unresolved placeholder import {item.name}; use canonical target module {module}.'}
                 aliases[item.asname or item.name] = item.name
@@ -188,6 +260,8 @@ def validate_bindings(code, context):
                     return {'valid': False, 'reason': f'Use canonical target module {module}; do not import a second instance as {item.name}.'}
         elif isinstance(node, ast.ImportFrom):
             for item in node.names:
+                if node.module == 'HOST_ISOLATED_RESOURCE_CONTEXT' or item.name == 'HOST_ISOLATED_RESOURCE_CONTEXT':
+                    return {'valid': False, 'reason': f'HOST_ISOLATED_RESOURCE_CONTEXT is a prompt section heading, not a Python module or symbol; remove that import and use {module or "the target module"} directly.'}
                 dependency_alias = (item.asname and item.asname not in (target, context.get('className'))
                                     and dependencies.get(item.asname) == f'{node.module}.{item.name}')
                 if (module and node.module != module and item.name in (target, context.get('className'))
@@ -238,7 +312,7 @@ def validate_bindings(code, context):
             if isinstance(attribute, str):
                 patch_path = resolve(node.args[0]) + '.' + attribute
         if isinstance(patch_path, str) and patch_path in forbidden:
-            return {'valid': False, 'reason': 'Do not mock or replace the selected target or its class. Keep the real target and patch only its dependencies at their use points.'}
+            return {'valid': False, 'reason': f'Do not mock or replace the selected target or its class ({patch_path}). Keep the real target {qualified} and patch only its dependencies at their use points (or pass MagicMock() objects for function parameters).'}
 
     # patch(...).start() returns a Mock, not its patcher. Calling stop on
     # that Mock cannot undo the patch and contaminates later real Trace cases.
@@ -261,6 +335,9 @@ def validate_bindings(code, context):
         for node in ast.walk(scope):
             if isinstance(node, ast.Attribute) and node.attr == 'stop' and dotted(node.value) in started_mocks:
                 return {'valid': False, 'reason': 'Calling stop on the Mock returned by patch(...).start() does not undo the patch. Retain the patcher and register addCleanup(patcher.stop), or use a patch context manager.'}
+    facts = _source_patch_facts(context)
+    mentions_type_error = 'TypeError' in {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    patch_paths = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -273,18 +350,56 @@ def validate_bindings(code, context):
         if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
             continue
         patch_path = value.value
+        patch_paths.append(patch_path)
         leaf = patch_path.rsplit('.', 1)[-1]
+        if module:
+            for param in facts['parameters']:
+                if ((patch_path == f'{module}.{param}' or patch_path.startswith(f'{module}.{param}.'))
+                        and patch_path not in facts['use_points']):
+                    return {'valid': False, 'reason': (
+                        f'Do not patch {patch_path}: {param} is a parameter of {qualified}, not a module attribute of {module}. '
+                        f'Remove that patch, pass a MagicMock() (or controlled object) for {param} directly to {qualified}(...), '
+                        f'and assert on {param}.'
+                    )}
+            if not mentions_type_error:
+                for dt_binding, dt_origin in facts['immutable_datetime'].items():
+                    if (patch_path.startswith(f'{module}.{dt_binding}.')
+                            or patch_path.startswith(f'{dt_origin}.')
+                            or (patch_path.startswith(f'{dt_binding}.') and patch_path.count('.') == 1)):
+                        attr = patch_path.rsplit('.', 1)[-1]
+                        return {'valid': False, 'reason': (
+                            f'Do not patch immutable datetime/date attribute {patch_path} (raises TypeError at runtime). '
+                            f"Patch the target module binding '{module}.{dt_binding}' (e.g. with patch('{module}.{dt_binding}') as clock_stub) "
+                            f'and configure clock_stub.{attr}.return_value.'
+                        )}
         for binding, origin in dependencies.items():
             if leaf == binding or patch_path == origin:
                 expected = f'{module}.{binding}'
                 if patch_path != expected:
                     return {'valid': False, 'reason': f'Patch the dependency at its target use point: {expected}, not {patch_path}. Verify the mock was called.'}
+        if module:
+            for binding, origin in facts['from_imports'].items():
+                if patch_path == origin or patch_path == binding:
+                    expected = f'{module}.{binding}'
+                    if patch_path != expected:
+                        return {'valid': False, 'reason': f'Patch the dependency at its target use point: {expected}, not {patch_path}. Verify the mock was called.'}
+            for use_point in sorted(facts['use_points']):
+                if not use_point.startswith(module + '.'):
+                    continue
+                call = use_point[len(module) + 1:]
+                if '.' not in call and (patch_path == call or ('.' not in module and patch_path.endswith('.' + use_point))):
+                    return {'valid': False, 'reason': f'Patch the dependency at its target use point: {use_point}, not {patch_path}. Verify the mock was called.'}
+                if '.' in call and '.' not in module and patch_path.endswith('.' + use_point):
+                    return {'valid': False, 'reason': f'Patch the dependency at its target use point: {use_point}, not {patch_path}. Verify the mock was called.'}
     # Diagnose the same certain test-owned binding failures before generic
     # behavior gates can hide the missing import or local shadowing from Writer.
     failure = definite_test_name_failure(tree, code)
     if failure:
         name = failure['name']
+        target_hint = (f'Import the selected target explicitly with `from {module} import {owner or target}` (or call `{module}.{owner or target}`). '
+                       if module and name in (target, owner) and failure['reasonCode'] == 'writer-undefined-name' else '')
         reason = (f'Writer binding repair: {name} is undefined or read before its local binding in {failure["method"]}. '
+                  + target_hint
                   + _additional_name_feedback(tree, code, failure)
                   + 'Use a distinct mock alias and explicitly import test helpers or source globals at the canonical target module; '
                   'do not change assertions or install a guessed package.')
@@ -293,7 +408,21 @@ def validate_bindings(code, context):
         return {'valid': False, **failure, 'repairRole': 'writer',
                 'reason': reason}
     if context.get('requireMockBehavior') and not has_mock_behavior(tree, context):
-        return {'valid': False, 'reason': 'Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.'}
+        permitted = set(facts['use_points']) - forbidden
+        for use_point in list(permitted):
+            if module and use_point.startswith(module + '.'):
+                root_call, sep, tail_call = use_point[len(module) + 1:].partition('.')
+                if sep and root_call in facts['equivalent']:
+                    permitted.add(facts['equivalent'][root_call] + '.' + tail_call)
+        unpermitted = [path for path in dict.fromkeys(patch_paths) if path not in permitted]
+        extra = ''
+        if unpermitted:
+            extra += f' Unrecognized or non-use-point patch target(s): {", ".join(unpermitted[:6])}.'
+        if permitted:
+            extra += f' Direct target use points in {qualified}: {", ".join(sorted(permitted)[:10])}.'
+        elif facts['parameters']:
+            extra += f' {qualified} has no module-level call use points; pass MagicMock() (or controlled objects) for parameter(s) ({", ".join(facts["parameters"])}) and assert on them.'
+        return {'valid': False, 'reason': 'Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.' + extra}
     if context.get('requireTargetBehavior') and not (has_target_result_assertion(tree, context) or has_mock_behavior(tree, context)):
         locations = ', '.join(f'{node.name}:{node.lineno}' for node in ast.walk(tree)
                              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'))[:300]

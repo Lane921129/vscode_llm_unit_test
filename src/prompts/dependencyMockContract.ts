@@ -356,3 +356,29 @@ export function missingNameRepairGuidance(output: string): string {
         + 'For a test-owned helper, add its explicit import. If that is the only correction, put the import inside the failing method and return the complete method; '
         + 'otherwise include at most 3 missing import statements before the corrected method. Do not alter assertions to hide NameError or repair target-source bindings.';
 }
+
+/** Conditional repair hints for mock call-count and call-argument AssertionErrors. */
+export function executionFailureRepairGuidance(output: string): string {
+    const hints: string[] = [];
+    const multiCall = [...output.matchAll(/^AssertionError: Expected '([A-Za-z_][A-Za-z_0-9]{0,79})' to be called once\. Called ([2-9]|\d{2,}) times\.\r?$/gm)].at(-1);
+    if (multiCall) {
+        hints.push(`MOCK CALL COUNT CHECK: "${multiCall[1]}" was called ${multiCall[2]} times during the target call. `
+            + 'Do not use assert_called_once or assert_called_once_with on a mock invoked multiple times by target statements, loops, or helpers; '
+            + 'use assert_any_call(...) for a specific source-shown call or assert_called_once() only on a single-call lifecycle method.');
+    }
+    const zeroCall = [...output.matchAll(/^AssertionError: Expected '([A-Za-z_][A-Za-z_0-9]{0,79})' to (?:be called once\. Called 0 times\.|have been called\.)\r?$/gm)].at(-1);
+    if (zeroCall) {
+        hints.push(`MOCK UNCALLED CHECK: "${zeroCall[1]}" was called 0 times. Verify that the patch targets the exact binding read by the target, `
+            + 'that the assertion checks the consumed receiver chain (such as return_value / __enter__.return_value), and that the test inputs reach that branch.');
+    }
+    if (/^AssertionError: expected call not found\.\r?$/m.test(output)) {
+        hints.push('MOCK CALL ARGUMENT CHECK: Compare Expected vs Actual call arguments against TARGET SOURCE and SOURCE CALL SETUP. '
+            + 'Retain source-shown argument conversions (such as str(path) vs Path) and read module-global arguments from the canonical target module rather than an upstream variable.');
+    }
+    const immutablePatch = [...output.matchAll(/^TypeError: cannot set '([^'\r\n]+)' attribute of immutable type '([^'\r\n]+)'\r?$/gm)].at(-1);
+    if (immutablePatch) {
+        hints.push(`IMMUTABLE TYPE PATCH CHECK: Cannot patch "${immutablePatch[1]}" directly on immutable type "${immutablePatch[2]}". `
+            + `Patch the owning dependency binding in the target module instead (for example, with patch("target_module.datetime") as clock_stub) and configure clock_stub.${immutablePatch[1]}.return_value.`);
+    }
+    return hints.join('\n');
+}

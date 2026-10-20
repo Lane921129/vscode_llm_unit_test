@@ -4,6 +4,13 @@
 
 ## 2026-10-20
 
+### 修復回饋例外視窗、Mock 綁定診斷、鏈式 Provenance 與 v3 存活突變指引
+
+- 更新 `repairFeedback.ts`、`dependencyMockContract.ts`、`roleContracts.ts` 與 `bugFixer.ts`：修正 `summarizeRepairOutput` 在超長 `FAIL:`／`ERROR:` 區塊（如附帶數十筆 `Calls: [...]` 清單的 `AssertionError`）只取尾端而切掉測試方法與例外列的問題，改為保留區塊標頭、例外診斷視窗與尾端摘要；新增 `executionFailureRepairGuidance`，針對多次呼叫 `AssertionError`、0 次呼叫、`expected call not found` 及不可變 `datetime`／`date` 屬性 `TypeError` 按需注入具體修復指引，未命中時不增加提示長度。
+- 更新 `isolatedResourceContext.ts`、`validate_test_bindings.py` 與 `mock_behavior.py`：在角色規則明示 `HOST_ISOLATED_RESOURCE_CONTEXT` 為提示詞區段而非可匯入模組並於靜態檢查攔截；新增目標參數誤作模組屬性（如 `@patch('main.page.update')`）、不可變 `datetime.datetime`／`datetime.date` 屬性 patch、同模組 helper 與 `moduleSource` 使用點不符之精確修復提示，並在未定義名稱為受測目標本身時直接提示 `from {module} import {owner or target}`；於 `mock_behavior.py` 支援跨 `setUp` 與測試方法的 `mock_children` 鏈式子 Mock provenance 追蹤，且避免同方法上非使用點的額外 1-arg `@patch` 連坐註銷合法的使用點 `@patch`。
+- 更新 `qualityAnalyst.ts`：修正 `qualityStrategyHints` 正則表達式以支援 `builtin-ast-v3` 單引號格式化的存活突變描述（如 `mutation from 'LtE' to 'Lt'`、`mutation from '0' to '1'`、`mutation from 'return_value' to 'None'`）並擴充涵蓋 `Eq`/`NotEq`/`In`/`NotIn`/`Is`/`IsNot`、`call_statement_omission`、字串常數、條件反轉與算術／一元運算變異。
+- 驗證：相關定向迴歸 Node 8 檔 53／53、Python 2 檔 35／35 通過；`npm run test:fast`（含嚴格型別檢查、ESLint、Node 快測 96 檔 736／736、Webview 語法檢查、Python 快測 4 檔 42／42）全數通過，0 略過；`npm run package`（production build）與 `secret_scan.py` 通過。完整開發回歸（`test:full`）、VS Code／Mocha、遠端 CI、DGX 與真實模型新批次尚未重跑；原有七份其他 WIP 與 Webview 啟用 Mutmut 選項的未提交差異保留且不納入本次提交。
+
 ### 模型傳輸 300 秒逾時覆寫、雙時間設定與相依 Receiver 指引
 
 - 新增 `modelTransport.ts`：當執行環境使用預設原生 `fetch` 時，以 `DelegatingModelDispatcher` 將單次模型請求的 `headersTimeout` 與 `bodyTimeout` 依呼叫端期限放寬（最高 86,400 秒），避免超過 300 秒的長耗時推論遭 Undici 預設值提前切斷；若宿主或測試已替換 `globalThis.fetch` 則原樣委派，且完整保留 `AbortSignal` 取消與串流期間期限。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 新增白名單傳輸原因碼（如 `UND_ERR_HEADERS_TIMEOUT`）擷取與中英雙語呈現，不記錄供應商回應內容。

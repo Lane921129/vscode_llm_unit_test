@@ -93,6 +93,19 @@ test('all failure types and actual/expected tails survive long error summaries',
     const importError = 'Traceback (most recent call last):\n' + 'stack\n'.repeat(1500) + 'NameError: pytest is not defined';
     assert.match(summarizeRepairOutput(importError), /NameError: pytest is not defined/);
     assert.match(summarizeRepairOutput('CANDIDATE REJECTED: passing case regressed\n' + output), /CANDIDATE REJECTED/);
+    const longCallsBlock = 'FAIL: test_init_db (suite.TestInitDb.test_init_db)\n'
+        + 'Traceback (most recent call last):\n'
+        + '  File "test_database.py", line 25, in test_init_db\n'
+        + '    mock_cursor.execute.assert_called_once_with("CREATE TABLE users")\n'
+        + 'AssertionError: Expected \'execute\' to be called once. Called 41 times.\n'
+        + 'Calls: [' + 'call("SQL_STATEMENT"), '.repeat(220) + 'call("FINAL_SQL")]\n';
+    const summarizedCalls = summarizeRepairOutput(longCallsBlock, 3500);
+    assert.match(summarizedCalls, /mock_cursor\.execute\.assert_called_once_with/);
+    assert.match(summarizedCalls, /AssertionError: Expected 'execute' to be called once\. Called 41 times\./);
+    assert.match(summarizedCalls, /FINAL_SQL/);
+    const bugFixPrompt = getBugFixerUserPrompt(modelCode + '\n    def test_init_db(self):\n        pass\n',
+        longCallsBlock, 'render', ['value'], '', undefined, 'worker');
+    assert.match(bugFixPrompt, /MOCK CALL COUNT CHECK: "execute" was called 41 times/);
 });
 
 test('verbose outcomes preserve tests with docstrings and reject a skipped passing test', () => {

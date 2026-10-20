@@ -12,7 +12,22 @@ export function summarizeRepairOutput(output: string, budget = 6000): string {
     return preamble + '\n' + failures.map(block => {
         if (block.length <= perBlock) { return block; }
         const header = block.split('\n')[0];
-        return `${header}\n... stack frames omitted ...\n${block.slice(-Math.max(80, perBlock - header.length - 40))}`;
+        const available = Math.max(80, perBlock - header.length - 40);
+        const exceptions = [...block.matchAll(/^(?!FAIL:|ERROR:|Traceback\b)(?:[A-Za-z_][\w.]*\.)?[A-Za-z_]\w*(?:Error|Exception|Warning|Failure|Interrupt)?:/gm)];
+        const exceptionStart = exceptions.at(-1)?.index;
+        if (exceptionStart !== undefined && block.length - exceptionStart > available) {
+            if (exceptionStart < Math.floor(available * 0.65)) {
+                const headBudget = Math.max(header.length + 40, Math.min(exceptionStart + 320, Math.floor(perBlock * 0.65)));
+                const tailBudget = Math.max(80, perBlock - headBudget - 40);
+                return `${block.slice(0, headBudget)}\n... stack frames omitted ...\n${block.slice(-tailBudget)}`;
+            }
+            const windowStart = Math.max(header.length + 1, exceptionStart - Math.min(240, Math.floor(available * 0.25)));
+            const windowLength = Math.max(120, Math.floor(available * 0.55));
+            const windowText = block.slice(windowStart, windowStart + windowLength);
+            const tailBudget = Math.max(80, available - windowText.length - 40);
+            return `${header}\n... stack frames omitted ...\n${windowText}\n... failure details omitted ...\n${block.slice(-tailBudget)}`;
+        }
+        return `${header}\n... stack frames omitted ...\n${block.slice(-available)}`;
     }).join('\n') + '\nFull runner output is retained in the report.';
 }
 

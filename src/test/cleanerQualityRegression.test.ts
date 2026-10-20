@@ -178,6 +178,19 @@ test('quality contract failures are bounded across rounds and boundary guidance 
     assert.match(hints, /exact comparison boundary/);
     assert.match(hints, /only executed observations/);
     assert.match(qualityStrategyHints('mutation from 7.5 to 0').join('\n'), /never a proven exclusion/);
+    const v3Survivors = [
+        "Mutant #1 at line 10 (kind compare, mutation from 'LtE' to 'Lt')",
+        "Mutant #2 at line 11 (kind compare, mutation from 'Eq' to 'NotEq')",
+        "Mutant #3 at line 12 (kind numeric_constant, mutation from '0' to '1')",
+        "Mutant #4 at line 13 (kind boolean_operator, mutation from 'And' to 'Or')",
+        "Mutant #5 at line 14 (kind return_value, mutation from 'return_value' to 'None')",
+        "Mutant #6 at line 15 (kind call_statement_omission, mutation from 'call' to 'pass')",
+        "Mutant #7 at line 16 (kind string_constant, mutation from \"'ok'\" to \"''\")",
+        "Mutant #8 at line 17 (kind conditional_negation, mutation from 'condition' to 'not_condition')",
+        "Mutant #9 at line 18 (kind container, mutation from 'non_empty' to 'empty')",
+        "Mutant #10 at line 19 (kind binary, mutation from 'Add' to 'Sub')"
+    ].join('\n');
+    assert.equal(qualityStrategyHints(v3Survivors).length, 10);
     let fresh = 0;
     await new QualityAnalystSession().request({ ...input, request: async () => { fresh++; return '{"tasks":[]}'; } });
     assert.equal(fresh, 1, 'new target analyses do not inherit a suspended role');

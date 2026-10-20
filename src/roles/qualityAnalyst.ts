@@ -154,17 +154,35 @@ export function parseQualityTasks(raw: string, measured: string): QualityTask[] 
 /** Small, conditional guidance. These are strategies, never asserted output facts. */
 export function qualityStrategyHints(survivors: string): string[] {
     const hints: string[] = [];
-    if (/mutation from (?:Lt|LtE|Gt|GtE) to (?:Lt|LtE|Gt|GtE)/.test(survivors)) {
+    if (/mutation from '?(?:Lt|LtE|Gt|GtE)'? to '?(?:Lt|LtE|Gt|GtE)'?/.test(survivors)) {
         hints.push('Comparison boundary survivor: reach the exact comparison boundary and both sides, including preceding branch constraints. Reuse only executed observations for those exact inputs as expected results. Do not repeat interior-only cases.');
     }
-    if (/mutation from (?:[+-]?\d+(?:\.\d+)?) to (?:[+-]?\d+(?:\.\d+)?)/.test(survivors)) {
+    if (/mutation from '?(?:Eq|NotEq|In|NotIn|Is|IsNot)'? to '?(?:Eq|NotEq|In|NotIn|Is|IsNot)'?/.test(survivors)) {
+        hints.push('Equality or membership survivor: test one input matching the compared value/member and one distinct non-matching input, then assert the resulting branch output or dependency call.');
+    }
+    if (/mutation from '?(?:[+-]?\d+(?:\.\d+)?)'? to '?(?:[+-]?\d+(?:\.\d+)?)'?/.test(survivors)) {
         hints.push('Numeric threshold survivor: check preceding branches before proposing an experiment. A redundant bound may be a conditional-equivalence candidate, never a proven exclusion or a reason to change the mutation denominator.');
     }
-    if (/mutation from (?:And to Or|Or to And)/.test(survivors)) {
+    if (/mutation from '?(?:And'? to '?Or|Or'? to '?And)'?/.test(survivors)) {
         hints.push('Boolean operator survivor: try mixed truth values for the subconditions, including required mock fields; verify original and mutant under identical setup.');
     }
-    if (/mutation from (?:return_value to None|(?:True|False) to (?:True|False))/.test(survivors)) {
+    if (/mutation from '?(?:return_value'? to '?None|(?:True|False)'? to '?(?:True|False))'?/.test(survivors)) {
         hints.push('Return-value survivor: check whether a truthiness assertion hides distinct values. Verify the original result for this exact input/mock before adding an exact assertion.');
+    }
+    if (/kind call_statement_omission\b|mutation from '?(?:await_)?call'? to '?pass'?/.test(survivors)) {
+        hints.push('Call-omission survivor: a side-effect or dependency call can be skipped without failing current tests. Assert the observable state change or verify the source-shown dependency call on the branch reaching that line.');
+    }
+    if (/kind string_constant\b/.test(survivors)) {
+        hints.push('String-constant survivor: current assertions ignore a literal key, query/command fragment, or returned field at the survivor line. Assert the specific returned field or verify the dependency call argument that uses that string.');
+    }
+    if (/kind (?:conditional|loop_condition|conditional_expression)_negation\b|mutation from '?(?:if_|while_|if_expression_)?condition'? to '?not_/.test(survivors)) {
+        hints.push('Condition-negation survivor: exercise both True and False outcomes of the condition at the survivor line and assert the distinct return value, state change, or dependency call for each branch.');
+    }
+    if (/kind (?:container|index_boundary)\b|mutation from '?(?:non_empty|index|lower|upper)'? to/.test(survivors)) {
+        hints.push('Container or index survivor: use a multi-element fixture with distinguishable first and last items (not uniform or empty values) and assert the exact selected element or collection contents.');
+    }
+    if (/kind (?:binary|augmented_assignment|unary)\b/.test(survivors)) {
+        hints.push('Arithmetic or unary operator survivor: avoid identity inputs such as 0 or 1 where operators coincide; choose non-trivial inputs and assert the exact computed result.');
     }
     return hints;
 }

@@ -1,5 +1,6 @@
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { EVIDENCE_CONTRACT_VERSIONS } from '../pipeline/evidenceContracts';
+import { executionFailureRepairGuidance, missingNameRepairGuidance } from '../prompts/dependencyMockContract';
 
 export const ROLE_CONTRACT_VERSIONS = {
     ...EVIDENCE_CONTRACT_VERSIONS,
@@ -35,13 +36,15 @@ export function buildWriterRevisionRequest(input: {
     functionName: string;
     evidence: string;
 }): string {
+    const repairGuidance = [missingNameRepairGuidance(input.findings), executionFailureRepairGuidance(input.findings)]
+        .filter(Boolean).join('\n');
     return `WRITER_REVISION_REQUEST_V2
 === TARGET ===
 Module: ${input.moduleName}
 Function: ${input.functionName}
 
 === REVIEW OR STRUCTURE FINDINGS ===
-${summarizeRepairOutput(referenceRepeatedTestFile(input.findings, input.code), 3500)}
+${summarizeRepairOutput(referenceRepeatedTestFile(input.findings, input.code), 3500)}${repairGuidance ? '\n' + repairGuidance : ''}
 
 === CURRENT TEST FILE ===
 \`\`\`python

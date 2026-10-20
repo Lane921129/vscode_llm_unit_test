@@ -218,6 +218,7 @@ def has_mock_behavior(tree, context):
             patch_blocked = {}
             mock_roots, configured_children = set(), set()
             namespace_members = {}
+            mock_children = {}
             serial = 0
 
             def resolve(node):
@@ -279,6 +280,11 @@ def has_mock_behavior(tree, context):
                         continue
                     if not isinstance(item, tuple):
                         result.add(item)
+                        if item not in visited:
+                            visited.add(item)
+                            if len(visited) > 512:
+                                return set()
+                            pending.extend(mock_children.get(item, {}).values())
                     elif item not in visited:
                         visited.add(item)
                         if len(visited) > 512:
@@ -324,8 +330,10 @@ def has_mock_behavior(tree, context):
                     arg = call.args[1]
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                         value = resolve(call.args[0]) + '.' + arg.value
-                if value not in permitted:
+                if not value or value in {target_path, f'{module}.{owner}' if owner else ''}:
                     return None
+                if value not in permitted:
+                    return 0
                 serial += 1
                 # Configured return values/attributes need not be mocks. The
                 # patch itself is still a real Mock and supports call assertions.
@@ -354,7 +362,8 @@ def has_mock_behavior(tree, context):
                 if is_target(node):
                     if asynchronous and not awaited:
                         return False
-                    observed.update(active)
+                    for item in active:
+                        observed.update(injected_tokens(item))
                     for arg in [*node.args, *(k.value for k in node.keywords)]:
                         observed.update(injected_tokens(token(arg)))
                     return found
@@ -378,11 +387,16 @@ def has_mock_behavior(tree, context):
                             if value is None:
                                 return found
                             name = dotted(item.optional_vars)
+                            if value == 0:
+                                if name:
+                                    bindings.pop(name, None)
+                                    mock_roots.discard(name)
+                                    blocked_paths.add(name)
+                                continue
                             if name:
                                 bindings[name] = value
                                 mock_roots.add(name)
-                            if value is not None:
-                                nested.add(value)
+                            nested.add(value)
                         found = statements(node.body, nested) or found
                     elif isinstance(node, (ast.Assign, ast.AnnAssign)):
                         rhs = node.value
@@ -419,12 +433,20 @@ def has_mock_behavior(tree, context):
                                 blocked_paths.discard(name)
                                 continue
                             mock_roots.discard(name)
+                            owner_prefix = next((prefix for prefix in sorted(bindings, key=len, reverse=True)
+                                                 if name.startswith(prefix + '.') and isinstance(bindings[prefix], int)), None)
+                            root_owner = token_name(owner_prefix) if owner_prefix else None
+                            attr_suffix = name[len(owner_prefix) + 1:] if owner_prefix else ''
                             if isinstance(lhs, ast.Attribute) and isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
                                 value = token(lhs.value) or value
                             if isinstance(lhs, ast.Attribute) and lhs.attr in ASSERTIONS:
                                 existing = token(lhs.value)
                                 if existing is not None:
                                     manual.add(existing)
+                            if isinstance(root_owner, int) and attr_suffix:
+                                mock_children.setdefault(root_owner, {})[attr_suffix] = value
+                            for stale in [key for key in bindings if key.startswith(name + '.')]:
+                                bindings.pop(stale, None)
                             if value is None:
                                 blocked_paths.add(name)
                             else:
@@ -485,6 +507,11 @@ def has_mock_behavior(tree, context):
                 aliases.pop(name, None)
             active = set()
             for name, value in zip(parameters, decorated):
+                if value == 0:
+                    bindings.pop(name, None)
+                    mock_roots.discard(name)
+                    blocked_paths.add(name)
+                    continue
                 bindings[name] = value
                 mock_roots.add(name)
                 if value is not None:

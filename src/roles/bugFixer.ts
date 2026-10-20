@@ -7,7 +7,7 @@ import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { RepairDiagnostic, RepairReasonCode, RepairResponseShape, repairHash } from '../pipeline/repairDiagnostics';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, formatFixtureConsumptionGuidance, missingNameRepairGuidance, OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE, relevantSourceImports, sourceSetupCallGuidance, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, executionFailureRepairGuidance, formatFixtureConsumptionGuidance, missingNameRepairGuidance, OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE, relevantSourceImports, sourceSetupCallGuidance, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { callerForPrompt } from '../pipeline/probeInputs';
 import { createPromptContextReferences } from '../prompts/compactWriterContext';
 
@@ -156,7 +156,7 @@ ${formatTargetContract(moduleName, funcName, funcArgs, astContext)}
 
 === LATEST FAILURE ===
 ${summarizeRepairOutput(errorOutput)}
-${missingNameRepairGuidance(errorOutput)}
+${[missingNameRepairGuidance(errorOutput), executionFailureRepairGuidance(errorOutput)].filter(Boolean).join('\n')}
 
 === CURRENT TEST IMPORT LINES (indentation retained; local imports stay in their original scope) ===
 ${imports.length ? imports.join('\n') : 'none'}

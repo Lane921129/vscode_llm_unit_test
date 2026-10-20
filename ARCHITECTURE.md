@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 修復回饋例外視窗、Mock 綁定診斷、鏈式 Provenance 與 v3 存活突變指引（2026-10-20）
+
+`repairFeedback.ts` 的 `summarizeRepairOutput` 在單一 `FAIL:`／`ERROR:` 區塊超過 `perBlock` 長度限制時，若例外列之後附帶超長 `Calls: [...]` 或斷言 diff（如 `init_db` 產生 41 次 `execute` 呼叫紀錄），會先定位 `AssertionError:`／例外列並保留「標頭＋例外列視窗＋尾端摘要」，避免單純取尾端 `slice(-available)` 切掉失敗測試方法位置與關鍵例外原因。`dependencyMockContract.ts` 的 `executionFailureRepairGuidance` 針對重複呼叫 `AssertionError`（`Expected '...' to be called once. Called N times.`）、0 次呼叫、`expected call not found` 與不可變內建型別（`datetime.datetime`／`datetime.date`）屬性寫入 `TypeError`，在 `roleContracts.ts`（Writer 修訂）與 `bugFixer.ts` 按需注入精準修復提示，無命中時零額外 token 開銷。
+
+`isolatedResourceContext.ts` 於 `ISOLATED_RESOURCE_ROLE_RULE` 與 `isolatedResourceSystemRule` 明示 `HOST_ISOLATED_RESOURCE_CONTEXT` 僅為提示詞區段標記、絕非可匯入的 Python 模組，同時維持 Reviewer／Writer system 規則字數上限。`validate_test_bindings.py` 攔截 `import HOST_ISOLATED_RESOURCE_CONTEXT`，並針對誤將目標函式參數當成模組屬性（`@patch('mod.param.method')`）、誤 patch 不可變 `datetime`／`date` C 型別方法、同模組 helper／跨模組 `from` 匯入使用點不符給出精準替換路徑；當未定義名稱即受測目標本身時直接提示 `from {module} import {owner or target}`，且於 `has_mock_behavior` 為假時列出無法對應受測來源使用點的 `@patch` 裝飾器與正確使用點。
+
+`mock_behavior.py` 跨 `setUp` 與測試方法追蹤 `mock_children` 父子鏈（如 `mock_get_conn.return_value = self.conn` 與 `self.conn.cursor.return_value = self.cur`），使鏈式子 Mock 上的呼叫與斷言能回溯至合法的受控 patch 來源；同時在單一測試方法掛載多個 `@patch` 時，僅忽略非使用點的額外 1-arg `@patch` 參數而不連坐註銷同方法的合法使用點 `@patch`。`qualityAnalyst.ts` 的 `qualityStrategyHints` 支援 `builtin-ast-v3` 以 `!r` 單引號格式化的存活突變描述（如 `mutation from 'LtE' to 'Lt'`、`mutation from '0' to '1'`、`mutation from 'return_value' to 'None'` 及 `call_statement_omission`），修復品質修訂階段 `measured-guidance` 的策略提示匹配。
+
 ## 模型傳輸逾時覆寫、雙時間上限與相依 Receiver 指引（2026-10-20）
 
 `modelTransport.ts` 將原生 Node／Undici `fetch` 的預設 300 秒 `headersTimeout`／`bodyTimeout` 改為由呼叫端絕對期限與 `AbortSignal` 控制（上限 86,400 秒），僅在 `globalThis.fetch` 仍為預設原生實作時透過 `DelegatingModelDispatcher` 覆寫單次請求的 `headersTimeout` 與 `bodyTimeout`，保留測試替身與宿主自訂 `fetch`。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 對傳輸錯誤僅提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。

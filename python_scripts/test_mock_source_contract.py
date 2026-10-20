@@ -233,6 +233,76 @@ class MockSourceContractTests(unittest.TestCase):
         self.assertEqual(result['mock_names'], ['mock_connect', 'mock_connect_2'])
         ast.parse(result['scaffold'])
 
+    def test_prompt_section_heading_and_parameter_or_immutable_patches_report_specific_repairs(self):
+        for bad_import in ('import HOST_ISOLATED_RESOURCE_CONTEXT\n',
+                           'from HOST_ISOLATED_RESOURCE_CONTEXT import setup\n'):
+            res = validate_bindings(bad_import + candidate(), self.context())
+            self.assertFalse(res['valid'])
+            self.assertIn('HOST_ISOLATED_RESOURCE_CONTEXT is a prompt section heading', res['reason'])
+
+        ui_source = 'def close_dialog(page, dialog):\n    dialog.open = False\n    page.update()\n'
+        ui_ctx = {'module': 'main', 'target': 'close_dialog', 'source': ui_source, 'moduleSource': ui_source,
+                  'requireMockBehavior': True, 'requireTargetBehavior': True}
+        bad_param_patch = ('import unittest\nfrom unittest.mock import patch\nfrom main import close_dialog\n'
+                           'class Cases(unittest.TestCase):\n    @patch("main.page.update")\n'
+                           '    def test_close(self, mock_update):\n        close_dialog(object(), object())\n'
+                           '        mock_update.assert_called_once()\n')
+        res = validate_bindings(bad_param_patch, ui_ctx)
+        self.assertFalse(res['valid'])
+        self.assertIn('page is a parameter of close_dialog, not a module attribute of main', res['reason'])
+
+        dt_source = 'from datetime import datetime\ndef stamp():\n    return datetime.now().isoformat()\n'
+        dt_ctx = {'module': 'database', 'target': 'stamp', 'source': dt_source, 'moduleSource': dt_source,
+                  'dependencies': {'datetime': 'datetime.datetime'}, 'requireMockBehavior': True}
+        for bad_dt in ('database.datetime.now', 'datetime.datetime.now', 'datetime.now'):
+            code = ('import unittest\nfrom unittest.mock import patch\nfrom database import stamp\n'
+                    f'class Cases(unittest.TestCase):\n    @patch({bad_dt!r})\n'
+                    '    def test_stamp(self, mock_now):\n        stamp()\n        mock_now.assert_called_once()\n')
+            res = validate_bindings(code, dt_ctx)
+            self.assertFalse(res['valid'])
+            self.assertIn("Patch the target module binding 'database.datetime'", res['reason'])
+
+        helper_mod = ('from database import update_vehicle_status\n'
+                      'def show_message_dialog(page, title, msg): pass\n'
+                      'def status_column(page):\n    show_message_dialog(page, "t", "m")\n')
+        helper_ctx = {'module': 'main', 'target': 'status_column',
+                      'source': 'def status_column(page):\n    show_message_dialog(page, "t", "m")\n',
+                      'moduleSource': helper_mod, 'requireMockBehavior': True}
+        for wrong_path, expected in (('show_message_dialog', 'main.show_message_dialog'),
+                                     ('pkg.main.show_message_dialog', 'main.show_message_dialog'),
+                                     ('database.update_vehicle_status', 'main.update_vehicle_status')):
+            code = ('import unittest\nfrom unittest.mock import patch\nfrom main import status_column\n'
+                    f'class Cases(unittest.TestCase):\n    @patch({wrong_path!r})\n'
+                    '    def test_col(self, m):\n        status_column(object())\n        m.assert_called_once()\n')
+            res = validate_bindings(code, helper_ctx)
+            self.assertFalse(res['valid'])
+            self.assertIn(f'Patch the dependency at its target use point: {expected}, not {wrong_path}', res['reason'])
+
+    def test_chained_setup_mocks_and_extra_non_use_point_decorators_preserve_proven_assertions(self):
+        db_source = ('def get_conn(): pass\ndef _now_text(): pass\n'
+                     'def update_loading(plate):\n    conn = get_conn()\n    cur = conn.cursor()\n'
+                     '    cur.execute(plate)\n    conn.commit()\n')
+        db_ctx = {'module': 'database', 'target': 'update_loading',
+                  'source': 'def update_loading(plate):\n    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(plate)\n    conn.commit()\n',
+                  'moduleSource': db_source, 'requireMockBehavior': True, 'requireTargetBehavior': True}
+        setup_chain = ('import unittest\nfrom unittest.mock import patch, MagicMock\nfrom database import update_loading\n'
+                       'class Cases(unittest.TestCase):\n    def setUp(self):\n'
+                       '        self.conn = MagicMock()\n        self.cur = MagicMock()\n'
+                       '        self.conn.cursor.return_value = self.cur\n'
+                       '    @patch("database.get_conn")\n    @patch("database._now_text")\n'
+                       '    def test_loading(self, mock_now, mock_get_conn):\n'
+                       '        mock_get_conn.return_value = self.conn\n'
+                       '        update_loading("ABC")\n'
+                       '        self.cur.execute.assert_called_once_with("ABC")\n'
+                       '        self.conn.commit.assert_called_once()\n')
+        self.assertTrue(validate_bindings(setup_chain, db_ctx)['valid'])
+        unpermitted_only = setup_chain.replace('self.cur.execute.assert_called_once_with("ABC")\n        self.conn.commit.assert_called_once()',
+                                               'mock_now.assert_not_called()')
+        res = validate_bindings(unpermitted_only, db_ctx)
+        self.assertFalse(res['valid'])
+        self.assertIn('database._now_text', res['reason'])
+        self.assertIn('database.get_conn', res['reason'])
+
 
 if __name__ == '__main__':
     unittest.main()
