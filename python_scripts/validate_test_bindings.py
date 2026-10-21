@@ -163,6 +163,56 @@ def _additional_name_feedback(tree, code, first):
             + '; '.join(details) + '. Repair the listed test bindings together. ')
 
 
+def _proven_immutable_datetime_bindings(tree, expected, context):
+    """Diagnose immutable attributes only for a source-matched, stable import.
+
+    Dependency origin hints and an old import do not prove the current object.
+    Unknown/rebound cases stay with execution rather than a certain rejection.
+    """
+    selected = source_function(tree, context)
+    if not selected or not expected or ast.dump(selected) != ast.dump(expected):
+        return {}
+    bindings = {}
+    direct_imports = {id(node) for node in tree.body if isinstance(node, ast.ImportFrom)
+                      and not node.level and node.module == 'datetime'}
+    for node in tree.body:
+        if id(node) not in direct_imports:
+            continue
+        for alias in node.names:
+            if alias.name in ('datetime', 'date'):
+                name = alias.asname or alias.name
+                bindings[name] = None if name in bindings else f'datetime.{alias.name}'
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if any(alias.name == '*' for alias in node.names):
+                return {}
+            for alias in node.names:
+                name = alias.asname or alias.name
+                if id(node) not in direct_imports or f'{node.module}.{alias.name}' != bindings.get(name):
+                    bindings.pop(name, None)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bindings.pop(alias.asname or alias.name.split('.')[0], None)
+        elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings.pop(dotted(node).split('.')[0], None)
+        elif isinstance(node, ast.arg):
+            bindings.pop(node.arg, None)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bindings.pop(node.name, None)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bindings.pop(node.name, None)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bindings.pop(node.rest, None)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bindings.pop(node.name, None)
+        elif isinstance(node, ast.Attribute) and node.attr in ('__dict__', '__builtins__', '__getattribute__'):
+            return {}
+        elif isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] in {
+                'globals', 'locals', 'vars', 'eval', 'exec', 'setattr', 'delattr', '__import__', 'reload'}:
+            return {}
+    return {name: origin for name, origin in bindings.items() if origin}
+
+
 def _source_patch_facts(context):
     module = context.get('module', '')
     owner = context.get('className')
@@ -189,9 +239,6 @@ def _source_patch_facts(context):
     module_globals = set(dependencies) | set(equivalent)
     from_imports = {}
     immutable_datetime = {}
-    for binding, origin in dependencies.items():
-        if origin in ('datetime.datetime', 'datetime.date'):
-            immutable_datetime[binding] = origin
     raw_module = context.get('moduleSource', '')
     if isinstance(raw_module, str) and raw_module and len(raw_module) <= 512000:
         try:
@@ -199,6 +246,7 @@ def _source_patch_facts(context):
         except (SyntaxError, TypeError):
             mod_tree = None
         if mod_tree:
+            immutable_datetime = _proven_immutable_datetime_bindings(mod_tree, selected, context)
             for node in mod_tree.body:
                 if isinstance(node, ast.Import):
                     for alias in node.names:
@@ -211,8 +259,6 @@ def _source_patch_facts(context):
                         module_globals.add(bound)
                         origin = f'{node.module}.{alias.name}'
                         from_imports.setdefault(bound, origin)
-                        if origin in ('datetime.datetime', 'datetime.date'):
-                            immutable_datetime.setdefault(bound, origin)
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     module_globals.add(node.name)
                 elif isinstance(node, (ast.Assign, ast.AnnAssign)):

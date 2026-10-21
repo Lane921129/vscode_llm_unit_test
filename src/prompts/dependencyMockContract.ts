@@ -362,9 +362,10 @@ export function executionFailureRepairGuidance(output: string): string {
     const hints: string[] = [];
     const multiCall = [...output.matchAll(/^AssertionError: Expected '([A-Za-z_][A-Za-z_0-9]{0,79})' to be called once\. Called ([2-9]|\d{2,}) times\.\r?$/gm)].at(-1);
     if (multiCall) {
-        hints.push(`MOCK CALL COUNT CHECK: "${multiCall[1]}" was called ${multiCall[2]} times during the target call. `
-            + 'Do not use assert_called_once or assert_called_once_with on a mock invoked multiple times by target statements, loops, or helpers; '
-            + 'use assert_any_call(...) for a specific source-shown call or assert_called_once() only on a single-call lifecycle method.');
+        hints.push(`MOCK CALL COUNT CHECK: "${multiCall[1]}" was called ${multiCall[2]} times in its recorded mock history. `
+            + 'This count alone does not attribute calls to the target; inspect setup/arrange calls, call_args_list and the source-supported expected history. '
+            + 'If setup history must be excluded, reset_mock() immediately before the target call while preserving configured return_value and side_effect. '
+            + 'Retain justified exact counts, arguments and order; do not weaken a failed once assertion to assert_any_call merely to pass.');
     }
     const zeroCall = [...output.matchAll(/^AssertionError: Expected '([A-Za-z_][A-Za-z_0-9]{0,79})' to (?:be called once\. Called 0 times\.|have been called\.)\r?$/gm)].at(-1);
     if (zeroCall) {

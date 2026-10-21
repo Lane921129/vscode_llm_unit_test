@@ -1,50 +1,43 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { channel } from 'node:diagnostics_channel';
+
 const MAX_TIMER_MS = 2_147_483_647;
-
-const GLOBAL_DISPATCHER_SYMBOLS = [
-    Symbol.for('undici.globalDispatcher.1'),
-    Symbol.for('undici.globalDispatcher.2'),
-] as const;
-
-export interface ModelTransportDispatchOptions {
-    origin?: string | URL;
-    path?: string;
-    method?: string;
-    headersTimeout?: number;
-    bodyTimeout?: number;
-    [key: string]: unknown;
+interface TransportScope {
+    deadlineAt: number;
+    failure?: Error;
+    abort: AbortController;
 }
+const transportScope = new AsyncLocalStorage<TransportScope>();
 
-export interface ModelTransportDispatcher {
-    dispatch(options: ModelTransportDispatchOptions, handler: unknown): boolean;
-}
-
-function isModelTransportDispatcher(value: unknown): value is ModelTransportDispatcher {
-    return typeof value === 'object' && value !== null
-        && typeof (value as ModelTransportDispatcher).dispatch === 'function';
-}
-
-/** Retrieve Node's built-in Undici global dispatcher without requiring an
- * external `undici` npm package or replacing the host's active Agent. */
-export function getNativeGlobalDispatcher(): ModelTransportDispatcher | undefined {
-    const host = globalThis as Record<symbol, unknown>;
-    for (const sym of GLOBAL_DISPATCHER_SYMBOLS) {
-        if (isModelTransportDispatcher(host[sym])) { return host[sym]; }
-    }
+// Observe requests after the host has selected its proxy/certificate Agent.
+// This channel is published synchronously before dispatch. Timeout fields are
+// runtime capabilities, not a public Undici API: verify both before changing
+// either and reject this request if a future runtime removes them. Never throw
+// from a diagnostics subscriber (Node promotes that to uncaughtException).
+channel('undici:request:create').subscribe(message => {
+    const scope = transportScope.getStore();
+    if (!scope || scope.failure) { return; }
     try {
-        if (typeof Request === 'function') { void new Request('http://127.0.0.1'); }
-    } catch { /* ignore lazy init errors */ }
-    for (const sym of GLOBAL_DISPATCHER_SYMBOLS) {
-        if (isModelTransportDispatcher(host[sym])) { return host[sym]; }
-    }
-    for (const sym of Object.getOwnPropertySymbols(globalThis)) {
-        if (String(sym).startsWith('Symbol(undici.globalDispatcher.') && isModelTransportDispatcher(host[sym])) {
-            return host[sym];
+        const request = (message as { request?: object })?.request;
+        if (!request) { throw new Error(); }
+        for (const name of ['headersTimeout', 'bodyTimeout']) {
+            const field = Object.getOwnPropertyDescriptor(request, name);
+            if (!field || !('value' in field) || !field.writable
+                || field.value !== undefined && (typeof field.value !== 'number' || !Number.isFinite(field.value) || field.value < 0)) {
+                throw new Error();
+            }
         }
+        const remaining = Math.max(1, Math.min(MAX_TIMER_MS, Math.ceil(scope.deadlineAt - Date.now())));
+        Object.assign(request, { headersTimeout: remaining, bodyTimeout: remaining });
+    } catch {
+        scope.failure = Object.assign(new TypeError('Model transport timeout control is unavailable in this runtime.'),
+            { code: 'MODEL_TRANSPORT_TIMEOUT_UNSUPPORTED' });
+        scope.abort.abort(scope.failure);
     }
-    return undefined;
-}
+});
 
 const SAFE_TRANSPORT_FAILURE_CODES = new Set([
+    'MODEL_TRANSPORT_TIMEOUT_UNSUPPORTED',
     'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
     'UND_ERR_SOCKET', 'UND_ERR_ABORTED', 'UND_ERR_DESTROYED', 'UND_ERR_CLOSED',
     'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
@@ -81,7 +74,6 @@ export interface ModelTransportOptions {
     deadlineAt: number;
     /** Explicit injection keeps fixtures and host fetch instrumentation intact. */
     fetcher?: typeof fetch;
-    dispatcher?: ModelTransportDispatcher;
 }
 
 /** The caller owns the AbortController and keeps its absolute-deadline timer
@@ -89,8 +81,9 @@ export interface ModelTransportOptions {
  * HTTP inactivity limits with that allowance; it never starts another request,
  * refreshes the deadline, changes TLS/proxy policy, or owns the shared sockets.
  *
- * Override at dispatch time: some Node fetch versions explicitly supply their
- * own 300-second limits, which would otherwise override Agent defaults. */
+ * No caller dispatcher is injected: VS Code must retain its proxy lookup and
+ * certificate Agent. The scoped create hook also works when it replaces Agent.
+ * Fetch implementations outside Undici retain their own transport policy. */
 export function fetchModelResponse(
     input: string, init: RequestInit, options: ModelTransportOptions
 ): Promise<Response> {
@@ -99,15 +92,16 @@ export function fetchModelResponse(
     if (init.signal.aborted || options.deadlineAt <= Date.now()) {
         return Promise.reject(new DOMException('Model request was cancelled or exceeded its deadline.', 'AbortError'));
     }
-    const delegate = options.dispatcher ?? getNativeGlobalDispatcher();
-    const dispatcher: ModelTransportDispatcher | undefined = delegate ? {
-        dispatch(dispatchOptions: ModelTransportDispatchOptions, handler: unknown): boolean {
-            const remaining = Math.max(1, Math.min(MAX_TIMER_MS, Math.ceil(options.deadlineAt - Date.now())));
-            return delegate.dispatch({ ...dispatchOptions, headersTimeout: remaining, bodyTimeout: remaining }, handler);
-        },
-    } : undefined;
-    // Keep the active host/global fetch, including test replacements. The local
-    // dispatcher changes no process-wide Undici settings or other HTTP users.
+    const scope: TransportScope = { deadlineAt: options.deadlineAt, abort: new AbortController() };
     const fetcher = options.fetcher ?? globalThis.fetch;
-    return fetcher(input, (dispatcher ? { ...init, dispatcher } : { ...init }) as RequestInit);
+    return transportScope.run(scope, async () => {
+        try {
+            const response = await fetcher(input, { ...init, signal: AbortSignal.any([init.signal!, scope.abort.signal]) });
+            if (scope.failure) {
+                void response.body?.cancel().catch(() => undefined);
+                throw scope.failure;
+            }
+            return response;
+        } catch (error) { throw scope.failure ?? error; }
+    });
 }

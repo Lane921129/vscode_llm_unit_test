@@ -8,8 +8,9 @@ test('Sidebar timing saves merge limits and keep startup snapshots safe across a
     const savedBudget = { timeoutMs: 1501, logicalRequests: 31, transportAttempts: 57, candidateAttempts: 0 };
     const settings = new Map<string, unknown>([['language', 'en'], ['targetBudget', savedBudget]]);
     const stored = new Map<string, unknown>([[API_TIMEOUT_PREFERENCE_KEY, 1800]]);
-    const calls: any[][] = [], messages: any[] = [], updates: any[][] = [], warnings: string[] = [];
+    const calls: any[][] = [], messages: any[] = [], updates: any[][] = [], warnings: string[] = [], errors: string[] = [];
     let saveWait: Promise<void> | undefined;
+    let credentialWait: Promise<void> | undefined;
     const config = {
         get: (key: string, fallback: unknown) => settings.has(key) ? settings.get(key) : fallback,
         inspect: () => ({ workspaceValue: savedBudget }),
@@ -27,6 +28,7 @@ test('Sidebar timing saves merge limits and keep startup snapshots safe across a
         Uri: { file: (fsPath: string) => ({ fsPath }) },
         window: {
             showWarningMessage: (value: string) => { warnings.push(value); },
+            showErrorMessage: (value: string) => { errors.push(value); },
             showOpenDialog: async () => [{ fsPath: '/different-selection' }]
         }
     };
@@ -40,13 +42,17 @@ test('Sidebar timing saves merge limits and keep startup snapshots safe across a
                 update: async (key: string, value: unknown) => { stored.set(key, value); } });
         provider.findPythonFiles = async () => [];
         provider.fetchLocalModels = async () => [];
+        provider.getStoredCloudCredentials = async () => { await credentialWait; return {}; };
         let receive!: (message: unknown) => Promise<void>;
         provider.resolveWebviewView({ webview: { html: '', options: {},
             postMessage: (value: unknown) => { messages.push(value); },
             onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } } });
         const start = (extra: Record<string, unknown> = {}) => receive({ command: 'startBatchAnalysis', envType: 'local',
             modelName: 'neutral-model', batchPath: '/fixture', timeoutSeconds: 1800, targetTimeoutSeconds: 3600, ...extra });
-        const reset = () => { calls.length = messages.length = updates.length = warnings.length = 0; saveWait = undefined; };
+        const reset = () => {
+            calls.length = messages.length = updates.length = warnings.length = errors.length = 0;
+            saveWait = credentialWait = undefined;
+        };
         await t.test('initial values show the actual saved total and exact units', async () => {
             await receive({ command: 'getInitialData' });
             assert.deepEqual(messages.find(item => item.command === 'executionTimingSettings'), {
@@ -121,6 +127,51 @@ test('Sidebar timing saves merge limits and keep startup snapshots safe across a
             await receive({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
             assert.equal(warnings.at(-1), 'Please select Env, Model, and Project or File.');
             assert.deepEqual(messages.at(-1), { command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
+        });
+        await t.test('late missing credentials cannot finish another active owner', async () => {
+            reset();
+            let release!: () => void;
+            credentialWait = new Promise<void>(resolve => { release = resolve; });
+            const pending = start({ envType: 'cloud', cloudKeyName: 'removed-setting' });
+            provider.beginAnalysis('credential-owner');
+            release();
+            await pending;
+            try {
+                assert.equal(calls.length, 0);
+                assert.equal(messages.some(item => item.command === 'analysisFinished'), false);
+                assert.equal(errors.length, 0);
+            } finally { provider.endAnalysis('credential-owner'); }
+        });
+        await t.test('changing selection during credentials lookup discards the stale missing-key error', async () => {
+            reset();
+            let release!: () => void;
+            credentialWait = new Promise<void>(resolve => { release = resolve; });
+            const pending = start({ envType: 'cloud', cloudKeyName: 'removed-setting' });
+            await receive({ command: 'browseBatchFolder' });
+            release();
+            await pending;
+            assert.equal(calls.length, 0);
+            assert.equal(errors.length, 0);
+            assert.equal(messages.filter(item => item.command === 'analysisFinished').length, 1);
+        });
+        await t.test('abort during credentials lookup finishes once without reporting a missing key', async () => {
+            reset();
+            let release!: () => void;
+            credentialWait = new Promise<void>(resolve => { release = resolve; });
+            const pending = start({ envType: 'cloud', cloudKeyName: 'removed-setting' });
+            await receive({ command: 'abortTest' });
+            release();
+            await pending;
+            assert.deepEqual(calls.map(item => item[0]), ['llm-unit-test.abortTest']);
+            assert.equal(errors.length, 0);
+            assert.equal(messages.filter(item => item.command === 'analysisFinished').length, 1);
+        });
+        await t.test('a current missing credential still fails visibly before dispatch', async () => {
+            reset();
+            await start({ envType: 'cloud', cloudKeyName: 'removed-setting' });
+            assert.equal(calls.length, 0);
+            assert.equal(errors.length, 1);
+            assert.equal(messages.filter(item => item.command === 'analysisFinished').length, 1);
         });
     } finally { Module._load = originalLoad; }
 });

@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 宿主傳輸與 Mock 證據回歸修復（2026-10-21）
+
+`modelTransport.ts` 不再注入 caller dispatcher 或探查私有全域 Symbol。正式請求沿用目前的 `globalThis.fetch`；VS Code 仍決定 Proxy、系統憑證與 TLS Agent。在每次 fetch 的 `AsyncLocalStorage` 作用域內，透過 `undici:request:create` 對最終 Request 的兩個可寫時間欄位套用原期限餘額，避免 Agent 被宿主重建後失去設定。Subscriber 不拋例外；欄位不支援則以 `MODEL_TRANSPORT_TIMEOUT_UNSUPPORTED` 取消本次請求。這些欄位是需要回歸核實的 runtime 能力，並非穩定公開設定 API；非 Undici transport 保留自己的政策。完整 body 的原期限與取消仍由 caller 持有。`undici` 僅為測試建構 Agent 的開發相依。詳見 [Undici diagnostics channel](https://undici.nodejs.org/api/DiagnosticsChannel)。
+
+`mock_behavior.py` 保留明確新 Mock 的身分，父路徑覆寫同時清除該路徑失效的子圖，不移除仍被其他成員或直接參數持有的物件。`validate_test_bindings.py` 對不可變 datetime/date patch 的拒絕要求完整模組與目標 AST 一致、直接 import 且沒有重綁／反射等撤銷；無法證明的情況交實跑確認。修復回饋把 Mock 次數明示為累積 history，要求先核 setup 與來源證據，不能一律改成較弱的 `assert_any_call`。
+
+Cloud 啟動等待憑證後再次核對 owner、取消與專案 revision；舊查詢不得解鎖新 run。Custom 模型保存設定名稱並於重建時恢復欄位，晚到選單不能抹掉使用者尚未保存的編輯；Webview state 不保存金鑰或端點內容。相關回歸與安裝版宿主包裝重播不代表已完成 F5／DGX 真模型驗收。
+
 ## 修復回饋例外視窗、Mock 綁定診斷、鏈式 Provenance 與 v3 存活突變指引（2026-10-20）
 
 `repairFeedback.ts` 的 `summarizeRepairOutput` 在單一 `FAIL:`／`ERROR:` 區塊超過 `perBlock` 長度限制時，若例外列之後附帶超長 `Calls: [...]` 或斷言 diff（如 `init_db` 產生 41 次 `execute` 呼叫紀錄），會先定位 `AssertionError:`／例外列並保留「標頭＋例外列視窗＋尾端摘要」，避免單純取尾端 `slice(-available)` 切掉失敗測試方法位置與關鍵例外原因。`dependencyMockContract.ts` 的 `executionFailureRepairGuidance` 針對重複呼叫 `AssertionError`（`Expected '...' to be called once. Called N times.`）、0 次呼叫、`expected call not found` 與不可變內建型別（`datetime.datetime`／`datetime.date`）屬性寫入 `TypeError`，在 `roleContracts.ts`（Writer 修訂）與 `bugFixer.ts` 按需注入精準修復提示，無命中時零額外 token 開銷。
@@ -10,7 +18,7 @@
 
 ## 模型傳輸逾時覆寫、雙時間上限與相依 Receiver 指引（2026-10-20）
 
-`modelTransport.ts` 將原生 Node／Undici `fetch` 的預設 300 秒 `headersTimeout`／`bodyTimeout` 改為由呼叫端絕對期限與 `AbortSignal` 控制（上限 86,400 秒），透過 `getNativeGlobalDispatcher` 直接取得 Node 內建的 `Symbol.for('undici.globalDispatcher.1')`／`Symbol.for('undici.globalDispatcher.2')` 全域 dispatcher 並於單次請求 `dispatch` 時覆寫 `headersTimeout` 與 `bodyTimeout`，不依賴外部 `undici` npm 套件，並保留測試替身與宿主自訂 `fetch`。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 對傳輸錯誤僅提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。
+先前以 caller dispatcher 覆寫 300 秒時間限制的做法已由上方 2026-10-21 修復取代，因為 VS Code 可能重建 Agent 或將其視為自訂 Proxy 政策。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 仍只提取白名單內的巢狀錯誤碼（如 `UND_ERR_HEADERS_TIMEOUT`、`ECONNREFUSED`），不將供應商回應內文或私密路徑寫入診斷。
 
 `executionTimingSettings.ts` 與側欄將「單次 API 等待上限（秒，1–86,400 整數）」與「每個函式總時間上限（秒，0.001–86,400，精確至毫秒）」分開解析、顯示與保存。開始分析前先驗證兩者並建立凍結的 `targetBudget` 快照（保留既有 `logicalRequests`、`transportAttempts`、`estimatedInputTokens`、`candidateAttempts`），各函式開始後固定絕對期限，重試不重新計時；非同步保存期間若執行權移轉、專案變更或取消則中止啟動。若宿主設定寫入失敗（例如未重啟宿主時 `targetBudget` 尚未註冊或資料夾範疇不可寫）僅記錄錯誤而不阻斷測試啟動；側欄並接手 Webview `appendLog` 轉發至系統日誌與 VS Code 警告通知，且於 `setModels`／`setApiKeys` 及跨 Webview 重建時自動保留或預選可用模型與環境狀態。
 

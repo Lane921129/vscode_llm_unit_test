@@ -437,14 +437,17 @@ def has_mock_behavior(tree, context):
                                                  if name.startswith(prefix + '.') and isinstance(bindings[prefix], int)), None)
                             root_owner = token_name(owner_prefix) if owner_prefix else None
                             attr_suffix = name[len(owner_prefix) + 1:] if owner_prefix else ''
-                            if isinstance(lhs, ast.Attribute) and isinstance(rhs, ast.Call) and resolve(rhs.func) in MOCK_FACTORIES:
-                                value = token(lhs.value) or value
                             if isinstance(lhs, ast.Attribute) and lhs.attr in ASSERTIONS:
                                 existing = token(lhs.value)
                                 if existing is not None:
                                     manual.add(existing)
                             if isinstance(root_owner, int) and attr_suffix:
-                                mock_children.setdefault(root_owner, {})[attr_suffix] = value
+                                children = mock_children.setdefault(root_owner, {})
+                                # Replacing a parent detaches every old path below it.
+                                # Other edges/aliases still own their original objects.
+                                for stale in [key for key in children if key == attr_suffix or key.startswith(attr_suffix + '.')]:
+                                    children.pop(stale, None)
+                                children[attr_suffix] = value
                             for stale in [key for key in bindings if key.startswith(name + '.')]:
                                 bindings.pop(stale, None)
                             if value is None:

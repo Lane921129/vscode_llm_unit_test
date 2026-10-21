@@ -278,6 +278,82 @@ class MockSourceContractTests(unittest.TestCase):
             self.assertFalse(res['valid'])
             self.assertIn(f'Patch the dependency at its target use point: {expected}, not {wrong_path}', res['reason'])
 
+    def test_replaced_mock_parent_cannot_observe_detached_children(self):
+        source = 'def target():\n    return boundary()\n'
+        context = {'module': 'sample', 'target': 'target', 'source': source,
+                   'moduleSource': 'def boundary(): pass\n' + source,
+                   'requireMockBehavior': True, 'requireTargetBehavior': True}
+        for explicit_return in ('', '    dep.return_value = MagicMock()\n'):
+            with self.subTest(explicit_return=bool(explicit_return)):
+                body = ('with patch("sample.boundary") as dep:\n'
+                        + explicit_return
+                        + '    orphan = MagicMock()\n'
+                        '    dep.return_value.child = orphan\n'
+                        '    alias = dep\n'
+                        '    alias.return_value = object()\n'
+                        '    sample.target()\n'
+                        '    orphan.assert_not_called()\n')
+                code = candidate(body=body).replace('from unittest.mock import patch\n',
+                                                  'from unittest.mock import patch, MagicMock\n')
+                self.assertFalse(validate_bindings(code, context)['valid'])
+
+    def test_mock_parent_replacement_preserves_other_reachable_member_aliases(self):
+        source = 'def target():\n    return boundary()\n'
+        context = {'module': 'sample', 'target': 'target', 'source': source,
+                   'moduleSource': 'def boundary(): pass\n' + source,
+                   'requireMockBehavior': True, 'requireTargetBehavior': True}
+        body = ('with patch("sample.boundary") as dep:\n'
+                '    child = MagicMock()\n'
+                '    dep.return_value.child = child\n'
+                '    dep.still_reachable = child\n'
+                '    dep.return_value = object()\n'
+                '    sample.target()\n'
+                '    child.assert_not_called()\n')
+        code = candidate(body=body).replace('from unittest.mock import patch\n',
+                                          'from unittest.mock import patch, MagicMock\n')
+        self.assertTrue(validate_bindings(code, context)['valid'])
+
+    def test_detached_mock_object_keeps_its_own_children_when_injected_directly(self):
+        source = 'def target(page):\n    page.child()\n'
+        body = ('root = MagicMock()\n'
+                'root.return_value = MagicMock()\n'
+                'root.return_value.child = MagicMock()\n'
+                'old = root.return_value\n'
+                'root.return_value = object()\n'
+                'sample.target(old)\n'
+                'old.child.assert_called_once_with()\n')
+        code = candidate(body=body).replace('from unittest.mock import patch\n',
+                                          'from unittest.mock import patch, MagicMock\n')
+        context = {'module': 'sample', 'target': 'target', 'source': source,
+                   'moduleSource': source, 'requireMockBehavior': True, 'requireTargetBehavior': True}
+        self.assertTrue(validate_bindings(code, context)['valid'])
+
+    def test_datetime_patch_rejection_requires_an_unchanged_current_source_binding(self):
+        fragment = 'def target():\n    return datetime.now()\n'
+        code = candidate(body='with patch("sample.datetime.now") as clock:\n'
+                              '    sample.target()\n    clock.assert_called_once_with()\n')
+        original = 'from datetime import datetime\n' + fragment
+        rebound = ('from datetime import datetime\nclass Clock:\n'
+                   '    @staticmethod\n    def now(): return 7\ndatetime = Clock\n' + fragment)
+        for dependencies in ({}, {'datetime': 'datetime.datetime'}):
+            with self.subTest(dependencies=dependencies):
+                context = {'module': 'sample', 'target': 'target', 'source': fragment,
+                           'moduleSource': rebound, 'dependencies': dependencies,
+                           'requireMockBehavior': True, 'requireTargetBehavior': True}
+                self.assertTrue(validate_bindings(code, context)['valid'])
+                context['moduleSource'] = original
+                result = validate_bindings(code, context)
+                self.assertFalse(result['valid'])
+                self.assertIn('immutable datetime/date', result['reason'])
+        for module_source in ('', original.replace('return datetime.now()', 'return 1'),
+                              original.replace('from datetime import datetime',
+                                               'if unknown:\n    from datetime import datetime'),
+                              original.replace('from datetime import datetime',
+                                               'from datetime import datetime\nif unknown:\n    datetime = unknown')):
+            context = {'module': 'sample', 'target': 'target', 'source': fragment,
+                       'moduleSource': module_source, 'dependencies': {'datetime': 'datetime.datetime'}}
+            self.assertTrue(validate_bindings(code, context)['valid'], module_source)
+
     def test_chained_setup_mocks_and_extra_non_use_point_decorators_preserve_proven_assertions(self):
         db_source = ('def get_conn(): pass\ndef _now_text(): pass\n'
                      'def update_loading(plate):\n    conn = get_conn()\n    cur = conn.cursor()\n'

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { buildCompactWriterContext, buildWriterRevisionContext } from '../prompts/compactWriterContext';
-import { formatFixtureReceiverGuidance, formatDependencyMockContract } from '../prompts/dependencyMockContract';
+import { formatFixtureReceiverGuidance, formatDependencyMockContract, executionFailureRepairGuidance } from '../prompts/dependencyMockContract';
 import { WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { generatedUnittestArguments, resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -142,5 +142,40 @@ test('source call setup retains the consumed module binding instead of its upstr
         const passed = run(directory, candidate.replace('sample.UPSTREAM)', 'sample.CONSUMED)'));
         assert.equal(passed.status, 0, passed.stdout + passed.stderr);
         assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), targetSource);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('call-count feedback distinguishes accumulated setup history from target behavior without weakening exact assertions', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-count-history-'));
+    const targetSource = 'from unittest.mock import Mock\nboundary = Mock()\n'
+        + 'def target():\n    return boundary("target")\n';
+    const candidate = 'import unittest\nfrom unittest.mock import patch\nimport sample\n'
+        + 'class Cases(unittest.TestCase):\n    def test_target(self):\n'
+        + '        with patch("sample.boundary", return_value=7) as dependency:\n'
+        + '            dependency("arrange")\n'
+        + '            self.assertEqual(sample.target(), 7)\n'
+        + '            dependency.assert_called_once_with("target")\n';
+    try {
+        extract(directory, targetSource);
+        const failed = run(directory, candidate);
+        assert.notEqual(failed.status, 0);
+        assert.match(failed.stderr, /Called 2 times/);
+        const hint = executionFailureRepairGuidance(failed.stderr);
+        assert.match(hint, /recorded mock history/);
+        assert.match(hint, /does not attribute calls to the target/);
+        assert.match(hint, /preserving configured return_value and side_effect/);
+        assert.match(hint, /do not weaken a failed once assertion/);
+        assert.doesNotMatch(hint, /times during the target call/);
+
+        const corrected = candidate.replace('            self.assertEqual(sample.target(), 7)',
+            '            dependency.reset_mock()\n            self.assertEqual(sample.target(), 7)');
+        const passed = run(directory, corrected);
+        assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+        const duplicateCall = run(directory, corrected.replace('            dependency.assert_called_once_with',
+            '            sample.target()\n            dependency.assert_called_once_with'));
+        assert.notEqual(duplicateCall.status, 0);
+        assert.match(duplicateCall.stderr, /Called 2 times/);
+        assert.equal(executionFailureRepairGuidance(duplicateCall.stderr), hint);
+        assert.equal(executionFailureRepairGuidance('OK'), '');
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

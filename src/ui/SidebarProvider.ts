@@ -561,6 +561,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         params.targetBudget = snapshotExecutionTargetBudget(savedBudget, timing.targetTimeoutSeconds);
                         if (params.envType === 'cloud') {
                             const keys = await this.getStoredCloudCredentials();
+                            if (this.activeAnalysis || this.pendingStartCancelled) { break; }
+                            if (revision !== this.projectRevision) {
+                                this.webview?.postMessage({ command: 'analysisFinished' });
+                                break;
+                            }
                             const credential = keys[params.cloudKeyName];
                             if (!credential) {
                                 vscode.window.showErrorMessage(localize("找不到此模型的 Google AI Studio API Key。"));

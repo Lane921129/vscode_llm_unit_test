@@ -1,12 +1,10 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { channel } from 'node:diagnostics_channel';
 import {
     fetchModelResponse,
-    getNativeGlobalDispatcher,
     getSafeTransportFailureCode,
     isSafeTransportFailureCode,
-    ModelTransportDispatcher,
-    ModelTransportDispatchOptions,
 } from '../llm/modelTransport';
 
 test('transport diagnostics retain only allowlisted nested failure codes', () => {
@@ -27,14 +25,14 @@ test('transport diagnostics retain only allowlisted nested failure codes', () =>
 
 test('model transport preserves the current host fetch replacement and caller signal', async () => {
     const priorFetch = globalThis.fetch;
-    const priorDispatcher = getNativeGlobalDispatcher();
     const controller = new AbortController();
     const response = new Response('fixture');
     let calls = 0;
     globalThis.fetch = async (input, init) => {
         calls++;
         assert.equal(input, 'https://fixture.invalid/generate');
-        assert.equal(init?.signal, controller.signal);
+        assert.equal(init?.signal?.aborted, false);
+        assert.equal('dispatcher' in (init || {}), false);
         assert.equal(init?.body, 'exact public fixture');
         assert.equal(init?.method, 'POST');
         assert.equal(new Headers(init?.headers).get('Content-Type'), 'application/json');
@@ -46,35 +44,65 @@ test('model transport preserves the current host fetch replacement and caller si
             signal: controller.signal,
         }, { deadlineAt: Date.now() + 600_000 }), response);
         assert.equal(calls, 1);
-        assert.equal(getNativeGlobalDispatcher(), priorDispatcher);
     } finally { globalThis.fetch = priorFetch; }
 });
 
-test('transport dispatch overrides native 300-second defaults without replacing the delegated policy', async () => {
-    let dispatchCount = 0;
-    const priorDispatcher = getNativeGlobalDispatcher();
+test('transport adjusts the final host request without supplying or replacing its dispatcher', async () => {
     const deadlineAt = Date.now() + 900_000;
-    const delegate: ModelTransportDispatcher = {
-        dispatch(options: ModelTransportDispatchOptions): boolean {
-            dispatchCount++;
-            assert.equal(options.origin, 'https://fixture.invalid');
-            assert.equal(options.path, '/generate');
-            assert.ok(options.headersTimeout! > 890_000 && options.headersTimeout! <= 900_000);
-            assert.equal(options.bodyTimeout, options.headersTimeout);
-            return true;
-        },
-    };
+    const request = { headersTimeout: 300_000, bodyTimeout: 300_000 };
     await fetchModelResponse('https://fixture.invalid/generate', { signal: new AbortController().signal }, {
-        deadlineAt, dispatcher: delegate,
+        deadlineAt,
         fetcher: async (_input, init) => {
-            const dispatcher = (init as RequestInit & { dispatcher: ModelTransportDispatcher }).dispatcher;
-            dispatcher.dispatch({ origin: 'https://fixture.invalid', path: '/generate', method: 'POST',
-                headersTimeout: 300_000, bodyTimeout: 300_000 }, {});
+            assert.equal('dispatcher' in (init || {}), false);
+            await Promise.resolve(); // Host proxy/certificate resolution may await.
+            channel('undici:request:create').publish({ request });
             return new Response('fixture');
         },
     });
-    assert.equal(dispatchCount, 1);
-    assert.equal(getNativeGlobalDispatcher(), priorDispatcher);
+    assert.ok(request.headersTimeout > 890_000 && request.headersTimeout <= 900_000);
+    assert.equal(request.bodyTimeout, request.headersTimeout);
+    const unrelated = { headersTimeout: 300_000, bodyTimeout: 300_000 };
+    channel('undici:request:create').publish({ request: unrelated });
+    assert.deepEqual(unrelated, { headersTimeout: 300_000, bodyTimeout: 300_000 });
+});
+
+test('unsupported request fields cancel only that fetch without throwing from the diagnostics subscriber', async () => {
+    for (const request of [{}, Object.freeze({ headersTimeout: 300_000, bodyTimeout: 300_000 })]) {
+        const controller = new AbortController();
+        await assert.rejects(fetchModelResponse('https://fixture.invalid', { signal: controller.signal }, {
+            deadlineAt: Date.now() + 1000,
+            fetcher: async (_input, init) => {
+                assert.doesNotThrow(() => channel('undici:request:create').publish({ request }));
+                assert.equal(init?.signal?.aborted, true);
+                assert.equal(controller.signal.aborted, false);
+                return new Response('fixture');
+            }
+        }), { code: 'MODEL_TRANSPORT_TIMEOUT_UNSUPPORTED' });
+    }
+});
+
+test('concurrent model waits retain independent deadlines and leave unrelated HTTP unchanged', async () => {
+    const requests: { headersTimeout: number; bodyTimeout: number }[] = [];
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    const fetcher: typeof fetch = async () => {
+        await ready;
+        const request = { headersTimeout: 300_000, bodyTimeout: 300_000 };
+        channel('undici:request:create').publish({ request });
+        requests.push(request);
+        return new Response('fixture');
+    };
+    const first = fetchModelResponse('https://fixture.invalid', { signal: new AbortController().signal },
+        { deadlineAt: Date.now() + 900_000, fetcher });
+    const second = fetchModelResponse('https://fixture.invalid', { signal: new AbortController().signal },
+        { deadlineAt: Date.now() + 600_000, fetcher });
+    const other = { headersTimeout: 300_000, bodyTimeout: 300_000 };
+    channel('undici:request:create').publish({ request: other });
+    release();
+    await Promise.all([first, second]);
+    assert.ok(requests[0].headersTimeout > 890_000 && requests[0].headersTimeout <= 900_000);
+    assert.ok(requests[1].headersTimeout > 590_000 && requests[1].headersTimeout <= 600_000);
+    assert.deepEqual(other, { headersTimeout: 300_000, bodyTimeout: 300_000 });
 });
 
 test('expired or cancelled model transport does not dispatch another request', async () => {

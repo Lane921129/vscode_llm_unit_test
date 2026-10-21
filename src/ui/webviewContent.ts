@@ -435,6 +435,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         let currentKeys = {};
         let currentCustomKeys = {};
+        let customSettingsLoaded = false;
+        let customFormEdited = false;
         let lastTestedProjectPath = '';
         const savedUiState = (typeof vscode.getState === 'function' ? vscode.getState() : null) || {};
         function saveUiState(patch = {}) {
@@ -816,11 +818,19 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     }
                     break;
                 }
-                case 'setCustomKeys':
+                case 'setCustomKeys': {
+                    const select = document.getElementById('custom-api-select');
+                    const previous = select.value || savedUiState.customKeyName || '';
                     currentCustomKeys = msg.keys;
                     const ckeys = Object.keys(msg.keys);
-                    document.getElementById('custom-api-select').innerHTML = '<option value="">-- Select --</option>' + ckeys.map(k => '<option value="' + k + '">' + k + '</option>').join('');
+                    const selected = ckeys.includes(previous) ? previous : customFormEdited ? '' : ckeys[0] || '';
+                    select.innerHTML = '<option value="">-- Select --</option>' + ckeys.map(k => '<option value="' + escapeHtml(k) + '">' + escapeHtml(k) + '</option>').join('');
+                    select.value = selected;
+                    if (!customFormEdited && (!customSettingsLoaded || selected !== previous)) applyCustomSetting(selected);
+                    customSettingsLoaded = true;
+                    saveUiState({ customKeyName: selected });
                     break;
+                }
                 case 'pythonEnvironmentSelection':
                     document.getElementById('python-environment-status').value = i18n.currentPython + msg.python;
                     break;
@@ -1017,14 +1027,22 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });
         document.getElementById('btn-clear-log').onclick = () => document.getElementById('log-area').value = '';
 
-        document.getElementById('custom-api-select').onchange = (e) => {
-            const name = e.target.value;
+        function applyCustomSetting(name) {
             const data = currentCustomKeys[name] || {url: '', model: '', key: ''};
             document.getElementById('custom-name').value = name || '';
             document.getElementById('custom-url').value = data.url || '';
             document.getElementById('custom-model').value = data.model || '';
             document.getElementById('custom-key').value = data.key || '';
+            customFormEdited = false;
+        }
+        document.getElementById('custom-api-select').onchange = (e) => {
+            const name = e.target.value;
+            applyCustomSetting(name);
+            saveUiState({ customKeyName: name || '' });
         };
+        for (const id of ['custom-name', 'custom-url', 'custom-model', 'custom-key']) {
+            document.getElementById(id).addEventListener('input', () => { customFormEdited = true; });
+        }
 
         document.getElementById('btn-save-custom').onclick = () => {
             const newName = document.getElementById('custom-name').value;

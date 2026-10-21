@@ -2,19 +2,23 @@ import * as assert from 'node:assert/strict';
 import { createServer, Server, ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { fetchModelResponse, getNativeGlobalDispatcher, ModelTransportDispatcher } from '../llm/modelTransport';
+import { fetchModelResponse } from '../llm/modelTransport';
+import { Agent } from 'undici';
 
-interface NativeTestAgent extends ModelTransportDispatcher {
-    destroy(): Promise<void>;
-}
+type NativeTestAgent = Agent;
 
 function createNativeTestAgent(options?: { headersTimeout?: number; bodyTimeout?: number }): NativeTestAgent {
-    const globalDispatcher = getNativeGlobalDispatcher();
-    assert.ok(globalDispatcher, 'Expected Node built-in global dispatcher to be available.');
-    const AgentConstructor = globalDispatcher.constructor as new (
-        opts?: { headersTimeout?: number; bodyTimeout?: number }
-    ) => NativeTestAgent;
-    return new AgentConstructor(options);
+    return new Agent(options);
+}
+
+// The host chooses its own Agent after async policy resolution. Production
+// fetchModelResponse must not supply a caller dispatcher that bypasses it.
+function hostFetch(agent: Agent): typeof fetch {
+    return async (input, init) => {
+        assert.equal('dispatcher' in (init || {}), false);
+        await Promise.resolve();
+        return fetch(input, { ...init, dispatcher: agent } as RequestInit);
+    };
 }
 
 async function fixture(handler: (response: ServerResponse) => void): Promise<{ server: Server; url: string }> {
@@ -42,7 +46,7 @@ test('native HTTP transport tolerates delayed headers within the caller deadline
     const timer = setTimeout(() => controller.abort(), 3000);
     try {
         const response = await fetchModelResponse(url, { method: 'POST', body: '{}', signal: controller.signal }, {
-            deadlineAt: Date.now() + 3000, dispatcher: agent,
+            deadlineAt: Date.now() + 3000, fetcher: hostFetch(agent),
         });
         assert.deepEqual(await response.json(), { fixture: 'headers' });
     } finally {
@@ -64,7 +68,7 @@ test('native HTTP transport also keeps the allowance through a delayed complete 
     const timer = setTimeout(() => controller.abort(), 3000);
     try {
         const response = await fetchModelResponse(url, { signal: controller.signal }, {
-            deadlineAt: Date.now() + 3000, dispatcher: agent,
+            deadlineAt: Date.now() + 3000, fetcher: hostFetch(agent),
         });
         assert.deepEqual(await response.json(), { fixture: 'body' });
     } finally {
@@ -87,7 +91,7 @@ test('cancelling a native request waiting for headers closes the active connecti
     const controller = new AbortController();
     try {
         const request = fetchModelResponse(url, { signal: controller.signal }, {
-            deadlineAt: Date.now() + 30_000, dispatcher: agent,
+            deadlineAt: Date.now() + 30_000, fetcher: hostFetch(agent),
         });
         await started;
         controller.abort();
@@ -108,7 +112,7 @@ test('caller deadline still aborts a response body which keeps streaming', { tim
     const timer = setTimeout(() => controller.abort(), 200);
     try {
         const response = await fetchModelResponse(url, { signal: controller.signal }, {
-            deadlineAt: Date.now() + 200, dispatcher: agent,
+            deadlineAt: Date.now() + 200, fetcher: hostFetch(agent),
         });
         await assert.rejects(response.text(), { name: 'AbortError' });
     } finally {

@@ -33,6 +33,7 @@ class ReplayElement {
         this.markup = value;
         for (const child of this.children) { child.parent = undefined; }
         this.children.length = 0;
+        if (this.tag === 'select') { this.value = value.match(/<option\b[^>]*value="([^"]*)"/)?.[1] || ''; }
     }
     get isConnected(): boolean { return this.root || !!this.parent?.isConnected; }
     appendChild(child: ReplayElement): void { child.parent = this; this.children.push(child); }
@@ -44,7 +45,7 @@ class ReplayElement {
 }
 class ReplayInput extends ReplayElement {}
 
-function replay(language: string) {
+function replay(language: string, initialState: Record<string, unknown> = {}) {
     setLanguage(language);
     const html = getWebviewContent(t);
     const elements = new Map<string, ReplayElement>();
@@ -60,6 +61,7 @@ function replay(language: string) {
     element('model-select').value = 'fixture-model';
     element('project-path').value = '/fixture';
     const messages: any[] = [];
+    const persistedState: Record<string, unknown> = { ...initialState };
     let receive!: (event: { data: unknown }) => void;
     const groups = () => element('dashboard-container').descendants().filter(item => item.className === 'file-group');
     const context = vm.createContext({
@@ -73,14 +75,16 @@ function replay(language: string) {
         },
         HTMLInputElement: ReplayInput,
         window: { addEventListener: (event: string, handler: typeof receive) => { if (event === 'message') { receive = handler; } } },
-        acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) })
+        acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message),
+            getState: () => ({ ...persistedState }),
+            setState: (state: Record<string, unknown>) => { Object.assign(persistedState, JSON.parse(JSON.stringify(state))); } })
     });
     vm.runInContext(html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/)![1], context);
     const send = (data: unknown) => receive({ data });
     const run = (source: string) => vm.runInContext(source, context);
     const coverage = (file: string, func = 'first') => send({ command: 'updateCoverage', fileName: file + ':' + func,
         file, func, score: '測試中', coverage: 'N/A', reason: '' });
-    return { html, element, groups, messages, send, run, coverage };
+    return { html, element, groups, messages, send, run, coverage, persistedState };
 }
 
 test('grouped dashboard preserves live collapsed folders through running updates, mode switches and delayed toggles', () => {
@@ -246,4 +250,38 @@ test('invalid timing blocks start and delayed initial settings cannot erase edit
     ui.element('btn-run').onclick!();
     assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
     assert.equal(ui.messages.at(-1).modelName, 'first-local-model');
+});
+
+test('Custom selection survives Webview rebuild and repeated menus preserve live fields', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const keys = {
+                first: { url: 'https://first.example.invalid/v1', model: 'first-model', key: 'fixture-first-secret' },
+                second: { url: 'https://second.example.invalid/v1', model: 'second-model', key: 'fixture-second-secret' }
+            };
+            const ui = replay(language, { envType: 'custom', customKeyName: 'second' });
+            assert.equal(ui.element('env-type').value, 'custom');
+            ui.send({ command: 'setCustomKeys', keys });
+            assert.equal(ui.element('custom-api-select').value, 'second');
+            assert.equal(ui.element('custom-url').value, keys.second.url);
+            assert.equal(ui.element('custom-model').value, 'second-model');
+            assert.equal(ui.element('custom-key').value, keys.second.key);
+            ui.element('custom-api-select').value = 'first';
+            ui.element('custom-api-select').onchange!({ target: ui.element('custom-api-select') });
+            assert.equal(ui.persistedState.customKeyName, 'first');
+            assert.equal(ui.element('custom-model').value, 'first-model');
+            ui.element('custom-model').value = 'unsaved-current-model';
+            ui.send({ command: 'setCustomKeys', keys });
+            assert.equal(ui.element('custom-api-select').value, 'first');
+            assert.equal(ui.element('custom-model').value, 'unsaved-current-model');
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.at(-1).modelName, 'unsaved-current-model');
+            assert.equal(ui.messages.at(-1).customUrl, keys.first.url);
+            const restored = replay(language, ui.persistedState);
+            restored.send({ command: 'setCustomKeys', keys });
+            assert.equal(restored.element('custom-api-select').value, 'first');
+            assert.equal(restored.element('custom-model').value, 'first-model');
+            assert.doesNotMatch(JSON.stringify(ui.persistedState), /fixture-.*-secret|example\.invalid/);
+        }
+    } finally { setLanguage('zh-tw'); }
 });

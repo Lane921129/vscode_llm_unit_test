@@ -2,6 +2,17 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-21
+
+### 修正宿主傳輸整合、Mock 證據撤銷與側欄非同步狀態
+
+- 模型傳輸移除 caller dispatcher 與私有全域 Symbol 探查，保留 VS Code 原有 Proxy 查詢、系統憑證、TLS 與注入 fetch。使用本次非同步作用域的 Undici request-create hook 對最終請求套用原期限；時間欄位不支援時安全取消，不從 subscriber 拋出未捕獲例外。保留完整 body 原期限及中止，並增加並行作業隔離反例。Undici 7.30.1 僅作測試 Agent 的開發相依，修正 manifest／lockfile 漂移。
+- 修正 `mock_behavior.py` 在父路徑被覆寫後仍借用舊子 Mock 證據的回歸，保留明確 Mock 身分及其他仍可達的別名。`validate_test_bindings.py` 對 immutable datetime/date 的拒絕改為要求同來源、穩定且未重綁的 import；歷史依賴提示不能代替目前物件證明。補充重綁、條件、來源不符與仍可達子圖的正反例。
+- Mock 次數修復提示只描述累積 history，要求先核 setup 與來源依據；需要時在 target 前清除安排階段的呼叫紀錄並保留 fixture，不能一律改用 `assert_any_call` 弱化精確斷言。中性實跑證明 setup 累積與目標重複呼叫可能產生同一錯誤，但修復不能混為一談。
+- Cloud 憑證等待後重新核對 owner、取消與專案 revision，避免舊回應解鎖新分析。Custom 模型保存／恢復設定名稱與欄位，重複選單不覆蓋尚未保存的編輯；持久化狀態不保存金鑰、URL 或完整 provider 設定。
+- 驗證：相關回歸第一批 Node 6 檔 43／43、Python 3 檔 60／60；最後新增並行隔離反例後，傳輸／中止／修復整合 Node 5 檔 21／21、Python 1 檔 8／8，兩批範圍有重疊不累加。`test:fast` 通過型別、lint、Node 96 檔 736／736、Webview 語法與 Python 42／42，均無略過；production build、追蹤檔與可達 Git 歷史密鑰掃描、`git diff --check` 通過。
+- 本機 VS Code 1.142.0／proxy-agent 0.45.0 的實際宿主包裝無網路重播確認：憑證 Agent 重建後，最終請求得到原期限餘額，且 Proxy 查詢保留。這是宿主函式重播及 localhost 回歸，未宣稱真 F5／DGX 長排隊或新模型批次已通過；`test:full`、VS Code／Mocha 與遠端 CI 未執行。原有八份 WIP 保留；Webview 原先啟用 Mutmut 的差異不納本次提交。
+
 ## 2026-10-20
 
 ### 修復回饋例外視窗、Mock 綁定診斷、鏈式 Provenance 與 v3 存活突變指引
