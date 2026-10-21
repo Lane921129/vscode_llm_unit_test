@@ -3,6 +3,8 @@ export interface ReportProvenance {
     extensionId: string;
     extensionVersion: string;
     buildTimestamp: string;
+    /** Bundle bytes observed once at activation; not a Git commit assertion. */
+    buildArtifactHash?: string;
     extensionMode: 'development' | 'production' | 'test' | 'unknown';
     /** Provider-neutral transport identity; model names alone are not globally unique. */
     modelProvider: 'local' | 'cloud' | 'custom';

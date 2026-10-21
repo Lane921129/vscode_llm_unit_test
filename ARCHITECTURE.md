@@ -514,6 +514,10 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 
 同模組 helper 檢索由 `ast_extractor.py` 執行，與既有跨檔相依合併供分析角色和 Writer 使用。來源碼是 setup/path 語境，無執行時不得成為 oracle。`src/prompts/compactWriterContext.ts` 為 structured small／large Writer 共用完整必要證據投影；完全相同來源與 setup 只在同一請求內引用，相依身分與觀測分開保留。必要 helper 先於可省略 topology／範例。初次 seed 可選一個完整、可重播且同呼叫無衝突的觀測，原產物保持完整；結構重試與正式修訂恢復全部觀測。`verifiedWriterExamples.ts` 提供經回歸執行的中性範例；`promptBudget.ts` 統一實際請求容量與輸入預算，參數量只作詳略及 Tier 參考。所有正式角色請求均先檢查完整提示預算，並記錄估計 tokens 與 logical request 耗時。Reviewer 拒絕帶穩定 diagnostics，完成 gate 維持不變。實作範圍與實驗室驗收見 [Writer 檢索與模型相容性](docs/Writer檢索與模型相容性_2026_09_17.md)。
 
+正式 Writer seed 使用獨立的 `WRITER_SEED_V1 OUTPUT SCOPE`，直接要求一個方法、一次目標呼叫及完整可執行檔案，不再先附完整套件規則後要求模型覆寫。依 AST `is_async` 只傳送當前同步或非同步 harness／呼叫指令，未知時保留條件說明；預算與 wire 使用同一建構器。structured seed 保留完整必要來源、匯入、建構／Mock／資源契約、規則與所選實跑觀測，省去 optional topology、範例設計與較廣的 Analyst 假說；擴充與修訂維持既有完整證據流程。選中觀測不是獨立需求或執行批准，仍須實跑、證據核對與同候選 Reviewer 核准。
+
+Ollama 長度中止仍一律拒絕。`output-shape-v1` 只記完整答案 hash／字元數與最多 65,536 字元、2,048 行樣本的 fence、方法、assertion、重複行計數；不保存樣本文字，不由詞法計數認定程式有效或製造 oracle。角色事件僅接受經 allowlist 核驗的形狀 DTO。`run_manifest.json.report.build` 在候選產生前保存啟動時擴充 ID、版本、模式、bundle mtime 與可取得的 bundle hash；此 hash 是啟動時磁碟產物觀測，不是 Git commit 或載入快取一致性的證明，舊報告缺值仍未知。
+
 Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀測不再按舊筆數／字串長度裁切；只移除明確留在產物中的狀態快照。解析後與目標參數過濾後都必須仍有具體策略。第一次請求預留一次格式補正的完整固定文字，最終 provider envelope 仍檢查實際總量；傳輸失敗不啟動格式補正。Cloud 的 `semantic-json` schema 完整描述各陣列元素及巢狀策略，但 schema 或 HTTP 成功本身不代表策略有效。
 
 `module_preflight.py` 的 `loaded-resource-scope-v1` 是提示投影資格，綁定實際載入來源集合摘要，不是執行成功或任意 Python 呼叫閉包的證明。未知 dispatch、動態／局部匯入、裝飾與未證明的來源關係保留全部資源；複雜 DB／UI 因而仍可能超過小模型預算。`buildTargetIsolatedResourceContext` 只在有資格且来源重新核對後，選取來源 owner 與共享資源身分，保留完整 schema／約束；runtime 批准計畫與 worker 初始化不縮小。必要 schema 因隱私無法呈現或來源漂移時停止請求，不能當成空 schema。

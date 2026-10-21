@@ -1,7 +1,8 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getSystemPrompt } from '../roles/unittestWriter';
-import { buildWriterSeedPrompt } from '../roles/writerPhases';
+import { getSystemPrompt, getUserPrompt } from '../roles/unittestWriter';
+import { buildWriterSeedPrompt, buildWriterSeedSystemPrompt } from '../roles/writerPhases';
+import { createHash } from 'node:crypto';
 import { ImportFixturePlan, withImportFixtures } from '../pipeline/importFixtures';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { estimatePromptTokens, promptFits } from '../prompts/promptBudget';
@@ -32,6 +33,28 @@ const previousSeed = (evidence: string) => `${evidence}\n\nWRITER_SEED_V1\n`
 
 const plan: ImportFixturePlan = { schemaVersion: 'import-fixtures-v1', id: 'a'.repeat(64), root: '/neutral/project',
     rules: [{ file: 'settings.py', sourceHash: 'b'.repeat(64), resources: [{ kind: 'directory', path: 'test-input' }] }] };
+
+test('formal seed removes suite instructions and optional proposals while preserving the whole evidence source', () => {
+    const source = 'def target(value):\n    return value * 3 - 2\n';
+    const evidence: any = { schemaVersion: 'writer-evidence-v3', sourceHash: createHash('sha256').update(source).digest('hex'), semanticGuidance: '',
+        ruleSelection: { ids: [], selectedRules: [] }, semanticPlan: { hypotheses: { marker: 'UNRELATED_FAMILY_PROPOSAL' } } };
+    const context = { code: source, name: 'target', args: ['value'], target_import_module: 'sample' };
+    const seed = getUserPrompt('sample.py', 'target', source, 'small',
+        { ...context, writerGenerationPhase: 'seed' }, '', 12000, '', evidence);
+    const expansion = getUserPrompt('sample.py', 'target', source, 'small', context, '', 12000, '', evidence);
+    assert.ok(seed.includes(source));
+    assert.match(seed, /Target import: from sample import target/);
+    assert.doesNotMatch(seed, /UNRELATED_FAMILY_PROPOSAL|OPTIONAL ANALYST HYPOTHESES/);
+    assert.match(expansion, /UNRELATED_FAMILY_PROPOSAL/);
+    withImportFixtures(plan, () => {
+        const small = buildWriterSeedSystemPrompt(getSystemPrompt(1, 'small'));
+        const large = buildWriterSeedSystemPrompt(getSystemPrompt(1, 'large'));
+        assert.equal(small, large);
+        assert.ok(large.endsWith(isolatedResourceSystemRule()));
+        assert.doesNotMatch(large, /comprehensive|kill all mutation|TEST DESIGN GUIDANCE/);
+        assert.match(large, /exactly ONE test method and ONE target call/);
+    });
+});
 
 test('small Writer retains every binding, assertion, isolation and pure-library instruction', () => {
     const system = getSystemPrompt(1, 'small');

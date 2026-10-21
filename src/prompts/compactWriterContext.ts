@@ -146,7 +146,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + 'No evidence means omit that assertion, never guess.'
     ];
     if (references.note()) { sections.push(references.note()); }
-    if (revision) { return sections.filter(Boolean).join('\n\n'); }
+    if (revision || context.writerGenerationPhase === 'seed') { return sections.filter(Boolean).join('\n\n'); }
     // Complete dependency source/setup is required in both full Writer sizes.
     // Only derived topology, neutral examples and hypotheses are optional.
     const requiredTokens = estimatePromptTokens(sections.filter(Boolean).join('\n\n'));

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { roleRequestBudget, BudgetedModelRole } from '../prompts/roleRequestBudget';
 import { contextInputBudget, estimatePromptTokens, promptFits } from '../prompts/promptBudget';
 import { buildOllamaPromptEnvelope } from '../llm/ollamaPrompt';
-import { getCompletedOllamaText } from '../llm/ollamaResponse';
+import { getCompletedOllamaText, readOutputShapeDiagnostic } from '../llm/ollamaResponse';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { getLanguage, setLanguage } from '../i18n/core';
 
@@ -109,7 +109,10 @@ test('length completion rejects a valid Python prefix without exposing provider 
         assert.ok(error instanceof AnalysisStageError);
         assert.equal(error.category, 'model-format');
         assert.equal(error.stage, 'model-request');
-        assert.deepEqual(error.diagnostic, { reasonCode: 'output-token-limit', outputTokenLimit: 1536 });
+        const diagnostic = error.diagnostic as Record<string, unknown>;
+        assert.equal(diagnostic.reasonCode, 'output-token-limit');
+        assert.equal(diagnostic.outputTokenLimit, 1536);
+        assert.equal(readOutputShapeDiagnostic(diagnostic.responseShape)?.testMethods, 1);
         assert.ok(!error.message.includes(validPrefix) && !JSON.stringify(error.diagnostic).includes('provider'));
         return true;
     });

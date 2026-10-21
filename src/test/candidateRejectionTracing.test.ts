@@ -20,6 +20,21 @@ const noopHooks: CandidatePipelineHooks = {
     event: () => {}, checkCancelled: () => {}
 };
 
+test('running manifest retains a portable activation build identity before any candidate exists', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-build-'));
+    const build = { extensionId: 'neutral.extension', extensionVersion: '1.2.3',
+        buildTimestamp: '2026-10-21T12:00:00.000Z', extensionMode: 'development' as const,
+        buildArtifactHash: 'a'.repeat(64) };
+    try {
+        new AnalysisJournal(directory, 'def target(): return 1', 'target', 'neutral/model', undefined, 'full', {
+            schemaVersion: 'target-report-v1', sourcePath: 'sample.py', sourceFile: 'sample.py', target: 'target',
+            modelIdentity: 'local/neutral', requestedTier: 'tier1', build });
+        const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'run_manifest.json'), 'utf8'));
+        assert.deepEqual(manifest.report.build, build);
+        assert.equal(fs.existsSync(path.join(directory, 'accepted_test.py')), false);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('rejected versions preserve actual attempt, gate, and code before retained baseline restoration', async () => {
     const rejections: unknown[][] = [];
     const validated: string[] = [];

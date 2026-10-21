@@ -140,6 +140,18 @@ test('formal Writer length recovery resends complete evidence once with paired c
                 const artifact = (name: string) => path.join(output, artifacts.find(item => path.basename(item) === name)!);
                 const events = fs.readFileSync(artifact('role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                 const knowledge = JSON.parse(fs.readFileSync(artifact('function_knowledge.json'), 'utf8'));
+                const manifest = JSON.parse(fs.readFileSync(artifact('run_manifest.json'), 'utf8'));
+                assert.equal(manifest.report.build.extensionId, 'fixture');
+                assert.equal(manifest.report.build.extensionMode, 'test');
+                assert.equal(manifest.report.build.buildArtifactHash,
+                    evidenceHash(fs.readFileSync(path.resolve(__dirname, '../orchestrator.js'), 'utf8')));
+                for (const event of events.filter(event => event.stage === 'model-request'
+                    && event.status === 'error' && event.detail.reasonCode === 'output-token-limit')) {
+                    assert.equal(event.detail.responseShape.version, 'output-shape-v1');
+                    assert.equal(event.detail.responseShape.responseHash, evidenceHash(incomplete));
+                    assert.equal(event.detail.responseShape.responseCharacters, incomplete.length);
+                    assert.ok(!JSON.stringify(event.detail.responseShape).includes(prefixMarker));
+                }
                 const writers = requests.filter(request => request.roleInstructions.length > 0
                     && !request.roleInstructions.includes('dependency_behaviors') && !request.roleInstructions.includes('You are the test Reviewer'));
                 const budgetOwners = requests.map(request => request.targetBudget);

@@ -4,6 +4,14 @@
 
 ## 2026-10-21
 
+### BMI 種子截斷分析、獨立短契約與小模型實跑
+
+- 分析 `bmi_2026_10_21_20_27`：3 次模型傳輸皆 HTTP 200、Analyst 解析成功；Writer 先後耗盡 1536 與 2322 個輸出 tokens，均為 `done_reason=length`。實際輸入 3728 tokens 可容於 8192 Context，沒有網路逾時或輸入超額證據。無候選，Checker／Reviewer／coverage／mutation 尚未開始；原批沒有回覆形狀或 build 身分，不能推定重複內容或載入版本。
+- `writerPhases.ts` 的 seed 改用獨立短角色契約，直接要求單方法、單次真目標呼叫及完整 Python unittest，不再先要求完整套件再覆寫。依 AST `is_async` 選擇同步或 async harness／呼叫方式，估算與 wire 共用同一建構器；未知時保留條件說明。保留精確綁定、oracle、Mock 使用點、隔離與資源限制。structured seed 不附 optional topology、設計範例及較廣 Analyst 假說，完整必要來源、setup、規則與選中觀測仍保留，擴充和修訂流程不變。
+- `ollamaResponse.ts` 對長度中止新增 `output-shape-v1`，保存完整答案 hash／字元數及有界樣本的 fence、方法、assertion、重複行計數；不保存樣本文字或 provider 原文。角色事件只接受核驗後的數字／hash DTO，詞法統計不作候選批准。`run_manifest.json.report.build` 在產生候選前保存擴充版本、模式、bundle mtime 與可取得的啟動 bundle hash；不冒充 Git commit 或歷史批次版本。
+- 回歸：相關第一批 Node 7 檔 49／49，包含真實 Mutatest、種子保留、逐案新增及同候選審查後突變；最後 AST 指令調整後 Node 4 檔 27／27，包含實際 wire、截斷診斷／build hash 落盤、原期限與最多一次輸出恢復。兩批重疊不累加。最終 `test:fast` 通過型別、lint、Node 96 檔 740／740、Webview 語法及 Python 4 檔 42／42，0 略過；production build、追蹤檔／可達 Git 歷史密鑰掃描與 `git diff --check` 通過。
+- 真模型小範圍驗證：使用本機既有模型與新建中性純函式、受控 Trace、正式提示／Ollama parser／seed contract 及 Python runner。3B 探測曾出現同步函式誤用 await，因而加入 AST 分派；最終 `qwen2.5-coder:3b-instruct` 首次漏 import，模型依實際錯誤補正一次後，單測實跑通過、testsRun=1、斷言觀測 verified，約 10.977 秒（初問 50、修訂 55 輸出 tokens）。`codegemma:2b` 正常 stop 但未取得有效測試，拒絕且不執行。這不是所有小模型通過率或完整閉環驗收；真模型 Reviewer、coverage、mutation、原 BMI／車輛 DGX 批次、`test:full`、VS Code／Mocha 與遠端 CI 未執行。原有八份 WIP 保留且不納入提交。
+
 ### 修正宿主傳輸整合、Mock 證據撤銷與側欄非同步狀態
 
 - 模型傳輸移除 caller dispatcher 與私有全域 Symbol 探查，保留 VS Code 原有 Proxy 查詢、系統憑證、TLS 與注入 fetch。使用本次非同步作用域的 Undici request-create hook 對最終請求套用原期限；時間欄位不支援時安全取消，不從 subscriber 拋出未捕獲例外。保留完整 body 原期限及中止，並增加並行作業隔離反例。Undici 7.30.1 僅作測試 Agent 的開發相依，修正 manifest／lockfile 漂移。

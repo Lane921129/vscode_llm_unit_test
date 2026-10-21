@@ -4,7 +4,7 @@ import { roleRequestBudget } from '../prompts/roleRequestBudget';
 import { estimatePromptTokens, promptFits } from '../prompts/promptBudget';
 import { buildWriterRevisionRequest } from '../roles/roleContracts';
 import { buildOllamaPromptEnvelope } from '../llm/ollamaPrompt';
-import { getCompletedOllamaText } from '../llm/ollamaResponse';
+import { getCompletedOllamaText, readOutputShapeDiagnostic } from '../llm/ollamaResponse';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 const revision = { envType: 'local', mode: 'full', role: 'writer-revision', seedPending: true,
@@ -113,7 +113,10 @@ test('the 6125-token failure envelope fits without slicing source, setup, observ
         (error: unknown) => {
             assert.ok(error instanceof AnalysisStageError);
             assert.equal(error.category, 'model-format');
-            assert.deepEqual(error.diagnostic, { reasonCode: 'output-token-limit', outputTokenLimit: 1536 });
+            const diagnostic = error.diagnostic as Record<string, unknown>;
+            assert.equal(diagnostic.reasonCode, 'output-token-limit');
+            assert.equal(diagnostic.outputTokenLimit, 1536);
+            assert.equal(readOutputShapeDiagnostic(diagnostic.responseShape)?.testMethods, 1);
             return true;
         },
         'a valid Python prefix at the new cap is still rejected before parsing or execution');

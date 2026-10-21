@@ -56,7 +56,7 @@ export function readCurrentFocusCasesForModelFixture(prompt: string, target: str
 export function readOllamaRoleRequest(wire: any): any & { roleInstructions: string; prompt: string; transmittedPrompt: string } {
     assert.equal(wire.system, ' ', 'local transport suppresses Modelfile system fallback without carrying the role twice');
     assert.equal(typeof wire.prompt, 'string');
-    assert.match(wire.prompt, /^(?:You are |EXECUTION_VERIFICATION_V1 Writer:)/,
+    assert.match(wire.prompt, /^(?:You are |EXECUTION_VERIFICATION_V1 Writer:|WRITER_SEED_V1 OUTPUT SCOPE\n)/,
         'role instructions must lead the actual transmitted prompt');
     // Known request envelopes start on their own line. Match their first
     // occurrence, before any target/test source can quote another role.

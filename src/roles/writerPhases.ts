@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 
 /** Select packaging only. The model still authors the complete test body. */
 export function selectWriterAdditionMethodName(baselineHash: string, focus: string,
@@ -19,14 +20,30 @@ export function buildWriterAdditionMethodInstruction(methodName: string): string
         + `def ${methodName}(self):\n`;
 }
 
-/** Instructions are additive to the existing evidence and Python output contract. */
-export function buildWriterSeedSystemPrompt(systemPrompt: string): string {
-    return `${systemPrompt}\n\nWRITER_SEED_V1 OUTPUT SCOPE\n`
-        + 'For initial seed generation and every pre-execution repair, replace comprehensive-suite, all-boundary and wider Analyst scenario requirements with exactly ONE test method and ONE target call. '
+/** A seed has its own small contract. Do not first ask for a comprehensive
+ * suite and then ask a small model to override that instruction. The complete
+ * target, setup and evidence are supplied separately, unchanged. */
+export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: boolean): string {
+    void systemPrompt; // Retain the existing call signature, not wider suite instructions.
+    const invocation = isAsync === true
+        ? 'The selected target is async: use unittest.IsolatedAsyncioTestCase, async def test_ and await its call. '
+        : isAsync === false
+            ? 'The selected target is synchronous: use unittest.TestCase and def test_; call it directly, never await it. '
+            : 'Use unittest.TestCase for synchronous targets; only an async target needs IsolatedAsyncioTestCase, async def and await. ';
+    return 'WRITER_SEED_V1 OUTPUT SCOPE\n'
+        + 'Write a minimal runnable Python unittest file: exactly ONE test method and ONE target call. '
+        + 'Return one python code fence, no prose or explanation. Include explicit unittest, target and helper imports; '
+        + invocation + 'Use test_ methods and self.assert*. No pytest or top-level assert. '
+        + 'Use the exact target module/class/property/constructor contract; never copy, redefine or mock the target or owner. '
         + 'When WRITER_SEED_CASE_FACTS_V1 is supplied, use ONLY that selected executed case and its exact input; copy targetCall when provided. '
-        + 'Do not select another observed example or substitute an Analyst/model hint, even if it appears more realistic. '
-        + 'Expansion happens only after this seed executes successfully. If no selected grounded case is supplied, use one explicitly controlled dependency scenario supported by the existing target and fixture contract; never invent inputs, expected values or exceptions. '
-        + 'Keep the complete runnable unittest packaging, real target binding, isolation and oracle rules above. Execution and independent Reviewer approval remain required.';
+        + 'Otherwise use one source-supported same-test controlled dependency case. Never guess outputs, exceptions, fixtures or imports; source expressions and diagnostics are not assertion oracles. '
+        + 'Use exact observed results or explicit same-test controls; never call dependencies to calculate expected values. '
+        + 'Use with self.assertRaises(ExactType) for an evidenced exception, no message second argument. '
+        + 'Pure calculations need no mocks; control external/ambient boundaries only at their source use points with fresh per-test state. '
+        + 'Never patch immutable built-in class members; replace the owning module binding. '
+        + 'No direct test network, file I/O, shell, dynamic execution or shared SQLite; no skip, swallowed errors or tautologies. '
+        + 'After this one test, close the code fence and stop. Expansion follows successful execution; independent Reviewer approval remains required.'
+        + isolatedResourceSystemRule();
 }
 
 export function buildWriterAdditionSystemPrompt(systemPrompt: string): string {

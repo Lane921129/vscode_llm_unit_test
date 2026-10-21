@@ -16,6 +16,8 @@ export interface ReportIdentity {
     schemaVersion: 'target-report-v1'; sourcePath: string; sourceFile: string;
     target: string; modelIdentity: string; requestedTier: string;
     requestedMutationEngine?: string; mutationWorkers?: number;
+    build?: { extensionId: string; extensionVersion: string; buildTimestamp: string;
+        extensionMode: 'development' | 'production' | 'test' | 'unknown'; buildArtifactHash?: string };
 }
 export interface TargetReportSummary {
     included: boolean; outcome: string; reason: string; coverage: string; mutation: string;

@@ -32,6 +32,16 @@ test('seed requests one evidence-supported executable case without changing the 
     assert.doesNotMatch(prompt, /Return.*JSON/);
 });
 
+test('seed instructions select only the AST-declared synchronous or async invocation', () => {
+    const sync = buildWriterSeedSystemPrompt('suite instructions', false);
+    assert.match(sync, /target is synchronous: use unittest.TestCase and def test_; call it directly, never await it/);
+    assert.doesNotMatch(sync, /IsolatedAsyncioTestCase|async def/);
+    const async = buildWriterSeedSystemPrompt('suite instructions', true);
+    assert.match(async, /target is async: use unittest.IsolatedAsyncioTestCase, async def test_ and await its call/);
+    assert.doesNotMatch(async, /never await it|target is synchronous/);
+    assert.match(buildWriterSeedSystemPrompt('suite instructions'), /only an async target needs/);
+});
+
 test('an opaque return diagnostic never becomes a claimed verified seed case or a fixture type', () => {
     const diagnostic = JSON.stringify({ complete: true, examples: [{ args: [], result_assertable: false,
         result: '<non_assertable: OpaqueHandle>', result_type: 'OpaqueHandle' }] });
@@ -58,16 +68,20 @@ test('formal seed system scope overrides broad scenario requests without changin
     const system = 'Write a comprehensive test suite following the Analyst scenarios. No direct I/O. Real target and observed assertions only.';
     const probe = PLAIN_TEST_GENERATION_PROBE_PROMPT;
     const seed = buildWriterSeedSystemPrompt(system);
-    assert.ok(seed.startsWith(system), 'the original safety and oracle contract remains verbatim');
+    assert.doesNotMatch(seed, /Write a comprehensive test suite following the Analyst scenarios/);
     assert.match(seed, /WRITER_SEED_V1 OUTPUT SCOPE/);
-    assert.match(seed, /initial seed generation and every pre-execution repair/);
-    assert.match(seed, /replace comprehensive-suite, all-boundary and wider Analyst scenario requirements/);
     assert.match(seed, /exactly ONE test method and ONE target call/);
     assert.match(seed, /use ONLY that selected executed case/);
-    assert.match(seed, /Do not select another observed example or substitute an Analyst\/model hint/);
-    assert.match(seed, /Expansion happens only after this seed executes successfully/);
-    assert.match(seed, /isolation and oracle rules above/);
-    assert.match(seed, /Execution and independent Reviewer approval remain required/);
+    assert.match(seed, /source expressions and diagnostics are not assertion oracles/);
+    assert.match(seed, /never copy, redefine or mock the target or owner/);
+    assert.match(seed, /No direct test network, file I\/O, shell, dynamic execution or shared SQLite/);
+    assert.match(seed, /No pytest or top-level assert/);
+    assert.match(seed, /never call dependencies to calculate expected values/);
+    assert.match(seed, /no message second argument/);
+    assert.match(seed, /fresh per-test state/);
+    assert.match(seed, /Never patch immutable built-in class members/);
+    assert.match(seed, /close the code fence and stop/);
+    assert.match(seed, /Expansion follows successful execution; independent Reviewer approval remains required/);
     assert.equal(PLAIN_TEST_GENERATION_PROBE_PROMPT, probe);
     assert.match(probe, /include BOTH/);
     assert.doesNotMatch(probe, /WRITER_SEED|exactly ONE target call/);

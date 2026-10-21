@@ -130,7 +130,7 @@ import { runtimeRoleAuthorization } from './llm/runtimeQualificationSession';
 import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification } from './pipeline/batchRuntimeQualification';
 import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
-import { getCompletedOllamaText } from './llm/ollamaResponse';
+import { getCompletedOllamaText, readOutputShapeDiagnostic } from './llm/ollamaResponse';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -428,7 +428,7 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
     sidebar.endAnalysis(execution.id);
 }
 
-let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVersion' | 'buildTimestamp' | 'extensionMode'> = {
+let extensionBuildIdentity: Pick<ReportProvenance, 'extensionId' | 'extensionVersion' | 'buildTimestamp' | 'extensionMode' | 'buildArtifactHash'> = {
     extensionId: 'unknown',
     extensionVersion: 'unknown',
     buildTimestamp: 'unknown',
@@ -550,8 +550,10 @@ function formatSessionDate(now: Date = new Date()): string {
 export function activate(context: vscode.ExtensionContext) {
     if (typeof vscode.workspace?.getConfiguration === 'function') { initI18n(); }
     let buildTimestamp = 'unknown';
+    let buildArtifactHash: string | undefined;
     try {
         buildTimestamp = fs.statSync(__filename).mtime.toISOString();
+        buildArtifactHash = evidenceHash(fs.readFileSync(__filename, 'utf8'));
     } catch {
         // Keep reports portable even when a host cannot expose bundle metadata.
     }
@@ -559,6 +561,7 @@ export function activate(context: vscode.ExtensionContext) {
         extensionId: context.extension.id,
         extensionVersion: String(context.extension.packageJSON.version || 'unknown'),
         buildTimestamp,
+        ...(buildArtifactHash ? { buildArtifactHash } : {}),
         extensionMode: context.extensionMode === vscode.ExtensionMode.Development
             ? 'development'
             : context.extensionMode === vscode.ExtensionMode.Test ? 'test' : 'production'
@@ -1712,6 +1715,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const methodInventories = new Map<string, ScenarioIdentity[]>();
     let activeSeedCaseIds: string[] | undefined;
     let activeSeedCaseFacts = '';
+    let seedTargetIsAsync: boolean | undefined;
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
@@ -1781,7 +1785,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const reportIdentity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: params.filePath,
         sourceFile: path.relative(projectRoot, params.filePath).replace(/\\/g, '/'),
         target: params.funcName || 'file', modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: userTierSetting,
-        requestedMutationEngine: params.mutationEngine || 'builtin', mutationWorkers: params.mutationWorkers ?? 2 };
+        requestedMutationEngine: params.mutationEngine || 'builtin', mutationWorkers: params.mutationWorkers ?? 2,
+        build: { ...extensionBuildIdentity } };
 
     // dummy 是使用者明確標記的雜訊／佔位函式。名稱判定可在 AST 前完成，
     // 讓大量 dummy 函式不會逐一觸發 AST、Trace、LLM 或突變測試。
@@ -1951,7 +1956,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 + 'then execute and review the whole candidate before mutation. The accumulator is unexecuted and unapproved.';
         }
         if (mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
-            system = buildWriterSeedSystemPrompt(system);
+            system = buildWriterSeedSystemPrompt(system, seedTargetIsAsync);
             if (activeSeedCaseFacts && !prompt.includes(activeSeedCaseFacts)) { prompt += '\n\n' + activeSeedCaseFacts; }
         }
         if (!writerCaseMode) { prompt = appendQualityEvidence(prompt); }
@@ -2170,11 +2175,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             return response;
         } catch (error) {
             const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
-                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; phase?: unknown; transportStarted?: unknown } : undefined;
+                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; responseShape?: unknown; phase?: unknown; transportStarted?: unknown } : undefined;
             recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
                 category: error instanceof AnalysisStageError ? error.category : 'unknown',
                 ...(diagnostic?.reasonCode === 'output-token-limit'
-                    ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit } : {}),
+                    ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit,
+                        ...(readOutputShapeDiagnostic(diagnostic.responseShape)
+                            ? { responseShape: readOutputShapeDiagnostic(diagnostic.responseShape) } : {}) } : {}),
                 ...(typeof diagnostic?.phase === 'string' && ['queue', 'http-wait', 'response-read', 'backoff'].includes(diagnostic.phase)
                     ? { phase: diagnostic.phase } : {}),
                 ...(diagnostic?.reasonCode === 'queue-timeout' && diagnostic.phase === 'queue' && diagnostic.transportStarted === false
@@ -3046,7 +3053,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // Reserve the same phase system, complete facts and output floor that the
         // final request will carry before optional Writer materials use this allowance.
         const generationBaseline = seedPending ? '' : checkpoints.executable?.code || bestCode || '';
-        const generationSystem = mode === 'full' && seedPending ? buildWriterSeedSystemPrompt(systemPrompt)
+        seedTargetIsAsync = typeof astContext?.is_async === 'boolean' ? astContext.is_async : undefined;
+        const generationSystem = mode === 'full' && seedPending ? buildWriterSeedSystemPrompt(systemPrompt, seedTargetIsAsync)
             : mode === 'full' && generationBaseline ? buildWriterAdditionSystemPrompt(systemPrompt) : systemPrompt;
         const generationFormat = mode === 'full' && generationBaseline ? 'text' : testGenerationResponseFormat;
         let generationEnvelope = addOutputContract(generationSystem, generationFormat) + '\n'
@@ -3067,7 +3075,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
             minimumOutputTokens: writerOutputBudget.minimumTokens });
         const generationBudget = Math.max(1, generationRoleBudget.inputBudget - estimateTokens(generationEnvelope));
-        const writerContext = seedCaseIds ? { ...astContext, writerScenarioCaseIds: seedCaseIds } : astContext;
+        const writerContext = seedPending ? { ...astContext, writerGenerationPhase: 'seed',
+            ...(seedCaseIds ? { writerScenarioCaseIds: seedCaseIds } : {}) } : astContext;
         if (seedCaseIds) {
             recordRole('writer-context', 'selected', { phase: 'seed', caseIds: seedCaseIds,
                 scope: 'one-complete-observation', evidenceRetained: true });
