@@ -8,6 +8,8 @@ import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { estimatePromptTokens, promptFits } from '../prompts/promptBudget';
 import { roleRequestBudget } from '../prompts/roleRequestBudget';
 import { buildOllamaPromptEnvelope } from '../llm/ollamaPrompt';
+import { formatWriterSeedPackaging } from '../pipeline/targetContract';
+import { validateUnittestStructure } from '../validation/generatedTestValidator';
 
 // Freeze the prior instructions as a size/control fixture, rather than changing
 // the input/output budget or removing evidence to make the new prompt fit.
@@ -38,13 +40,15 @@ test('formal seed removes suite instructions and optional proposals while preser
     const source = 'def target(value):\n    return value * 3 - 2\n';
     const evidence: any = { schemaVersion: 'writer-evidence-v3', sourceHash: createHash('sha256').update(source).digest('hex'), semanticGuidance: '',
         ruleSelection: { ids: [], selectedRules: [] }, semanticPlan: { hypotheses: { marker: 'UNRELATED_FAMILY_PROPOSAL' } } };
-    const context = { code: source, name: 'target', args: ['value'], target_import_module: 'sample' };
+    const context = { code: source, name: 'target', args: ['value'], is_async: false, target_import_module: 'sample' };
     const seed = getUserPrompt('sample.py', 'target', source, 'small',
         { ...context, writerGenerationPhase: 'seed' }, '', 12000, '', evidence);
     const expansion = getUserPrompt('sample.py', 'target', source, 'small', context, '', 12000, '', evidence);
     assert.ok(seed.includes(source));
     assert.match(seed, /Target import: from sample import target/);
     assert.doesNotMatch(seed, /UNRELATED_FAMILY_PROPOSAL|OPTIONAL ANALYST HYPOTHESES/);
+    assert.match(seed, /WRITER_SEED_PACKAGING_V1/);
+    assert.doesNotMatch(expansion, /WRITER_SEED_PACKAGING_V1/);
     assert.match(expansion, /UNRELATED_FAMILY_PROPOSAL/);
     withImportFixtures(plan, () => {
         const small = buildWriterSeedSystemPrompt(getSystemPrompt(1, 'small'));
@@ -54,6 +58,41 @@ test('formal seed removes suite instructions and optional proposals while preser
         assert.doesNotMatch(large, /comprehensive|kill all mutation|TEST DESIGN GUIDANCE/);
         assert.match(large, /exactly ONE test method and ONE target call/);
     });
+});
+
+test('seed packaging supplies only canonical imports and the proper harness, never a test body or oracle', () => {
+    for (const is_async of [false, true]) {
+        const packaging = formatWriterSeedPackaging('sample', 'Owner.target', { class_name: 'Owner', is_async });
+        const prefix = /```python\n([\s\S]*?)\n```/.exec(packaging)![1];
+        assert.match(prefix, /from sample import Owner/);
+        assert.match(prefix, is_async ? /unittest.IsolatedAsyncioTestCase/ : /unittest.TestCase/);
+        assert.match(prefix, is_async ? /async def test_seed/ : /    def test_seed/);
+        assert.doesNotMatch(prefix, /assertEqual|assertRaises|return_value|Owner\(/);
+        assert.equal(validateUnittestStructure(prefix, 'Owner.target', 'sample').valid, false,
+            'the host packaging cannot be accepted as a model-authored runnable test');
+    }
+    assert.equal(formatWriterSeedPackaging('sample', 'target', {}), '');
+    assert.equal(formatWriterSeedPackaging('unsafe\nimport secret', 'target', { is_async: false }), '');
+    assert.equal(formatWriterSeedPackaging('sample', 'unittest', { is_async: false }), '');
+    assert.match(formatWriterSeedPackaging('sample', 'GeneratedSeedTests', { is_async: false }), /class GeneratedSeedCases/);
+});
+
+test('short seed context preserves full helper source, setup, selected rules and source identity', () => {
+    const source = 'def target(value):\n    return helper(CONFIG, value)\n';
+    const helper = 'def helper(config, value):\n    return value + config.offset\n';
+    const sourceHash = createHash('sha256').update(source).digest('hex');
+    const evidence: any = { schemaVersion: 'writer-evidence-v3', sourceHash, semanticGuidance: '',
+        ruleSelection: { ids: ['neutral-rule'], selectedRules: [{ ruleId: 'neutral-rule', title: 'Neutral construction',
+            triggerFacts: ['source-supported setup'], relatedAnalystHints: [], guidance: ['RULE_MUST_REMAIN'] }] } };
+    const context = { code: source, name: 'target', args: ['value'], is_async: false, writerGenerationPhase: 'seed',
+        target_import_module: 'sample', calls: ['helper'], referenced_globals: [{ name: 'CONFIG', code: 'CONFIG = read_config()' }],
+        dependencyContexts: [{ name: 'helper', code: helper }] };
+    const prompt = getUserPrompt('sample.py', 'target', source, 'small', context, '', 1, '', evidence);
+    for (const complete of [source, helper, 'CONFIG = read_config()', sourceHash, 'RULE_MUST_REMAIN']) {
+        assert.ok(prompt.includes(complete), 'required data cannot be shortened even when the caller budget is tiny');
+    }
+    assert.match(prompt, /WRITER_SEED_PACKAGING_V1/);
+    assert.doesNotMatch(prompt, /OPTIONAL ANALYST HYPOTHESES|TEST DESIGN GUIDANCE/);
 });
 
 test('small Writer retains every binding, assertion, isolation and pure-library instruction', () => {

@@ -13,7 +13,8 @@ import ast
 import json
 import os
 from mock_behavior import imports, dotted
-from ast_extractor import function_scope_bindings, function_scope_usage
+from ast_extractor import (function_scope_bindings, function_scope_usage, extract_parameters,
+                           receiver_exclusions, method_kind as source_method_kind)
 from dependency_fixture_contract import build_dependency_fixture_contract
 
 
@@ -122,26 +123,13 @@ def constructor_required_params(class_node):
     init_node = next((item for item in class_node.body
                       if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == '__init__'), None)
     if not init_node:
-        return []
-    params = [arg.arg for arg in init_node.args.args if arg.arg not in ('self', 'cls')]
-    required_count = len(params) - len(init_node.args.defaults)
-    return params[:required_count]
+        return None if class_node.bases else []
+    return [parameter['name'] for parameter in extract_parameters(
+        init_node.args, receiver_exclusions(init_node, class_node)) if parameter['required']]
 
 
 def get_method_kind(func_node, class_node):
-    if not class_node:
-        return 'module'
-    decorator_names = {
-        node.id if isinstance(node, ast.Name)
-        else node.attr if isinstance(node, ast.Attribute)
-        else ''
-        for node in func_node.decorator_list
-    }
-    if 'staticmethod' in decorator_names:
-        return 'static'
-    if 'classmethod' in decorator_names:
-        return 'class'
-    return 'instance'
+    return source_method_kind(func_node, class_node)
 
 
 def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
@@ -233,9 +221,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     unknown_calls = []
     external_calls = find_external_calls(target_func, import_bindings, target_module, local_helpers, unknown_calls)
 
-    # 取得函式參數名稱（如果在 class 內，去除 self/cls）
-    all_params = [arg.arg for arg in target_func.args.args]
-    func_params = [p for p in all_params if p not in ('self', 'cls')] if class_name else all_params
+    parameters = extract_parameters(target_func.args, receiver_exclusions(target_func, class_node))
+    func_params = [parameter['name'] for parameter in parameters]
 
     # 建立 patch decorator 列表
     patches = [ec["patch_path"] for ec in external_calls]
@@ -243,7 +230,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     for ec in external_calls:
         base = f"mock_{ec['name']}"
         name, suffix = base, 2
-        while name in mock_names:
+        while name in mock_names or name in func_params or name in ('self', 'instance', 'result'):
             name, suffix = f'{base}_{suffix}', suffix + 1
         mock_names.append(name)
 
@@ -282,24 +269,39 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
             lines.append('    # TODO: configure source-consumed receiver objects: ' + ', '.join(paths))
             lines.append('    # Keep enclosing return objects; do not replace them with None/string/scalar. No expected output is implied.')
         else:
-            lines.append(f"    {mock_name}.return_value = None  # TODO: choose an explicit controlled return; source shape is unknown")
+            lines.append(f"    # TODO: choose an explicit controlled return for {mock_name}; source shape is unknown, no value is supplied")
 
     lines.append(f"")
 
     # TODO: 參數設定、呼叫、斷言
+    parameter_bindings = {}
+    used_names = {'self', 'instance', 'result', *mock_names}
     if func_params:
         for param in func_params:
-            lines.append(f"    {param} = None  # TODO: set appropriate test value for '{param}'")
+            local, suffix = param, 2
+            if local in used_names:
+                local = 'input_' + param
+            while local in used_names or local in func_params and local != param:
+                local, suffix = f'input_{param}_{suffix}', suffix + 1
+            used_names.add(local)
+            parameter_bindings[param] = local
+            lines.append(f"    # TODO: define {local} explicitly for parameter '{param}'; no fixture value is supplied")
         lines.append(f"")
 
-    call_args = ", ".join(func_params)
-    if class_name and method_kind == 'instance':
+    call_args = ", ".join(
+        f"{parameter['name']}={parameter_bindings[parameter['name']]}" if parameter['kind'] == 'keyword_only'
+        else ('*' if parameter['kind'] == 'var_positional' else '**' if parameter['kind'] == 'var_keyword' else '')
+        + parameter_bindings[parameter['name']] for parameter in parameters)
+    if class_name and method_kind in ('instance', 'property'):
         required_init = constructor_required_params(class_node)
-        if required_init:
+        if required_init is None:
+            lines.append(f"    instance = {class_name}(...)  # TODO: verify inherited constructor setup from source")
+        elif required_init:
             lines.append(f"    instance = {class_name}(...)  # TODO: provide valid values for: {', '.join(required_init)}")
         else:
             lines.append(f"    instance = {class_name}()")
-        call_target = f"instance.{selected_method_name}({call_args})"
+        call_target = (f"instance.{selected_method_name}" if method_kind == 'property'
+                       else f"instance.{selected_method_name}({call_args})")
     elif class_name:
         call_target = f"{class_name}.{selected_method_name}({call_args})"
     else:
@@ -318,6 +320,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
         "patches": patches,
         "mock_names": mock_names,
         "func_params": func_params,
+        "parameter_bindings": parameter_bindings,
         "class_name": class_name,
         "method_kind": method_kind,
         "is_async": isinstance(target_func, ast.AsyncFunctionDef),

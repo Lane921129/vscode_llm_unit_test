@@ -4,6 +4,15 @@
 
 ## 2026-10-21
 
+### BMI 21:16 輸出不收斂、種子外框與 Mock 簽名契約
+
+- 分析 `bmi_2026_10_21_21_16`：Analyst 成功，三次傳輸均 HTTP 200；Writer 的實際輸入都是 3203 tokens，可容於 8192 Context。先後輸出至 1536／2416 上限並以 length 結束，第二次增額受原 60 秒 API 額度限制。安全形狀統計為 4719／8120 字元、0 個 test_ 方法及 0 個 self.assert 呼叫；未保存原回覆，不能推定具體文字、複製來源或重複內容。沒有候選，Checker、Reviewer、coverage、mutation 均未執行，不能歸因品質門檻過嚴。
+- seed 使用精簡固定標籤資料包，保留完整必要來源、setup、helper、選中觀測、診斷與 construction rules，省去重複一般教學文字。新增 `formatWriterSeedPackaging`，只提供 canonical import、unittest class 及依 AST 選擇的同步／非同步方法開頭；不提供輸入、呼叫、fixture 值、預期值或 assertion。空外框不能通過驗證；輸出 cap、Context、期限、一次恢復與品質 gate 不變，擴充／修訂沿用既有流程。
+- Mock scaffold 重用 `ast_extractor` 的 method kind、receiver 與完整參數擷取，修正 property 呼叫方式、static 中名為 self 的真參數、positional-only／keyword-only／variadic 引數、keyword-only 建構子與局部名稱碰撞。未知繼承建構子保留 TODO；未知輸入與 mock return 不再預填 None。scaffold 仍為 executable=false 的 setup 提案，不授予執行或 assertion 證據。
+- F5 改為明確宣告的 `build:extension` 前置任務，執行 package、使用 `$tsc` matcher 並顯示專用建置終端機，避免依賴自動偵測任務。JSONC 與任務映射檢查通過；本機編譯錯誤未重現，尚待使用者提供實際第一段錯誤，不能宣稱已修好未知 compiler error。Debug Anyway 可能載入舊 bundle，不表示本次編譯成功。
+- 驗證：Mock／AST 相關 Python 2 檔 110／110（包含補齊中性 fixture 後的真實 binding 呼叫）；相關 Node 首批 4 檔 23／23，最後 seed context 調整後 5 檔 28／28（含輸出恢復、Reviewer 修訂保全及真實 Mutatest），最後 wire 斷言另驗 1／1。重疊批次不累加。最終 `test:fast` 通過型別、lint、Node 96 檔 742／742、Webview 語法與 Python 4 檔 42／42，均 0 略過；production build、追蹤檔／可達 Git 歷史密鑰掃描與 `git diff --check` 通過。
+- 真模型小範圍驗證：以與本批來源相同的 BMI、真實 AST 與單一受控 Trace，經正式 seed prompt／Ollama parser／seed contract／Python runner，`qwen2.5-coder:3b-instruct` 首次生成即通過單測實跑，testsRun=1、斷言觀測 verified，約 7.349 秒、113 輸出 tokens；`codegemma:2b` 正常 stop 但沒有有效測試。這是單一 seed smoke，並非原完整批次提示的受控效能比較，亦未驗收真模型 Reviewer、coverage、mutation 或所有 1B～5B 模型。開發機無法連到 DGX；原 13B BMI／車輛批次、`test:full`、VS Code／Mocha 與遠端 CI 未重跑。原有八份 WIP 保留且不納入提交。
+
 ### BMI 種子截斷分析、獨立短契約與小模型實跑
 
 - 分析 `bmi_2026_10_21_20_27`：3 次模型傳輸皆 HTTP 200、Analyst 解析成功；Writer 先後耗盡 1536 與 2322 個輸出 tokens，均為 `done_reason=length`。實際輸入 3728 tokens 可容於 8192 Context，沒有網路逾時或輸入超額證據。無候選，Checker／Reviewer／coverage／mutation 尚未開始；原批沒有回覆形狀或 build 身分，不能推定重複內容或載入版本。

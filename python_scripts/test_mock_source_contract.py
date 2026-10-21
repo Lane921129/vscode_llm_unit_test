@@ -29,11 +29,11 @@ class MockSourceContractTests(unittest.TestCase):
         return {'module': 'sample', 'target': 'target', 'source': 'def target():\n    return sql.connect(DB_NAME)\n',
                 'moduleSource': module_source, 'requireMockBehavior': True, 'requireTargetBehavior': True, **extra}
 
-    def scaffold(self, source, trace=None):
+    def scaffold(self, source, trace=None, target='target'):
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder, 'sample.py')
             file.write_text(source, encoding='utf-8')
-            return generate_scaffold(str(file), 'target', trace, 'sample')
+            return generate_scaffold(str(file), target, trace, 'sample')
 
     def test_module_import_member_aliases_observe_a_real_target_and_patch_object(self):
         candidates = [candidate('sample.sql.connect'), candidate(),
@@ -214,7 +214,8 @@ class MockSourceContractTests(unittest.TestCase):
         self.assertNotIn('Real return', result['scaffold'])
         self.assertNotIn('_MemoryConnection', result['scaffold'])
         self.assertEqual(result['trace_hints'], 'omitted-setup-is-not-an-oracle')
-        self.assertIn('return_value = None  # TODO', result['scaffold'])
+        self.assertIn('source shape is unknown, no value is supplied', result['scaffold'])
+        self.assertNotIn('return_value = None', result['scaffold'])
 
     def test_scaffold_placeholders_cannot_be_accepted_as_a_complete_candidate(self):
         for code in [candidate() + '\n# SETUP PLACEHOLDERS ONLY: fill every TODO\n',
@@ -232,6 +233,53 @@ class MockSourceContractTests(unittest.TestCase):
         result = self.scaffold(source)
         self.assertEqual(result['mock_names'], ['mock_connect', 'mock_connect_2'])
         ast.parse(result['scaffold'])
+
+    def test_scaffold_uses_the_shared_property_and_constructor_contract(self):
+        source = ('class Owner:\n    def __init__(receiver, /, *, configuration):\n'
+                  '        receiver.configuration = configuration\n    @property\n'
+                  '    def target(receiver): return receiver.configuration\n')
+        result = self.scaffold(source, target='Owner.target')
+        self.assertEqual(result['method_kind'], 'property')
+        self.assertEqual(result['func_params'], [])
+        self.assertIn('provide valid values for: configuration', result['scaffold'])
+        self.assertIn('result = instance.target\n', result['scaffold'])
+        self.assertNotIn('instance.target(', result['scaffold'])
+        self.assertFalse(result['executable'])
+
+    def test_scaffold_preserves_static_self_posonly_and_keyword_arguments_in_real_calls(self):
+        source = ('class Owner:\n    @staticmethod\n    def target(self, /, *, flag):\n'
+                  '        return self, flag\n')
+        result = self.scaffold(source, target='Owner.target')
+        self.assertEqual(result['func_params'], ['self', 'flag'])
+        self.assertEqual(result['parameter_bindings'], {'self': 'input_self', 'flag': 'flag'})
+        self.assertIn('Owner.target(input_self, flag=flag)', result['scaffold'])
+        self.assertNotIn('self = None', result['scaffold'])
+        # Complete the deliberately non-executable setup using explicit fixture
+        # values. This exercises Python's binding rules, not just emitted text.
+        code = ('import unittest\n' + source + '\nclass Cases(unittest.TestCase):\n'
+                + textwrap.indent(result['scaffold'], '    '))
+        code = code.replace("# TODO: define input_self explicitly for parameter 'self'; no fixture value is supplied", 'input_self = 7')
+        code = code.replace("# TODO: define flag explicitly for parameter 'flag'; no fixture value is supplied", 'flag = True')
+        code += '\n        self.assertEqual(result, (7, True))\n'
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, 'generated.py').write_text(code, encoding='utf-8')
+            run = subprocess.run([sys.executable, '-B', '-m', 'unittest', 'generated'], cwd=folder,
+                                 capture_output=True, text=True, timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn('Ran 1 test', run.stderr)
+
+    def test_scaffold_does_not_shadow_patch_parameters_or_invent_unknown_constructor_setup(self):
+        source = ('import sqlite3 as sql\ndef target(mock_connect, /, *items, flag, **options):\n'
+                  '    return sql.connect(mock_connect)\n')
+        result = self.scaffold(source)
+        self.assertEqual(result['mock_names'], ['mock_connect_2'])
+        self.assertEqual(result['func_params'], ['mock_connect', 'flag', 'items', 'options'])
+        self.assertIn('target(mock_connect, flag=flag, *items, **options)', result['scaffold'])
+        self.assertNotIn(' = None', result['scaffold'])
+        ast.parse(result['scaffold'])
+        inherited = self.scaffold('class Owner(ExternalBase):\n    def target(self): return self.value\n', target='Owner.target')
+        self.assertIn('verify inherited constructor setup', inherited['scaffold'])
+        self.assertNotIn('instance = Owner()', inherited['scaffold'])
 
     def test_prompt_section_heading_and_parameter_or_immutable_patches_report_specific_repairs(self):
         for bad_import in ('import HOST_ISOLATED_RESOURCE_CONTEXT\n',

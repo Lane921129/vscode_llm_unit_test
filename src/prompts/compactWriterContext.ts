@@ -1,5 +1,5 @@
 import { BehaviorObservations, observationsForPrompt, summarizeObservationPhase, TraceInputSnapshot, TraceValueSnapshot, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
-import { formatTargetContract } from '../pipeline/targetContract';
+import { formatTargetContract, formatWriterSeedPackaging } from '../pipeline/targetContract';
 import { estimatePromptTokens } from './promptBudget';
 import { formatWriterPatternGuide, matchingWriterExamples } from './verifiedWriterExamples';
 import { callerForPrompt, callerMatchesObservation, typedCallFields } from '../pipeline/probeInputs';
@@ -105,6 +105,30 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
         dependencyIndex: index + 1, name: dep.name, sourceHash: dep.sourceHash,
         ...partitionWriterObservations(dep.traceResult)
     }] : []);
+    if (!revision && context.writerGenerationPhase === 'seed') {
+        // Keep the complete source/setup and selected observation data. The
+        // standalone seed system already owns the general safety/oracle rules;
+        // repeating the full generation tutorial here obscures the one task.
+        return [
+            COMPACT_WRITER_VERSION + ' (metadata, never an import)',
+            formatTargetContract(input.module, input.name, context.args || [], context),
+            `Source hash: ${input.evidence.sourceHash}`,
+            `TARGET SOURCE (read-only):\n\`\`\`python\n${input.source}\n\`\`\``,
+            'SOURCE SETUP (declarations, not runtime values):\n' + JSON.stringify(setup),
+            ...fragments, ...dependencyBlocks,
+            formatDependencyMockContract(input.module, context, input.allowedMockTargets, false, { sourceImportsListed: true }),
+            'VERIFIED OBSERVATIONS (exact call/setup only; not independent requirements):\n'
+                + JSON.stringify(targetObservations.observations),
+            ...(scenario.note ? [scenario.note] : []),
+            'DEPENDENCY OBSERVATIONS (not target results):\n'
+                + JSON.stringify(dependencyObservations.map(({ diagnostics: _diagnostics, ...entry }) => entry)),
+            'DIAGNOSTICS (never fixtures or expected values):\n' + JSON.stringify({ target: targetObservations.diagnostics,
+                dependencies: dependencyObservations.map(({ observations: _observations, ...entry }) => entry) }),
+            'SELECTED RULES (construction constraints, not output facts):\n' + formatUniqueRules(input.evidence),
+            ...(input.focus ? ['CURRENT REQUEST:\n' + input.focus] : []),
+            references.note(), formatWriterSeedPackaging(input.module, input.name, context)
+        ].filter(Boolean).join('\n\n');
+    }
     const sections = [
         (revision ? 'writer-revision-context-v2' : COMPACT_WRITER_VERSION) + ' (metadata, never an import)',
         '=== WRITER EVIDENCE BUNDLE V3 ===',
@@ -146,7 +170,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + 'No evidence means omit that assertion, never guess.'
     ];
     if (references.note()) { sections.push(references.note()); }
-    if (revision || context.writerGenerationPhase === 'seed') { return sections.filter(Boolean).join('\n\n'); }
+    if (revision) { return sections.filter(Boolean).join('\n\n'); }
     // Complete dependency source/setup is required in both full Writer sizes.
     // Only derived topology, neutral examples and hypotheses are optional.
     const requiredTokens = estimatePromptTokens(sections.filter(Boolean).join('\n\n'));

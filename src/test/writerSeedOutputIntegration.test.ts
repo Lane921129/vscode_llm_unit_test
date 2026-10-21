@@ -45,6 +45,9 @@ test('formal seed wire uses the logged reserve and never validates an output-lim
                 done: true, done_reason: 'stop' }), { status: 200 });
         }
         assert.match(request.prompt, /WRITER_SEED_V1/);
+        assert.match(request.prompt, /WRITER_SEED_PACKAGING_V1/);
+        assert.match(request.prompt, /from sample import increment/);
+        assert.match(request.prompt, /class GeneratedSeedTests\(unittest.TestCase\):\n    def test_seed\(self\):/);
         assert.equal(request.options.num_predict, 1536);
         assert.ok(estimatePromptTokens(request.transmittedPrompt) <= 8192 - request.options.num_predict);
         return new Response(JSON.stringify({ response: 'import unittest\nfrom sample import increment\n'

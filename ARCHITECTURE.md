@@ -516,6 +516,10 @@ Trace 基線明確匯入所選目標，避免 wildcard 遺漏私有名稱。例�
 
 正式 Writer seed 使用獨立的 `WRITER_SEED_V1 OUTPUT SCOPE`，直接要求一個方法、一次目標呼叫及完整可執行檔案，不再先附完整套件規則後要求模型覆寫。依 AST `is_async` 只傳送當前同步或非同步 harness／呼叫指令，未知時保留條件說明；預算與 wire 使用同一建構器。structured seed 保留完整必要來源、匯入、建構／Mock／資源契約、規則與所選實跑觀測，省去 optional topology、範例設計與較廣的 Analyst 假說；擴充與修訂維持既有完整證據流程。選中觀測不是獨立需求或執行批准，仍須實跑、證據核對與同候選 Reviewer 核准。
 
+seed 的使用者語境只保留精簡固定標籤與完整必要資料，避免重述一般生成教學。`targetContract.ts` 的 `WRITER_SEED_PACKAGING_V1` 提供 canonical target import、unittest class 和方法開頭；host 不填測資、目標呼叫、fixture return 或 assertion，空骨架仍被拒絕。Mock scaffold 重用主 AST 的 method kind、receiver 排除與完整參數種類；property 讀屬性，static 真參數不按名稱刪除，未知繼承建構子與未知輸入／Mock 返回值只留 TODO，不假設 None。所有 scaffold 仍不可直接執行或批准。
+
+F5 使用 `.vscode/tasks.json` 明確宣告的 `build:extension`，執行 package 並呈現 `$tsc` 建置診斷；不依賴 npm 任務自動偵測。建置失敗後的 Debug Anyway 可能載入既有磁碟 bundle，不能證明當次來源已成功編譯。
+
 Ollama 長度中止仍一律拒絕。`output-shape-v1` 只記完整答案 hash／字元數與最多 65,536 字元、2,048 行樣本的 fence、方法、assertion、重複行計數；不保存樣本文字，不由詞法計數認定程式有效或製造 oracle。角色事件僅接受經 allowlist 核驗的形狀 DTO。`run_manifest.json.report.build` 在候選產生前保存啟動時擴充 ID、版本、模式、bundle mtime 與可取得的 bundle hash；此 hash 是啟動時磁碟產物觀測，不是 Git commit 或載入快取一致性的證明，舊報告缺值仍未知。
 
 Analyst 的固定指令與 evidence 分開組裝，來源、setup、相依與觀測不再按舊筆數／字串長度裁切；只移除明確留在產物中的狀態快照。解析後與目標參數過濾後都必須仍有具體策略。第一次請求預留一次格式補正的完整固定文字，最終 provider envelope 仍檢查實際總量；傳輸失敗不啟動格式補正。Cloud 的 `semantic-json` schema 完整描述各陣列元素及巢狀策略，但 schema 或 HTTP 成功本身不代表策略有效。
