@@ -10,11 +10,13 @@ import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../mutation/mutationResult';
 import { renderReviewerDiagnostics } from './reviewerDiagnosticsPresentation';
 import { renderTraceTiming } from './traceTimingPresentation';
+import { TestFocus, testFocusLabel } from './testFocus';
 import { CandidateMethodSummary, readCandidateMethodSummary, renderCandidateMethodCounts, renderCandidateMethodTimeline } from './candidateMethodSummary';
 
 export interface ReportIdentity {
     schemaVersion: 'target-report-v1'; sourcePath: string; sourceFile: string;
     target: string; modelIdentity: string; requestedTier: string;
+    testFocus?: TestFocus;
     requestedMutationEngine?: string; mutationWorkers?: number;
     build?: { extensionId: string; extensionVersion: string; buildTimestamp: string;
         extensionMode: 'development' | 'production' | 'test' | 'unknown'; buildArtifactHash?: string };
@@ -278,7 +280,9 @@ export function writeTargetReports(directory: string, identity: ReportIdentity, 
     const displayState = verifiedPresentation ? state : { ...state, terminalStatus: 'incomplete', executionVerified: false };
     const failed = !verifiedPresentation || Boolean(state.firstFailure || state.lastRepairFailure)
         || (!isReportExcluded(terminal) && !['running', 'passed', 'execution-passed'].includes(String(terminal)));
-    const flow = withOutcomeHeader(formatTierHistory(state) + renderCandidateMethodTimeline(summary.methodSummary)
+    const flow = withOutcomeHeader((identity.testFocus
+        ? localize('- **測試重點**: {0}（共同品質流程）', testFocusLabel(identity.testFocus)) + '\n\n'
+        : formatTierHistory(state)) + renderCandidateMethodTimeline(summary.methodSummary)
         + eventTimeline(directory, runId, sourceHash)
         + renderTraceTiming(state, identity.target) + processBody, displayState);
     fs.writeFileSync(path.join(directory, 'workflow_report.md'), flow, 'utf8');

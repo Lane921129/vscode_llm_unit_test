@@ -66,9 +66,7 @@ test('captured runtime survives an unknown-metadata restart without becoming a n
     assert.deepEqual(first, { ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 12288, inputBudget: 8601 });
     const saved = JSON.parse(JSON.stringify({ preferredRuntimeContextTokens: 12288, preferredRuntimeContextSource: 'captured-runtime' }));
     assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, ...saved }), first);
-    assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, ...saved, preferredRuntimeContextSource: 'user-choice' }), {
-        ok: false, reasonCode: 'runtime-context-metadata-required'
-    });
+    assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, ...saved, preferredRuntimeContextSource: 'user-choice' }), first);
     assert.deepEqual(resolveLocalRuntimeContext({ ...metadata, preferredRuntimeContextTokens: 12288 }), {
         ok: false, reasonCode: 'runtime-context-metadata-required'
     }, 'legacy preferences without origin cannot impersonate observed allocation');
@@ -94,13 +92,15 @@ test('unknown model limits retain captured, qualified and observed runtime fallb
     });
 });
 
-test('explicit choices cannot exceed the known bound and malformed preferences cannot invent capacity', () => {
+test('explicit choices may exceed metadata while malformed preferences cannot invent capacity', () => {
     const base = { paramSize: '3B', contextLength: 8192, contextLengthKnown: true };
     for (const fields of [
         { runtimeContextTokens: 16384 },
         { preferredRuntimeContextTokens: 16384, preferredRuntimeContextSource: 'user-choice' as const }
     ]) {
-        assert.deepEqual(resolveLocalRuntimeContext({ ...base, ...fields }), { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' });
+        const result = resolveLocalRuntimeContext({ ...base, ...fields });
+        assert.equal(result.ok, true);
+        if (result.ok) { assert.equal(result.contextWindow, 16384); }
     }
     assert.deepEqual(resolveLocalRuntimeContext({ ...base, preferredRuntimeContextTokens: 16384 }), {
         ok: true, configuredTokens: 0, mode: 'automatic', contextWindow: 4096, inputBudget: 2867
@@ -141,7 +141,7 @@ test('explicit local runtime uses the advertised bound and reserves output capac
     }
     assert.equal(resolveLocalRuntimeContext({ paramSize: '3B', contextLength: 8192, contextLengthKnown: true, runtimeContextTokens: 8192 }).ok, true);
     assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '3B', contextLength: 8192, contextLengthKnown: true, runtimeContextTokens: 8193 }), {
-        ok: false, reasonCode: 'runtime-context-exceeds-model-limit'
+        ok: true, configuredTokens: 8193, mode: 'explicit', contextWindow: 8193, inputBudget: 5735
     });
     assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '2B', contextLength: 32768, contextLengthKnown: true, runtimeContextTokens: 32768 }), {
         ok: true, configuredTokens: 32768, mode: 'explicit', contextWindow: 32768, inputBudget: 22937
@@ -210,15 +210,15 @@ test('invalid runtime settings never become automatic defaults or silently clamp
     }
 });
 
-test('a positive override requires known valid metadata, not a remembered fallback number', () => {
+test('a positive direct override remains usable without valid architecture metadata', () => {
     for (const contextLength of [4096, 8192, 32768]) {
         assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '3B', contextLength, runtimeContextTokens: 2048 }), {
-            ok: false, reasonCode: 'runtime-context-metadata-required'
+            ok: true, configuredTokens: 2048, mode: 'explicit', contextWindow: 2048, inputBudget: 1433
         });
     }
     for (const contextLength of [0, -1, 8192.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
         assert.deepEqual(resolveLocalRuntimeContext({ paramSize: '3B', contextLength, contextLengthKnown: true, runtimeContextTokens: 2048 }), {
-            ok: false, reasonCode: 'runtime-context-metadata-required'
+            ok: true, configuredTokens: 2048, mode: 'explicit', contextWindow: 2048, inputBudget: 1433
         });
     }
 });

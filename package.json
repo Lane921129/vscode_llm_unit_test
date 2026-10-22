@@ -113,13 +113,9 @@
         },
         "llmUnitTest.promptStrategy": {
           "type": "string",
-          "enum": [
-            "auto",
-            "small",
-            "large"
-          ],
-          "default": "auto",
-          "description": "Prompt strategy: small (strict formatting) vs large (advanced reasoning)"
+          "enum": ["full", "boundary", "coverage", "mutation", "auto", "small", "large", "tier1", "tier2", "tier3", "tier4"],
+          "default": "full",
+          "description": "Test priority: full, boundary, coverage or mutation. All quality gates remain active. Other values are retained for legacy settings."
         },
         "llmUnitTest.validationMode": {
           "type": "string",

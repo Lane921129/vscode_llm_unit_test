@@ -1,4 +1,5 @@
 import { localize } from '../i18n/core';
+import { isTestFocus } from '../pipeline/testFocus';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -297,7 +298,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
                 
                 case 'setPromptStrategy': {
-                    if (this.activeAnalysis) { break; }
+                    if (this.activeAnalysis || !isTestFocus(message.strategy)) { break; }
                     await config.update('promptStrategy', message.strategy, true);
                     if (this.activeAnalysis) { break; }
                     if (this.webview) {
@@ -850,7 +851,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
-                                        localize("⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（{0}）。Tier 1 的確定性測試仍可使用。", capability.reason)
+                                        localize("⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（{0}）。完整流程須先完成角色資格驗證。", capability.reason)
                                     );
                                 }
                             } else if (message.envType === 'custom') {
@@ -905,7 +906,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
-                                        localize("⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（{0}）。Tier 1 的確定性測試仍可使用。", capability.reason)
+                                        localize("⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（{0}）。完整流程須先完成角色資格驗證。", capability.reason)
                                     );
                                 }
                             }

@@ -67,7 +67,7 @@ test('sidebar abort waits for its active transport and batch cleanup before publ
         run = handlers.get('llm-unit-test.runBatchAnalysis')!({ ...params, batchPath: root });
         await started;
         const runningMarkup = webview.html;
-        await receiveMessage({ command: 'setPromptStrategy', strategy: 'tier2' });
+        await receiveMessage({ command: 'setPromptStrategy', strategy: 'boundary' });
         assert.deepEqual(settingsUpdates, [], 'an active analysis must reject strategy changes even if the UI message is sent');
         assert.equal(webview.html, runningMarkup, 'changing Tier cannot rebuild the running view and remove its stop button');
         await receiveMessage({ command: 'abortTest' });
@@ -114,16 +114,16 @@ test('sidebar abort waits for its active transport and batch cleanup before publ
         assert.equal(manifest.targets[1].state, 'pending');
         assert.equal(manifest.complete, false);
         assert.equal(requests, 1, 'cancellation must not start Writer repair or the next target');
-        await receiveMessage({ command: 'setPromptStrategy', strategy: 'tier2' });
-        assert.deepEqual(settingsUpdates, [{ key: 'promptStrategy', value: 'tier2' }]);
+        await receiveMessage({ command: 'setPromptStrategy', strategy: 'boundary' });
+        assert.deepEqual(settingsUpdates, [{ key: 'promptStrategy', value: 'boundary' }]);
         assert.notEqual(webview.html, runningMarkup, 'strategy changes become available after the actual owner has finished');
         const idleMarkup = webview.html;
         settingsGate = new Promise<void>(resolve => { finishSettingsUpdate = resolve; });
-        const delayedChange = receiveMessage({ command: 'setPromptStrategy', strategy: 'tier3' });
+        const delayedChange = receiveMessage({ command: 'setPromptStrategy', strategy: 'coverage' });
         sidebar.beginAnalysis('next-analysis-during-settings-save');
         finishSettingsUpdate!();
         await delayedChange;
-        assert.deepEqual(settingsUpdates.at(-1), { key: 'promptStrategy', value: 'tier3' }, 'the setting was requested while idle');
+        assert.deepEqual(settingsUpdates.at(-1), { key: 'promptStrategy', value: 'coverage' }, 'the setting was requested while idle');
         assert.equal(webview.html, idleMarkup, 'a setting save finishing after another analysis starts cannot rebuild its active view');
         sidebar.endAnalysis('next-analysis-during-settings-save');
     } finally {

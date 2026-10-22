@@ -56,6 +56,7 @@ import { partitionBatchPreflight, BatchPreflightTarget, BatchPreflightRow } from
 import { writeBatchPreflightSnapshot } from './pipeline/batchPreflightSnapshot';
 import { presentOutcome, presentSummaryOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
 import { TierHistory } from './pipeline/tierHistory';
+import { focusedSeedOutputFloor, isTestFocus, requiresQualifiedRoles, resolveTestFocus, testFocusInstruction, testFocusLabel } from './pipeline/testFocus';
 import { mayFallbackTier, selectCandidateRepairRole } from './tier/tierFailurePolicy';
 import { ReportIdentity, writeTargetReports, renderMutationBaselineTiming } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
@@ -120,7 +121,7 @@ import { MutationRun, MutationContext, parseIsolatedMutationRun,
 import { exceptionNamesFromEvidence } from './validation/exceptionEvidence';
 import { validateTraceEvidence } from './validation/traceAssertionEvidence';
 import { selectPromptDetail } from './prompts/promptDetailStrategy';
-import { contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
+import { contextGrowthCeiling, contextInputBudget, estimatePromptTokens, promptFits, runtimeContextWindow, resolveLocalRuntimeContext } from './prompts/promptBudget';
 import { roleRequestBudget, type WriterRevisionWorkload } from './prompts/roleRequestBudget';
 import { assessPromptCapacity } from './prompts/promptCapacity';
 import { formatPromptCapacity } from './pipeline/promptCapacityPresentation';
@@ -317,7 +318,7 @@ function initialAnalysisModel(params: AnalysisModelSelection, modelSnapshot: Mod
 /** Global prerequisites must fail before import setup, Trace or role requests. */
 async function requireInitialAutoRoles(params: AnalysisModelSelection & Partial<Pick<AnalysisParams,
     'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable'>>, snapshot: ModelSnapshot) {
-    if ((params.promptStrategy || 'auto') !== 'auto') { return; }
+    if (!requiresQualifiedRoles(params.promptStrategy)) { return; }
     const mode = verificationMode(params.validationMode);
     const { activeModelProfile, localRuntime, qualificationRequest } = initialAnalysisModel(params, snapshot);
     const current = !(localRuntime && !localRuntime.ok)
@@ -339,7 +340,9 @@ async function requireInitialAutoRoles(params: AnalysisModelSelection & Partial<
             localize('本機 Context 設定無法使用；請檢查 llmUnitTest.runtimeContextTokens，並重新執行模型測試連線。')
                 + ` [${localRuntime.reasonCode}]`, { reasonCode: localRuntime.reasonCode });
     }
-    throw new AnalysisStageError('validation', 'role-qualification', mode === 'full'
+    throw new AnalysisStageError('validation', 'role-qualification', isTestFocus(params.promptStrategy)
+        ? localize('測試重點模式需要先完成本次容量的 Writer 角色測試連線；完整流程亦需 Reviewer。')
+        : mode === 'full'
         ? localize('完整流程的 Auto 需要先完成 Writer 與 Reviewer 角色測試連線。')
         : localize('Auto 的 Writer 尚未通過此模型的生成探測。請先執行「測試連線」，或明確選擇手動 Tier；執行驗證模式不會改用 Trace 代替生成。'));
 }
@@ -1659,11 +1662,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const pythonExecutable = normalizePythonExecutable(params.pythonExecutable);
 
     // ─── Tier 路由：依使用者設定或自動路由 ───
-    const userTierSetting = params.promptStrategy || 'auto';
+    const focusedWorkflow = isTestFocus(params.promptStrategy);
+    const testFocus = resolveTestFocus(params.promptStrategy);
+    const userTierSetting = focusedWorkflow ? 'auto' : params.promptStrategy || 'auto';
     // 複雜度評估（對無選擇函式時用預設分數）
     const dummyNameMarked = hasDummyFunctionNameMarker(params.funcName);
     let complexityScore = 30;
-    if (params.funcName && !dummyNameMarked) {
+    if (params.funcName && !dummyNameMarked && !focusedWorkflow) {
         const comp = await assessFunctionComplexity(params.filePath, params.funcName, pythonExecutable);
         complexityScore = comp.score;
         log(localize("[Tier] 複雜度評估: {0}/100 ({1}){2}", comp.score, comp.level, comp.reasons.length > 0 ? ' - ' + comp.reasons.slice(0,2).join('; ') : ''));
@@ -1715,6 +1720,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const methodInventories = new Map<string, ScenarioIdentity[]>();
     let activeSeedCaseIds: string[] | undefined;
     let activeSeedCaseFacts = '';
+    let focusedMockSetup = '';
     let seedTargetIsAsync: boolean | undefined;
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
@@ -1728,7 +1734,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 : localize('完整流程的 Auto 需要先完成 Writer 與 Reviewer 角色測試連線。')
             : localize("[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier {0} 選擇繼續執行。輸出仍須通過{1}。", userTierSetting.replace('tier', ''), gateDescription));
     }
-    const resolvedTier = resolveTier(
+    const resolvedTier = focusedWorkflow ? 2 : resolveTier(
         modelParamBillion,
         complexityScore,
         userTierSetting,
@@ -1736,7 +1742,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     );
     // Tier 2 uses this for divide-and-conquer; it must derive from measured
     // capability, never from a finite list of vendor/model name fragments.
-    let evalStrategy = selectPromptDetail(
+    let evalStrategy = focusedWorkflow ? 'small' as const : selectPromptDetail(
         activeModelProfile.paramSize,
         activeModelProfile.contextLength,
         resolvedTier
@@ -1745,6 +1751,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         log(localize("[模型能力] 此模型尚未通過 unittest 探測；保留你的手動 Tier 選擇，並以{0}檢查每次輸出。", gateDescription));
     }
     log(mode === 'execution' ? localize("[系統] 執行驗證：使用來源與明確 Mock 生成測試，延後完整品質流程。")
+        : focusedWorkflow ? localize('[測試重點] {0}；使用共同品質流程。', testFocusLabel(testFocus))
         : localize("[系統] 策略路由: {0} → Tier {1}", userTierSetting === 'auto' ? localize("Auto 自動") : localize("使用者指定"), resolvedTier));
 
     if (!params.filePath || !fs.existsSync(params.filePath)) {
@@ -1755,12 +1762,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let tier1GenerationModeRecorded = false;
     const reportDateStr = new Date().toLocaleString('zh-TW', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     let currentTier = resolvedTier;
-    let finalReportMarkdown = localize("# {0}\n\n- **目標檔案**: {1}\n- **測試函式**: {2}\n- **起始生成方式**: {3}\n- **日期**: {4}\n\n", mode === 'execution' ? localize("執行驗證與修復報告") : localize("突變測試與修復分析報告"), params.filePath, params.funcName || localize("全檔案"), mode === 'execution' ? localize("來源與明確 Mock 測試假設；採執行驗證流程") : 'Tier ' + currentTier, reportDateStr);
+    let finalReportMarkdown = localize("# {0}\n\n- **目標檔案**: {1}\n- **測試函式**: {2}\n- **起始生成方式**: {3}\n- **日期**: {4}\n\n", mode === 'execution' ? localize("執行驗證與修復報告") : localize("突變測試與修復分析報告"), params.filePath, params.funcName || localize("全檔案"), mode === 'execution' ? localize("來源與明確 Mock 測試假設；採執行驗證流程") : focusedWorkflow ? testFocusLabel(testFocus) : 'Tier ' + currentTier, reportDateStr);
     finalReportMarkdown += formatReportProvenance({
         ...extensionBuildIdentity,
         modelProvider: params.envType,
         modelName: params.modelName,
         requestedTier: userTierSetting,
+        ...(focusedWorkflow ? { testFocus } : {}),
         resolvedTier,
         qualified: qualifiedForSelectedModel,
         roleQualification,
@@ -1785,6 +1793,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const reportIdentity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: params.filePath,
         sourceFile: path.relative(projectRoot, params.filePath).replace(/\\/g, '/'),
         target: params.funcName || 'file', modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: userTierSetting,
+        ...(focusedWorkflow ? { testFocus } : {}),
         requestedMutationEngine: params.mutationEngine || 'builtin', mutationWorkers: params.mutationWorkers ?? 2,
         build: { ...extensionBuildIdentity } };
 
@@ -1814,7 +1823,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     }, knownSecrets);
     finalReportMarkdown += localize("- **驗證目標**: {0}\n", mode === 'execution' ? localize("執行驗證（Trace、覆蓋率、突變與品質審查延後）") : localize("完整品質驗證"));
     const tierHistory: TierHistory = { requested: userTierSetting, initial: resolvedTier, rounds: [], transitions: [] };
-    if (mode === 'full') { journal.knowledge({ tierHistory }); }
+    if (mode === 'full') { journal.knowledge(focusedWorkflow ? { testFocus } : { tierHistory }); }
     const qualityAnalystSession = new QualityAnalystSession();
     const qualityExperiments = new QualityImprovementSession();
     let qualityObservationEvidence = '';
@@ -1964,6 +1973,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const observations = numericEvidencePrompt();
             if (!prompt.includes(observations)) { prompt += '\n\n' + observations; }
         }
+        if (focusedWorkflow && mode === 'full' && ['writer', 'writer-revision', 'analyst-planning', 'analyst-quality'].includes(role)) {
+            prompt += '\n\n' + testFocusInstruction(testFocus);
+        }
+        if (focusedWorkflow && seedPending && role === 'writer' && focusedMockSetup) {
+            prompt += '\n\nSOURCE MOCK SETUP (non-executable TODO guidance, not output evidence):\n' + focusedMockSetup;
+        }
         prompt += importResourcePrompt();
         if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
             const focusCases = qualityFocusCasesForPrompt(writerCaseMode?.evidence || activeQualityTaskEvidence);
@@ -1998,15 +2013,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             throw new AnalysisStageError('validation', 'source-changed', localize('來源或相依版本改變，停止保存舊執行證據。'));
         }
         const roleOutputBudget = role === 'analyst-planning' ? analystOutputBudget : writerOutputBudget;
-        const minimumOutputTokens = roleOutputBudget.minimumTokens;
         const estimatedInputTokens = estimatePromptTokens(contractedSystem + '\n' + prompt);
         const requiredInputTokens = Math.max(estimatedInputTokens, observedInputTokens ?? 0);
         const correctionReserve = reservedInputTokens + (outputAttempt > 0 ? CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS : 0);
+        const minimumOutputTokens = Math.max(roleOutputBudget.minimumTokens,
+            focusedWorkflow && seedPending && role === 'writer'
+                ? focusedSeedOutputFloor(requestContextWindow, requiredInputTokens, correctionReserve) : 0);
         const capacityAt = (contextWindow: number) => assessPromptCapacity({ envType: requestParams.envType, mode,
             role, seedPending, contextWindow, estimatedInputTokens, observedInputTokens,
             reservedInputTokens: correctionReserve, revisionCurrentCode, revisionWorkload, minimumOutputTokens,
-            modelContextLimit: activeModelProfile.contextLength,
-            modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
+            ...contextGrowthCeiling(activeModelProfile, contextWindow),
             modelContextLimitSource: modelSnapshot.localRuntimeMetadata?.source ?? 'unknown' });
         const initialCapacity = capacityAt(requestContextWindow);
         journal.knowledge({ promptCapacity: initialCapacity });
@@ -2024,8 +2040,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 inputBudget: contextInputBudget(activeModelProfile.paramSize, activeModelProfile.contextLength),
                 revisionCurrentCode, revisionWorkload, minimumOutputTokens });
             const growth = planContextGrowth({ currentContextTokens: requestContextWindow,
-                modelContextLimit: activeModelProfile.contextLength,
-                modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
+                ...contextGrowthCeiling(activeModelProfile, requestContextWindow),
                 estimatedPromptTokens: requiredInputTokens,
                 reservedInputTokens: correctionReserve, requestOutputTokens: limitBudget.requestOutputTokens });
             if (growth.status === 'grown') {
@@ -2197,8 +2212,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     observedInputTokens = stats.promptEvalCount!;
                 }
                 const growth = planWriterOutputGrowth({ exhaustedCap: diagnostic.outputTokenLimit,
-                    currentContextTokens: requestContextWindow, modelContextLimit: activeModelProfile.contextLength,
-                    modelContextLimitVerified: activeModelProfile.contextLengthKnown === true,
+                    currentContextTokens: requestContextWindow, ...contextGrowthCeiling(activeModelProfile, requestContextWindow),
                     estimatedPromptTokens: estimatedInputTokens, observedPromptTokens: observedInputTokens,
                     reservedInputTokens, timedOutputLimit: outputRecoveryTokenLimit(outputStage, completedTransport) });
                 if (growth.status === 'blocked') {
@@ -2996,6 +3010,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         ? localize("[測試生成規則] 分析完成後選取：{0}。", deterministicRuleIds.join(', ') || localize("無"))
         : localize("[測試生成規則] 模型尚未驗證；使用 AST 確定性規則：{0}。", deterministicRuleIds.join(', ') || localize("無")));
 
+    if (focusedWorkflow && mode === 'full' && astContext && !astContext.error) {
+        const setup = await runMockScaffold(params.filePath, params.funcName, undefined, targetImportModule, pythonExecutable);
+        if (setup?.patches.length) {
+            focusedMockSetup = setup.scaffold;
+            recordRole('writer-context', 'mock-setup-selected', { origin: 'source-use-points', executable: false,
+                patchCount: setup.patches.length, allModelSizes: true });
+        }
+    }
     while (currentLoop <= params.maxLoops && !qualityToolsSatisfied) {
 
         if (isExecutionCancelled()) {
@@ -3006,8 +3028,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         log(localize("\n--- 🔄 第 {0} 輪開始 ---", currentLoop));
         currentTier = resolvedTier;
         tierHistory.rounds.push({ loop: currentLoop, start: currentTier });
-        journal.knowledge({ tierHistory });
-        recordRole('tier', 'started', { tier: currentTier, requested: userTierSetting });
+        if (focusedWorkflow) {
+            recordRole('test-focus', 'started', { focus: testFocus, workflow: 'shared-quality-loop-v1' });
+        } else {
+            journal.knowledge({ tierHistory });
+            recordRole('tier', 'started', { tier: currentTier, requested: userTierSetting });
+        }
         finalReportMarkdown += localize("## 第 {0} 輪測試\n", currentLoop);
 
         let targetCode: string;
@@ -3108,7 +3134,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             let tierSuccess = false;
             while (currentTier >= 1 && !tierSuccess && !isExecutionCancelled()) {
                 try {
-                log(localize("[Tier 執行] 目前使用策略：Tier {0}", currentTier));
+                if (!focusedWorkflow) { log(localize("[Tier 執行] 目前使用策略：Tier {0}", currentTier)); }
                 sanitizedCode = '';
                 rawCode = '';
 
@@ -3778,7 +3804,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             break; // 預先驗證成功，跳出 Tier 降階迴圈
         } catch (tierErr: any) {
             throwIfExecutionCancelled();
-            if (!mayFallbackTier(tierErr, currentTier)) { throw tierErr; }
+            if (focusedWorkflow || !mayFallbackTier(tierErr, currentTier)) { throw tierErr; }
             if (tierErr instanceof RepairResponseError) {
                 recordRole('bug-fixer', 'tier-failed', { tier: currentTier, category: 'model-format',
                     reason: tierErr.message, reasonCodes: tierErr.diagnostic.reasonCodes });
@@ -4191,7 +4217,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const proposedIds = new Set(numericPlan?.inputs.map(input => input.mutantId) || []);
                 const supportedSurvivors = survivorLines.filter(line => [...proposedIds].some(id => line.startsWith(`- id ${id},`)));
                 const focus = pendingQualityGap?.focus || selectQualityFocus(loopAssessment, survivorLines, currentLoop, supportedSurvivors,
-                    deferredFocusId ? [deferredFocusId] : []);
+                    deferredFocusId ? [deferredFocusId] : [], focusedWorkflow ? testFocus : 'full');
                 if (deferredFocusId && focus?.id !== deferredFocusId) {
                     analystTasks += '\nThe previous focus remains unresolved and is deferred. Work only on the following current FOCUS; '
                         + 'do not claim the previous task resolved or remove its mutant from scoring.';

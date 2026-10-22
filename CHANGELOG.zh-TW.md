@@ -4,6 +4,16 @@
 
 ## 2026-10-22
 
+### 測試重點共用閉環、明確 Context 請求與 seed 輸出空間
+
+- 側欄以「完整／邊界優先／覆蓋率優先／突變強化」取代模型尺寸 Tier；舊選擇顯示為完整，新流程不依模型大小分流或降 Tier 重問。四種重點只調整提示及實測缺口順序，共用種子、工具執行、同候選 Reviewer、覆蓋率與突變、有界修訂；既有品質門檻與角色資格保留。舊 API／歷史報告仍可讀。
+- 明確正整數 `runtimeContextTokens`／已保存的使用者容量，可以高於或缺少模型 metadata。修正手動值被較低宣告擋住的路徑，側欄、測試連線及正式角色請求採同一 `num_ctx`；保留原始宣告，不把手動值或固定短探針冒充上限／長提示實證。未知上限或手動超宣告時，不自動向更大容量外推；非法數值、過期角色資格與必要提示超額仍停止。
+- 新流程的 Writer seed 按完整提示剩餘空間分配最高 4096 的輸出 cap，扣除補正與 128 tokens 餘裕；正常 EOS 可提早結束，Context 與輸出／時間額度分開。Analyst 維持短計畫，原期限、請求次數及截斷回覆拒絕不變。
+- 來源使用點 Mock scaffold 改為各模型共用、每目標一次且只附初始 seed；仍是非可執行 TODO 指引，不推導答案、不自動替換目標或執行未完成骨架。報告與角色事件記錄測試重點；中英文同步。
+- 驗證：相關 Node 107 項通過；新增完整流程／截斷／中止及 Mock 組合 Node 20 項與 Python 42 項通過；快速驗證 Node 742 項、Python 42 項及 Webview 語法通過。上述集合有重疊，不累加為完整測試數。TypeScript、lint、production build、追蹤檔及可達歷史密鑰掃描通過，未執行完整 `test:full` 或實驗室 F5／DGX 長 Context 驗收。
+- 真模型限界：本機 `qwen2.5-coder:3b-instruct` 以 8192 Context／4096 輸出 cap 完成 BMI 單一 seed，實際輸出 113 tokens、正常 stop，單一測試實跑成功，約 10.3 秒。這不是完整 Reviewer／coverage／mutation 真模型驗收，不代表 2B、13B、70B 或所有小模型可用。完整新流程的執行／審查／突變回歸採固定模型回覆與真實 Python 工具。
+- 保留原有八份 WIP；重疊的五份 UI／翻譯檔依使用者明確授權合併，提交只取本次差異，原有 WIP 不納入。
+
 ### 清除 VS Code 套件宣告警告
 
 - 移除 `activationEvents` 中冗餘的 `onView:mutation-test-view`；目前最低 VS Code 版本高於 1.74，宿主會從 `contributes.views` 自動產生啟用事件，保留相同 view ID 與註冊流程。

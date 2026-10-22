@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 容量選擇與測試重點（2026-10-22）
+
+側欄以完整、邊界優先、覆蓋率優先及突變強化取代模型尺寸 Tier。這些是共同閉環的優先順序，不是品質門檻或跳過量測的模式；每次仍只處理一案／一缺口，新增後實跑並取得同候選 Reviewer 同意。覆蓋率重點優先選未覆蓋處，突變重點優先選存活變異；邊界重點優先來源支持的邊界策略及可執行數值規劃，沒有相應證據時回到其他真實缺口。沒有證據不發明答案。舊 Tier API 與報告 reader 保留相容，新側欄不再提供尺寸分級或自動降階。
+
+`testFocus.ts` 提供中性任務指引、標籤與資格政策；新重點仍需要相同模型及容量的 Writer／Reviewer 資格。Mock scaffold 按來源使用點取得一次，初次 Writer 提示才附上，不受模型大小限制。新 seed 按完整提示、補正與 128 tokens 餘裕分配最高 4096 的輸出 cap；正常 EOS 可提前結束，舊截斷、期限與計數閘門不變。測試重點不改變 num_ctx，也不保證減少 Ollama 的模型載入時間。
+
+`resolveLocalRuntimeContext` 接受明確正整數執行容量，保留原始 metadata；超出或缺少宣告的手動請求在 UI 明示未驗證。`contextGrowthCeiling` 只在宣告能覆蓋目前請求時授予自動增容邊界；否則只能使用已選容量，不把手動值或短探針當成模型上限。正式請求仍明傳 num_ctx，容量資格、完整輸入與執行驗證均須獨立成立。
+
 ## 宿主傳輸與 Mock 證據回歸修復（2026-10-21）
 
 `modelTransport.ts` 不再注入 caller dispatcher 或探查私有全域 Symbol。正式請求沿用目前的 `globalThis.fetch`；VS Code 仍決定 Proxy、系統憑證與 TLS Agent。在每次 fetch 的 `AsyncLocalStorage` 作用域內，透過 `undici:request:create` 對最終 Request 的兩個可寫時間欄位套用原期限餘額，避免 Agent 被宿主重建後失去設定。Subscriber 不拋例外；欄位不支援則以 `MODEL_TRANSPORT_TIMEOUT_UNSUPPORTED` 取消本次請求。這些欄位是需要回歸核實的 runtime 能力，並非穩定公開設定 API；非 Undici transport 保留自己的政策。完整 body 的原期限與取消仍由 caller 持有。`undici` 僅為測試建構 Agent 的開發相依。詳見 [Undici diagnostics channel](https://undici.nodejs.org/api/DiagnosticsChannel)。

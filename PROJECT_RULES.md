@@ -2,6 +2,12 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+# 2026-10-22 容量與測試重點修訂（優先於舊 Tier／手動上限條款）
+
+- 明確保存的正整數 `num_ctx` 是使用者的執行請求，可以超出或缺少模型 metadata。不得覆寫模型宣告、冒稱伺服器已接受或長提示已驗證；原始宣告、選擇、觀測及輸出 cap 分開記錄。同端點／模型／num_ctx 的角色資格仍須匹配。自動模式沿用宣告規劃，未知上限或手動超宣告時，不自動向更大容量外推；必要輸入不截斷。
+- 新介面使用 full、boundary、coverage、mutation 測試重點，只改情境與實測缺口的優先順序，不按模型參數量分 Tier、不降 Tier 重問。四種重點共用 seed、執行、Reviewer、coverage、mutation 與有界修訂；Auto 的角色資格與首錯即停仍適用。舊策略僅作設定及歷史相容。
+- Mock setup 骨架依來源使用點提供給各大小模型，不由 Tier 或名稱決定。scaffold 保持非可執行，不能代寫預期值。新 seed 的初始輸出額度按完整提示剩餘空間配置，最高 4096，保留補正／餘裕、原 deadline、一次恢復及截斷拒絕；提高輸出 cap 不要求模型填滿，也不改 num_ctx 或載入設定。
+
 ## 目前驗收優先順序
 
 - `summarizeRepairOutput` 裁切超長 `FAIL:`／`ERROR:` 區塊時，必須保留失敗測試識別標頭與例外診斷列（如 `AssertionError:`），不得因後方巨量 `Calls:` 清單只取尾端而遺失核心錯誤；`executionFailureRepairGuidance` 僅在執行輸出實際出現對應 `AssertionError`／不可變型別 `TypeError` 時按需補充修復指引。

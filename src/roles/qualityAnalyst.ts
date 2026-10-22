@@ -5,6 +5,7 @@ import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { coverageGapIds } from '../pipeline/qualityRegression';
 import type { QualityTaskEvidence, QualityTaskIdentity } from '../pipeline/qualityTaskEvidence';
 import { qualityAnalystContractVersion } from './roleContracts';
+import { TestFocus } from '../pipeline/testFocus';
 
 export interface QualityTask {
     evidence: string;
@@ -29,7 +30,7 @@ export interface QualityFocus { id: string; kind: 'coverage' | 'survivor'; evide
 
 /** Rotate one deterministic measured gap per round; no model selects or invents evidence. */
 export function selectQualityFocus(coverage: TargetCoverageAssessment, survivors: string[], round: number,
-    preferredSurvivors: readonly string[] = [], excludedFocusIds: readonly string[] = []): QualityFocus | undefined {
+    preferredSurvivors: readonly string[] = [], excludedFocusIds: readonly string[] = [], priority: TestFocus = 'full'): QualityFocus | undefined {
     const items = [
         ...coverageGapIds(coverage).map(evidence => ({ kind: 'coverage' as const, evidence })),
         ...[...new Set(survivors)].filter(Boolean).map(evidence => ({ kind: 'survivor' as const, evidence }))
@@ -39,7 +40,12 @@ export function selectQualityFocus(coverage: TargetCoverageAssessment, survivors
     const alternatives = items.filter(item => !excludedFocusIds.includes(item.id));
     const eligible = alternatives.length ? alternatives : items;
     const supported = eligible.filter(item => item.kind === 'survivor' && preferredSurvivors.includes(item.evidence));
-    const pool = supported.length ? supported : eligible;
+    const emphasized = priority === 'coverage' ? eligible.filter(item => item.kind === 'coverage')
+        : priority === 'boundary' ? supported.length ? supported : eligible.filter(item => item.kind === 'coverage')
+        : priority === 'mutation' ? eligible.filter(item => item.kind === 'survivor') : [];
+    const relevant = emphasized.length ? emphasized : eligible;
+    const supportedRelevant = supported.filter(item => relevant.includes(item));
+    const pool = supportedRelevant.length ? supportedRelevant : relevant;
     const item = pool[(Math.max(1, round) - 1) % pool.length];
     return item;
 }

@@ -85,7 +85,7 @@ test('formats a non-secret system log for a successful connection that fails qua
 
     assert.strictEqual(
         message,
-        '[模型資格] Cloud Gemini／gemma-4-31b-it：連線成功，但未通過 純 Python unittest（模型沒有產生有效的 unittest 結構。）。Auto 將保守使用 Tier 1。'
+        '[模型資格] Cloud Gemini／gemma-4-31b-it：連線成功，但未通過 純 Python unittest（模型沒有產生有效的 unittest 結構。）。完整流程須先完成角色資格驗證。'
     );
 });
 

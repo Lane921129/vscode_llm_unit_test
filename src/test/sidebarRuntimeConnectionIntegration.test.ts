@@ -196,15 +196,11 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             assertVerified(16384, true);
         });
 
-        await t.test('invalid explicit context and unavailable model limits stop before qualification transport', async () => {
+        await t.test('invalid explicit context stops before qualification transport', async () => {
             for (const scenario of [
                 { setting: -1, show: () => Response.json(metadata) },
                 { setting: 1.5, show: () => Response.json(metadata) },
-                { setting: '8192', show: () => Response.json(metadata) },
-                { setting: 32769, show: () => Response.json(metadata) },
-                { setting: 8192, show: () => Response.json({ details: metadata.details }) },
-                { setting: 8192, show: () => new Response('PRIVATE_PROVIDER_ERROR', { status: 500 }) },
-                { setting: 8192, show: () => new Response('PRIVATE_INVALID_JSON', { status: 200 }) }
+                { setting: '8192', show: () => Response.json(metadata) }
             ]) {
                 reset(); settings.set('runtimeContextTokens', scenario.setting);
                 const probes = installTransport(scenario.show);
@@ -215,6 +211,23 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
                 assert.ok(Object.values(finalProfile().roleQualification).every((role: any) => role.state !== 'verified'));
                 assert.equal(information.length, 0);
                 assert.ok(warnings.some(message => message.includes('Context 設定不可用')));
+                assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_PROVIDER_ERROR|PRIVATE_INVALID_JSON/);
+            }
+        });
+
+        await t.test('explicit context above or without metadata reaches fixed role probes without replacing model metadata', async () => {
+            for (const scenario of [
+                { setting: 32769, known: true, show: () => Response.json(metadata) },
+                { setting: 8192, known: false, show: () => Response.json({ details: metadata.details }) },
+                { setting: 8192, known: false, show: () => new Response('PRIVATE_PROVIDER_ERROR', { status: 500 }) },
+                { setting: 8192, known: false, show: () => new Response('PRIVATE_INVALID_JSON', { status: 200 }) }
+            ]) {
+                reset(); settings.set('runtimeContextTokens', scenario.setting);
+                const probes = installTransport(scenario.show);
+                await request();
+                assert.deepEqual(probes.map(body => body.options.num_ctx), Array(3).fill(scenario.setting));
+                assertVerified(scenario.setting, scenario.known);
+                assert.equal(finalProfile().contextLength, scenario.known ? 16384 : 4096);
                 assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_PROVIDER_ERROR|PRIVATE_INVALID_JSON/);
             }
         });

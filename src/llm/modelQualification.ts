@@ -116,7 +116,7 @@ export function formatModelQualificationLog(profile: ModelQualificationProfile, 
     const summary = profile.testGenerationReady === true
         ? localize("[模型資格] {0}／{1}：連線成功，已通過 {2}。", provider, model, mode)
             + ' ' + localize('短探針只認證固定樣本；正式函式仍須檢查完整提示容量、實際執行與審查品質。')
-        : localize("[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。Auto 將保守使用 Tier 1。", provider, model, mode, reason);
+        : localize("[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。完整流程須先完成角色資格驗證。", provider, model, mode, reason);
     return profile.testGenerationReady !== true && responsePreview
         ? localize("{0}\n[模型探測回應]\n{1}", summary, responsePreview)
         : summary;

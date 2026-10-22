@@ -1,4 +1,5 @@
 import { localize } from '../i18n/core';
+import { TestFocus, testFocusLabel } from '../pipeline/testFocus';
 export interface ReportProvenance {
     extensionId: string;
     extensionVersion: string;
@@ -10,6 +11,7 @@ export interface ReportProvenance {
     modelProvider: 'local' | 'cloud' | 'custom';
     modelName: string;
     requestedTier: string;
+    testFocus?: TestFocus;
     resolvedTier: number;
     qualified: boolean | undefined;
     qualificationReason?: string;
@@ -39,7 +41,8 @@ export function formatReportProvenance(provenance: ReportProvenance): string {
         localize("- **執行模式**: {0}", provenance.extensionMode),
         localize("- **模型識別**: `{0}/{1}`", provenance.modelProvider, provenance.modelName),
         localize("- **模型**: `{0}`", provenance.modelName),
-        localize("- **起始策略**: 請求 {0}，起始 Tier {1}（中途切換見策略執行摘要）", provenance.requestedTier, provenance.resolvedTier),
+        provenance.testFocus ? localize('- **測試重點**: {0}（共同品質流程）', testFocusLabel(provenance.testFocus))
+            : localize("- **起始策略**: 請求 {0}，起始 Tier {1}（中途切換見策略執行摘要）", provenance.requestedTier, provenance.resolvedTier),
         localize("- **模型 unittest 生成能力（測試連線驗證）**: {0}", qualification),
         ...qualificationDetails,
         ...(provenance.roleQualification ? [

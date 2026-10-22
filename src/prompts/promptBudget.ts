@@ -58,13 +58,13 @@ export function resolveLocalRuntimeContext(profile: {
         return { ok: false, reasonCode: 'invalid-runtime-context' };
     }
     const hasPreference = configured === 0 && typeof preferred === 'number' && preferred > 0;
+    // Origin-less legacy numbers are not a fresh user instruction.
+    if (hasPreference && profile.preferredRuntimeContextSource === undefined && !knownUpperBound) {
+        return { ok: false, reasonCode: 'runtime-context-metadata-required' };
+    }
     if (hasPreference && profile.preferredRuntimeContextSource !== undefined
         && !['user-choice', 'captured-runtime'].includes(profile.preferredRuntimeContextSource)) {
         return { ok: false, reasonCode: 'invalid-runtime-context' };
-    }
-    const requiresKnownBound = configured > 0 || (hasPreference && profile.preferredRuntimeContextSource !== 'captured-runtime');
-    if (requiresKnownBound && !knownUpperBound) {
-        return { ok: false, reasonCode: 'runtime-context-metadata-required' };
     }
     const observed = profile.effectiveRuntimeContextTokens;
     // A known model limit drives automatic allocation. Only a real user choice
@@ -76,13 +76,18 @@ export function resolveLocalRuntimeContext(profile: {
         : isLocalRuntimeQualification(profile.qualificationRuntime) ? profile.qualificationRuntime.numCtx
         : typeof observed === 'number' && Number.isSafeInteger(observed) && observed > 0 ? observed
         : UNKNOWN_CONTEXT_WINDOW;
-    if (knownUpperBound && contextWindow > profile.contextLength) {
-        return { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' };
-    }
     return {
         ok: true, configuredTokens: configured, mode: configured > 0 ? 'explicit' : 'automatic',
         contextWindow, inputBudget: Math.floor(contextWindow * 0.7)
     };
+}
+
+/** A user's explicit runtime request is not a verified architecture limit.
+ * Keep the original metadata; allow the request but never auto-grow past it. */
+export function contextGrowthCeiling(profile: { contextLength: number; contextLengthKnown?: boolean }, requested: number) {
+    const verified = profile.contextLengthKnown === true && Number.isSafeInteger(profile.contextLength)
+        && profile.contextLength > 0 && profile.contextLength >= requested;
+    return { modelContextLimit: verified ? profile.contextLength : undefined, modelContextLimitVerified: verified };
 }
 
 /** Conservative estimate, not provider tokenizer usage. */

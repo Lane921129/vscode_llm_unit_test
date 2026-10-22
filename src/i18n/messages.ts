@@ -1,5 +1,12 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '完整': 'Complete',
+    '邊界優先': 'Boundary first',
+    '覆蓋率優先': 'Coverage first',
+    '突變強化': 'Mutation strengthening',
+    '- **測試重點**: {0}（共同品質流程）': '- **Test focus**: {0} (shared quality workflow)',
+    '[測試重點] {0}；使用共同品質流程。': '[Test focus] {0}; shared quality workflow.',
+    '測試重點模式需要先完成本次容量的 Writer 角色測試連線；完整流程亦需 Reviewer。': 'Test focus mode requires Writer qualification at the selected capacity; the full workflow also requires Reviewer.',
     'HTTP 傳輸原因碼：{0}。': 'HTTP transport failure code: {0}.',
     'HTTP 傳輸等待逾時（{0}）；未記錄供應商回應內容。': 'HTTP transport wait timed out ({0}); provider response content was not recorded.',
     '單次 API 等待上限（秒）': 'Per-API wait limit (seconds)',
@@ -918,7 +925,9 @@ export const englishMessages: Record<string, string> = {
     "未提供原因": "No reason provided",
     "[模型資格] {0}／{1}：舊探針結果已過期（原紀錄：{2}）；請重新執行測試連線。正式測試生成使用純 Python。": "[Model qualification] {0}/{1}: old probe expired (previous: {2}). Rerun Test connection. Test generation uses plain Python.",
     "[模型資格] {0}／{1}：連線成功，已通過 {2}。": "[Model qualification] {0}/{1}: connected; passed {2}.",
-    "[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。Auto 將保守使用 Tier 1。": "[Model qualification] {0}/{1}: connected, but failed {2} ({3}). Auto conservatively uses Tier 1.",
+    "[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。完整流程須先完成角色資格驗證。": "[Model qualification] {0}/{1}: connected, but failed {2} ({3}). Complete role qualification before starting the full workflow.",
+    "⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（{0}）。完整流程須先完成角色資格驗證。": "⚠️ Cloud Gemini connected, but unittest generation was not verified ({0}). Complete role qualification before starting the full workflow.",
+    "⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（{0}）。完整流程須先完成角色資格驗證。": "⚠️ Custom API connected, but unittest generation was not verified ({0}). Complete role qualification before starting the full workflow.",
     "{0}\n[模型探測回應]\n{1}": "{0}\n[Model probe response]\n{1}",
     "Reviewer 沒有回傳 JSON。": "Reviewer returned no JSON.",
     "Reviewer 已通過 review-v7 分類、行號引用與欄位契約。": "Reviewer passed review-v7 categories, line citations and field contracts.",

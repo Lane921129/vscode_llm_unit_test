@@ -1,7 +1,9 @@
 import { localize } from '../i18n/core';
+import { resolveTestFocus } from '../pipeline/testFocus';
 import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettings';
 
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2) {
+    const selectedFocus = resolveTestFocus(currentStrategy);
     const selectedEngine = ['builtin', 'mutatest', 'mutmut'].includes(mutationEngine) ? mutationEngine : 'builtin';
     const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
     return `
@@ -295,14 +297,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>${t('ui.executionValidation')}</option>
             </select>
             <p id="validation-scope" role="status" aria-live="polite"></p>
-            <label>🧠 ${t('ui.promptStrategy')}</label>
+            <label for="prompt-strategy">🧠 ${t('ui.testFocus')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
-                <option value="auto"     ${currentStrategy === 'auto'  ? 'selected' : ''}>${t('ui.tierAuto')}</option>
-                <option value="tier1"    ${currentStrategy === 'tier1' ? 'selected' : ''}>${t('ui.tier1')}</option>
-                <option value="tier2"    ${currentStrategy === 'tier2' ? 'selected' : ''}>Tier 2 — 7–13B (Ground-Truth)</option>
-                <option value="tier3"    ${currentStrategy === 'tier3' ? 'selected' : ''}>Tier 3 — 34–70B (Mock Scaffold)</option>
-                <option value="tier4"    ${currentStrategy === 'tier4' ? 'selected' : ''}>${t('ui.tier4')}</option>
+                <option value="full" ${selectedFocus === 'full' ? 'selected' : ''}>${t('ui.focusFull')}</option>
+                <option value="boundary" ${selectedFocus === 'boundary' ? 'selected' : ''}>${t('ui.focusBoundary')}</option>
+                <option value="coverage" ${selectedFocus === 'coverage' ? 'selected' : ''}>${t('ui.focusCoverage')}</option>
+                <option value="mutation" ${selectedFocus === 'mutation' ? 'selected' : ''}>${t('ui.focusMutation')}</option>
             </select>
+            <p>${t('ui.focusGuide')}</p>
 
             <label>📂 ${t('ui.projectPath')}</label>
             <div class="flex-row">
@@ -490,7 +492,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         updateExecutionTimingStatus();
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         vscode.postMessage({ command: 'getInitialData' });
@@ -732,7 +734,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         i18n.runtimeContextLimit + tokens(msg.modelLimit),
                         i18n.runtimeContextRequest + tokens(msg.requestTokens),
                         ...(msg.configuredTokens > 0 ? [i18n.runtimeContextGlobal] : []),
-                        ...(msg.reasonCode ? [i18n.runtimeContextUnavailable] : [])
+                        ...(msg.reasonCode ? [i18n.runtimeContextUnavailable] : []),
+                        ...(msg.requestTokens > 0 && (!msg.modelLimit || msg.requestTokens > msg.modelLimit)
+                            ? [i18n.runtimeContextOverride] : [])
                     ].join('\\n');
                     updateLocalContextControls();
                     break;

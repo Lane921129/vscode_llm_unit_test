@@ -120,13 +120,14 @@ test('Sidebar defaults to half a known model limit while preserving explicit per
             assert.equal(getRuntimeContextPreference(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY), identity('neutral-a', 'http://127.0.0.1:21434'))?.tokens, 16384);
         });
 
-        await t.test('unknown upper bounds retain captured fallback after reopening but reject manual unverified capacity', async () => {
+        await t.test('unknown upper bounds retain fallback after reopening and accept explicit runtime requests', async () => {
             reset(); shown = {}; running = { models: [] }; await get();
             assert.equal(last().requestTokens, 4096); assert.equal(last().modelLimit, undefined);
             view = attach(); await get(); assert.equal(last().requestTokens, 4096); assert.equal(last().reasonCode, undefined);
             const previous = JSON.stringify(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY));
-            await save(8192); assert.equal(JSON.stringify(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY)), previous);
-            assert.equal(warnings.length, 1); assert.equal(last().requestTokens, 4096);
+            await save(8192); assert.notEqual(JSON.stringify(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY)), previous);
+            assert.equal(warnings.length, 0); assert.equal(last().requestTokens, 8192);
+            assert.equal(last().modelLimit, undefined); assert.equal(last().savedSource, 'user-choice');
         });
 
         await t.test('an unknown model upper bound does not turn its captured ps allocation into an invalid manual choice after reopen', async () => {
@@ -149,7 +150,7 @@ test('Sidebar defaults to half a known model limit while preserving explicit per
 
         await t.test('invalid user choices, active analyses and unsaved endpoint messages do not mutate preferences', async () => {
             reset(); await get(); const previous = JSON.stringify(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY));
-            for (const tokens of [-1, 1.5, NaN, 32769]) { await save(tokens); }
+            for (const tokens of [-1, 1.5, NaN]) { await save(tokens); }
             assert.equal(JSON.stringify(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY)), previous);
             view.provider.beginAnalysis('active'); const count = fetchCount;
             await get(); await save(16384); assert.equal(fetchCount, count);

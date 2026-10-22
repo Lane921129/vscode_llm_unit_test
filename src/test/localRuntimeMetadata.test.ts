@@ -90,11 +90,11 @@ test('cancelled discovery sends no requests and stops even a transport that igno
     assert.equal(stopped.diagnostic.allocation.reasonCode, 'cancelled');
 });
 
-test('fresh upper bound keeps manual choices and validates a newly lower model limit', async () => {
+test('fresh metadata remains intact when an explicit runtime request exceeds it', async () => {
     const fresh = await discover(() => Response.json(metadata), { cachedProfile: cached });
     assert.equal(resolveLocalRuntimeContext({ ...fresh.metadata, runtimeContextTokens: 12288 }).ok, true);
     const lowered = await discover(() => Response.json({ model_info: { 'neutral.context_length': 4096 } }), { cachedProfile: cached });
     assert.equal(lowered.metadata.contextLength, 4096);
     assert.deepEqual(resolveLocalRuntimeContext({ ...lowered.metadata, runtimeContextTokens: 8192 }),
-        { ok: false, reasonCode: 'runtime-context-exceeds-model-limit' });
+        { ok: true, configuredTokens: 8192, mode: 'explicit', contextWindow: 8192, inputBudget: 5734 });
 });

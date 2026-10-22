@@ -65,6 +65,7 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
             promptStrategy: 'auto', validationMode: 'full' };
         const finished = () => messages.filter(item => item.command === 'analysisFinished').length;
         for (const [name, profiles, mode] of [
+            ['focused-boundary-unprobed', [], 'full'],
             ['unprobed-full', [], 'full'],
             ['writer-only-full', [profile()], 'full'],
             ['wrong-context', [{ ...profile(), qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: 8192 } }], 'execution'],
@@ -74,7 +75,8 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
             savedProfiles = [...profiles]; activate();
             const beforeFinished = finished(), beforeSpawns = spawns.length, beforeRequests = requests.length;
             const outputPath = path.join(root, name);
-            await handlers.get('llm-unit-test.runBatchAnalysis')!({ ...base, batchPath: root, outputPath, validationMode: mode });
+            await handlers.get('llm-unit-test.runBatchAnalysis')!({ ...base,
+                ...(name.startsWith('focused-') ? { promptStrategy: 'boundary' } : {}), batchPath: root, outputPath, validationMode: mode });
             assert.equal(spawns.length, beforeSpawns, name + ': no source scan, import, setup or Trace before Auto readiness');
             assert.equal(requests.length, beforeRequests, name + ': no model generation or qualification request');
             assert.equal(fs.existsSync(outputPath), false, name + ': no fictitious target result');
