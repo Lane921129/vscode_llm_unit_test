@@ -40,6 +40,9 @@ test('seed instructions select only the AST-declared synchronous or async invoca
     assert.match(async, /target is async: use unittest.IsolatedAsyncioTestCase, async def test_ and await its call/);
     assert.doesNotMatch(async, /never await it|target is synchronous/);
     assert.match(buildWriterSeedSystemPrompt('suite instructions'), /only an async target needs/);
+    assert.match(sync, /parameter\.member needs an attribute-bearing fixture/);
+    assert.match(sync, /not a dict of same-named keys/);
+    assert.match(sync, /callable members explicit unittest\.mock\.Mock behavior/);
 });
 
 test('an opaque return diagnostic never becomes a claimed verified seed case or a fixture type', () => {

@@ -35,7 +35,7 @@ export function readOutputShapeDiagnostic(value: unknown): ReturnType<typeof out
 /** Never treat a syntactically valid prefix as a completed candidate. The
  * diagnostic deliberately excludes the provider response and arbitrary reason. */
 export function getCompletedOllamaText(payload: Record<string, unknown>, outputTokenLimit?: number,
-    privacy?: Parameters<typeof buildModelOutputPreview>[1]): string {
+    privacy?: Parameters<typeof buildModelOutputPreview>[1], requireExplicitStop = false): string {
     if (payload.done_reason === 'length') {
         const knownLimit = Number.isSafeInteger(outputTokenLimit) && (outputTokenLimit as number) > 0;
         const shape = typeof payload.response === 'string' ? outputShape(payload.response) : undefined;
@@ -52,6 +52,10 @@ export function getCompletedOllamaText(payload: Record<string, unknown>, outputT
                     ...(privacy && typeof payload.response === 'string'
                         ? { responsePreview: buildModelOutputPreview(payload.response, privacy) } : {}) } : {}),
                 ...(knownLimit ? { outputTokenLimit } : {}) });
+    }
+    if (requireExplicitStop && (payload.done !== true || payload.done_reason !== 'stop')) {
+        throw new AnalysisStageError('model-format', 'model-request',
+            localize('種子續寫未取得明確完整 stop 證據；未接合或執行內容。'));
     }
     return typeof payload.response === 'string' ? payload.response : '';
 }

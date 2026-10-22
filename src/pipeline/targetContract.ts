@@ -25,6 +25,17 @@ export function formatTargetContract(module: string, name: string, args: string[
 /** Packaging only: no input, call, fixture value, expected value or assertion is
  * authored here. An incomplete prefix must never become an executable candidate. */
 export function formatWriterSeedPackaging(module: string, name: string, context?: any): string {
+    const prefix = writerSeedCodePrefix(module, name, context);
+    if (!prefix) { return ''; }
+    return 'WRITER_SEED_PACKAGING_V1 (incomplete prefix, not an executable test or assertion evidence)\n'
+        + 'Start the returned test file with these imports and unittest wrapper; add any required helper imports. '
+        + 'Then author the setup, ONE real target call and its evidence-supported assertion inside this method.\n'
+        + '```python\n' + prefix + '```\n'
+        + 'Return the COMPLETE test file in one Python fence; do not return this empty prefix, source implementation, plans or explanations.';
+}
+
+/** The same wrapper for an explicit code-completion request. No test body. */
+export function writerSeedCodePrefix(module: string, name: string, context?: any): string {
     const identifier = (value: unknown): value is string => typeof value === 'string'
         && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(value.normalize('NFKC'));
     const owner = context?.class_name || context?.class_context?.name || (name.includes('.') ? name.split('.')[0] : undefined);
@@ -32,11 +43,7 @@ export function formatWriterSeedPackaging(module: string, name: string, context?
     if (!module.split('.').every(identifier) || !identifier(imported) || imported === 'unittest'
         || typeof context?.is_async !== 'boolean') { return ''; }
     const harness = imported === 'GeneratedSeedTests' ? 'GeneratedSeedCases' : 'GeneratedSeedTests';
-    return 'WRITER_SEED_PACKAGING_V1 (incomplete prefix, not an executable test or assertion evidence)\n'
-        + 'Start the returned test file with these imports and unittest wrapper; add any required helper imports. '
-        + 'Then author the setup, ONE real target call and its evidence-supported assertion inside this method.\n'
-        + '```python\nimport unittest\n' + `from ${module} import ${imported}\n\n`
+    return 'import unittest\n' + `from ${module} import ${imported}\n\n`
         + `class ${harness}(unittest.${context.is_async ? 'IsolatedAsyncioTestCase' : 'TestCase'}):\n`
-        + `    ${context.is_async ? 'async def' : 'def'} test_seed(self):\n` + '```\n'
-        + 'Return the COMPLETE test file in one Python fence; do not return this empty prefix, source implementation, plans or explanations.';
+        + `    ${context.is_async ? 'async def' : 'def'} test_seed(self):\n`;
 }

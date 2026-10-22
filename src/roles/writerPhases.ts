@@ -40,6 +40,8 @@ export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: bool
         + 'Use exact observed results or explicit same-test controls; never call dependencies to calculate expected values. '
         + 'Use with self.assertRaises(ExactType) for an evidenced exception, no message second argument. '
         + 'Pure calculations need no mocks; control external/ambient boundaries only at their source use points with fresh per-test state. '
+        + 'Source parameter.member needs an attribute-bearing fixture (for example types.SimpleNamespace), not a dict of same-named keys. '
+        + 'Give callable members explicit unittest.mock.Mock behavior; preserve the source receiver shape. '
         + 'Never patch immutable built-in class members; replace the owning module binding. '
         + 'No direct test network, file I/O, shell, dynamic execution or shared SQLite; no skip, swallowed errors or tautologies. '
         + 'After this one test, close the code fence and stop. Expansion follows successful execution; independent Reviewer approval remains required.'

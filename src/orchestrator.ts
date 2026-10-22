@@ -134,6 +134,8 @@ import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutp
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText, readOutputShapeDiagnostic } from './llm/ollamaResponse';
 import { diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
+import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
+import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -489,6 +491,8 @@ interface AnalysisParams {
     requestContextTokens?: number;
     /** Role-owned output cap paired with the final input budget; local transport only. */
     requestOutputTokens?: number;
+    /** Internal, observed-echo recovery only; not a saved model capability. */
+    requestSeedCompletion?: boolean;
     /** Internal batch inventory; never serialized with provider credentials. */
     batchJournal?: BatchJournal;
     batchTargetId?: number;
@@ -1118,7 +1122,8 @@ async function requestLlmApiUnlocked(
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
         bodyData = {
             model: params.modelName,
-            ...buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt),
+            ...(params.requestSeedCompletion ? { prompt: userPrompt, raw: true }
+                : buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt)),
             stream: true,
             options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
                 ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}) },
@@ -1247,8 +1252,11 @@ async function requestLlmApiUnlocked(
         if (params.envType === 'local') {
             responseText = getCompletedOllamaText(resJson, params.requestOutputTokens, {
                 knownSecrets: [params.cloudKey, params.customKey].filter((value): value is string => Boolean(value)),
-                excludedTexts: [contractedSystemPrompt, userPrompt]
-            });
+                excludedTexts: [contractedSystemPrompt, userPrompt],
+                // Never whitelist a runtime prompt, source, fixture or candidate.
+                publicInstructionTexts: [buildWriterSeedSystemPrompt('', true), buildWriterSeedSystemPrompt('', false),
+                    buildWriterSeedSystemPrompt(''), writerOutputFormatCorrection(true), writerOutputFormatCorrection(false)]
+            }, params.requestSeedCompletion);
         } else if (params.envType === 'custom') {
             const customText = getCustomChatCompletionText(resJson);
             if (customText) {
@@ -1733,6 +1741,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let activeSeedCaseFacts = '';
     let focusedMockSetup = '';
     let seedTargetIsAsync: boolean | undefined;
+    let seedPackagingPrefix = '';
     const testGenerationResponseFormat = selectTestGenerationResponseFormat(activeModelProfile);
     const analysisResponseFormat = selectAnalysisResponseFormat(activeModelProfile);
     if (testGenerationResponseFormat === 'text') {
@@ -2006,7 +2015,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     methodBodyAuthor: 'model', scenarioDeduplicationPreserved: true });
             }
         }
-        const contractedSystem = addOutputContract(system, format);
+        let contractedSystem = addOutputContract(system, format);
+        let completionPrefix = '';
         const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
             && localRuntime?.ok === true;
         const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
@@ -2166,6 +2176,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             capacity: capacityAt(contextWindow),
             ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
             contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt, recoveryMode,
+            ...(completionPrefix ? { writerPromptMode: 'seed-code-completion-v1', packagingPrefixHash: evidenceHash(completionPrefix),
+                methodBodyAuthor: 'model' } : {}),
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
         if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, correctionReserve)
@@ -2192,7 +2204,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         recordRole('model-request', 'requested', metrics);
         try {
             const response = await requestLlmApi({ ...requestParams, requestContextTokens: contextWindow,
-                requestOutputTokens: roleBudget.requestOutputTokens }, system, prompt, requestLog, format, deadline,
+                requestOutputTokens: roleBudget.requestOutputTokens, requestSeedCompletion: Boolean(completionPrefix) }, system, prompt, requestLog, format, deadline,
                 timing => {
                     if (timing.kind === 'transport' && timing.outcome === 'completed') { completedTransport = timing; }
                     recordRole('model-request', 'timing', { role, ...timing });
@@ -2202,7 +2214,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
             }
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
-            return response;
+            return completionPrefix ? assembleWriterSeedCompletion(completionPrefix, response) : response;
         } catch (error) {
             const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
                 ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; responseShape?: unknown;
@@ -2235,15 +2247,29 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             recoveryMode: 'format-correction', targetDeadlinePreserved: true });
                         throw error;
                     }
-                    prompt += writerOutputFormatCorrection(mode === 'full' && seedPending);
+                    const seed = mode === 'full' && seedPending;
+                    prompt += writerOutputFormatCorrection(seed);
+                    if (seed && seedPackagingPrefix) {
+                        // A completed instruction echo is evidence for trying completion;
+                        // it does not establish a permanent capability or grant execution.
+                        completionPrefix = seedPackagingPrefix;
+                        prompt = writerSeedCompletionPrompt(contractedSystem, prompt, completionPrefix);
+                        system = ''; contractedSystem = '';
+                    }
                     recoveryMode = 'format-correction';
                     observedInputTokens = undefined;
                     recoveryTransport = undefined;
                     recordRole('model-request', 'output-format-retry', { role, ...recovery,
+                        writerPromptMode: completionPrefix ? 'seed-code-completion-v1' : 'instruction',
                         outputDiagnosis: 'repetitive-without-tests', requestOutputTokens: roleBudget.requestOutputTokens,
                         previousOutputTokens: diagnostic.outputTokenLimit, responseShape: readOutputShapeDiagnostic(diagnostic.responseShape),
                         retry: 1, deadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true,
                         evidencePreserved: true, discardedOutputReused: false });
+                    if (completionPrefix) {
+                        recordRole('writer-seed', 'completion-selected', { version: 'seed-code-completion-v1',
+                            packagingPrefixHash: evidenceHash(completionPrefix), methodBodyAuthor: 'model',
+                            evidencePreserved: true, discardedOutputReused: false, targetDeadlinePreserved: true });
+                    }
                     requestLog(localize('[輸出恢復] {0} 回覆高度重複且未形成可辨識測試；改送一次格式修正，保留原期限。', role));
                     continue;
                 }
@@ -3124,6 +3150,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // final request will carry before optional Writer materials use this allowance.
         const generationBaseline = seedPending ? '' : checkpoints.executable?.code || bestCode || '';
         seedTargetIsAsync = typeof astContext?.is_async === 'boolean' ? astContext.is_async : undefined;
+        seedPackagingPrefix = writerSeedCodePrefix(targetImportModule, params.funcName || targetFuncName, astContext);
         const generationSystem = mode === 'full' && seedPending ? buildWriterSeedSystemPrompt(systemPrompt, seedTargetIsAsync)
             : mode === 'full' && generationBaseline ? buildWriterAdditionSystemPrompt(systemPrompt) : systemPrompt;
         const generationFormat = mode === 'full' && generationBaseline ? 'text' : testGenerationResponseFormat;

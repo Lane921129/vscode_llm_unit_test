@@ -2,6 +2,16 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-23
+
+### Writer 種子續寫恢復、可讀診斷及車輛物件形狀指引
+
+- 對 Local seed 完整 length 回覆中實測高度重複、沒有測試結構的情況，將唯一格式恢復改為可追溯的 `seed-code-completion-v1`：完整提示逐行轉為可逆 Python 註解，結尾接 canonical import／class／方法簽名。Ollama raw 請求省略 system/template；僅完整 stop 回覆可原樣接合，完整 Python fence 則保留原文。包裝不含測資、fixture 值、目標呼叫或斷言，不修縮排、不採截斷、不增加第三次請求或放寬原期限與品質門檻。其他角色、非 seed 及一般輸出增額政策保持。
+- 輸出診斷允許顯示程式明確指定的固定框架指令，避免每一行都被 `[withheld-prompt-content]` 遮住。動態 prompt 不加入公開集合，混合來源、憑證與位置仍先遮蔽；節錄維持有界、少於原文且不可執行。中英文 failure report 區分程式碼續寫與一般格式補正。
+- 新增通用 seed setup 指引：`parameter.member` 是屬性存取，與同名鍵字典不同；使用具體物件形狀及明確 callable 控制，不提供 fixture 值或 oracle。車輛 `get_plate_no_from_event` 實測第一批因把 page／事件當字典，回傳 None 與預期不符；加入指引後模型已改用物件，但仍有控制項回傳與預期不符，Bug Fixer 全類別回覆被拒，Writer 恢復亦未成功。兩批都未進突變，來源未修改，整個車輛專案仍未驗收。
+- 真實模型證據：本機 Qwen 3B 在修正前的現行生成流程完成同來源 BMI（source hash `5aca7912…`），保留7方法、目標覆蓋10/10、Reviewer 完成、builtin-ast-v3 突變83/96（86.46%）並通過 standard80。這證明原流程仍可生成，不代表本次續寫恢復已獲真模型驗收。CodeGemma 2B 的原指令／raw 續寫比較皆 HTTP200、正常 stop，但沒有測試斷言；首次 raw 實驗誤帶 system 的請求無效，已修正且未算成功。未宣稱 Codellama 13B、任意 base／2B 模型或車輛整批已通過。
+- 驗證：相關9檔56／56通過，最後 seed／物件形狀與診斷4檔28／28通過（範圍重疊不累加）；快速驗證 Node743／743、Python42／42、型別、lint、Webview通過。擴大相關回歸時發現原有資格耗時 fixture 未明確開啟可選資格；以 HEAD 原始 orchestrator 重播亦失敗，改為該案例明確 opt-in，保留原計數與期限斷言後通過。完整開發回歸、VS Code／Mocha、F5、DGX與遠端CI未執行；本機模型實跑使用編輯器API替身與真實產品工具，並非F5實測。
+
 ## 2026-10-22
 
 ### Writer 重複輸出格式恢復與可讀失敗診斷

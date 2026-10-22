@@ -2,6 +2,14 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+## 2026-10-23 Writer 種子續寫恢復（優先於下文固定文字補正／外框條款）
+
+- 當正式 Local seed 的完整 length 回覆符合既有高度重複且無測試結構條件，唯一格式恢復可改為 `seed-code-completion-v1`。只依實際失敗形狀，不依模型名稱或參數量；沒有合法 canonical 包裝時仍採原文字補正。非 seed、Analyst、Reviewer、Bug Fixer 與正常請求不切換 raw。
+- 原完整角色契約與使用者證據逐行加 Python 註解前綴，可精確反解回原字串；不裁來源、setup 或觀測。結尾只有經目標契約核驗的 import／class／方法簽名，不含輸入、fixture 值、目標呼叫、expected 或斷言。新 wire 重新核算容量；原期限、計數及至多兩次不續。
+- 此窄路徑採 Ollama `raw:true` 且不送 system/template，避免 API 格式衝突。完整 stop 回覆才可與包裝原樣接合；若模型已返回完整 Python fence 則保留該完整產物。不修縮排、不挑多份候選、不採 length 前綴，空方法或錯誤內容仍由原 AST、seed、Checker、Reviewer、coverage／mutation 門檻拒絕。工具只提供包裝，測試內容仍由 AI 撰寫。
+- 診斷可保留程式內明確指定的固定框架指令重述，僅排除與該固定行完全相同的隱私遮蔽項；動態 prompt、來源、測資、fixture 或候選不可加入此公開集合。混合私有來源、疑似憑證及位置仍先遮蔽，原節錄限額與不可執行標記保持。
+- seed 提示須區分 Python 屬性與字典鍵，依來源 receiver 形狀安排物件與 callable 成員；這是 setup 指引，不提供值或 oracle，也不禁止明確、有證據的非法輸入案例。
+
 ## 2026-10-22 Writer 重複輸出恢復與診斷（優先於下文僅增額／不保存節錄條款）
 
 - Local Writer／Writer 修訂的完整 length 回覆，若有至少16個非空行、80%以上為重複行且沒有可辨識 test_／self.assert，既有唯一恢復機會改送格式修正，不盲目提高輸出。此為文字形狀的恢復路由，不是 AST 判定或候選批准；無法判斷及已有測試結構時保留原增額政策，不依模型名稱特化。

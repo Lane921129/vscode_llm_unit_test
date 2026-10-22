@@ -32,7 +32,10 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
             && candidate?.detail?.role === role && numeric(candidate.sequence) !== undefined
             && Number(candidate.sequence) > Number(event.sequence)
             && ['output-format-retry', 'output-budget-grown', 'output-recovery-blocked', 'requested', 'error'].includes(candidate.status));
-        const recovery = later?.status === 'output-format-retry' ? localize('一次格式修正；未重用截斷內容')
+        const recovery = later?.status === 'output-format-retry'
+            ? later.detail?.writerPromptMode === 'seed-code-completion-v1'
+                ? localize('一次程式碼續寫恢復；工具只提供包裝，測試內容由模型撰寫')
+                : localize('一次格式修正；未重用截斷內容')
             : later?.status === 'output-budget-grown' ? localize('提高輸出額度後重送')
                 : later?.status === 'output-recovery-blocked' ? localize('剩餘時間或容量不足，未重送')
                     : localize('未安排進一步恢復；本次候選未完成');
@@ -58,7 +61,7 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
                 sections.push(localize('第 {0} 行；樣本內出現 {1} 次；原行 {2} 字元。', sample.line, sample.repetitions, sample.characters), '',
                     fence + 'text', sample.text, fence, '');
             }
-            sections.push(localize('節錄最多六種非空行；已隱藏疑似憑證、位置及與提示相同的內容。'), '');
+            sections.push(localize('節錄最多六種非空行；已隱藏疑似憑證、位置及來源重述，固定框架指令可保留。'), '');
         }
     }
     return sections.length ? [localize('### 模型輸出失敗診斷'), '', ...sections].join('\n') : '';

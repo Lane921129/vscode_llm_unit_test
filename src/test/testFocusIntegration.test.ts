@@ -66,6 +66,10 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
             assert.match(request.prompt, /WRITER_OUTPUT_FORMAT_REPAIR_V1/);
             assert.match(request.prompt, /value \+ 1/);
             assert.doesNotMatch(request.prompt, /# output not converged/);
+            assert.equal(request.raw, true);
+            assert.match(request.transmittedPrompt, /\nclass GeneratedSeedTests\(unittest.TestCase\):\n    def test_seed\(self\):\n$/);
+            return Response.json({ response: '        self.assertEqual(increment(1), 2)\n',
+                done: true, done_reason: truncated ? 'length' : 'stop' });
         }
         return new Response(JSON.stringify({ response: 'import unittest\nfrom sample import increment\n'
             + 'class Tests(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(increment(1), 2)\n',
@@ -106,6 +110,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
             assert.equal(failures[0].detail.responsePreview.executable, false);
             assert.ok(failures[0].detail.responsePreview.samples.some((sample: any) => sample.text.includes('output not converged')));
             assert.equal(events.filter(event => event.status === 'output-format-retry').length, 1);
+            assert.equal(events.filter(event => event.stage === 'writer-seed' && event.status === 'completion-selected').length, 1);
             assert.ok(!events.some(event => event.status === 'output-budget-grown'));
             const planned = events.find(event => event.status === 'recovery-stage-planned' && event.detail.role === 'writer');
             assert.ok(events.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer')
@@ -163,3 +168,5 @@ test('repetitive Writer output receives one format correction and then completes
     () => verifyFocusedWorkflow(false, true, 'repair'));
 test('a second repetitive Writer output stops without another retry or executing partial output',
     () => verifyFocusedWorkflow(false, true, 'persistent'));
+test('a truncated code continuation never becomes a candidate despite its complete-looking assertion',
+    () => verifyFocusedWorkflow(true, true, 'repair'));

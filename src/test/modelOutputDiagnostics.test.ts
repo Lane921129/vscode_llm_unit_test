@@ -58,6 +58,25 @@ test('formal length errors include a bounded diagnostic excerpt without provider
     assert.doesNotMatch(JSON.stringify(diagnostic), /ENVELOPE_NOT_SAVED|privateProviderField/);
 });
 
+test('static instruction echoes stay readable while mixed source and credentials remain hidden', () => {
+    const instruction = writerOutputFormatCorrection(true);
+    const publicLine = instruction.trim().split('\n').pop()!;
+    const privateLine = 'def internal_customer_lookup(private_record):';
+    const response = (publicLine + '\n' + privateLine + '\n' + publicLine + ' ' + privateLine + '\n').repeat(20);
+    const preview = buildModelOutputPreview(response, {
+        excludedTexts: [instruction, privateLine], publicInstructionTexts: [instruction]
+    });
+    assert.match(preview.samples[0].text, /previous response reached its output cap/);
+    assert.equal(preview.samples[1].text, '[withheld-prompt-content]');
+    assert.equal(preview.samples[2].text, '[withheld-prompt-content]');
+    assert.doesNotMatch(JSON.stringify(preview), /internal_customer_lookup|private_record/);
+    const secret = 'known-' + 'secret-fixture-0123456789';
+    const hidden = buildModelOutputPreview((publicLine + secret + '\n').repeat(20), {
+        knownSecrets: [secret], publicInstructionTexts: [instruction]
+    });
+    assert.doesNotMatch(JSON.stringify(hidden), /previous response|secret-fixture/);
+});
+
 test('failure diagnostics show each attempt, exact timing, recovery and excerpts in both languages', () => {
     const diagnostic = failure('Repeated diagnostic phrase\n'.repeat(40), {});
     const events = [
@@ -77,6 +96,10 @@ test('failure diagnostics show each attempt, exact timing, recovery and excerpts
             assert.match(report, /3014/); assert.match(report, /4096/); assert.match(report, /106\.066/);
             assert.match(report, /Repeated diagnostic phrase/);
             assert.match(report, /output-token-limit/);
+            const continuation = events.map(event => event.status === 'output-format-retry'
+                ? { ...event, detail: { ...event.detail, writerPromptMode: 'seed-code-completion-v1' } } : event);
+            const completionReport = renderModelOutputDiagnostics(continuation);
+            assert.match(completionReport, selected === 'en' ? /One code-completion recovery/ : /一次程式碼續寫恢復/);
             if (selected === 'en') {
                 assert.doesNotMatch(report, /[\u3400-\u9fff]/);
                 assert.match(report, /One format correction/);

@@ -29,9 +29,10 @@ function safeLine(text: string): string {
 }
 
 /** Only a bounded diagnostic excerpt, never the provider envelope or candidate.
- * Suppress prompt/source echoes and credentials before applying display limits. */
+ * Suppress prompt/source echoes and credentials before applying display limits.
+ * Only caller-supplied, static framework instructions may be shown as echoes. */
 export function buildModelOutputPreview(text: string, privacy: {
-    knownSecrets?: readonly string[]; excludedTexts?: readonly string[];
+    knownSecrets?: readonly string[]; excludedTexts?: readonly string[]; publicInstructionTexts?: readonly string[];
 }): ModelOutputPreview {
     const lines = text.slice(0, 65536).split('\n').slice(0, 2048);
     const unique = new Map<string, { line: number; repetitions: number; characters: number }>();
@@ -42,8 +43,11 @@ export function buildModelOutputPreview(text: string, privacy: {
         if (found) { found.repetitions++; }
         else { unique.set(key, { line: index + 1, repetitions: 1, characters: key.length }); }
     });
+    const normalize = (value: string) => value.trim().replace(/\s+/g, ' ');
+    const publicLines = new Set((privacy.publicInstructionTexts || []).flatMap(value => value.split('\n'))
+        .flatMap(value => [normalize(value), normalize('# ' + value)]));
     const excluded = (privacy.excludedTexts || []).flatMap(value => value.split('\n'))
-        .map(value => value.trim().replace(/\s+/g, ' ')).filter(value => value.length >= 8);
+        .map(normalize).filter(value => value.length >= 8 && !publicLines.has(value));
     const sensitive = containsCredential(text, privacy.knownSecrets) || sensitiveAssignment.test(text);
     let remaining = Math.min(1200, Math.floor(text.length / 2));
     const samples: ModelOutputPreview['samples'] = [];

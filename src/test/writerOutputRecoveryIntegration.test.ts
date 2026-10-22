@@ -134,6 +134,7 @@ test('formal Writer length recovery resends complete evidence once with paired c
                 const output = path.join(directory, scenario);
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-writer-recovery',
                     filePath: source, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full', maxLoops: 1,
+                    requireRoleQualification: scenario === 'qualification-consumed-retry',
                     timeoutSeconds: scenario === 'measured-too-slow' ? 300 : 60,
                     mutationEngine: 'builtin', outputPath: output });
                 const artifacts = fs.readdirSync(output, { recursive: true }).map(String);

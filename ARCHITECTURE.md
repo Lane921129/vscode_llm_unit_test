@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## Writer 種子程式碼續寫恢復（2026-10-23）
+
+`writerSeedCompletion.ts` 只處理實測高度重複、尚無測試結構的 Local seed 恢復。一般生成維持模型模板；唯一重試可把完整角色與證據轉成可逆的逐行註解，結尾接 `targetContract.ts` 的 canonical import／class／方法簽名，以 `raw:true`（不送 system/template）請模型續寫。此包裝沒有測資、目標呼叫或預期值；原回覆丟棄，不續寫截斷內容。新輸入重算容量且不借舊耗時，原 deadline／計數與兩次上限保持。只有完整 stop 才接合模型原字串；完整 fence 則直接保留。後續仍經相同 AST、執行、Reviewer、coverage 與 mutation，模式選擇不授予模型資格或測試批准。
+
+角色事件與 failure report 區分文字格式補正及程式碼續寫。固定框架指令可在有界去密節錄保留，但動態來源與秘密不能藉此公開。通用 seed 指引另外明示屬性物件不等於同名鍵字典、callable 成員須明確控制，避免 UI 參數 setup 與來源存取方式不符；不替模型提供 fixture 值或斷言。
+
+本機 Qwen 3B 已有 BMI 真實完整通過證據；CodeGemma 2B 的比較尚未產生有效測試，不能宣稱任意 base／小模型已適配。車輛單目標與整個專案驗收分開記錄，不能以 BMI 或固定回覆回歸代替。
+
 ## Writer 重複輸出與可讀失敗診斷（2026-10-22）
 
 `modelOutputDiagnostics.ts` 依完整詞法統計選擇恢復路由：高度重複且無可辨識測試的 Local Writer length 回覆，改用既有唯一重送機會附加固定格式修正；不採用前綴、不刪必要證據、不新增第三次請求。已改變提示不能沿用原實測輸入或速度，重新核容量並保留完整單次時間與原階段／target deadline。其他輸出仍走原有有界增額。

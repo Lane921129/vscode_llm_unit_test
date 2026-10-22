@@ -54,16 +54,20 @@ export function readCurrentFocusCasesForModelFixture(prompt: string, target: str
 
 /** Decode the real wire prompt for fixture routing; never route on the ignored system field. */
 export function readOllamaRoleRequest(wire: any): any & { roleInstructions: string; prompt: string; transmittedPrompt: string } {
-    assert.equal(wire.system, ' ', 'local transport suppresses Modelfile system fallback without carrying the role twice');
+    assert.equal(wire.system, wire.raw === true ? undefined : ' ',
+        'raw completion omits system; normal transport suppresses the Modelfile fallback');
     assert.equal(typeof wire.prompt, 'string');
-    assert.match(wire.prompt, /^(?:You are |EXECUTION_VERIFICATION_V1 Writer:|WRITER_SEED_V1 OUTPUT SCOPE\n)/,
+    const decodedPrompt = wire.raw === true ? wire.prompt.split('\n').map((line: string) =>
+        line.startsWith('# ') ? line.slice(2) : line).join('\n') : wire.prompt;
+    if (wire.raw === true) { assert.match(wire.prompt, /^# WRITER_SEED_V1 OUTPUT SCOPE\n/); }
+    assert.match(decodedPrompt, /^(?:You are |EXECUTION_VERIFICATION_V1 Writer:|WRITER_SEED_V1 OUTPUT SCOPE\n)/,
         'role instructions must lead the actual transmitted prompt');
     // Known request envelopes start on their own line. Match their first
     // occurrence, before any target/test source can quote another role.
-    const start = /^(?:=== ANALYSIS EVIDENCE V2 ===|REVIEW_REQUEST_V7|QUALITY_TASK_V[34]|BUG_FIX_REQUEST_V5|WRITER_REVISION_REQUEST_V2|EXECUTION_VERIFICATION_V1|compact-writer-v[12] \(metadata, never an import\)|Target function: [^\r\n]+)\r?$/m.exec(wire.prompt);
+    const start = /^(?:=== ANALYSIS EVIDENCE V2 ===|REVIEW_REQUEST_V7|QUALITY_TASK_V[34]|BUG_FIX_REQUEST_V5|WRITER_REVISION_REQUEST_V2|EXECUTION_VERIFICATION_V1|compact-writer-v[12] \(metadata, never an import\)|Target function: [^\r\n]+)\r?$/m.exec(decodedPrompt);
     assert.ok(start && start.index > 0, 'fixture needs an explicit user-request boundary; do not guess from evidence text');
-    const roleInstructions = wire.prompt.slice(0, start.index - 1);
-    const prompt = wire.prompt.slice(start.index);
-    assert.equal(roleInstructions + '\n' + prompt, wire.prompt, 'the complete wire text must survive decoding');
+    const roleInstructions = decodedPrompt.slice(0, start.index - 1);
+    const prompt = decodedPrompt.slice(start.index);
+    assert.equal(roleInstructions + '\n' + prompt, decodedPrompt, 'the complete wire text must survive decoding');
     return { ...wire, roleInstructions, prompt, transmittedPrompt: wire.prompt };
 }
