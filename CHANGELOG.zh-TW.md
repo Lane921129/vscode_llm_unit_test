@@ -2,6 +2,14 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-22
+
+### 清除 VS Code 套件宣告警告
+
+- 移除 `activationEvents` 中冗餘的 `onView:mutation-test-view`；目前最低 VS Code 版本高於 1.74，宿主會從 `contributes.views` 自動產生啟用事件，保留相同 view ID 與註冊流程。
+- 為 `mutation-test-view` 補上 `icon: "$(beaker)"`，與既有 view container 使用相同的內建圖示，解除 `Missing property "icon"` 診斷，不增加圖檔或相依。
+- 驗證 manifest JSON、最低宿主版本、自動啟用條件、圖示與 lockfile 一致性，並核對沒有其他 manifest 欄位差異；`npm run package` 的型別檢查、lint 與 production build、追蹤檔／可達 Git 歷史密鑰掃描及 `git diff --check` 通過。這是宣告修正，未重跑模型／Python／突變批次、完整回歸或實驗室 F5；原有八份 WIP 保留且不納入提交。
+
 ## 2026-10-21
 
 ### BMI 21:16 輸出不收斂、種子外框與 Mock 簽名契約

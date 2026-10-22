@@ -19,9 +19,6 @@
   "categories": [
     "Testing"
   ],
-  "activationEvents": [
-    "onView:mutation-test-view"
-  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -38,7 +35,8 @@
         {
           "type": "webview",
           "id": "mutation-test-view",
-          "name": "%contributes.views.mutation-test-explorer.0.name%"
+          "name": "%contributes.views.mutation-test-explorer.0.name%",
+          "icon": "$(beaker)"
         }
       ]
     },
