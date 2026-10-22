@@ -16,6 +16,8 @@ export default {
         mutationWorkers: "Parallel mutation workers (1–4)",
         mutationEngineHint: "Mutatest 3.1.0 supplies mutation rules for the shared isolated runner. Mutmut can be selected to check availability, but its isolated integration is not yet available; preflight stops the run. Installing the package alone does not enable it. Engines are never silently switched.",
         testFocus: "Test focus",
+        requireRoleQualification: "Require role qualification before starting (optional)",
+        roleQualificationHint: "Off by default. You can generate without testing the connection first. Actual execution, Reviewer approval and quality checks still apply.",
         focusFull: "Complete",
         focusBoundary: "Boundary first",
         focusCoverage: "Coverage first",

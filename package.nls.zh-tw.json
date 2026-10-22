@@ -1,4 +1,5 @@
 {
+  "contributes.configuration.properties.llmUnitTest.requireRoleQualification.description": "可選的事先角色資格要求，預設關閉：直接生成，不插入固定能力探針。開啟時須有相同模型／端點／容量的角色資格。正式候選的實際執行、Reviewer 核准與品質檢查始終保留。",
   "contributes.configuration.properties.llmUnitTest.traceTimeoutSeconds.description": "受控 Python Trace 的總時間，包含啟動與清理（秒）。預設 60 秒，仍受原目標總期限限制；與模型請求超時分開。",
   "contributes.configuration.properties.llmUnitTest.tracePlanningTimeoutSeconds.description": "Trace 匯入與輸入規劃時間（秒）。預設 15 秒，仍受 Trace 總時間及目標期限限制。",
   "contributes.configuration.properties.llmUnitTest.traceCaseTimeoutSeconds.description": "每個 Trace 案例的目標執行時間（秒），另計校準的冷啟動時間。預設 5 秒、最大 30 秒，仍受剩餘總時間限制。",

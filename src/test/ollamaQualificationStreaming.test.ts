@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildOllamaRoleQualificationProbe, requestOllamaQualification } from '../llm/ollamaCapability';
-import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { QualificationRequestError } from '../llm/connectionQualification';
 
 const encode = (lines: unknown[]) => lines.map(line => JSON.stringify(line)).join('\n') + '\n';
 const body = () => buildOllamaRoleQualificationProbe('neutral-probe', 'Return a fixed probe.', 'review-json', 8192);
@@ -39,7 +39,7 @@ test('qualification keeps the deadline active after HTTP headers arrive', async 
         });
         headersReturned = true;
         return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
-    }), { name: 'AbortError' });
+    }), (error: unknown) => error instanceof QualificationRequestError && error.reasonCode === 'timeout');
     assert.equal(headersReturned, true);
     assert.equal(aborted, true);
 });
@@ -51,7 +51,7 @@ test('qualification discards a partial streaming prefix and length-stopped compl
     ]) {
         await assert.rejects(requestOllamaQualification('http://127.0.0.1:11434', body(), 1000,
             async () => new Response(encode(records), { headers: { 'Content-Type': 'application/x-ndjson' } })),
-        (error: unknown) => error instanceof AnalysisStageError
+        (error: unknown) => error instanceof QualificationRequestError
             && !JSON.stringify(error).includes('findings'));
     }
 });
@@ -62,10 +62,10 @@ test('qualification preserves JSON-only compatibility and does not retry HTTP re
             { headers: { 'Content-Type': 'application/json' } }));
     assert.equal(payload?.response, '{"findings":[]}');
     let calls = 0;
-    assert.equal(await requestOllamaQualification('http://127.0.0.1:11434', body(), 1000, async () => {
+    await assert.rejects(requestOllamaQualification('http://127.0.0.1:11434', body(), 1000, async () => {
         calls++;
         return new Response('private provider failure', { status: 503 });
-    }), undefined);
+    }), (error: unknown) => error instanceof QualificationRequestError && error.httpStatus === 503);
     assert.equal(calls, 1);
 });
 

@@ -106,17 +106,20 @@ export function formatModelQualificationLog(profile: ModelQualificationProfile, 
             ? 'Custom API'
             : 'Local Ollama';
     const model = compactLogValue(profile.modelName, localize("未指定模型"));
-    const mode = localize(compactLogValue(profile.testGenerationMode, localize("unittest 生成探測")));
+    const mode = localize(['plain', 'plain-python'].includes(profile.testGenerationMode || '')
+        ? TEST_GEN_MODE_PYTHON : compactLogValue(profile.testGenerationMode, localize("unittest 生成探測")));
     const reason = compactLogValue(profile.testGenerationReason, localize("未提供原因"));
 
     if (profile.testGenerationReady !== undefined && profile.qualificationVersion !== QUALIFICATION_VERSION) {
         return localize("[模型資格] {0}／{1}：舊探針結果已過期（原紀錄：{2}）；請重新執行測試連線。正式測試生成使用純 Python。", provider, model, mode);
     }
 
-    const summary = profile.testGenerationReady === true
+    const summary = profile.roleQualification?.writer.state === 'not-run' && profile.testGenerationReady === false
+        ? localize('[模型資格] {0}／{1}：服務可連線，但 {2} 探針未完成（{3}）；模型能力尚未判定。', provider, model, mode, reason)
+        : profile.testGenerationReady === true
         ? localize("[模型資格] {0}／{1}：連線成功，已通過 {2}。", provider, model, mode)
             + ' ' + localize('短探針只認證固定樣本；正式函式仍須檢查完整提示容量、實際執行與審查品質。')
-        : localize("[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。完整流程須先完成角色資格驗證。", provider, model, mode, reason);
+        : localize("[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。若開啟事先資格要求，請先完成角色驗證。", provider, model, mode, reason);
     return profile.testGenerationReady !== true && responsePreview
         ? localize("{0}\n[模型探測回應]\n{1}", summary, responsePreview)
         : summary;

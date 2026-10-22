@@ -1,12 +1,18 @@
 # 專案閱讀入口
 
+## 可選事先角色資格（2026-10-22）
+
+`llmUnitTest.requireRoleQualification` 預設關閉，側欄可勾選要求。固定樣本只驗證一小段角色能力，不能保證正式專案成功，因此它是可選的事先檢查。關閉時直接走 AI 種子、Checker、同候選 Reviewer、coverage／mutation 與修訂閉環；增容也不插入資格探針，不會把未測的角色標成 verified。開啟後保留同模型／端點／容量的開始前資格及增容重驗。每次執行凍結此政策；資源批准、完整輸入與實際候選品質門檻不受此選項影響。
+
+主動按測試連線時，Local 的 `connectionQualification.ts` 逐角色核驗固定 Writer／Reviewer／Bug Fixer，第一個失敗即停，餘下標 not-run；HTTP／逾時／截斷／回覆格式與 Python 執行分開。`ollamaCapability.ts` 沿用宿主傳輸與完整 body 原期限，採 UI 的 API 等待設定，支援取消及忽略 AbortSignal 的傳輸超時；三角色固定樣本各有1024輸出cap。只記角色狀態、安全原因及數字，無 provider 原文；30秒 Python 固定樣本上限與模型等待分開。
+
 ## 容量選擇與測試重點（2026-10-22）
 
 側欄以完整、邊界優先、覆蓋率優先及突變強化取代模型尺寸 Tier。這些是共同閉環的優先順序，不是品質門檻或跳過量測的模式；每次仍只處理一案／一缺口，新增後實跑並取得同候選 Reviewer 同意。覆蓋率重點優先選未覆蓋處，突變重點優先選存活變異；邊界重點優先來源支持的邊界策略及可執行數值規劃，沒有相應證據時回到其他真實缺口。沒有證據不發明答案。舊 Tier API 與報告 reader 保留相容，新側欄不再提供尺寸分級或自動降階。
 
-`testFocus.ts` 提供中性任務指引、標籤與資格政策；新重點仍需要相同模型及容量的 Writer／Reviewer 資格。Mock scaffold 按來源使用點取得一次，初次 Writer 提示才附上，不受模型大小限制。新 seed 按完整提示、補正與 128 tokens 餘裕分配最高 4096 的輸出 cap；正常 EOS 可提前結束，舊截斷、期限與計數閘門不變。測試重點不改變 num_ctx，也不保證減少 Ollama 的模型載入時間。
+`testFocus.ts` 提供中性任務指引與標籤；新重點僅在使用者開啟事先資格要求時，要求相同模型及容量的 Writer／Reviewer 資格。Mock scaffold 按來源使用點取得一次，初次 Writer 提示才附上，不受模型大小限制。新 seed 按完整提示、補正與 128 tokens 餘裕分配最高 4096 的輸出 cap；正常 EOS 可提前結束，舊截斷、期限與計數閘門不變。測試重點不改變 num_ctx，也不保證減少 Ollama 的模型載入時間。
 
-`resolveLocalRuntimeContext` 接受明確正整數執行容量，保留原始 metadata；超出或缺少宣告的手動請求在 UI 明示未驗證。`contextGrowthCeiling` 只在宣告能覆蓋目前請求時授予自動增容邊界；否則只能使用已選容量，不把手動值或短探針當成模型上限。正式請求仍明傳 num_ctx，容量資格、完整輸入與執行驗證均須獨立成立。
+`resolveLocalRuntimeContext` 接受明確正整數執行容量，保留原始 metadata；超出或缺少宣告的手動請求在 UI 明示未驗證。`contextGrowthCeiling` 只在宣告能覆蓋目前請求時授予自動增容邊界；否則只能使用已選容量，不把手動值或短探針當成模型上限。正式請求仍明傳 num_ctx，完整輸入與執行驗證均須獨立成立；只有開啟事先資格要求才檢查容量資格。
 
 ## 宿主傳輸與 Mock 證據回歸修復（2026-10-21）
 

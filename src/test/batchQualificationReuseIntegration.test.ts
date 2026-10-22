@@ -9,7 +9,7 @@ import { resultDataDirectory } from '../pipeline/resultLayout';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
 
-test('real batch keeps manual qualification policy, reuses exact grown runtime, and requires actual review before mutation', async t => {
+test('real batch honors optional qualification, reuses strict runtime evidence, and requires actual review before mutation', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-qualification-reuse-'));
     const project = path.join(directory, 'project');
     fs.mkdirSync(project);
@@ -24,6 +24,7 @@ test('real batch keeps manual qualification policy, reuses exact grown runtime, 
     const requests: any[] = [];
     const writes: string[] = [];
     let rejectActualReviewer = false;
+    let rejectProbeReviewer = false;
     const probeCode = 'import unittest\nclass TestProbe(unittest.TestCase):\n'
         + '    def test_positive(self):\n        self.assertEqual(increment(1), 2)\n'
         + '    def test_negative(self):\n        self.assertEqual(increment(-1), 0)\n';
@@ -63,7 +64,7 @@ test('real batch keeps manual qualification policy, reuses exact grown runtime, 
             response = probeCode;
         } else if (wire.prompt.includes('Review this exact TEST_FILE')) {
             assert.deepEqual(wire.format.required, ['findings'], 'the public probe uses the formal schema');
-            response = 'not a valid public reviewer contract';
+            response = rejectProbeReviewer ? 'not a valid public reviewer contract' : '{"findings":[]}';
         } else if (request.roleInstructions.includes('dependency_behaviors')) {
             assert.ok(request.prompt.includes('FULL_REQUIRED_SOURCE_MARKER') && request.prompt.includes('source note 89'));
             response = JSON.stringify({ test_strategy: { approach: 'Call advance with observed integer inputs.' } });
@@ -89,24 +90,25 @@ test('real batch keeps manual qualification policy, reuses exact grown runtime, 
             roleQualification: { writer: { state: 'verified', reason: 'fixed original context' },
                 reviewer: { state: reviewerState, reason: 'fixed original context' }, bugFixer: { state: 'not-run', reason: 'not used' } }
         });
-        const run = async (name: string, strategy: 'tier2' | 'auto') => {
+        const run = async (name: string, strategy: 'tier2' | 'auto', requireRoleQualification = false) => {
             requests.length = 0;
             const output = path.join(directory, name);
             const savedBefore = JSON.stringify(persisted.get('llmUnitTest.modelProfiles.v1'));
             const writesBefore = writes.length;
             await handlers.get('llm-unit-test.runBatchAnalysis')!({ envType: 'local', modelName: 'neutral-batch-reuse',
-                batchPath: project, promptStrategy: strategy, validationMode: 'full', maxLoops: 1,
+                batchPath: project, promptStrategy: strategy, requireRoleQualification, validationMode: 'full', maxLoops: 1,
                 timeoutSeconds: 60, mutationEngine: 'builtin', outputPath: output });
             const batch = path.join(output, fs.readdirSync(output)[0]);
             const manifest = JSON.parse(fs.readFileSync(path.join(batch, 'batch_manifest.json'), 'utf8'));
             assert.equal(manifest.expectedTargets, 2);
-            assert.equal(manifest.finishedTargets, 2);
-            const targets = manifest.targets.map((target: any) => {
+            assert.ok(manifest.finishedTargets >= 1 && manifest.finishedTargets <= 2);
+            const targets = manifest.targets.filter((target: any) => target.state !== 'pending').map((target: any) => {
                 const data = resultDataDirectory(path.join(batch, target.reportDirectory));
                 const events = fs.readFileSync(path.join(data, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                 const knowledge = JSON.parse(fs.readFileSync(path.join(data, 'function_knowledge.json'), 'utf8'));
                 return { target, data, events, knowledge };
             });
+            assert.equal(targets.length, manifest.finishedTargets);
             assert.ok(writes.slice(writesBefore).every(key => key !== 'llmUnitTest.modelProfiles.v1'
                 && !/runtimeContext|contextPreference/i.test(key)),
             'ordinary last-folder memory is allowed; runtime model/context preferences must stay unchanged');
@@ -116,10 +118,11 @@ test('real batch keeps manual qualification policy, reuses exact grown runtime, 
             }
             return { manifest, targets, wire: [...requests] };
         };
-        await t.test('manual Tier 2 probes once per capacity and reaches mutation only after actual candidate approval', async () => {
-            setInitialProfile('unverified');
-            const result = await run('manual-approved', 'tier2');
+        await t.test('explicit qualification probes once per capacity and reaches mutation only after actual candidate approval', async () => {
+            setInitialProfile('verified');
+            const result = await run('strict-approved', 'tier2', true);
             assert.equal(result.manifest.allTargetsPassed, true, JSON.stringify(result.targets.map((item: any) => item.knowledge.lastFailure)));
+            assert.equal(result.manifest.finishedTargets, 2);
             const probes = result.wire.filter(request => !request.roleInstructions);
             const capacities = [...new Set(probes.map(request => request.options.num_ctx))];
             assert.ok(capacities.length > 0 && capacities.every(capacity => Number(capacity) > 4096 && Number(capacity) <= 16384));
@@ -152,24 +155,39 @@ test('real batch keeps manual qualification policy, reuses exact grown runtime, 
                 assert.equal(item.events[approval].detail.approvedCodeHash, checkpoint.codeHash);
             }
         });
-        await t.test('a second batch reprobes; manual availability cannot substitute for valid actual candidate review', async () => {
+        await t.test('optional qualification skips probes even after context growth without forging role evidence', async () => {
+            setInitialProfile('unverified');
+            const result = await run('optional-approved', 'auto');
+            assert.equal(result.manifest.allTargetsPassed, true);
+            assert.equal(result.manifest.finishedTargets, 2);
+            assert.ok(!result.wire.some(request => !request.roleInstructions));
+            assert.ok(result.targets.every((item: any) => item.knowledge.roleQualificationRequired === false));
+            for (const item of result.targets) {
+                const approval = item.events.findIndex((event: any) => event.stage === 'reviewer' && event.status === 'approved');
+                const mutation = item.events.findIndex((event: any) => event.stage === 'mutation' && event.status === 'measured');
+                assert.ok(approval >= 0 && mutation > approval);
+            }
+        });
+        await t.test('optional qualification cannot substitute for actual review and stops the remaining batch after failure', async () => {
             rejectActualReviewer = true;
-            const result = await run('manual-rejected-actual-review', 'tier2');
+            const result = await run('optional-rejected-actual-review', 'tier2');
             assert.equal(result.manifest.allTargetsPassed, false);
-            assert.ok(result.wire.some(request => request.prompt.includes('Review this exact TEST_FILE')),
-                'a new batch cannot borrow the preceding batch runtime cache');
+            assert.equal(result.manifest.finishedTargets, 1);
+            assert.ok(result.manifest.targets.some((target: any) => target.state === 'pending'));
+            assert.ok(!result.wire.some(request => !request.roleInstructions));
             assert.ok(result.wire.some(request => request.roleInstructions.includes('You are the test Reviewer')),
-                'manual policy permits the actual review attempt');
+                'optional policy permits the actual review attempt');
             for (const item of result.targets) {
                 assert.ok(!item.events.some((event: any) => event.stage === 'reviewer' && event.status === 'approved'));
                 assert.ok(!item.events.some((event: any) => event.stage === 'mutation' && event.status === 'measured'));
                 assert.notEqual(item.knowledge.terminalStatus, 'passed');
             }
         });
-        await t.test('Auto cannot borrow original capacity Reviewer qualification after new-capacity contract failure', async () => {
+        await t.test('explicit qualification cannot borrow original capacity Reviewer evidence after new-capacity contract failure', async () => {
             setInitialProfile('verified');
             rejectActualReviewer = false;
-            const result = await run('auto-invalid-new-reviewer', 'auto');
+            rejectProbeReviewer = true;
+            const result = await run('strict-invalid-new-reviewer', 'auto', true);
             assert.equal(result.manifest.allTargetsPassed, false);
             assert.ok(result.wire.some(request => request.prompt.includes('Review this exact TEST_FILE')));
             assert.ok(!result.wire.some(request => request.roleInstructions.length > 0),

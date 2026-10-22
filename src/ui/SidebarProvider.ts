@@ -1,5 +1,7 @@
 import { localize } from '../i18n/core';
 import { isTestFocus } from '../pipeline/testFocus';
+import { qualifyLocalConnection } from '../llm/connectionQualification';
+import { runLocalRuntimeQualificationProbe } from '../llm/localRuntimeRequalification';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -11,7 +13,7 @@ import { BatchScopeSelection } from '../pipeline/batchScope';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, googleThinkingSession, normalizeGoogleModelName } from '../llm/cloudApi';
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, LOCAL_RUNTIME_QUALIFICATION_VERSION, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
-import { buildOllamaPlainTestGenerationProbe, buildOllamaRoleQualificationProbe, requestOllamaQualification } from '../llm/ollamaCapability';
+import { buildOllamaRoleQualificationProbe, requestOllamaQualification } from '../llm/ollamaCapability';
 import { readLocalRuntimeMetadata } from '../llm/localRuntimeMetadata';
 import { resolveLocalRuntimeContext } from '../prompts/promptBudget';
 import { findModelProfile, restoreModelProfiles, StoredModelProfile } from '../llm/modelProfileRegistry';
@@ -21,7 +23,7 @@ import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualifi
 import { runIsolatedProbe, verifyRunnableTestGenerationProbe } from '../llm/modelProbeExecution';
 import { buildRoleQualificationProfile, formatRoleQualificationLog, runRoleQualificationProbes } from '../llm/roleQualification';
 import { buildCustomChatCompletionBody, getCustomChatCompletionText, responseSchemaForOutputFormat } from '../llm/customApi';
-import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchJsonWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, MODEL_QUALIFICATION_TIMEOUT_MS, requestJsonWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
+import { CONNECTION_DISCOVERY_TIMEOUT_MS, fetchJsonWithTimeout, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, requestJsonWithTimeout, retryTransientProviderRequest } from '../llm/connectionTimeout';
 import { configuredPythonForResource } from '../environment/pythonEnvironmentController';
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
 import { API_TIMEOUT_PREFERENCE_KEY, MAX_EXECUTION_TIMEOUT_SECONDS, parseExecutionTimingSettings, snapshotExecutionTargetBudget } from '../pipeline/executionTimingSettings';
@@ -172,7 +174,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const config = vscode.workspace.getConfiguration('llmUnitTest');
         const html = getWebviewContent(t, config.get('language', 'auto'), config.get('promptStrategy', 'auto'),
             config.get('ollamaBaseUrl', 'http://127.0.0.1:11434'), config.get('validationMode', 'full'),
-            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2));
+            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false));
         if (this.webview.html !== html) { this.webview.html = html; }
     }
 
@@ -237,7 +239,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const strategy = config.get<string>('promptStrategy', 'auto');
         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
         this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'full'),
-            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2));
+            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false));
 
         this.webview.onDidReceiveMessage(async (message) => {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -297,6 +299,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 
+                case 'setRoleQualificationRequired': {
+                    if (this.activeAnalysis || this.analysisStartPending || typeof message.required !== 'boolean') { break; }
+                    await this.rememberRunPreference(config, 'requireRoleQualification', message.required);
+                    break;
+                }
                 case 'setPromptStrategy': {
                     if (this.activeAnalysis || !isTestFocus(message.strategy)) { break; }
                     await config.update('promptStrategy', message.strategy, true);
@@ -305,7 +312,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const lang = config.get<string>('language', 'auto');
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
                         this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'full'),
-                            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2));
+                            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false));
                     }
                     break;
                 }
@@ -653,6 +660,16 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'testConnection': {
+                    let qualificationTimeoutMs: number;
+                    try {
+                        qualificationTimeoutMs = parseExecutionTimingSettings(message.timeoutSeconds
+                            ?? this.uiState.get(API_TIMEOUT_PREFERENCE_KEY) ?? 60, 600).timeoutSeconds * 1000;
+                    } catch {
+                        vscode.window.showWarningMessage(localize('API 等待時間必須為 1 至 86400 整數秒。'));
+                        break;
+                    }
+                    const qualificationAbort = new AbortController();
+                    let releaseCancellation: { dispose(): void } | undefined;
                     // One connection action owns one immutable runtime setting,
                     // including when the user edits configuration during a probe.
                     const requestedRuntimeContext = message.envType === 'local'
@@ -665,11 +682,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     try { await vscode.window.withProgress({
                         location: vscode.ProgressLocation.Notification,
                         title: localize("正在測試 API 連線..."),
-                        cancellable: false
-                    }, async () => {
+                        cancellable: true
+                    }, async (_progress, token) => {
+                        releaseCancellation = token?.onCancellationRequested(() => qualificationAbort.abort());
                         try {
                             const timedJson = (url: string, init: RequestInit, timeoutMs: number) =>
-                                fetchJsonWithTimeout<Response>((input, options) => fetch(input, options), url, init, timeoutMs);
+                                fetchJsonWithTimeout<Response>((input, options) => fetch(input, options), url, { ...init, signal: qualificationAbort.signal }, timeoutMs);
                             const projectRoot = message.projectRoot || this.lastFolder('project');
                             const pythonExecutable = configuredPythonForResource(message.filePath || projectRoot, projectRoot);
                             const isolatedProbeExecutor = (code: string) => runIsolatedProbe(
@@ -721,50 +739,34 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     }
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
-                                    try {
-                                        const plainResponse = await requestOllamaQualification(baseUrl,
-                                            buildOllamaPlainTestGenerationProbe(message.modelName, runtime.contextWindow));
-                                        const capability = await verifyRunnableTestGenerationProbe(
-                                            plainResponse, isolatedProbeExecutor
-                                        );
-                                        const roleQualification = await runRoleQualificationProbes(
-                                            { state: capability.capability, reason: capability.reason },
-                                            async (prompt, format) => {
-                                                const roleResponse = await requestOllamaQualification(baseUrl,
-                                                    buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow));
-                                                return typeof roleResponse?.response === 'string' ? roleResponse.response : undefined;
-                                            }, isolatedProbeExecutor
-                                        );
-                                        const qualificationProfile = { ...profile, qualificationRuntime,
-                                            testGenerationReady: capability.capability === 'verified',
-                                            testGenerationReason: capability.reason, qualificationVersion: QUALIFICATION_VERSION,
-                                            testGenerationMode: 'plain-python', roleQualification };
-                                        this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
-                                        vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
-                                        this.appendModelQualificationLog(qualificationProfile);
-                                        this.appendRoleQualificationLog(qualificationProfile);
-                                        const latestConfig = vscode.workspace.getConfiguration('llmUnitTest');
-                                        const latestPreference = getRuntimeContextPreference(this.runtimeContextPreferencesSnapshot(), selection.identity);
-                                        if (latestConfig.get<unknown>('runtimeContextTokens', 0) !== requestedRuntimeContext
-                                            || qualificationEndpointKey('local', latestConfig.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) !== selection.identity.endpointKey
-                                            || JSON.stringify(latestPreference) !== JSON.stringify(selection.preference)) {
-                                            vscode.window.showWarningMessage(localize("本次角色探針使用 Runtime Context {0} tokens；設定已變更，請重新測試連線以驗證目前設定。", runtime.contextWindow.toLocaleString()));
-                                        } else if (capability.capability === 'verified') {
-                                            vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！模型：{0}，本次 Runtime Context：{1} tokens；已通過純 Python unittest 驗證。", metadata.paramSize, runtime.contextWindow.toLocaleString()));
-                                        } else {
-                                            vscode.window.showWarningMessage(localize("⚠️ Local Ollama 連線成功，但未通過 unittest 生成驗證（{0}）；本次 Runtime Context：{1} tokens。", capability.reason, runtime.contextWindow.toLocaleString()));
-                                        }
-                                    } catch {
-                                        const reason = localize("測試連線逾時或無法完成 unittest 生成探針。");
-                                        const qualificationProfile = { ...profile, qualificationRuntime,
-                                            qualificationVersion: QUALIFICATION_VERSION, testGenerationReady: false,
-                                            testGenerationReason: reason, testGenerationMode: localize("未完成"),
-                                            roleQualification: buildRoleQualificationProfile({ state: 'unverified', reason }) };
-                                        this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
-                                        vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
-                                        this.appendModelQualificationLog(qualificationProfile);
-                                        this.appendRoleQualificationLog(qualificationProfile);
-                                        vscode.window.showWarningMessage(localize("⚠️ Local Ollama 服務可連線，但本次角色探針未完成；Runtime Context：{0} tokens。請重新測試連線。", runtime.contextWindow.toLocaleString()));
+                                    const assessed = await qualifyLocalConnection({ numCtx: runtime.contextWindow, timeoutMs: qualificationTimeoutMs,
+                                        request: async (_role, prompt, format) => {
+                                            const response = await requestOllamaQualification(baseUrl,
+                                                buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow),
+                                                qualificationTimeoutMs, undefined, qualificationAbort.signal);
+                                            return typeof response?.response === 'string' ? response.response : undefined;
+                                        },
+                                        execute: code => runLocalRuntimeQualificationProbe(code, MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS, pythonExecutable),
+                                        onEvent: event => this.webview?.postMessage({ command: 'appendLog',
+                                            text: '[role-qualification-probe] ' + JSON.stringify(event) })
+                                    });
+                                    const qualificationProfile = { ...profile, ...assessed, qualificationRuntime };
+                                    this.webview?.postMessage({ command: 'modelProbeResult', profile: qualificationProfile });
+                                    await vscode.commands.executeCommand('llm-unit-test.updateModelProfile', qualificationProfile);
+                                    this.appendModelQualificationLog(qualificationProfile);
+                                    this.appendRoleQualificationLog(qualificationProfile);
+                                    const complete = assessed.roleQualification.writer.state === 'verified'
+                                        && assessed.roleQualification.reviewer.state === 'verified';
+                                    const latestConfig = vscode.workspace.getConfiguration('llmUnitTest');
+                                    const latestPreference = getRuntimeContextPreference(this.runtimeContextPreferencesSnapshot(), selection.identity);
+                                    if (latestConfig.get<unknown>('runtimeContextTokens', 0) !== requestedRuntimeContext
+                                        || qualificationEndpointKey('local', latestConfig.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434')) !== selection.identity.endpointKey
+                                        || JSON.stringify(latestPreference) !== JSON.stringify(selection.preference)) {
+                                        vscode.window.showWarningMessage(localize("本次角色探針使用 Runtime Context {0} tokens；設定已變更，請重新測試連線以驗證目前設定。", runtime.contextWindow.toLocaleString()));
+                                    } else if (complete) {
+                                        vscode.window.showInformationMessage(localize('Writer／Reviewer 固定角色探針已完成；正式測試仍須驗證。'));
+                                    } else {
+                                        vscode.window.showWarningMessage(localize('角色資格測試未完成或未通過；請查看逐角色原因。關閉事先資格要求仍可開始正式生成。'));
                                     }
                                 } else {
                                     vscode.window.showInformationMessage(localize("✅ Local Ollama 連線成功！"));
@@ -815,7 +817,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                                     body: JSON.stringify(next.body), signal });
                                             },
                                             { maxAttempts: 2, isCancelled: () => signal.aborted }
-                                        )), MODEL_QUALIFICATION_TIMEOUT_MS);
+                                        )), qualificationTimeoutMs, qualificationAbort.signal);
                                     return response.ok ? getGoogleGeneratedText(payload) : undefined;
                                 };
                                 const capability = await verifyRunnableTestGenerationProbe(
@@ -851,7 +853,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
-                                        localize("⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（{0}）。完整流程須先完成角色資格驗證。", capability.reason)
+                                        localize("⚠️ Cloud Gemini 連線成功，但未通過 unittest 生成驗證（{0}）。若開啟事先資格要求，請先完成角色驗證。", capability.reason)
                                     );
                                 }
                             } else if (message.envType === 'custom') {
@@ -867,7 +869,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         PLAIN_TEST_GENERATION_PROBE_PROMPT,
                                         'text'
                                     ))
-                                }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                }, qualificationTimeoutMs);
                                 const capability = await verifyRunnableTestGenerationProbe(
                                     response.ok ? { response: getCustomChatCompletionText(payload) } : undefined,
                                     isolatedProbeExecutor
@@ -880,7 +882,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                             body: JSON.stringify(buildCustomChatCompletionBody(
                                                 message.modelName, 'Return only the requested role artifact.', prompt, format
                                             ))
-                                        }, MODEL_QUALIFICATION_TIMEOUT_MS);
+                                        }, qualificationTimeoutMs);
                                         return roleResponse.ok ? getCustomChatCompletionText(rolePayload) : undefined;
                                     }, isolatedProbeExecutor
                                 );
@@ -906,7 +908,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     );
                                 } else {
                                     vscode.window.showWarningMessage(
-                                        localize("⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（{0}）。完整流程須先完成角色資格驗證。", capability.reason)
+                                        localize("⚠️ Custom API 連線成功，但未通過 unittest 生成驗證（{0}）。若開啟事先資格要求，請先完成角色驗證。", capability.reason)
                                     );
                                 }
                             }
@@ -914,7 +916,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             vscode.window.showErrorMessage(localize("❌ 連線失敗: {0}", error.message));
                             this.webview?.postMessage({ command: 'appendLog', text: localize("[錯誤] 連線測試失敗: {0}", error.message) });
                         }
-                    }); } finally { releasePython(); }
+                    }); } finally { releaseCancellation?.dispose(); releasePython(); }
                     break;
                 }
 

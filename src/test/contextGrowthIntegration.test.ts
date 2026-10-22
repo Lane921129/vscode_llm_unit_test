@@ -33,7 +33,7 @@ test('formal context growth requalifies the new wire capacity before execution, 
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
             getConfiguration: () => ({ get: (key: string, fallback: unknown) =>
-                key === 'pythonPath' ? python : key === 'runtimeContextTokens' ? 4096 : fallback,
+                key === 'pythonPath' ? python : key === 'runtimeContextTokens' ? 4096 : key === 'requireRoleQualification' ? true : fallback,
             update: async () => { throw new Error('context growth must not overwrite saved settings'); } }),
             openTextDocument: async () => ({}) },
         window: { registerWebviewViewProvider: (_: string, provider: any) => {
@@ -84,11 +84,11 @@ test('formal context growth requalifies the new wire capacity before execution, 
                 reviewer: { state: 'verified', reason: 'fixed original context' }, bugFixer: { state: 'unverified', reason: 'not used' } } });
         const beforeWrites = writes;
         const beforeStored = JSON.stringify(persisted.get('llmUnitTest.modelProfiles.v1'));
-        const run = async (name: string) => {
+        const run = async (name: string, requireRoleQualification = true) => {
             requests.length = 0;
             const output = path.join(directory, name);
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-growth',
-                filePath: source, funcName: 'advance', promptStrategy: 'auto', validationMode: 'full', maxLoops: 1,
+                filePath: source, funcName: 'advance', promptStrategy: 'auto', requireRoleQualification, validationMode: 'full', maxLoops: 1,
                 timeoutSeconds: 60, mutationEngine: 'builtin', outputPath: output });
             const artifacts = fs.readdirSync(output, { recursive: true }).map(String);
             const artifact = (name: string) => path.join(output, artifacts.find(item => path.basename(item) === name)!);
@@ -135,6 +135,20 @@ test('formal context growth requalifies the new wire capacity before execution, 
             assert.ok(!result.events.some(event => event.stage === 'mutation' && event.status === 'measured'));
             assert.ok(result.events.some(event => event.stage === 'model-runtime' && event.status === 'qualification-failed'),
                 JSON.stringify(result.knowledge.lastFailure));
+        });
+        await t.test('optional qualification grows capacity without probes and still requires actual review before mutation', async () => {
+            const result = await run('optional-grown', false);
+            assert.equal(result.knowledge.roleQualificationRequired, false);
+            assert.equal(result.knowledge.terminalStatus, 'passed', JSON.stringify(result.knowledge.lastFailure));
+            assert.ok(!requests.some(request => request.prompt.includes('A safe runtime already provides increment(value)')
+                || request.prompt.includes('Review this exact TEST_FILE')));
+            assert.ok(!result.events.some(event => event.stage === 'context-qualification' && event.status === 'requested'));
+            const grown = result.events.find(event => event.stage === 'model-runtime' && event.status === 'context-grown');
+            assert.ok(grown);
+            assert.ok(Object.values(grown.detail.roleQualification).every((role: any) => role.state === 'not-run'));
+            const reviewed = result.events.find(event => event.stage === 'reviewer' && event.status === 'approved');
+            const mutation = result.events.find(event => event.stage === 'mutation' && event.status === 'measured');
+            assert.ok(reviewed && mutation && reviewed.sequence < mutation.sequence);
         });
     } finally {
         globalThis.fetch = originalFetch; Module._load = originalLoad;

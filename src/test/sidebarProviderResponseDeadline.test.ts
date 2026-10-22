@@ -5,6 +5,7 @@ test('Sidebar discovery and each non-local qualification keep a deadline through
     const Module = require('module');
     const originalLoad = Module._load, originalFetch = globalThis.fetch, originalWarn = console.warn;
     const errors: string[] = [], information: string[] = [], profiles: any[] = [];
+    let cancelProgress: (() => void) | undefined;
     const vscode = {
         commands: { executeCommand: async (name: string, profile: unknown) => {
             if (name === 'llm-unit-test.updateModelProfile') { profiles.push(profile); }
@@ -13,7 +14,10 @@ test('Sidebar discovery and each non-local qualification keep a deadline through
             name === 'language' ? 'en' : name === 'ollamaBaseUrl' ? 'http://fixture.invalid' : fallback }) },
         env: { language: 'en' }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         ProgressLocation: { Notification: 1 },
-        window: { withProgress: async (_options: unknown, run: () => Promise<void>) => run(),
+        window: { withProgress: async (_options: unknown, run: (...args: any[]) => Promise<void>) => run({}, {
+            onCancellationRequested: (listener: () => void) => { cancelProgress = listener;
+                return { dispose: () => { cancelProgress = undefined; } }; }
+        }),
             showInformationMessage: (message: string) => { information.push(message); },
             showWarningMessage: () => undefined,
             showErrorMessage: (message: string) => { errors.push(message); } }
@@ -22,7 +26,7 @@ test('Sidebar discovery and each non-local qualification keep a deadline through
         if (name === 'vscode') { return vscode; }
         const value = originalLoad.call(this, name, ...args);
         if (name.endsWith('/connectionTimeout')) {
-            return { ...value, CONNECTION_DISCOVERY_TIMEOUT_MS: 100, MODEL_QUALIFICATION_TIMEOUT_MS: 100 };
+            return { ...value, CONNECTION_DISCOVERY_TIMEOUT_MS: 100 };
         }
         if (name.endsWith('/modelProbeExecution') || name === './modelProbeExecution') {
             return { ...value, runIsolatedProbe: async () => true };
@@ -39,7 +43,7 @@ test('Sidebar discovery and each non-local qualification keep a deadline through
         provider.resolveWebviewView({ webview: { options: {}, html: '', postMessage: () => undefined,
             onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } } });
         const request = (envType: 'local' | 'custom' | 'cloud') => receive({ command: 'testConnection', envType,
-            modelName: 'neutral-model', cloudKeyName: 'fixture', customUrl: 'https://fixture.invalid/chat/completions' });
+            timeoutSeconds: 1, modelName: 'neutral-model', cloudKeyName: 'fixture', customUrl: 'https://fixture.invalid/chat/completions' });
         const reset = () => { errors.length = information.length = profiles.length = 0; };
         const hanging = () => {
             let cancellations = 0, decoded = 0;
@@ -96,6 +100,24 @@ class TestCases(unittest.TestCase):
             await request('cloud');
             assert.equal(requests, 2); assert.equal(stalled.cancelled(), 1);
             assert.equal(profiles.length, 0); assert.equal(errors.length, 1); assert.match(errors[0], /deadline/);
+        });
+
+        await t.test('progress cancellation reaches Cloud and Custom requests without certifying an unfinished probe', async () => {
+            for (const envType of ['cloud', 'custom'] as const) {
+                reset(); let requestSignal: AbortSignal | undefined;
+                globalThis.fetch = async (_url, init) => {
+                    if (!init?.body) { return Response.json({ models: [{ name: 'models/neutral-cloud',
+                        supportedGenerationMethods: ['generateContent'], inputTokenLimit: 8192 }] }); }
+                    requestSignal = init.signal as AbortSignal;
+                    queueMicrotask(() => cancelProgress?.());
+                    return hanging().response;
+                };
+                await request(envType);
+                assert.equal(requestSignal?.aborted, true, envType);
+                assert.equal(profiles.length, 0);
+                assert.equal(errors.length, 1);
+                assert.equal(cancelProgress, undefined, 'the cancellation listener is released');
+            }
         });
 
         await t.test('Ollama model listing and initial discovery do not hang on a pending JSON body', async () => {

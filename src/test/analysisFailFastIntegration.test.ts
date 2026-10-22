@@ -39,7 +39,8 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
         }, showInformationMessage: async () => {}, showTextDocument: async () => {},
         showQuickPick: async (items: any[]) => items.filter(item => item.picked) },
         workspace: { workspaceFolders: [{ uri: { fsPath: root } }], openTextDocument: async () => ({}),
-            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python : fallback }) },
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'requireRoleQualification' ? true : fallback }) },
         commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
             handlers.set(name, handler); return { dispose() {} };
         } }
@@ -111,7 +112,7 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
         responseCode = 'import unittest\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertTrue(True)\n';
         const failedOutput = path.join(root, 'batch-failure');
         const beforeBatchFinished = finished();
-        await handlers.get('llm-unit-test.runBatchAnalysis')!({ ...base, promptStrategy: 'tier1', validationMode: 'execution',
+        await handlers.get('llm-unit-test.runBatchAnalysis')!({ ...base, requireRoleQualification: false, promptStrategy: 'tier1', validationMode: 'execution',
             batchPath: root, outputPath: failedOutput });
         const batchDirectory = path.join(failedOutput, fs.readdirSync(failedOutput)[0]);
         const manifest = JSON.parse(fs.readFileSync(path.join(batchDirectory, 'batch_manifest.json'), 'utf8'));
@@ -129,7 +130,7 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
 
         const wholeOutput = path.join(root, 'whole-file-failure');
         const beforeWholeFinished = finished();
-        await handlers.get('llm-unit-test.runCaptureAndTest')!({ ...base, promptStrategy: 'tier1', validationMode: 'execution',
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ ...base, requireRoleQualification: false, promptStrategy: 'tier1', validationMode: 'execution',
             filePath: file, funcName: '', outputPath: wholeOutput });
         assert.equal(knowledgeFiles(wholeOutput).length, 1, 'whole-file scheduling also stops before second target');
         assert.equal(finished(), beforeWholeFinished + 1);

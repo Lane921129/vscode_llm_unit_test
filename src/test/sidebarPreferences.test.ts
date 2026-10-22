@@ -169,6 +169,9 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
     elements.get('mutation-engine').onchange({ target: { value: 'mutmut' } });
     assert.equal(messages.at(-1).command, 'setMutationEngine');
     assert.equal(messages.at(-1).engine, 'mutmut');
+    elements.get('require-role-qualification').checked = true;
+    elements.get('require-role-qualification').onchange({ target: { checked: true } });
+    assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), { command: 'setRoleQualificationRequired', required: true });
     for (const value of ['', '0', '5', '1.5', 'NaN']) {
         elements.get('mutation-workers').value = value;
         elements.get('mutation-workers').onchange();
@@ -254,6 +257,7 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
             assert.equal(message.timeoutSeconds, 60);
             assert.equal(message.validationMode, mode, 'both single-file and batch requests carry the displayed mode');
             assert.equal(message.mutationEngine, 'mutmut');
+            assert.equal(message.requireRoleQualification, true, 'the run carries an immutable opt-in choice');
             assert.equal(message.mutationWorkers, 3);
             assert.equal(elements.get('validation-mode').disabled, true, 'the active run cannot change modes');
             assert.equal(elements.get('mutation-engine').disabled, true);

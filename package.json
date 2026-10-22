@@ -117,6 +117,11 @@
           "default": "full",
           "description": "Test priority: full, boundary, coverage or mutation. All quality gates remain active. Other values are retained for legacy settings."
         },
+        "llmUnitTest.requireRoleQualification": {
+          "type": "boolean",
+          "default": false,
+          "description": "%contributes.configuration.properties.llmUnitTest.requireRoleQualification.description%"
+        },
         "llmUnitTest.validationMode": {
           "type": "string",
           "enum": [

@@ -55,7 +55,7 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } } });
         const reset = () => { executed.length = messages.length = information.length = warnings.length = errors.length = 0; stored.clear(); };
         const finalProfile = () => executed.filter(item => item[0] === 'llm-unit-test.updateModelProfile').at(-1)?.[1];
-        const request = () => receive({ command: 'testConnection', envType: 'local', modelName: 'neutral-model' });
+        const request = () => receive({ command: 'testConnection', envType: 'local', modelName: 'neutral-model', timeoutSeconds: 337 });
         const installTransport = (show: () => Response = () => Response.json(metadata), onWriter?: () => void,
             running: unknown = { models: [] }) => {
             const probes: any[] = [];
@@ -98,6 +98,10 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
                 endpointKey: profile.endpointKey, runtimeContextTokens: numCtx }), true);
             assert.deepEqual(messages.filter(item => item.command === 'modelProbeResult').at(-1).profile, profile);
             assert.equal(errors.length, 0);
+            const probeEvents = messages.filter(item => item.command === 'appendLog'
+                && item.text.startsWith('[role-qualification-probe] ')).map(item => JSON.parse(item.text.slice('[role-qualification-probe] '.length)));
+            assert.ok(probeEvents.length > 0);
+            assert.ok(probeEvents.every(event => event.timeoutMs === 337000), 'connection probes use the selected API allowance');
         };
 
         await t.test('automatic mode sends half the known model limit to all role probes and retains that choice on next selection', async () => {
@@ -266,7 +270,8 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             assert.deepEqual(finalProfile().qualificationRuntime, { version: 'ollama-context-v1', numCtx: 8192 });
             assert.ok(Object.values(finalProfile().roleQualification).every((role: any) => role.state !== 'verified'));
             assert.equal(information.length, 0);
-            assert.ok(warnings.some(message => message.includes('角色探針未完成')));
+            assert.ok(warnings.some(message => message.includes('角色資格測試未完成或未通過')));
+            assert.deepEqual(Object.values(finalProfile().roleQualification).map((role: any) => role.state), ['not-run', 'not-run', 'not-run']);
             assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_TRANSPORT_FAILURE/);
         });
 

@@ -107,7 +107,7 @@ export class RuntimeQualificationSession {
 }
 
 export interface RuntimeRoleAuthorizationOptions {
-    policy: 'auto' | 'manual';
+    policy: 'auto' | 'manual' | 'optional';
     role: keyof RoleQualificationProfile;
     qualification: RoleQualificationProfile | undefined;
     /** Must be established by exact endpoint/model/capacity/Python/scope/version binding. */
@@ -117,11 +117,13 @@ export interface RuntimeRoleAuthorizationOptions {
 /** Role availability does not approve any actual candidate or authorize mutation. */
 export function runtimeRoleAuthorization(options: RuntimeRoleAuthorizationOptions): {
     allowed: boolean; reasonCode: 'runtime-identity-mismatch' | 'role-verified' | 'manual-unverified-attempt'
-        | 'role-unavailable' | 'auto-role-unverified'; roleState: RoleQualificationStatus['state']
+        | 'role-unavailable' | 'auto-role-unverified' | 'optional-unverified-attempt'; roleState: RoleQualificationStatus['state']
 } {
     const status = options.qualification?.[options.role];
     const roleState = status?.state ?? 'not-run';
     if (!options.currentIdentity) { return { allowed: false, reasonCode: 'runtime-identity-mismatch', roleState }; }
+    if (options.policy === 'optional') { return { allowed: true, reasonCode: roleState === 'verified'
+        ? 'role-verified' : 'optional-unverified-attempt', roleState }; }
     if (status?.diagnostics?.failureKind === 'unavailable') {
         return { allowed: false, reasonCode: 'role-unavailable', roleState };
     }

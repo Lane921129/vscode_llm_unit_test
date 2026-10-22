@@ -2,7 +2,7 @@ import { localize } from '../i18n/core';
 import { resolveTestFocus } from '../pipeline/testFocus';
 import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettings';
 
-export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2) {
+export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false) {
     const selectedFocus = resolveTestFocus(currentStrategy);
     const selectedEngine = ['builtin', 'mutatest', 'mutmut'].includes(mutationEngine) ? mutationEngine : 'builtin';
     const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
@@ -305,6 +305,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <option value="mutation" ${selectedFocus === 'mutation' ? 'selected' : ''}>${t('ui.focusMutation')}</option>
             </select>
             <p>${t('ui.focusGuide')}</p>
+            <label style="display:flex; align-items:center; gap:6px;">
+                <input type="checkbox" id="require-role-qualification" ${requireRoleQualification ? 'checked' : ''} style="width:auto; margin:0;" />${t('ui.requireRoleQualification')}
+            </label>
+            <p>${t('ui.roleQualificationHint')}</p>
 
             <label>📂 ${t('ui.projectPath')}</label>
             <div class="flex-row">
@@ -897,7 +901,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function updateLocalContextControls() {
             const frozen = analysisRunning || environmentBusy;
-            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy', 'timeout-sec', 'target-timeout-sec']) {
+            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy', 'require-role-qualification', 'timeout-sec', 'target-timeout-sec']) {
                 document.getElementById(id).disabled = frozen;
             }
             const noSelection = !document.getElementById('model-select').value;
@@ -943,6 +947,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             vscode.postMessage({ command: 'setLanguage', lang: e.target.value });
         };
         
+        document.getElementById('require-role-qualification').onchange = (event) => {
+            vscode.postMessage({ command: 'setRoleQualificationRequired', required: event.target.checked });
+        };
         document.getElementById('prompt-strategy').onchange = (e) => {
             if (analysisRunning || environmentBusy) return;
             vscode.postMessage({ command: 'setPromptStrategy', strategy: e.target.value });
@@ -1100,25 +1107,26 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('btn-test-cloud').onclick = () => {
             const cloudKeyName = document.getElementById('api-key-select').value;
             if(!cloudKeyName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Cloud setting.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'cloud', cloudKeyName, ...environmentSelection() });
+            vscode.postMessage({ command: 'testConnection', envType: 'cloud', cloudKeyName, timeoutSeconds: Number(document.getElementById('timeout-sec').value), ...environmentSelection() });
         };
         document.getElementById('btn-test-local').onclick = () => {
             const modelName = document.getElementById('model-select').value;
             if(!modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Local model.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName, contextRevision: runtimeContextRevision, ...environmentSelection() });
+            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName, contextRevision: runtimeContextRevision, timeoutSeconds: Number(document.getElementById('timeout-sec').value), ...environmentSelection() });
         };
         document.getElementById('btn-test-custom').onclick = () => {
             const customUrl = document.getElementById('custom-url').value;
             const modelName = document.getElementById('custom-model').value;
             const customKey = document.getElementById('custom-key').value;
             if(!customUrl || !modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please provide Custom API URL and Model Name.' });
-            vscode.postMessage({ command: 'testConnection', envType: 'custom', customUrl, modelName, customKey, ...environmentSelection() });
+            vscode.postMessage({ command: 'testConnection', envType: 'custom', customUrl, modelName, customKey, timeoutSeconds: Number(document.getElementById('timeout-sec').value), ...environmentSelection() });
         };
 
         function getCommonExecutionOptions() {
             return {
                 ollamaUrl: document.getElementById('ollama-url').value,
                 promptStrategy: document.getElementById('prompt-strategy').value,
+                requireRoleQualification: document.getElementById('require-role-qualification').checked,
                 validationMode: document.getElementById('validation-mode').value,
                 mutationEngine: document.getElementById('mutation-engine').value,
                 mutationWorkers: mutationWorkerCount(),

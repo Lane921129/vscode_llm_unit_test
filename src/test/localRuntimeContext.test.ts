@@ -172,7 +172,7 @@ test('all local roles require matching qualification after automatic half-limit 
         for (const role of ['writer', 'reviewer', 'bugFixer'] as const) {
             const probe = buildOllamaRoleQualificationProbe('neutral-model', `Neutral ${role} contract`,
                 role === 'reviewer' ? 'json' : 'text', runtime.contextWindow);
-            assert.deepEqual(probe.options, { temperature: 0, num_ctx: runtime.contextWindow });
+            assert.deepEqual(probe.options, { temperature: 0, num_ctx: runtime.contextWindow, num_predict: 1024 });
             const profile: ModelQualificationProfile = {
                 envType: 'local', modelName: 'neutral-model', qualificationVersion: QUALIFICATION_VERSION,
                 testGenerationReady: role === 'writer',

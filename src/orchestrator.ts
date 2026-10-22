@@ -56,7 +56,7 @@ import { partitionBatchPreflight, BatchPreflightTarget, BatchPreflightRow } from
 import { writeBatchPreflightSnapshot } from './pipeline/batchPreflightSnapshot';
 import { presentOutcome, presentSummaryOutcome, describeStageEvent, withOutcomeHeader } from './pipeline/resultPresentation';
 import { TierHistory } from './pipeline/tierHistory';
-import { focusedSeedOutputFloor, isTestFocus, requiresQualifiedRoles, resolveTestFocus, testFocusInstruction, testFocusLabel } from './pipeline/testFocus';
+import { focusedSeedOutputFloor, isTestFocus, resolveTestFocus, testFocusInstruction, testFocusLabel } from './pipeline/testFocus';
 import { mayFallbackTier, selectCandidateRepairRole } from './tier/tierFailurePolicy';
 import { ReportIdentity, writeTargetReports, renderMutationBaselineTiming } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
@@ -92,7 +92,7 @@ import { findModelProfile, restoreModelProfiles, StoredModelProfile, upsertModel
 import { QUALIFICATION_VERSION, selectAnalysisResponseFormat, selectTestGenerationResponseFormat, qualificationEndpointKey, qualificationAppliesToRequest, qualificationForRequest, type ModelQualificationProfile } from './llm/modelQualification';
 import { RoleQualificationProfile, qualifiedRole } from './llm/roleQualification';
 import { ReviewSession, ReviewStatus } from './roles/reviewSession';
-import { canUseModelAuthoredRepair, canUseTierOneLlmGeneration, resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
+import { resolveTier, resolveTier1GenerationMode } from './tier/tierRouter';
 import { resolveTierTwoSubtaskGate } from './tier/subtaskResponseGate';
 import { formatPythonImport, inferTargetImportModule } from './utils/dependencyResolver';
 import { shouldRetryTraceWithoutCallerInputs } from './tier/traceRecovery';
@@ -128,6 +128,7 @@ import { formatPromptCapacity } from './pipeline/promptCapacityPresentation';
 import { CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS, planContextGrowth } from './prompts/contextGrowth';
 import { requalifyLocalRuntime, runLocalRuntimeQualificationProbe, runtimeQualificationExecutionBudget } from './llm/localRuntimeRequalification';
 import { runtimeRoleAuthorization } from './llm/runtimeQualificationSession';
+import { unprobedLocalQualification } from './llm/connectionQualification';
 import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification } from './pipeline/batchRuntimeQualification';
 import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
@@ -271,6 +272,7 @@ function defaultModelProfile(): ModelProfile {
 let currentModelProfile: ModelProfile = defaultModelProfile();
 let storedModelProfiles: StoredModelProfile[] = [];
 interface ModelSnapshot {
+    requireRoleQualification?: boolean;
     current: ModelProfile;
     stored: StoredModelProfile[];
     runtimeContextTokens: unknown;
@@ -318,7 +320,7 @@ function initialAnalysisModel(params: AnalysisModelSelection, modelSnapshot: Mod
 /** Global prerequisites must fail before import setup, Trace or role requests. */
 async function requireInitialAutoRoles(params: AnalysisModelSelection & Partial<Pick<AnalysisParams,
     'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable'>>, snapshot: ModelSnapshot) {
-    if (!requiresQualifiedRoles(params.promptStrategy)) { return; }
+    if (snapshot.requireRoleQualification !== true) { return; }
     const mode = verificationMode(params.validationMode);
     const { activeModelProfile, localRuntime, qualificationRequest } = initialAnalysisModel(params, snapshot);
     const current = !(localRuntime && !localRuntime.ok)
@@ -348,12 +350,15 @@ async function requireInitialAutoRoles(params: AnalysisModelSelection & Partial<
 }
 
 async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pick<AnalysisParams,
-    'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable' | 'targetBudget'>>>(
+    'promptStrategy' | 'validationMode' | 'filePath' | 'funcName' | 'pythonExecutable' | 'targetBudget' | 'requireRoleQualification'>>>(
     params: T,
     sidebar: MutationViewProvider,
     operation: (params: T & { sessionDate: string }, log: (text: string) => void, view: AnalysisView,
         withEnvironmentSetup: <R>(setup: () => Promise<R>) => Promise<R>) => Promise<void>
 ): Promise<void> {
+    const config = vscode.workspace.getConfiguration('llmUnitTest');
+    const required = params.requireRoleQualification ?? config.get<unknown>('requireRoleQualification', false);
+    if (typeof required !== 'boolean') { throw new AnalysisStageError('validation', 'qualification-policy', 'Invalid role qualification policy.'); }
     const environmentLease = AnalysisEnvironmentLease.acquire(pythonEnvironmentActivity);
     if (!environmentLease) {
         const hadActiveAnalysis = analysisRuns.hasActiveRun;
@@ -363,10 +368,10 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
         }
         return;
     }
-    const config = vscode.workspace.getConfiguration('llmUnitTest');
     const selectedParams = params.envType === 'local' ? { ...params,
         ollamaUrl: params.ollamaUrl || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434') } : params;
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
+        requireRoleQualification: required,
         runtimeContextTokens: config.get<unknown>('runtimeContextTokens', 0),
         runtimeContextPreferences: sidebar.runtimeContextPreferencesSnapshot(),
         targetBudget: params.targetBudget ?? config.get<unknown>('targetBudget', {}) });
@@ -456,6 +461,7 @@ function getContextBudget(profile: ModelProfile): number {
 }
 
 interface AnalysisParams {
+    requireRoleQualification?: boolean;
     validationMode?: VerificationMode;
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
@@ -1708,11 +1714,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         ? qualifiedRole('writer', roleQualification, currentQualification, true) : qualifiedForSelectedModel;
     const reviewerReady = qualifiedRole('reviewer', roleQualification, currentQualification);
     const fixerReady = qualifiedRole('bugFixer', roleQualification, currentQualification);
-    const tier1GenerationMode = resolveTier1GenerationMode(writerReady, userTierSetting);
+    const requireRoleQualification = modelSnapshot.requireRoleQualification === true;
+    const tier1GenerationMode = requireRoleQualification ? resolveTier1GenerationMode(writerReady, userTierSetting) : 'llm-evidence-bound';
     const mayUseModelAuthoredTests = tier1GenerationMode === 'llm-evidence-bound';
     let seedPending = mayUseModelAuthoredTests && mode === 'full';
-    const mayUseModelAuthoredReview = canUseTierOneLlmGeneration(reviewerReady, userTierSetting);
-    let mayUseModelAuthoredRepair = canUseModelAuthoredRepair(fixerReady, userTierSetting);
+    const mayUseModelAuthoredReview = !requireRoleQualification || reviewerReady;
+    let mayUseModelAuthoredRepair = !requireRoleQualification || fixerReady;
     const writerOutputBudget = new WriterOutputBudget();
     // Analyst output needs belong to this target and never raise Writer's floor.
     const analystOutputBudget = new WriterOutputBudget();
@@ -1727,14 +1734,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     if (testGenerationResponseFormat === 'text') {
         log(localize('Writer 使用純 Python；Analyst 使用獨立的 JSON 計畫契約。'));
     }
-    if (qualifiedForSelectedModel === undefined) {
+    if (!requireRoleQualification) {
+        log(localize('事先角色資格測試為可選；本次直接生成，仍須通過執行、審查與品質驗證。'));
+    } else if (qualifiedForSelectedModel === undefined) {
         log(userTierSetting === 'auto'
             ? mode === 'execution'
                 ? localize("[模型能力] 此供應商／模型尚未完成 Writer 探測；執行驗證的 Auto 需要先透過「測試連線」確認生成能力。")
                 : localize('完整流程的 Auto 需要先完成 Writer 與 Reviewer 角色測試連線。')
             : localize("[模型能力] 此供應商／模型尚未完成 unittest 探測；依你的手動 Tier {0} 選擇繼續執行。輸出仍須通過{1}。", userTierSetting.replace('tier', ''), gateDescription));
     }
-    const resolvedTier = focusedWorkflow ? 2 : resolveTier(
+    const resolvedTier = focusedWorkflow || !requireRoleQualification && userTierSetting === 'auto' ? 2 : resolveTier(
         modelParamBillion,
         complexityScore,
         userTierSetting,
@@ -2073,7 +2082,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     recordRole('context-qualification', 'cache-hit', { role, contextWindow: growth.contextTokens,
                         roleQualification: cached.roleQualification, qualificationVersion: cached.qualificationVersion });
                 }
-                const requalified = cached || await requalifyLocalRuntime({ numCtx: growth.contextTokens, includeBugFixer,
+                const requalified = cached || (!requireRoleQualification ? unprobedLocalQualification(growth.contextTokens) : await requalifyLocalRuntime({ numCtx: growth.contextTokens, includeBugFixer,
                     request: async (probeRole, probeSystem, probePrompt, probeFormat) => {
                         throwIfExecutionCancelled();
                         currentTargetBudget()?.assertRemaining();
@@ -2098,15 +2107,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         return response;
                     },
                     executor: code => runLocalRuntimeQualificationProbe(code, runtimeQualificationExecutionBudget(qualificationDeadline), pythonExecutable)
-                });
+                }));
                 throwIfExecutionCancelled();
                 currentTargetBudget()?.assertRemaining();
                 if (!runtimeQualifications.current()) { throw new AnalysisStageError('validation', 'source-changed', 'Runtime qualification scope changed.'); }
                 if (!cached) { runtimeQualifications.session.set(identity, requalified); }
                 const requestedRole = role === 'reviewer' ? 'reviewer' : role === 'bug-fixer' ? 'bugFixer' : 'writer';
-                const authorization = runtimeRoleAuthorization({ policy: userTierSetting === 'auto' ? 'auto' : 'manual',
+                const authorization = runtimeRoleAuthorization({ policy: requireRoleQualification ? 'auto' : 'optional',
                     role: requestedRole, qualification: requalified.roleQualification, currentIdentity: true });
-                const usable = authorization.allowed && (userTierSetting !== 'auto'
+                const usable = authorization.allowed && (!requireRoleQualification
                     || requalified.roleQualification.writer.state === 'verified'
                     && (mode !== 'full' || requalified.roleQualification.reviewer.state === 'verified'));
                 if (!usable) {
@@ -2122,7 +2131,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 activeModelProfile.budgetTokens = contextInputBudget(activeModelProfile.paramSize, requestContextWindow);
                 Object.assign(activeModelProfile, requalified);
                 roleQualification = requalified.roleQualification;
-                mayUseModelAuthoredRepair = runtimeRoleAuthorization({ policy: userTierSetting === 'auto' ? 'auto' : 'manual',
+                mayUseModelAuthoredRepair = runtimeRoleAuthorization({ policy: requireRoleQualification ? 'auto' : 'optional',
                     role: 'bugFixer', qualification: roleQualification, currentIdentity: true }).allowed;
                 runtimeQualifications.rememberContext(identity);
                 journal.knowledge({ roleQualification, runtimeContextTokens: requestContextWindow });
@@ -2131,7 +2140,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     elapsedMs: Date.now() - qualificationStartedAt,
                     qualificationRuntime: requalified.qualificationRuntime, roleQualification, authorization,
                     qualificationCacheHit: !!cached, savedChoicePreserved: true });
-                log(localize('[容量調整] 完整提示超額，num_ctx 由 {0} 提高至 {1}；上限 {2}，已重驗角色，保留已儲存選擇。',
+                log(localize(requireRoleQualification ? '[容量調整] 完整提示超額，num_ctx 由 {0} 提高至 {1}；上限 {2}，已重驗角色，保留已儲存選擇。'
+                    : '[容量調整] num_ctx 由 {0} 提高至 {1}；上限 {2}，略過可選資格探針，正式候選仍須驗證。',
                     previousContextWindow, requestContextWindow, growth.modelContextLimit));
             } else {
                 recordRole('model-runtime', 'context-growth-blocked', { role, contextWindow: requestContextWindow,
@@ -2262,6 +2272,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             roleQualification, qualificationVersion: QUALIFICATION_VERSION });
     }
     recordRole('pipeline', 'running', { target: params.funcName });
+    journal.knowledge({ roleQualificationRequired: requireRoleQualification });
+    recordRole('qualification-policy', requireRoleQualification ? 'required' : 'optional', { priorProbeRequired: requireRoleQualification });
     const releaseResourceObserver = currentExecution()?.subscribeResourceLifecycle(event => {
         journal.record(currentLoop, 'isolated-resources', event.cleaned ? 'cleaned' : 'failed', event);
         journal.knowledge({ resourceLifecycle: event });
