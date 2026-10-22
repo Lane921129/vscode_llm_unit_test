@@ -133,6 +133,7 @@ import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification }
 import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText, readOutputShapeDiagnostic } from './llm/ollamaResponse';
+import { diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -1244,7 +1245,10 @@ async function requestLlmApiUnlocked(
 
         let responseText: string;
         if (params.envType === 'local') {
-            responseText = getCompletedOllamaText(resJson, params.requestOutputTokens);
+            responseText = getCompletedOllamaText(resJson, params.requestOutputTokens, {
+                knownSecrets: [params.cloudKey, params.customKey].filter((value): value is string => Boolean(value)),
+                excludedTexts: [contractedSystemPrompt, userPrompt]
+            });
         } else if (params.envType === 'custom') {
             const customText = getCustomChatCompletionText(resJson);
             if (customText) {
@@ -2014,6 +2018,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // output retry, HTTP fallback and context growth never renew the stage or target.
         let observedInputTokens: number | undefined;
         let recoveryTransport: TransportAttemptTiming | undefined;
+        let recoveryMode: 'output-growth' | 'format-correction' | undefined;
         for (let outputAttempt = 0; outputAttempt < outputStage.maximumAttempts; outputAttempt++) {
         const qualificationDeadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt);
         throwIfExecutionCancelled();
@@ -2160,7 +2165,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             ...(role === 'writer-revision' && revisionWorkload ? { revisionWorkload } : {}),
             capacity: capacityAt(contextWindow),
             ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
-            contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt,
+            contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt, recoveryMode,
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
         if (!promptFits(contractedSystem, prompt, roleBudget.inputBudget, correctionReserve)
@@ -2200,11 +2205,15 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             return response;
         } catch (error) {
             const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
-                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; responseShape?: unknown; phase?: unknown; transportStarted?: unknown } : undefined;
+                ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; responseShape?: unknown;
+                    responsePreview?: unknown; phase?: unknown; transportStarted?: unknown } : undefined;
             recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
                 category: error instanceof AnalysisStageError ? error.category : 'unknown',
                 ...(diagnostic?.reasonCode === 'output-token-limit'
                     ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit,
+                        outputDiagnosis: diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)),
+                        ...(readModelOutputPreview(diagnostic.responsePreview)
+                            ? { responsePreview: readModelOutputPreview(diagnostic.responsePreview) } : {}),
                         ...(readOutputShapeDiagnostic(diagnostic.responseShape)
                             ? { responseShape: readOutputShapeDiagnostic(diagnostic.responseShape) } : {}) } : {}),
                 ...(typeof diagnostic?.phase === 'string' && ['queue', 'http-wait', 'response-read', 'backoff'].includes(diagnostic.phase)
@@ -2216,6 +2225,28 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
+                if (['writer', 'writer-revision'].includes(role)
+                    && diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)) === 'repetitive-without-tests') {
+                    // A changed prompt cannot borrow timing or measured input counts
+                    // from the discarded response. Reserve a complete retry allowance.
+                    const recovery = planOutputRecoveryRetry(outputStage, roleBudget.requestOutputTokens || 1);
+                    if (!recovery.allowed) {
+                        recordRole('model-request', 'output-recovery-blocked', { role, ...recovery,
+                            recoveryMode: 'format-correction', targetDeadlinePreserved: true });
+                        throw error;
+                    }
+                    prompt += writerOutputFormatCorrection(mode === 'full' && seedPending);
+                    recoveryMode = 'format-correction';
+                    observedInputTokens = undefined;
+                    recoveryTransport = undefined;
+                    recordRole('model-request', 'output-format-retry', { role, ...recovery,
+                        outputDiagnosis: 'repetitive-without-tests', requestOutputTokens: roleBudget.requestOutputTokens,
+                        previousOutputTokens: diagnostic.outputTokenLimit, responseShape: readOutputShapeDiagnostic(diagnostic.responseShape),
+                        retry: 1, deadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true,
+                        evidencePreserved: true, discardedOutputReused: false });
+                    requestLog(localize('[輸出恢復] {0} 回覆高度重複且未形成可辨識測試；改送一次格式修正，保留原期限。', role));
+                    continue;
+                }
                 const stats = completedTransport?.ollama;
                 if (completedTransport?.outcome === 'completed' && stats?.done === true && stats.completionReason === 'length'
                     && Number.isSafeInteger(stats.promptEvalCount) && (stats.promptEvalCount as number) > 0) {
@@ -2246,6 +2277,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     }
                     if (!roleOutputBudget.learn(nextOutputTokens)) { throw error; }
                     recoveryTransport = completedTransport;
+                    recoveryMode = 'output-growth';
                     recordRole('model-request', 'output-budget-grown', { role,
                         previousOutputTokens: diagnostic.outputTokenLimit, requestOutputTokens: nextOutputTokens,
                         estimatedInputTokens, observedInputTokens, boundedBy: growth.boundedBy,

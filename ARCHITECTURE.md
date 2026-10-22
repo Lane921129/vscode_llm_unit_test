@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## Writer 重複輸出與可讀失敗診斷（2026-10-22）
+
+`modelOutputDiagnostics.ts` 依完整詞法統計選擇恢復路由：高度重複且無可辨識測試的 Local Writer length 回覆，改用既有唯一重送機會附加固定格式修正；不採用前綴、不刪必要證據、不新增第三次請求。已改變提示不能沿用原實測輸入或速度，重新核容量並保留完整單次時間與原階段／target deadline。其他輸出仍走原有有界增額。
+
+`ollamaResponse.ts` 在正式呼叫提供的隱私語境內產生 `model-output-preview-v1`：只保留有界非空行節錄、位置與樣本次數，先隱藏疑似憑證、提示來源重述及位置；不含完整 provider envelope，永遠未完成且不可執行。資格探針等低階呼叫預設不保存節錄。`modelOutputDiagnosticsPresentation.ts` 將逐次失敗、token、耗時及恢復決策呈現於函式／逐輪 failure report與workflow；資料經白名單讀取，文字統計非AST或品質批准，舊紀錄不能從hash復原原文。
+
 ## 可選事先角色資格（2026-10-22）
 
 `llmUnitTest.requireRoleQualification` 預設關閉，側欄可勾選要求。固定樣本只驗證一小段角色能力，不能保證正式專案成功，因此它是可選的事先檢查。關閉時直接走 AI 種子、Checker、同候選 Reviewer、coverage／mutation 與修訂閉環；增容也不插入資格探針，不會把未測的角色標成 verified。開啟後保留同模型／端點／容量的開始前資格及增容重驗。每次執行凍結此政策；資源批准、完整輸入與實際候選品質門檻不受此選項影響。

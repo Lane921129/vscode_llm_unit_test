@@ -8,7 +8,7 @@ import { estimatePromptTokens } from '../prompts/promptBudget';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
 
-async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true) {
+async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' = 'none') {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-seed-output-'));
     const source = path.join(directory, 'sample.py');
     fs.writeFileSync(source, 'def increment(value):\n    return value + 1\n');
@@ -17,6 +17,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true) 
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
     const requests: any[] = [];
+    let writerAttempts = 0;
     const persisted = new Map<string, unknown>();
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -57,6 +58,15 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true) 
         assert.match(request.prompt, /class GeneratedSeedTests\(unittest.TestCase\):\n    def test_seed\(self\):/);
         assert.equal(request.options.num_predict, 4096);
         assert.ok(estimatePromptTokens(request.transmittedPrompt) <= 8192 - request.options.num_predict);
+        writerAttempts++;
+        if (repetition !== 'none') {
+            if (writerAttempts === 1 || repetition === 'persistent') {
+                return Response.json({ response: '# output not converged\n'.repeat(40), done: true, done_reason: 'length' });
+            }
+            assert.match(request.prompt, /WRITER_OUTPUT_FORMAT_REPAIR_V1/);
+            assert.match(request.prompt, /value \+ 1/);
+            assert.doesNotMatch(request.prompt, /# output not converged/);
+        }
         return new Response(JSON.stringify({ response: 'import unittest\nfrom sample import increment\n'
             + 'class Tests(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(increment(1), 2)\n',
             done: true, done_reason: truncated ? 'length' : 'stop' }), { status: 200 });
@@ -78,7 +88,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true) 
         const artifacts = fs.readdirSync(output, { recursive: true }).map(String);
         const events = artifacts.filter(name => path.basename(name) === 'role_events.jsonl')
             .flatMap(name => fs.readFileSync(path.join(output, name), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)));
-        assert.equal(requests.filter(request => request.options.num_predict === 4096).length, 1,
+        assert.equal(requests.filter(request => request.options.num_predict === 4096).length, repetition === 'none' ? 1 : 2,
             'output-limit failure is not retried as a complete candidate or text-format fallback');
         const writer = events.find(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer');
         assert.ok(writer, 'formal seed request was recorded');
@@ -90,7 +100,25 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true) 
         assert.equal(writer.detail.inputBudget, 4096);
         assert.equal(writer.detail.reservedOutputTokens, 4096);
         assert.equal(writer.detail.requestOutputTokens, 4096);
-        if (!truncated) {
+        if (repetition !== 'none') {
+            const failures = events.filter(event => event.stage === 'model-request' && event.status === 'error');
+            assert.equal(failures[0].detail.outputDiagnosis, 'repetitive-without-tests');
+            assert.equal(failures[0].detail.responsePreview.executable, false);
+            assert.ok(failures[0].detail.responsePreview.samples.some((sample: any) => sample.text.includes('output not converged')));
+            assert.equal(events.filter(event => event.status === 'output-format-retry').length, 1);
+            assert.ok(!events.some(event => event.status === 'output-budget-grown'));
+            const planned = events.find(event => event.status === 'recovery-stage-planned' && event.detail.role === 'writer');
+            assert.ok(events.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer')
+                .every(event => event.detail.stageDeadlineAt === planned.detail.deadlineAt));
+            const failureReport = artifacts.find(name => path.basename(name) === 'failure_report.md' && !name.includes('loop'))!;
+            const report = fs.readFileSync(path.join(output, failureReport), 'utf8');
+            assert.match(report, /模型輸出失敗診斷|Model output failure diagnostics/);
+            assert.match(report, /output not converged/);
+            const roundFailure = artifacts.find(name => /loop[\\/]1[\\/]failure_report\.md$/.test(name))!;
+            assert.doesNotMatch(fs.readFileSync(path.join(output, roundFailure), 'utf8'),
+                /本輪沒有記錄失敗事件|No failure events were recorded/);
+        }
+        if (!truncated && repetition !== 'persistent') {
             const knowledgePath = artifacts.find(name => path.basename(name) === 'function_knowledge.json')!;
             const knowledge = JSON.parse(fs.readFileSync(path.join(output, knowledgePath), 'utf8'));
             if (!reviewAccepted) {
@@ -131,3 +159,7 @@ test('focused workflow executes and reviews a seed before completing real covera
     () => verifyFocusedWorkflow(false));
 test('optional qualification never substitutes for actual Reviewer approval before mutation',
     () => verifyFocusedWorkflow(false, false));
+test('repetitive Writer output receives one format correction and then completes real review and mutation',
+    () => verifyFocusedWorkflow(false, true, 'repair'));
+test('a second repetitive Writer output stops without another retry or executing partial output',
+    () => verifyFocusedWorkflow(false, true, 'persistent'));

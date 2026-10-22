@@ -1,6 +1,7 @@
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { localize } from '../i18n/core';
 import { createHash } from 'node:crypto';
+import { buildModelOutputPreview, diagnoseModelOutput } from './modelOutputDiagnostics';
 
 const shapeCounts = ['responseCharacters', 'sampledCharacters', 'sampledLines', 'nonemptyLines',
     'pythonFences', 'testMethods', 'assertionCalls', 'repeatedLines'] as const;
@@ -33,15 +34,23 @@ export function readOutputShapeDiagnostic(value: unknown): ReturnType<typeof out
 
 /** Never treat a syntactically valid prefix as a completed candidate. The
  * diagnostic deliberately excludes the provider response and arbitrary reason. */
-export function getCompletedOllamaText(payload: Record<string, unknown>, outputTokenLimit?: number): string {
+export function getCompletedOllamaText(payload: Record<string, unknown>, outputTokenLimit?: number,
+    privacy?: Parameters<typeof buildModelOutputPreview>[1]): string {
     if (payload.done_reason === 'length') {
         const knownLimit = Number.isSafeInteger(outputTokenLimit) && (outputTokenLimit as number) > 0;
+        const shape = typeof payload.response === 'string' ? outputShape(payload.response) : undefined;
+        const diagnosis = diagnoseModelOutput(shape);
         throw new AnalysisStageError('model-format', 'model-request',
             knownLimit
-                ? localize('模型回覆因長度限制未完成（本次 num_predict={0} tokens）；輸出額度與 Context 容量分開設定。未保存或執行截斷內容。', outputTokenLimit)
+                ? diagnosis === 'repetitive-without-tests'
+                    ? localize('模型回覆高度重複且沒有可辨識測試結構（本次 num_predict={0} tokens）；未採用或執行截斷測試，詳見失敗報告的輸出診斷。', outputTokenLimit)
+                    : localize('模型回覆因長度限制未完成（本次 num_predict={0} tokens）；未採用或執行截斷測試，失敗報告另列輸出診斷與去密節錄。', outputTokenLimit)
                 : localize('模型回覆達到輸出上限而未完成；未保存或執行截斷內容。'),
             { reasonCode: 'output-token-limit',
-                ...(typeof payload.response === 'string' ? { responseShape: outputShape(payload.response) } : {}),
+                ...(shape ? { responseShape: shape,
+                    outputDiagnosis: diagnosis,
+                    ...(privacy && typeof payload.response === 'string'
+                        ? { responsePreview: buildModelOutputPreview(payload.response, privacy) } : {}) } : {}),
                 ...(knownLimit ? { outputTokenLimit } : {}) });
     }
     return typeof payload.response === 'string' ? payload.response : '';

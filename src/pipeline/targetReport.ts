@@ -9,6 +9,7 @@ import { formatTierHistory } from './tierHistory';
 import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 import { readStoredMutationRun, readMutationCodeChange, MutationRun } from '../mutation/mutationResult';
 import { renderReviewerDiagnostics } from './reviewerDiagnosticsPresentation';
+import { renderModelOutputDiagnostics } from './modelOutputDiagnosticsPresentation';
 import { renderTraceTiming } from './traceTimingPresentation';
 import { TestFocus, testFocusLabel } from './testFocus';
 import { CandidateMethodSummary, readCandidateMethodSummary, renderCandidateMethodCounts, renderCandidateMethodTimeline } from './candidateMethodSummary';
@@ -267,7 +268,7 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
                 + (event.stage === 'model-request' && event.status === 'timing'
                     ? '; ' + (formatModelRequestTiming(detail) || localize('未知')) : '');
             return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)}${rejectedCandidateLink(directory, detail, runId, sourceHash, loop)} |`;
-        }), '', renderReviewerDiagnostics(events), `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
+        }), '', renderModelOutputDiagnostics(events), renderReviewerDiagnostics(events), `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
 }
 
 export function writeTargetReports(directory: string, identity: ReportIdentity, sourceHash: string,
@@ -336,7 +337,7 @@ function writeOrganizedReports(data: string, identity: ReportIdentity, sourceHas
     for (const number of rounds.sort((a, b) => a - b)) {
         const directory = roundDirectory(data, number);
         fs.mkdirSync(directory, { recursive: true });
-        const failures = events.filter(event => event.loop === number && /failed|rejected|invalid|unavailable|rollback|retained-baseline/.test(event.status));
+        const failures = events.filter(event => event.loop === number && /failed|error|budget-exceeded|rejected|invalid|unavailable|rollback|retained-baseline/.test(event.status));
         const artifacts = fs.readdirSync(directory).filter(name => !['report.md', 'failure_report.md'].includes(name));
         const title = localize('## 第 {0} 輪結果', number);
         const flow = title + '\n\n' + identityLines(identity) + '\n'
@@ -361,7 +362,7 @@ function writeOrganizedReports(data: string, identity: ReportIdentity, sourceHas
         + localize('- **失敗原因**: {0}\n', reportCell(conciseReason(summary.reason)))
         + localize('- **首次失敗**: {0}\n- **最近失敗**: {1}\n', describe(state.firstFailure), describe(state.lastFailure))
         + (summary.methodSummary ? renderCandidateMethodTimeline(summary.methodSummary) : '')
-        + renderReviewerDiagnostics(events)
+        + renderModelOutputDiagnostics(events) + renderReviewerDiagnostics(events)
         + renderTraceTiming(state, identity.target)
         + '\n' + localize('### 各輪流程\n\n') + links.join('\n') + '\n\n'
         + localize('[共用紀錄與完整稽核流程](loop/_run/workflow_report.md)\n');

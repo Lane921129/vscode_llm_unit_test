@@ -4,6 +4,14 @@
 
 ## 2026-10-22
 
+### Writer 重複輸出格式恢復與可讀失敗診斷
+
+- 分析 BMI 22:45：Analyst 正常完成；Writer 兩次 HTTP 200，輸入均3014 tokens，輸出4096／6144 tokens後 length，分別約106／175秒。Context 已由8192增至10240；兩次各僅三種不同非空行，詞法方法／斷言數為零，尚未形成候選，無 Checker／Reviewer／突變量測。舊紀錄沒有原回覆，不能推測三行的內容；另於結果內建立衍生分析頁，原始報告與事件不改寫。
+- Local Writer／Writer 修訂遇到完整樣本、至少16非空行、80%以上重複且無可辨識方法／斷言時，既有唯一恢復機會改送固定格式修正，不再只加額度重送。保留完整必要提示與原品質門檻，不回灌原失敗回覆；提示改變後撤回先前的實測輸入與速度依據，重新核容量並要求完整單次時間。原最多兩次、階段／target期限及計數不變；已有測試結構及未知樣本仍採既有增額政策。
+- 正式 Local length 失敗保存 `model-output-preview-v1`：最多六種非空行的有界節錄、原行位置／字元數及樣本重複次數；先隱藏已知／疑似憑證、提示／來源重述與位置。總顯示預算最多1200字元且少於原文，不保存 provider envelope；complete／executable皆false，不作測試或續寫來源。低階資格探針預設不保存節錄。
+- 函式及逐輪 failure report、workflow新增逐次輸出診斷：實測輸入／輸出tokens、num_predict、Context、HTTP、請求／載入／推論耗時、詞法統計、hash、恢復決策與去密節錄。未知不借前次數字；明示詞法非AST、節錄不可執行、舊紀錄無法還原原文。逐輪失敗統計補入error／budget-exceeded，避免恢復成功後顯示沒有失敗事件。
+- 驗證：相關 Node 73項通過，含一次格式修正後完成真實 Python執行／同候選Reviewer／builtin突變，以及再次重複即停、隱私／雙語／宿主傳輸；快速 Node 743項、Python 42項及Webview語法通過，TypeScript、lint與production build通過。集合有重疊、不累加；模型回覆為固定fixture，未重跑`test:full`、F5／DGX或實驗室13B真模型，不宣稱已提高真模型通過率。
+
 ### 事先角色資格可選化與連線探針診斷
 
 - 新增側欄「要求事先通過角色資格測試」及 `llmUnitTest.requireRoleQualification`，預設關閉並保存選擇。關閉時允許未測或先前探針失敗的模型直接嘗試正式生成，Context 增容也略過固定資格探針；不將未測角色標為 verified。開啟後，所有策略均要求同模型／端點／容量的 Writer 資格，完整流程亦要求 Reviewer；新容量仍須重驗。每次執行凍結政策並記錄至角色事件與認知檔。
