@@ -100,9 +100,10 @@ test('all folder pickers restore independent selections after provider recreatio
         settingScopes.set('mutationEngine', 'workspaceFolderValue');
         await view.receive({ command: 'setMutationEngine', engine: 'builtin' });
         assert.deepEqual(settingUpdates.at(-1), { key: 'mutationEngine', value: 'builtin', target: 3 });
-        await view.receive({ command: 'setMutationEngine', engine: 'mutatest' });
+        await view.receive({ command: 'setMutationEngine', engine: 'mutmut' });
         view = attach();
-        assert.match(view.webview.html, /value="mutatest" selected/);
+        assert.match(view.webview.html, /value="mutmut" selected/);
+        assert.doesNotMatch(view.webview.html, /value="mutmut"[^>]*disabled/);
         assert.match(view.webview.html, /id="mutation-workers" value="3"/);
         for (const message of [{ command: 'setMutationEngine', engine: 'unknown' },
             ...[0, 5, 1.5, '3', NaN].map(workers => ({ command: 'setMutationWorkers', workers }))]) {
@@ -116,10 +117,12 @@ test('all folder pickers restore independent selections after provider recreatio
         await view.receive({ command: 'setMutationWorkers', workers: 1 });
         assert.equal(settingUpdates.length, count, 'active analysis cannot change persisted mutation settings');
         view.provider.endAnalysis('active');
-        for (const command of ['startAnalysis', 'startBatchAnalysis']) {
-            await view.receive({ command, envType: 'local', mutationEngine: 'mutatest', mutationWorkers: 3 });
-            assert.equal(executed.at(-1)[1].mutationEngine, 'mutatest');
-            assert.equal(executed.at(-1)[1].mutationWorkers, 3);
+        for (const engine of ['mutatest', 'mutmut']) {
+            for (const command of ['startAnalysis', 'startBatchAnalysis']) {
+                await view.receive({ command, envType: 'local', mutationEngine: engine, mutationWorkers: 3 });
+                assert.equal(executed.at(-1)[1].mutationEngine, engine);
+                assert.equal(executed.at(-1)[1].mutationWorkers, 3);
+            }
         }
     } finally {
         Module._load = originalLoad;
@@ -138,7 +141,16 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
     elements.get('validation-mode').value = modeOptions.match(/value="([^"]+)" selected/)![1];
     const engineOptions = html.match(/<select id="mutation-engine">([\s\S]*?)<\/select>/)![1];
     elements.get('mutation-engine').value = engineOptions.match(/value="([^"]+)" selected/)![1];
-    assert.match(engineOptions, /value="mutmut"[^>]*disabled/);
+    assert.match(engineOptions, /<option value="mutmut"[^>]*>Mutmut/);
+    assert.doesNotMatch(engineOptions, /value="mutmut"[^>]*disabled/);
+    assert.match(engineOptions, /Mutmut（隔離整合尚未完成）/);
+    assert.match(html, /隔離整合尚未完成，會在預檢停止/);
+    setLanguage('en');
+    try {
+        const englishHtml = getWebviewContent(t, 'en');
+        assert.match(englishHtml, /Mutmut \(integration not yet available\)/);
+        assert.match(englishHtml, /isolated integration is not yet available/);
+    } finally { setLanguage('zh-tw'); }
     const messages: any[] = [];
     let receive!: (event: unknown) => void;
     const context = vm.createContext({
@@ -153,10 +165,10 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
     assert.equal(elements.get('mutation-engine').value, 'builtin');
     assert.equal(elements.get('mutation-engine').disabled, false);
     assert.equal(elements.get('mutation-workers').value, '2');
-    elements.get('mutation-engine').value = 'mutatest';
-    elements.get('mutation-engine').onchange({ target: { value: 'mutatest' } });
+    elements.get('mutation-engine').value = 'mutmut';
+    elements.get('mutation-engine').onchange({ target: { value: 'mutmut' } });
     assert.equal(messages.at(-1).command, 'setMutationEngine');
-    assert.equal(messages.at(-1).engine, 'mutatest');
+    assert.equal(messages.at(-1).engine, 'mutmut');
     for (const value of ['', '0', '5', '1.5', 'NaN']) {
         elements.get('mutation-workers').value = value;
         elements.get('mutation-workers').onchange();
@@ -241,7 +253,7 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
             assert.equal(message.mutpyTimeout, DEFAULT_MUTATION_TIMEOUT_SECONDS);
             assert.equal(message.timeoutSeconds, 60);
             assert.equal(message.validationMode, mode, 'both single-file and batch requests carry the displayed mode');
-            assert.equal(message.mutationEngine, 'mutatest');
+            assert.equal(message.mutationEngine, 'mutmut');
             assert.equal(message.mutationWorkers, 3);
             assert.equal(elements.get('validation-mode').disabled, true, 'the active run cannot change modes');
             assert.equal(elements.get('mutation-engine').disabled, true);

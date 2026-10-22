@@ -339,7 +339,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <select id="mutation-engine">
                     <option value="builtin" ${selectedEngine === 'builtin' ? 'selected' : ''}>${t('ui.mutationBuiltin')}</option>
                     <option value="mutatest" ${selectedEngine === 'mutatest' ? 'selected' : ''}>${t('ui.mutationMutatest')}</option>
-                    <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''} disabled>${t('ui.mutationMutmut')}</option>
+                    <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''}>${t('ui.mutationMutmut')}</option>
                 </select>
                 <p>${t('ui.mutationEngineHint')}</p>
                 <label for="mutation-workers">${t('ui.mutationWorkers')}${t('ui.fullModeSuffix')}</label>

@@ -6,7 +6,9 @@
 
 # mutatest 3.x requires coverage < 6. Native mutmut does not support Windows;
 # Windows/Python 3.12+ uses the built-in AST mutation runner; native mutmut needs WSL.
-mutatest>=3.1.0; python_version < "3.12"
-coverage>=4.4,<6; python_version < "3.12"
-mutmut>=3.5.0; python_version >= "3.12" and platform_system != "Windows"
-coverage>=7.0.0; python_version >= "3.12"
+# Mutmut is an optional native tool; installing it does not enable the extension's unfinished isolated adapter.
+# Pin direct tools so a new upstream release cannot silently change CI evidence.
+mutatest==3.1.0; python_version < "3.12"
+coverage==5.5; python_version < "3.12"
+mutmut==3.7.0; python_version >= "3.12" and platform_system != "Windows"
+coverage==7.16.0; python_version >= "3.12"
