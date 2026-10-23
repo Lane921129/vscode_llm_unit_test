@@ -137,6 +137,7 @@ import { diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrecti
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
+import { prepareParameterFixtureExperiments, ParameterFixtureSession } from './pipeline/parameterFixtureExperiments';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -1851,6 +1852,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const qualityAnalystSession = new QualityAnalystSession();
     const qualityExperiments = new QualityImprovementSession();
     let qualityObservationEvidence = '';
+    const parameterFixtureExperiments = new ParameterFixtureSession();
     let qualityTraceProjection = '';
     let qualityTraceReference = '';
     const appendQualityEvidence = (prompt: string): string => {
@@ -4314,7 +4316,32 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 }
                 const focusedMutant = focus?.kind === 'survivor' ? bestMutation?.mutants.find(mutant =>
                     mutant.status === 'SURVIVED' && focus.evidence.startsWith(`- id ${mutant.id},`)) : undefined;
-                if (focus && bestCode && evidenceStillCurrent()) {
+                if (focus && bestCode && evidenceStillCurrent() && !(params.funcName || targetFuncName).includes('.')) {
+                    const result = await prepareParameterFixtureExperiments({ sourcePath: params.filePath, source: initialSource,
+                        target: params.funcName || targetFuncName, module: targetImportModule, testCode: bestCode,
+                        focus: { ...focus, mutant: focusedMutant,
+                            line: focus.kind === 'coverage' ? Number(/^(?:line|branch):(\d+)/.exec(focus.evidence)?.[1]) || undefined : undefined },
+                        python: pythonExecutable, env: testExecutionEnv, knownSecrets,
+                        triedFingerprints: parameterFixtureExperiments.triedFingerprints });
+                    throwIfExecutionCancelled();
+                    if (!evidenceStillCurrent()) { throw new Error(localize('來源或相依已變更，未採用補測觀測。')); }
+                    parameterFixtureExperiments.record(result);
+                    fs.writeFileSync(path.join(loopDir, `loop${currentLoop}_parameter_fixture_experiments.json`), JSON.stringify(result, null, 2), 'utf8');
+                    recordRole('parameter-fixture-experiment', result.status, { gapId: focus.id,
+                        fingerprints: result.experiments.map(item => item.fingerprint), reason: result.reason });
+                    const nextEvidence = parameterFixtureExperiments.prompt(result,
+                        Math.min(8000, Math.floor(activeModelProfile.budgetTokens * 0.6)), knownSecrets);
+                    if (nextEvidence) {
+                        qualityObservationEvidence = nextEvidence;
+                        qualityTraceProjection = '';
+                        qualityTraceReference = '';
+                        observedBoundary = true;
+                        recordRole('quality-evidence', 'writer-required', { gapId: focus.id, testAuthor: 'llm',
+                            evidenceMode: 'parameter-fixture-observations-v1' });
+                    } else if (qualityObservationEvidence.startsWith('PARAMETER_FIXTURE_OBSERVATIONS_V1')) {
+                        qualityObservationEvidence = '';
+                    }
+                } else if (focus && bestCode && evidenceStillCurrent()) {
                     const result = await prepareQualityExperiments({ sourcePath: params.filePath, source: initialSource,
                         target: params.funcName || targetFuncName, module: targetImportModule, testCode: bestCode,
                         focus: { ...focus, mutant: focusedMutant,

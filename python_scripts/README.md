@@ -13,6 +13,7 @@
 | 修復範圍 | `validate_repair_scope.py` | 限制 Bug Fixer 只修改失敗測試並保留既有測試 |
 | 斷言證據 | `validate_assertion_evidence.py` | 檢查同一呼叫的 literal 斷言是否與已驗證行為觀測矛盾 |
 | 情境識別 | `scenario_inventory.py` | 為測試 AST 與設定建立指紋，不執行測試 |
+| 品質補測觀測 | `quality_experiment_runner.py`、`parameter_fixture_experiments.py` | 分別觀察實例有序狀態及頂層函式的受控物件參數；只回傳觀測，由 AI 新增測試，再重跑、審查與量測。參見[參數物件受控補測](../docs/參數物件受控補測.md) |
 | 格式救援 | `rescue_unittest.py` | 受限制的 unittest 產物整理 |
 | 品質測量 | `basic_mutation_runner.py` | 每個變異體使用獨立目錄並停用 bytecode 後執行 |
 

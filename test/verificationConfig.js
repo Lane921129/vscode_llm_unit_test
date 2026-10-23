@@ -39,7 +39,7 @@ const fastNodeTests = new Set([
     'writerSeedScenario', 'writerSourceSetup'
 ].map(name => `${name}.test.ts`));
 
-// Existing full Python suite, unchanged in membership and order.
+// Full Python suite; append new reviewed coverage without removing prior files.
 const pythonTests = [
     'python_scripts/test_rescue_unittest.py',
     'python_scripts/test_ast_pipeline.py',
@@ -74,6 +74,7 @@ const pythonTests = [
     'python_scripts/test_mutation_code_change.py',
     'python_scripts/test_external_mutation_runner.py',
     'python_scripts/test_quality_experiments.py',
+    'python_scripts/test_parameter_fixture_experiments.py',
     'python_scripts/test_quality_policy.py',
     'python_scripts/test_runtime_policy.py',
     'python_scripts/test_isolated_resources.py',

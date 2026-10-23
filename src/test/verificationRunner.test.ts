@@ -16,10 +16,11 @@ const options = (mode: string, list = false) => ({ mode, list, node: [], python:
 
 test('fast and integration partition every current Node and original Python test without overlap', () => {
     const inventory = config.discoverTests();
-    assert.equal(inventory.python.length, 49, 'preserve all original explicit Python modules');
-    assert.equal(new Set(inventory.python).size, 49);
+    assert.equal(inventory.python.length, 50, 'preserve all original modules and include the new fixture regression');
+    assert.equal(new Set(inventory.python).size, 50);
+    const originalPython = inventory.python.filter((file: string) => file !== 'python_scripts/test_parameter_fixture_experiments.py');
     // Snapshot of the original runner's ordered 49-module list, not of tier output.
-    assert.equal(createHash('sha256').update(JSON.stringify(inventory.python)).digest('hex'),
+    assert.equal(createHash('sha256').update(JSON.stringify(originalPython)).digest('hex'),
         'd944706c9adf2e92b700689274a03291a9a71941c4efdcd93309db8bd6332205');
     const fast = config.partitionTests(inventory, 'fast');
     const integration = config.partitionTests(inventory, 'integration');
@@ -35,6 +36,7 @@ test('fast and integration partition every current Node and original Python test
     assert.ok(integration.node.includes('src/test/bmiFocusedExpansionIntegration.test.ts'));
     assert.ok(integration.python.includes('python_scripts/test_external_mutation_runner.py'));
     assert.ok(integration.python.includes('python_scripts/test_secret_scan.py'));
+    assert.ok(integration.python.includes('python_scripts/test_parameter_fixture_experiments.py'));
 });
 
 test('a new Node test defaults to integration and remains in full without a classification edit', () => {
@@ -176,7 +178,8 @@ test('legacy Python entry retains the complete original list and scans history o
     const calls: string[][] = [];
     assert.equal(pythonRunner.runPythonTests([], { ...quiet, fileSystem: { existsSync: () => true },
         spawn: (_command: string, args: string[]) => { calls.push(args); return { status: 0 }; } }), 0);
-    assert.equal(calls[0].length, 51, '49 modules plus -m unittest');
+    assert.equal(calls[0].length, 52, '50 modules plus -m unittest');
+    assert.deepEqual(calls[0].slice(2), config.pythonTests, 'the legacy entry runs every current module in order');
     assert.deepEqual(calls[0].slice(0, 4), ['-m', 'unittest', 'python_scripts/test_rescue_unittest.py', 'python_scripts/test_ast_pipeline.py']);
     assert.equal(calls[0].at(-1), 'python_scripts/test_secret_scan.py');
     assert.deepEqual(calls[1], ['python_scripts/secret_scan.py', '--history']);

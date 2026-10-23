@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 參數物件受控補測（2026-10-23）
+
+`parameter_fixture_experiments.py` 與 `parameterFixtureExperiments.ts` 補上頂層函式的物件參數實驗。它與既有實例狀態實驗分開：AST 只從通過候選解析受控物件與 callable 配方，按當前來源缺口選取參數屬性的缺少、假值及 getter 例外，worker 重新推導計畫後才在全新隔離程序呼叫真實目標。常數 factory 每次建立新的回傳；identity factory 返回實際收到的同一參數，不把任意 lambda 當成可求值程式。
+
+觀測綁定來源、seed、目標、模組、資源計畫與配方摘要；必須證明目標 frame 進入及 profile 未被替換，失敗、I/O、ambient read、不可重播結果與來源漂移不授證。工具16秒階段一輪只執行一例，避免4秒冷啟動上限讓框架模組完全無法載入；未執行規劃仍留後續輪次。`ParameterFixtureSession` 分開保存嘗試與已交付案例，Context 不足不能截斷觀測或冒充已送出。
+
+正式流程仍是 AI seed→執行→Reviewer→coverage／mutation→依缺口實驗→AI 新增測試→合併保留→重跑重審重測。頂層數值突變探測在無物件觀測時照常保留；class instance 的有序狀態實驗維持既有契約。工具不產生 unittest、不降低門檻；目前不支援任意自訂 fixture 類別、輸入相關的計算 lambda、async 或未知 setup，結果須明示 unsupported。
+
 ## 無 Trace 的種子範圍、局部 fixture 修復與來源定位（2026-10-23）
 
 `review_test_facts.py` 額外收集不依賴 literal 解碼的 `targetCallSyntax`，只列可保守解析到 canonical target 的直接 AST 呼叫站（行／column）。重綁與未知接收者不推定，巢狀函式／類別 body 不計入；此為語法下界，不能當執行次數或 expected 證據。`reviewFacts.ts` 核驗位置與唯一性，不將這份陣列加到 Reviewer prompt。`writerSeedContract.ts` 在無選定 Trace 時也拒絕明確多方法／多呼叫 seed；物件輸入保持 unknown，仍須實跑重審。Writer 生成及修訂都在所有來源、focus與資源語境之後重申同一最小範圍。

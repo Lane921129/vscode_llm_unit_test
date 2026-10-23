@@ -27,6 +27,7 @@ export const PYTHON_TOOLS = {
     traceDeduplication: 'deduplicate_trace_tests.py',
     mutationInputs: 'mutation_probe_plan.py',
     qualityExperiments: 'quality_experiment_runner.py',
+    parameterFixtureExperiments: 'parameter_fixture_experiments.py',
     mutation: 'basic_mutation_runner.py',
     externalMutation: 'external_mutation_runner.py',
     coverage: 'coverage_read.py'
