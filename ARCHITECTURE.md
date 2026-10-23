@@ -1,5 +1,15 @@
 # 專案閱讀入口
 
+## 無 Trace 的種子範圍、局部 fixture 修復與來源定位（2026-10-23）
+
+`review_test_facts.py` 額外收集不依賴 literal 解碼的 `targetCallSyntax`，只列可保守解析到 canonical target 的直接 AST 呼叫站（行／column）。重綁與未知接收者不推定，巢狀函式／類別 body 不計入；此為語法下界，不能當執行次數或 expected 證據。`reviewFacts.ts` 核驗位置與唯一性，不將這份陣列加到 Reviewer prompt。`writerSeedContract.ts` 在無選定 Trace 時也拒絕明確多方法／多呼叫 seed；物件輸入保持 unknown，仍須實跑重審。Writer 生成及修訂都在所有來源、focus與資源語境之後重申同一最小範圍。
+
+`bugFixer.ts` 將方法內 fixture 類別與整份外層 class 包裝分開：唯一失敗方法可保留原巢狀定義，合併不授批准，原 AST scope 仍保護其他方法、共享設定、簽名與 imports。canonical seed 外框預列 `types`，同名目標時省略該 helper import；包裝不寫測資或答案。
+
+`ast_extractor.py` 的 `source_location` 綁定完整目標片段與實際起訖行；`sourceLineContext.ts` 核對片段 hash及列數，讓 Writer／品質 Analyst 對照實測檔案行號。coverage 焦點僅補少量鄰近行，長行指回既有完整來源，避免另一份完整函式占用 Context；全檔版本仍由預檢與 journal 核驗。位置不能當 oracle。
+
+本機 Qwen 3B 的車輛 `get_plate_no_from_event` 已保留經執行及 Reviewer 的 seed，完成 builtin 突變7/12（58.33%），目標行10/14且仍缺分支；未達標。來源定位後仍重複既有情境。現有品質實驗工具回報 `instance-target-required`，尚不支援此頂層函式的物件參數；後續需補受控參數 fixture 實驗，不能把 unsupported 或空任務算通過。
+
 ## Writer 種子程式碼續寫恢復（2026-10-23）
 
 `writerSeedCompletion.ts` 只處理實測高度重複、尚無測試結構的 Local seed 恢復。一般生成維持模型模板；唯一重試可把完整角色與證據轉成可逆的逐行註解，結尾接 `targetContract.ts` 的 canonical import／class／方法簽名，以 `raw:true`（不送 system/template）請模型續寫。此包裝沒有測資、目標呼叫或預期值；原回覆丟棄，不續寫截斷內容。新輸入重算容量且不借舊耗時，原 deadline／計數與兩次上限保持。只有完整 stop 才接合模型原字串；完整 fence 則直接保留。後續仍經相同 AST、執行、Reviewer、coverage 與 mutation，模式選擇不授予模型資格或測試批准。

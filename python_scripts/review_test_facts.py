@@ -261,6 +261,42 @@ def review_syntax_details(code, method, aliases, standard_assertions):
     return assertions, patches
 
 
+def target_call_syntax(method, aliases, target):
+    """Conservative call-site lower bound, independent of literal input decoding.
+    Never descends into nested bodies or claims execution/expected-value evidence.
+    """
+    shadowed = {arg.arg for arg in [*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs]}
+    for node in ast.walk(method):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            shadowed.add(node.id)
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            shadowed.add(dotted(node).split('.')[0])
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node is not method:
+            shadowed.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for item in node.names:
+                if item.name == '*':
+                    shadowed.update(aliases)
+                else:
+                    shadowed.add(item.asname or (item.name.split('.')[0] if isinstance(node, ast.Import) else item.name))
+    result = []
+
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.Call):
+            root, _, tail = dotted(node.func).partition('.')
+            if root and root not in shadowed and root in aliases \
+                    and aliases[root] + ('.' + tail if tail else '') == target:
+                result.append({'line': node.lineno, 'column': node.col_offset})
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in method.body:
+        visit(statement)
+    return result
+
+
 def build_review_facts(payload):
     code = payload['code']
     if len(code) > 120000:
@@ -353,6 +389,7 @@ def build_review_facts(payload):
                      'assertions': [], 'calls': [], 'exceptionGuards': [], 'scalarBindings': [], 'mockAssertions': [],
                      'standardAssertions': []}
             if not custom_loader:
+                facts['targetCallSyntax'] = target_call_syntax(method, aliases, target)
                 facts['standardAssertions'] = standard_assertion_syntax(cls, method, aliases, overrides)
                 assertion_syntax, patch_syntax = review_syntax_details(code, method, aliases, facts['standardAssertions'])
                 facts['standardAssertionCalls'] = assertion_syntax

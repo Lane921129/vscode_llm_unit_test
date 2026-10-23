@@ -65,6 +65,7 @@ test('seed packaging supplies only canonical imports and the proper harness, nev
         const packaging = formatWriterSeedPackaging('sample', 'Owner.target', { class_name: 'Owner', is_async });
         const prefix = /```python\n([\s\S]*?)\n```/.exec(packaging)![1];
         assert.match(prefix, /from sample import Owner/);
+        assert.match(prefix, /import types\n/, 'the advertised SimpleNamespace fixture has an explicit stdlib import');
         assert.match(prefix, is_async ? /unittest.IsolatedAsyncioTestCase/ : /unittest.TestCase/);
         assert.match(prefix, is_async ? /async def test_seed/ : /    def test_seed/);
         assert.doesNotMatch(prefix, /assertEqual|assertRaises|return_value|Owner\(/);
@@ -75,6 +76,8 @@ test('seed packaging supplies only canonical imports and the proper harness, nev
     assert.equal(formatWriterSeedPackaging('unsafe\nimport secret', 'target', { is_async: false }), '');
     assert.equal(formatWriterSeedPackaging('sample', 'unittest', { is_async: false }), '');
     assert.match(formatWriterSeedPackaging('sample', 'GeneratedSeedTests', { is_async: false }), /class GeneratedSeedCases/);
+    assert.doesNotMatch(formatWriterSeedPackaging('sample', 'types', { is_async: false }), /^import types$/m,
+        'the helper import must not shadow a selected target named types');
 });
 
 test('short seed context preserves full helper source, setup, selected rules and source identity', () => {

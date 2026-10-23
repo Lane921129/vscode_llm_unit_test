@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import contextlib
 import io
 import json
@@ -15,6 +16,21 @@ from validate_test_bindings import validate_bindings
 
 
 class WriterRetrievalTests(unittest.TestCase):
+    def test_source_location_matches_the_exact_indented_decorated_target_snippet(self):
+        source = '# location padding\n\nclass Owner:\n    @staticmethod\n    def target(value):\n        return value\n'
+        with tempfile.TemporaryDirectory() as folder:
+            file = Path(folder, 'source.py')
+            file.write_text(source, encoding='utf-8')
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                extract_info(str(file), 'Owner.target')
+            result = json.loads(output.getvalue())
+        location = result['source_location']
+        self.assertEqual(location['startLine'], 5)
+        self.assertEqual(location['endLine'], 6)
+        self.assertEqual(result['code'], '\n'.join(source.split('\n')[4:6]))
+        self.assertEqual(location['sourceHash'], hashlib.sha256(result['code'].encode('utf-8')).hexdigest())
+
     def retrieve(self, source, **limits):
         tree = ast.parse(source)
         target = next(node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))

@@ -30,7 +30,7 @@ export function getBugFixerSystemPrompt(): string {
 
 CONTRACT:${isolatedResourceSystemRule()}
 - Use only the failure, target binding, permitted mock paths, complete target source, imports, setup, verified observations, and failing method supplied in BUG_FIX_REQUEST_V5.
-- Preserve the test method name. Do not add tests, classes, helpers, source code, or unittest.main().
+- Preserve the test method name. Do not add tests, module/class fixtures, source code, or unittest.main(). Existing method-local fixture definitions must remain inside the named method, never lifted into the module or TestCase.
 - A return_value does not raise; use side_effect inside the failing method for a mocked exception.
 - ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
 - ${TEST_IMPORT_GUIDANCE}
@@ -262,7 +262,7 @@ function parseReplacement(raw: string): BugFixReplacement | undefined {
 
 function normalizedReplacementMethod(replacement: string, method: TestMethodFragment): string | undefined {
     const clean = replacement.trim().replace(/^```(?:python|py)?\s*/i, '').replace(/```$/i, '').trim();
-    if (/^\s*class\s+/m.test(clean) || /unittest\.main\s*\(/.test(clean)) { return undefined; }
+    if (/^class\s+/m.test(clean) || /unittest\.main\s*\(/.test(clean)) { return undefined; }
     const lines = clean.replace(/\r\n/g, '\n').split('\n');
     const definition = lines.findIndex(line => new RegExp(`^\\s*(?:async\\s+)?def\\s+${method.name}\\s*\\(`).test(line));
     if (definition < 0 || lines.some((line, index) => index !== definition && /^\s*(?:async\s+)?def\s+test_/.test(line))) {

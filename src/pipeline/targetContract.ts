@@ -43,7 +43,8 @@ export function writerSeedCodePrefix(module: string, name: string, context?: any
     if (!module.split('.').every(identifier) || !identifier(imported) || imported === 'unittest'
         || typeof context?.is_async !== 'boolean') { return ''; }
     const harness = imported === 'GeneratedSeedTests' ? 'GeneratedSeedCases' : 'GeneratedSeedTests';
-    return 'import unittest\n' + `from ${module} import ${imported}\n\n`
+    return 'import unittest\n' + (imported === 'types' ? '' : 'import types\n')
+        + `from ${module} import ${imported}\n\n`
         + `class ${harness}(unittest.${context.is_async ? 'IsolatedAsyncioTestCase' : 'TestCase'}):\n`
         + `    ${context.is_async ? 'async def' : 'def'} test_seed(self):\n`;
 }

@@ -21,6 +21,8 @@ export interface WriterSeedContractResult {
     reasonCode?: WriterSeedContractReason;
     methodCount: number;
     literalTargetCallCount: number;
+    /** A conservative static lower bound, never a runtime call count. */
+    syntacticTargetCallCount: number | null;
     caseId?: string;
 }
 interface SelectedSeedCase {
@@ -82,14 +84,18 @@ function selectedSeedCase(input: WriterSeedEvidenceInput): SelectedSeedCase | un
 export function validateWriterSeedContract(input: WriterSeedEvidenceInput & { facts: ReviewFacts }): WriterSeedContractResult {
     const methodCount = input.facts.methods.length;
     const literalTargetCallCount = input.facts.methods.reduce((count, method) => count + method.calls.length, 0);
+    const syntacticTargetCallCount = input.facts.methods.every(method => Array.isArray(method.targetCallSyntax))
+        ? input.facts.methods.reduce((count, method) => count + method.targetCallSyntax!.length, 0) : null;
     const result = (status: WriterSeedContractResult['status'], reasonCode?: WriterSeedContractReason,
-        caseId?: string): WriterSeedContractResult => ({ status, reasonCode, methodCount, literalTargetCallCount, caseId });
+        caseId?: string): WriterSeedContractResult => ({ status, reasonCode, methodCount, literalTargetCallCount, syntacticTargetCallCount, caseId });
     if (!validIdentity(input.identity) || !sameIdentity(input.facts, input.identity)
         || input.observations && !sameIdentity(input.observations, input.identity)) {
         return result('rejected', 'writer-seed-identity-mismatch');
     }
     if (methodCount > 1) { return result('rejected', 'writer-seed-method-count'); }
-    if (literalTargetCallCount > 1) { return result('rejected', 'writer-seed-call-count'); }
+    if (literalTargetCallCount > 1 || syntacticTargetCallCount !== null && syntacticTargetCallCount > 1) {
+        return result('rejected', 'writer-seed-call-count');
+    }
     if (methodCount !== 1 || literalTargetCallCount !== 1) { return result('unknown', 'writer-seed-call-unknown'); }
     const selected = selectedSeedCase(input);
     if (!selected) { return result('unknown', 'writer-seed-evidence-unavailable'); }

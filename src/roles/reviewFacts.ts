@@ -29,6 +29,9 @@ export function reviewAssertionObservationStatus(assertion: ReviewAssertionFact)
 export interface ReviewMethodFacts {
     line: number; endLine: number; name: string; assertions: ReviewAssertionFact[];
     calls: Array<{ line: number; call: TraceValueSnapshot; observationReturned?: true; spellings?: string[] }>;
+    /** Direct canonical call-site lower bound; unknown object inputs are allowed.
+     * Presence is syntax only, not a runtime count or an assertion oracle. */
+    targetCallSyntax?: Array<{ line: number; column: number }>;
     exceptionGuards: Array<{ line: number; exception: string; callLines: number[] }>;
     scalarBindings: Array<{ line: number; name: string; type: string }>;
     mockAssertions?: Array<{ line: number; kind: string; patchTarget: string; mockPath: string; targetCallLine: number }>;
@@ -194,6 +197,18 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
         || !Array.isArray(value.imports) || !Array.isArray(value.classes) || !Array.isArray(value.methods)
         || containsCredential(run.stdout, options.knownSecrets)) { invalid('ast-identity'); }
     for (const method of value.methods) {
+        if (object(method) && method.targetCallSyntax !== undefined) {
+            if (!Array.isArray(method.targetCallSyntax) || method.targetCallSyntax.length > 12000
+                || !Number.isSafeInteger(method.line) || !Number.isSafeInteger(method.endLine)
+                || method.line < 1 || method.endLine < method.line
+                || method.targetCallSyntax.some((item: unknown) => !object(item)
+                    || Object.keys(item).some(key => !['line', 'column'].includes(key))
+                    || !Number.isSafeInteger(item.line) || item.line < method.line || item.line > method.endLine
+                    || !Number.isSafeInteger(item.column) || item.column < 0)
+                || new Set(method.targetCallSyntax.map((item: any) => `${item.line}:${item.column}`)).size !== method.targetCallSyntax.length) {
+                invalid('ast-target-call-syntax-shape');
+            }
+        }
         if (object(method) && Array.isArray(method.calls) && method.calls.some((call: unknown) => !object(call)
             || call.observationReturned !== undefined && call.observationReturned !== true
             || call.spellings !== undefined && (!Array.isArray(call.spellings) || call.spellings.length < 1 || call.spellings.length > 2
@@ -241,7 +256,7 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
 /** Call spellings already appear in TEST_FILE; project their AST presence without duplicating code. */
 export function reviewFactsForPrompt(facts: ReviewFacts): string {
     return 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...facts,
-        methods: facts.methods.map(method => ({ ...method, calls: method.calls.map(({ line, observationReturned }) => ({ line, observationReturned })),
+        methods: facts.methods.map(({ targetCallSyntax: _syntax, ...method }) => ({ ...method, calls: method.calls.map(({ line, observationReturned }) => ({ line, observationReturned })),
             assertions: method.assertions.map(({ observationVerified: _legacy, observationStatus: _status, ...assertion }) => {
                 const observationStatus = reviewAssertionObservationStatus({ ...assertion, observationVerified: _legacy, observationStatus: _status });
                 if (observationStatus === undefined) { invalid('ast-assertion-observation-shape'); }

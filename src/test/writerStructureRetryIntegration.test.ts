@@ -128,13 +128,15 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
                 if (++writers === 1) { return bad; }
                 assert.equal(writers, 2);
                 assertRepairPrompt(prompt, bad, validateUnittestStructure(bad, '_read', 'sample').reason!);
-                assert.doesNotMatch(prompt, /WRITER_SEED_V1/);
+                assert.match(prompt, /Pass execution before expansion; existing output contract\.$/);
+                assert.equal((prompt.match(/^WRITER_SEED_V1$/gm) || []).length, 1,
+                    'the revision retains one final seed scope rather than inheriting suite expansion');
                 return good;
             };
             const outputPath = path.join(directory, 'corrected');
             await run({ ...params, outputPath });
             const result = readRun(outputPath);
-            assert.equal(writers, 2);
+            assert.equal(writers, 2, JSON.stringify(result.knowledge.lastFailure));
             assert.ok(result.events.some(event => event.stage === 'writer-seed' && event.status === 'accepted'),
                 JSON.stringify(result.knowledge.lastFailure));
             assert.ok(result.events.some(event => event.stage === 'reviewer' && event.status === 'approved'));

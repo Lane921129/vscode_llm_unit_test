@@ -903,7 +903,10 @@ def extract_info(filepath, func_name):
             'condition_facts': branch_condition_facts(func_node, set(args)),
             'dependency_fixture_contract': build_dependency_fixture_contract(func_node, target_source, func_name, module_bindings),
             'source_setup_call_contract': build_source_setup_call_contract(func_node, target_source, func_name, tree),
-            'code': target_source
+            'code': target_source,
+            'source_location': {'version': 'python-source-location-v1', 'startLine': func_node.lineno,
+                                'endLine': func_node.end_lineno,
+                                'sourceHash': hashlib.sha256(target_source.encode('utf-8')).hexdigest()}
         }, ensure_ascii=False))
     except Exception as error:
         print(json.dumps({'error': str(error)}, ensure_ascii=False))

@@ -8,10 +8,11 @@ import { estimatePromptTokens } from '../prompts/promptBudget';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
 
-async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' = 'none') {
+async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' = 'none', unknownFixture = false) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-seed-output-'));
     const source = path.join(directory, 'sample.py');
-    fs.writeFileSync(source, 'def increment(value):\n    return value + 1\n');
+    fs.writeFileSync(source, unknownFixture ? 'def increment(value: object):\n    return value.amount\n'
+        : 'def increment(value):\n    return value + 1\n');
     const output = path.join(directory, 'result');
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
@@ -50,6 +51,19 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         if (request.roleInstructions.includes('You are the test Reviewer')) {
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             return Response.json({ response: reviewAccepted ? '{"findings":[]}' : 'invalid review', done: true, done_reason: 'stop' });
+        }
+        if (unknownFixture) {
+            writerAttempts++;
+            assert.doesNotMatch(request.prompt, /WRITER_SEED_CASE_FACTS_V1\n\{/);
+            assert.match(request.prompt, /Pass execution before expansion; existing output contract\.$/,
+                'seed generation and its Writer revision finish with the same bounded phase scope');
+            const setup = 'import unittest\nfrom types import SimpleNamespace\nfrom sample import increment\n'
+                + 'class Tests(unittest.TestCase):\n    def test_seed(self):\n';
+            if (writerAttempts > 1) { assert.match(request.prompt, /one direct target call/); }
+            return Response.json({ response: setup
+                + '        self.assertEqual(increment(SimpleNamespace(amount=7)), 7)\n'
+                + (writerAttempts === 1 ? '        self.assertEqual(increment(SimpleNamespace(amount=8)), 8)\n' : ''),
+                done: true, done_reason: 'stop' });
         }
         assert.match(request.prompt, /WRITER_SEED_V1/);
         assert.match(request.transmittedPrompt, /TEST_FOCUS_V1 \(boundary/);
@@ -104,6 +118,14 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         assert.equal(writer.detail.inputBudget, 4096);
         assert.equal(writer.detail.reservedOutputTokens, 4096);
         assert.equal(writer.detail.requestOutputTokens, 4096);
+        if (unknownFixture) {
+            const shape = events.find(event => event.stage === 'writer-seed-input' && event.status === 'rejected');
+            assert.equal(shape?.detail.reasonCode, 'writer-seed-call-count');
+            assert.equal(shape.detail.literalTargetCallCount, 0);
+            assert.equal(shape.detail.syntacticTargetCallCount, 2);
+            assert.equal(writerAttempts, 2, 'one Writer shape revision precedes the only executable seed');
+            assert.equal(events.filter(event => event.stage === 'validation' && event.status === 'accepted').length, 1);
+        }
         if (repetition !== 'none') {
             const failures = events.filter(event => event.stage === 'model-request' && event.status === 'error');
             assert.equal(failures[0].detail.outputDiagnosis, 'repetitive-without-tests');
@@ -170,3 +192,5 @@ test('a second repetitive Writer output stops without another retry or executing
     () => verifyFocusedWorkflow(false, true, 'persistent'));
 test('a truncated code continuation never becomes a candidate despite its complete-looking assertion',
     () => verifyFocusedWorkflow(true, true, 'repair'));
+test('without Trace a multi-call object seed returns to Writer before execution, then completes review and mutation',
+    () => verifyFocusedWorkflow(false, true, 'none', true));

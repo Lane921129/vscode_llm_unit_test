@@ -25,6 +25,24 @@ const seed = 'import unittest\nfrom sample import scale_ratio\nclass Cases(unitt
     + '        self.assertEqual(result, (24.22, "measured"))\n';
 const facts = (code = seed) => buildReviewFacts({ ...identity, module: 'sample', code, python,
     env: process.env, executionVerified: false });
+
+test('seed shape applies without Trace and does not confuse unknown fixture calls with no calls', async () => {
+    const code = 'import unittest\nfrom sample import scale_ratio\nclass Cases(unittest.TestCase):\n'
+        + '    def test_seed(self):\n        class Fixture:\n            pass\n'
+        + '        item = Fixture()\n        first = scale_ratio(item)\n        second = scale_ratio(item)\n'
+        + '        self.assertIsNone(first)\n';
+    const actual = await facts(code);
+    const result = validateWriterSeedContract({ identity, facts: actual });
+    assert.equal(result.literalTargetCallCount, 0);
+    assert.equal(result.syntacticTargetCallCount, 2);
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.reasonCode, 'writer-seed-call-count');
+    const single = validateWriterSeedContract({ identity, facts: await facts(code.replace('        second = scale_ratio(item)\n', '')) });
+    assert.equal(single.syntacticTargetCallCount, 1);
+    assert.equal(single.status, 'unknown', 'object setup is not an observed literal input or oracle');
+    const legacy = { ...actual, methods: actual.methods.map(({ targetCallSyntax: _syntax, ...method }) => method) };
+    assert.equal(validateWriterSeedContract({ identity, facts: legacy }).syntacticTargetCallCount, null);
+});
 async function traceObservedSeed(cases: ProbeInputCase[], sourceCode = source, targetName = identity.target): Promise<BehaviorObservations> {
     const parent = fs.realpathSync(os.tmpdir());
     const root = fs.mkdtempSync(path.join(parent, 'writer-seed-contract-'));
@@ -65,7 +83,7 @@ test('one real observed return or exception binds a formal seed input, without a
         targetKind: 'sync-top-level-function' as const };
     const actual = await facts();
     const valid = validateWriterSeedContract({ ...context, facts: actual });
-    assert.deepEqual(valid, { status: 'grounded', methodCount: 1, literalTargetCallCount: 1,
+    assert.deepEqual(valid, { status: 'grounded', methodCount: 1, literalTargetCallCount: 1, syntacticTargetCallCount: 1,
         reasonCode: undefined, caseId: trace.cases![0].case_id });
     assert.equal(actual.executionVerified, false);
     assert.equal(actual.methods[0].assertions[0].observationVerified, undefined);

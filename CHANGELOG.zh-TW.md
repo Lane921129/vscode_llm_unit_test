@@ -4,6 +4,16 @@
 
 ## 2026-10-23
 
+### 無 Trace 種子範圍、方法內 fixture 修復與品質來源定位
+
+- 補充 `bmi_2026_10_22_23_26` 分析：兩次 Writer 為首問與格式補正，均 HTTP200／4096輸出、沒有測試結構；輸入3005／3140且Context8192，沒有輸入超額證據。當批 `codellama:13b-code` 與指令模型身份分開，build早於種子續寫修復；不得把舊批次當新續寫已失敗或宣稱該模型已恢復。分析另存 `docs/BMI重複輸出分析_2026_10_22_2326.md`，保留原結果。
+- 修正 seed 形狀檢查只在有可用 Trace 時啟用的缺口：Reviewer AST 工具新增 `targetCallSyntax` 語法下界，即使參數是未知物件，仍能辨識可定位的多個 canonical 呼叫站。Node 核驗行／column、數量與唯一性，legacy 缺欄位保持未知；不將此陣列加入 Reviewer 提示、不當執行次數或 oracle。無 Trace 的一個受控 fixture 仍實跑重審，多方法／多直接呼叫交 Writer。seed 範圍移至生成及修訂提示結尾，避免後附的品質／資源語境把修訂變成擴充整套案例。
+- 修正 Bug Fixer 把唯一失敗方法內既有 fixture 類別也判成外層 class 包裝。保留巢狀定義後仍須通過原 Python AST scope，其他方法、fixture、signature、decorator與新增 import 限制不變；新增裸方法及同 host class 包裝的 AST 回歸。seed 包裝增加明確 `import types`，避免依 SimpleNamespace 指引生成後漏 import；目標同名時不遮蔽。
+- AST 新增 `python-source-location-v1`，綁定來源片段摘要、起訖行與原文。Writer／品質 Analyst 可把 `line:259` 等量測 ID 對回目標來源；僅複製至多十個鄰近短行，長行改用完整原文列引用，未知／摘要或列數不符不推定位置。完整函式保持原樣，全檔版本仍走現有預檢／journal；位置不是 expected 或執行證據。
+- 真實車輛實測：本機 Qwen 3B、相同來源與既有批准資源，`get_plate_no_from_event` 從無可執行成果進展到 seed 執行與 Reviewer 同意、完成 builtin-ast-v3 突變7/12（58.33%）、目標行10/14。仍缺例外與分支，品質未通過；品質 Analyst 空任務、Writer 重複情境而保留基線。加入來源定位後重跑仍為58.33%，不能宣稱已改善補測成功率。現有品質實驗回報 `instance-target-required`，頂層函式的物件參數補測尚待實作，整個車輛專案未驗收；受測來源未修改。
+- 驗證：直接相關 Node27與Python52通過；修復／無 Trace 到真實 Python／Reviewer／突變整合 Node31通過；來源定位／Writer修訂最後 Node10與Python6通過，集合有重疊。快速 Node743、Python42、型別、lint、Webview與production build通過。首次來源整合揭露舊 fixture 禁止 seed 範圍文字，已改驗證恰一個結尾範圍且保留兩次上限；沙箱 EPERM hard link 的失敗未算產品失敗，正常本機權限重跑通過。完整開發回歸、F5／Mocha、DGX與遠端 CI 未重跑。
+- 補跑 AST pipeline 與 `test_validate_repair_scope`：Python100／100通過。第一次 selector 誤寫為不存在的 `test_repair_scope`，runner按契約非零退出且未跑測試；修正檔名後才計入上述成功數。
+
 ### Writer 種子續寫恢復、可讀診斷及車輛物件形狀指引
 
 - 對 Local seed 完整 length 回覆中實測高度重複、沒有測試結構的情況，將唯一格式恢復改為可追溯的 `seed-code-completion-v1`：完整提示逐行轉為可逆 Python 註解，結尾接 canonical import／class／方法簽名。Ollama raw 請求省略 system/template；僅完整 stop 回覆可原樣接合，完整 Python fence 則保留原文。包裝不含測資、fixture 值、目標呼叫或斷言，不修縮排、不採截斷、不增加第三次請求或放寬原期限與品質門檻。其他角色、非 seed 及一般輸出增額政策保持。

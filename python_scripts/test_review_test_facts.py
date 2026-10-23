@@ -15,6 +15,24 @@ def suite(body, prefix=''):
 
 
 class ReviewFactsTests(unittest.TestCase):
+    def test_target_syntax_counts_unknown_objects_and_same_line_calls_without_an_oracle(self):
+        facts = self.facts('class Fixture:\n    pass\nvalue = Fixture()\nfirst, second = score(value), score(value)\nself.assertIsNone(first)')
+        method = facts['methods'][0]
+        self.assertEqual(method['calls'], [])
+        self.assertEqual(len(method['targetCallSyntax']), 2)
+        self.assertEqual(method['targetCallSyntax'][0]['line'], method['targetCallSyntax'][1]['line'])
+        self.assertNotEqual(method['targetCallSyntax'][0]['column'], method['targetCallSyntax'][1]['column'])
+        self.assertFalse(any(item.get('observationVerified') for item in method['assertions']))
+
+    def test_target_syntax_skips_nested_bodies_and_uncertain_rebindings(self):
+        one = self.facts('def nested():\n    return score(1)\nresult = score(unknown_object)\nself.assertIsNone(result)')
+        self.assertEqual(len(one['methods'][0]['targetCallSyntax']), 1)
+        for body in ['score = lambda x: x\nscore(object())\nscore(object())',
+                     'class score:\n    pass\nscore(object())\nscore(object())']:
+            self.assertEqual(self.facts(body)['methods'][0]['targetCallSyntax'], [])
+        code = suite('api.score = lambda x: x\napi.score(object())\napi.score(object())', 'import sample as api\n')
+        self.assertEqual(self.facts('', code=code)['methods'][0]['targetCallSyntax'], [])
+
     def facts(self, body, observations=None, code=None):
         return build_review_facts({'code': code or suite(body), 'module': 'sample', 'target': 'score',
                                    'runId': 'run', 'sourceHash': 'a' * 64, 'executionVerified': True,

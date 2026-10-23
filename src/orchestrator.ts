@@ -136,6 +136,7 @@ import { getCompletedOllamaText, readOutputShapeDiagnostic } from './llm/ollamaR
 import { diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
+import { formatSourceLineContext } from './pipeline/sourceLineContext';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -518,6 +519,7 @@ interface AstContext {
     name: string;
     probeInputFixture?: ProbeFixtureIdentity;
     source_setup_call_contract?: unknown;
+    source_location?: unknown;
     /** Python AST uses null for module-level functions without an owning class. */
     class_name?: string | null;
     target_import_module?: string;
@@ -1971,8 +1973,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     ): Promise<string> => {
         if (role === 'writer' && mode === 'full' && !writerCaseMode) {
             writerAdditionBaseline = seedPending ? undefined : checkpoints.executable?.code || bestCode || undefined;
-            prompt = seedPending ? buildWriterSeedPrompt(prompt)
-                : buildWriterExpansionPrompt(prompt, checkpoints.executable?.code || bestCode || '', analystTasks);
+            if (!seedPending) {
+                prompt = buildWriterExpansionPrompt(prompt, checkpoints.executable?.code || bestCode || '', analystTasks);
+            }
         }
         if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
             system = buildWriterAdditionSystemPrompt(system);
@@ -2002,6 +2005,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             prompt += '\n\nSOURCE MOCK SETUP (non-executable TODO guidance, not output evidence):\n' + focusedMockSetup;
         }
         prompt += importResourcePrompt();
+        if (mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
+            // Finish both generation and correction with the same small task.
+            // Wider focus/resource context must not become a request to expand.
+            prompt = buildWriterSeedPrompt(prompt);
+        }
         if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
             const focusCases = qualityFocusCasesForPrompt(writerCaseMode?.evidence || activeQualityTaskEvidence);
             if (focusCases && !prompt.includes(focusCases)) { prompt += '\n\n' + focusCases; }
@@ -2597,18 +2605,20 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 observations: astContext?.traceResult ? { ...identity, value: astContext.traceResult } : undefined,
                 ...(astContext?.class_name === null && astContext.is_async === false && astContext.method_kind === 'module'
                     ? { targetKind: 'sync-top-level-function' as const } : {}) };
-            // Enforce this input contract only when this generation received one
-            // usable selected observation. Unknown mock/state bindings retain the
-            // ordinary structure, execution and Reviewer validation path.
-            if (seedPending && seedCaseFactsForPrompt(seedEvidence) && methodInventories.has(evidenceHash(code))) {
+            // Shape is independent of an input oracle. Even without Trace, a
+            // seed must not hide an entire suite behind one test method.
+            if (seedPending && methodInventories.has(evidenceHash(code))) {
                 const facts = await buildReviewFacts({ ...identity, code, module: targetImportModule,
                     python: pythonExecutable, env: testExecutionEnv, executionVerified: false, knownSecrets });
                 const result = validateWriterSeedContract({ ...seedEvidence, facts });
                 recordRole('writer-seed-input', result.status, { ...result, codeHash: evidenceHash(code) });
                 if (result.status === 'rejected') {
                     additionRejections.set(evidenceHash(code), { gate: 'unittest-structure', reasonCode: result.reasonCode!,
-                        reason: 'The seed must contain exactly one test method with one target call using exactly the selected observed input. '
-                            + 'Use WRITER_SEED_CASE_FACTS_V1; do not add guessed boundary cases or unrelated exception requirements.' });
+                        reason: 'The seed must contain exactly one test method with one direct target call. '
+                            + 'Keep ONE evidence-supported case; expansion follows successful execution. '
+                            + (activeSeedCaseFacts ? 'Use exactly WRITER_SEED_CASE_FACTS_V1. '
+                                : 'Use one source-supported, same-test controlled dependency case; no selected Trace oracle is available. ')
+                            + 'Do not add guessed boundary cases or unrelated exception requirements.' });
                 }
             }
             return code;
@@ -4299,7 +4309,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         pendingQualityGap = qualityExperiments.beginFocus(focus, loopAssessment, bestMutation);
                     }
                     analystTasks += '\nMEASURED GAP (not an output oracle):\n' + JSON.stringify(focus)
-                        + '\n' + qualityStrategyHints(focus.evidence).join('\n');
+                        + '\n' + qualityStrategyHints(focus.evidence).join('\n')
+                        + '\n' + formatSourceLineContext(astContext?.code || '', astContext?.source_location, focus.evidence);
                 }
                 const focusedMutant = focus?.kind === 'survivor' ? bestMutation?.mutants.find(mutant =>
                     mutant.status === 'SURVIVED' && focus.evidence.startsWith(`- id ${mutant.id},`)) : undefined;
@@ -4396,6 +4407,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         observations: taskEvidence,
                         identity: { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName },
                         context: `TARGET SOURCE\n${astContext?.code || ''}\nMODULE: ${targetImportModule}\n`
+                            + formatSourceLineContext(astContext?.code || '', astContext?.source_location, focus.evidence) + '\n'
                             + `CURRENT TESTS\n${fs.readFileSync(testPath, 'utf8')}\n`
                             + `CONDITIONAL STRATEGIES (not output facts)\n${qualityStrategyHints(focus.evidence).join('\n')}`,
                         deadlineAt: deadlineAtFromTimeoutSeconds(params.timeoutSeconds),

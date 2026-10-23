@@ -4,6 +4,10 @@
 
 ## 2026-10-23 Writer 種子續寫恢復（優先於下文固定文字補正／外框條款）
 
+- seed 的單方法／單呼叫形狀檢查不以有無可用 Trace 為前提。AST 可提供 canonical 直接呼叫站的保守下界，不解碼物件輸入也不代表執行次數；未知 receiver／重綁／巢狀 body 不猜。只有精確觀測輸入才可標 grounded；沒有 Trace 的單一受控 fixture 仍走原 Checker／Reviewer，不冒充已核實 oracle。生成與 Writer 修訂都以相同 seed 範圍結尾，完整來源、發現與候選仍保留。
+- Bug Fixer 可原樣返回唯一失敗方法內既有的 fixture 類別；不能因方法內出現 class 就視為整份 TestCase 包裝。module／class fixture、其他方法、簽名／decorator及 import 範圍仍由原 Python AST gate 核驗，不授予額外修改權限。種子包裝可預列 `types` 標準庫以配合 SimpleNamespace 指引，但不可遮蔽同名目標；不提供 fixture 值或斷言。
+- 來源行號導航須綁定 AST 片段內容摘要及起訖行數，保留完整原文，未知／不符時不捏造位置。當前 coverage line／branch 可附至多十個鄰近行；過長行只引用完整來源的對應列，不複製整個函式或裁切來源。這是位置證據，不是執行結果、斷言 oracle 或品質批准。
+
 - 當正式 Local seed 的完整 length 回覆符合既有高度重複且無測試結構條件，唯一格式恢復可改為 `seed-code-completion-v1`。只依實際失敗形狀，不依模型名稱或參數量；沒有合法 canonical 包裝時仍採原文字補正。非 seed、Analyst、Reviewer、Bug Fixer 與正常請求不切換 raw。
 - 原完整角色契約與使用者證據逐行加 Python 註解前綴，可精確反解回原字串；不裁來源、setup 或觀測。結尾只有經目標契約核驗的 import／class／方法簽名，不含輸入、fixture 值、目標呼叫、expected 或斷言。新 wire 重新核算容量；原期限、計數及至多兩次不續。
 - 此窄路徑採 Ollama `raw:true` 且不送 system/template，避免 API 格式衝突。完整 stop 回覆才可與包裝原樣接合；若模型已返回完整 Python fence 則保留該完整產物。不修縮排、不挑多份候選、不採 length 前綴，空方法或錯誤內容仍由原 AST、seed、Checker、Reviewer、coverage／mutation 門檻拒絕。工具只提供包裝，測試內容仍由 AI 撰寫。

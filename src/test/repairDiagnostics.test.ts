@@ -95,6 +95,28 @@ test('real Python repair-scope checks distinguish unchanged methods, conflicting
     assert.deepEqual(check(original.replace('1, 2', '1, 1')), { valid: true, reason: '', reasonCode: null });
 });
 
+test('one-method repairs retain nested fixture classes while the AST scope gate protects other tests', () => {
+    const fixture = '        class Fixture:\n            def __init__(self):\n                self.value = 7\n';
+    const before = 'import unittest\nclass Cases(unittest.TestCase):\n    def test_one(self):\n'
+        + fixture + '        self.assertEqual(Fixture().value, 8)\n'
+        + '    def test_other(self):\n        self.assertTrue(True)\n';
+    const replacement = 'def test_one(self):\n' + fixture.slice(4).replaceAll('\n        ', '\n    ')
+        + '    self.assertEqual(Fixture().value, 7)';
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    for (const raw of [fence(replacement), fence('class Cases(unittest.TestCase):\n'
+        + replacement.split('\n').map(line => '    ' + line).join('\n'))]) {
+        const result = mergeBugFixReplacementDetailed(raw, before, failure);
+        assert.ok(result.code, JSON.stringify(result.diagnostic));
+        assert.match(result.code, /class Fixture:/);
+        const run = spawnSync(python, ['-B', path.resolve(__dirname, '../../python_scripts/validate_repair_scope.py')], {
+            input: JSON.stringify({ previous: before, candidate: result.code, failure }), encoding: 'utf8'
+        });
+        assert.equal(run.status, 0, run.stderr);
+        assert.equal(JSON.parse(run.stdout).valid, true, run.stdout);
+        assert.ok(result.code.endsWith('    def test_other(self):\n        self.assertTrue(True)'));
+    }
+});
+
 test('scope refusal is journaled before stopping and does not execute the rejected candidate', async () => {
     const events: Array<{ stage: string; status: string; detail: any }> = [];
     let executions = 0;

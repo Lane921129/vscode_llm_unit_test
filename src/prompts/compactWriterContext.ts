@@ -6,6 +6,8 @@ import { callerForPrompt, callerMatchesObservation, typedCallFields } from '../p
 import { validTraceInputSnapshot, validTraceValueSnapshot } from '../pipeline/traceValues';
 import { formatDependencyMockContract, formatDependencyTopology, formatSourceImport, relevantSourceImports } from './dependencyMockContract';
 
+import { formatSourceLineContext } from '../pipeline/sourceLineContext';
+
 export const COMPACT_WRITER_VERSION = 'compact-writer-v2';
 
 /** Request-local references only replace complete, byte-identical source/setup
@@ -114,6 +116,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             formatTargetContract(input.module, input.name, context.args || [], context),
             `Source hash: ${input.evidence.sourceHash}`,
             `TARGET SOURCE (read-only):\n\`\`\`python\n${input.source}\n\`\`\``,
+            formatSourceLineContext(input.source, context.source_location),
             'SOURCE SETUP (declarations, not runtime values):\n' + JSON.stringify(setup),
             ...fragments, ...dependencyBlocks,
             formatDependencyMockContract(input.module, context, input.allowedMockTargets, false, { sourceImportsListed: true }),
@@ -139,6 +142,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             + `Deterministically selected test rules: ${input.evidence.ruleSelection.ids.join(', ') || 'none'}\n`
             + 'Test-generation rules constrain test construction. They are not evidence of a return value or exception.',
         `TARGET SOURCE (read-only, not an output oracle):\n\`\`\`python\n${input.source}\n\`\`\``,
+        formatSourceLineContext(input.source, context.source_location),
         'SOURCE SETUP (read-only declarations, not evaluated values or expected outputs):\n'
             + `SETUP FACTS (source only; caller values are input candidates, not expected outputs${callerNote}):\n` + JSON.stringify(setup)
             + '\nsourceSpelling reproduces AST import syntax, not original formatting. Module globals belong to the canonical target module; do not rename or evaluate their expressions. '
