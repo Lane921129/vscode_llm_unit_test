@@ -93,16 +93,24 @@ test('formal seed system scope overrides broad scenario requests without changin
     assert.match(addition, /multiple target calls.*EVERY supplied bound case/);
 });
 
-test('addition mode resolves standalone-file system packaging without weakening any evidence or isolation rule', () => {
+test('addition has an independent narrow contract while the complete evidence stays in the user prompt', () => {
     const system = 'Complete runnable unittest file. No direct I/O; evidence-supported assertions only.';
     const prompt = buildWriterAdditionSystemPrompt(system);
-    assert.ok(prompt.startsWith(system));
-    assert.match(prompt, /replace the complete-file packaging requirement/);
+    assert.ok(!prompt.includes(system), 'do not ask the model to override a broader suite contract');
+    assert.ok(prompt.startsWith('WRITER_ADDITION_V1 OUTPUT MODE'));
     assert.match(prompt, /one Python fence/);
-    assert.match(prompt, /All target binding, evidence, assertion and isolation rules above still apply/);
-    assert.match(prompt, /Replace comprehensive-suite and all-survivor scope with the current focus only/);
+    assert.match(prompt, /one NEW unittest test method for the current focus/);
     assert.match(prompt, /multiple target calls.*EVERY supplied bound case exactly/);
     assert.match(prompt, /do not add unrelated zero, negative or exception inputs/);
+    assert.match(prompt, /never copy, redefine or mock the target or owner/);
+    assert.match(prompt, /not assertion oracles/);
+    assert.match(prompt, /No direct test network, file I\/O, shell, dynamic execution or shared SQLite/);
+    assert.match(prompt, /separate Reviewer approval and coverage\/mutation measurement/);
+    const evidence = 'SOURCE_EXACT\nSETUP_EXACT\nOBSERVED_CASE_EXACT\n';
+    const baseline = 'import unittest\nclass Cases(unittest.TestCase):\n    def test_kept(self):\n        self.assertEqual(target(1), 2)\n';
+    const expanded = buildWriterExpansionPrompt(evidence, baseline, 'MEASURED_GAP_EXACT');
+    assert.ok(expanded.startsWith(evidence));
+    assert.ok(expanded.includes(baseline));
     assert.doesNotMatch(prompt, /skip.*validation|automatically approve|ignore.*evidence/i);
 });
 

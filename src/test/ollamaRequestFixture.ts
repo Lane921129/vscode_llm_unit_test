@@ -60,7 +60,7 @@ export function readOllamaRoleRequest(wire: any): any & { roleInstructions: stri
     const decodedPrompt = wire.raw === true ? wire.prompt.split('\n').map((line: string) =>
         line.startsWith('# ') ? line.slice(2) : line).join('\n') : wire.prompt;
     if (wire.raw === true) { assert.match(wire.prompt, /^# WRITER_SEED_V1 OUTPUT SCOPE\n/); }
-    assert.match(decodedPrompt, /^(?:You are |EXECUTION_VERIFICATION_V1 Writer:|WRITER_SEED_V1 OUTPUT SCOPE\n)/,
+    assert.match(decodedPrompt, /^(?:You are |EXECUTION_VERIFICATION_V1 Writer:|WRITER_SEED_V1 OUTPUT SCOPE\n|WRITER_ADDITION_V1 OUTPUT MODE\n)/,
         'role instructions must lead the actual transmitted prompt');
     // Known request envelopes start on their own line. Match their first
     // occurrence, before any target/test source can quote another role.

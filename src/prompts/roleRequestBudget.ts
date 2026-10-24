@@ -4,6 +4,7 @@ export type BudgetedModelRole = 'writer' | 'writer-revision' | 'reviewer' | 'bug
     | 'analyst-planning' | 'analyst-quality';
 
 export const WRITER_SEED_OUTPUT_TOKEN_LIMIT = 1536;
+export const WRITER_ADDITION_OUTPUT_TOKEN_LIMIT = 1536;
 export const ANALYST_PLAN_OUTPUT_TOKEN_LIMIT = 1024;
 
 /** Host-owned counts from this exact revision. Findings are not a test-case
@@ -32,6 +33,9 @@ export function roleRequestBudget(input: {
     /** The exact candidate owned by this revision, never inferred from a prompt or checkpoint. */
     revisionCurrentCode?: string;
     revisionWorkload?: WriterRevisionWorkload;
+    /** Set only when the host owns an executed baseline and requests one new method.
+     * This is output scope, never inferred from prompt words or model identity. */
+    writerOutputScope?: 'single-test-addition';
     /** A previous complete transport for this exact role ended at its output cap.
      * The caller owns separate Writer and Analyst floors; never transfer one
      * role's learned minimum to another role or a qualification probe. */
@@ -43,9 +47,11 @@ export function roleRequestBudget(input: {
         ? input.minimumOutputTokens as number : 0;
     const boundedPlan = input.role === 'analyst-planning';
     const boundedSeed = input.mode === 'full' && input.role === 'writer' && input.seedPending;
+    const boundedAddition = input.mode === 'full' && !input.seedPending
+        && ['writer', 'writer-revision'].includes(input.role) && input.writerOutputScope === 'single-test-addition';
     const boundedRevision = input.mode === 'full' && input.role === 'writer-revision'
-        && typeof input.revisionCurrentCode === 'string' && input.revisionCurrentCode.trim().length > 0;
-    if (input.envType !== 'local' || (!boundedPlan && !boundedSeed && !boundedRevision)
+        && !boundedAddition && typeof input.revisionCurrentCode === 'string' && input.revisionCurrentCode.trim().length > 0;
+    if (input.envType !== 'local' || (!boundedPlan && !boundedSeed && !boundedRevision && !boundedAddition)
         || !Number.isSafeInteger(input.contextWindow) || input.contextWindow <= 0
         || !Number.isSafeInteger(input.inputBudget) || input.inputBudget < 0
         || !Number.isSafeInteger(defaultReserve) || defaultReserve <= 0) {
@@ -75,7 +81,8 @@ export function roleRequestBudget(input: {
             reservedOutputTokens: requestOutputTokens, requestOutputTokens };
     }
     const requestOutputTokens = Math.max(learnedMinimum,
-        Math.min(boundedPlan ? ANALYST_PLAN_OUTPUT_TOKEN_LIMIT : WRITER_SEED_OUTPUT_TOKEN_LIMIT, defaultReserve));
+        Math.min(boundedPlan ? ANALYST_PLAN_OUTPUT_TOKEN_LIMIT
+            : boundedAddition ? WRITER_ADDITION_OUTPUT_TOKEN_LIMIT : WRITER_SEED_OUTPUT_TOKEN_LIMIT, defaultReserve));
     return { inputBudget: Math.max(0, input.contextWindow - requestOutputTokens),
         reservedOutputTokens: requestOutputTokens, requestOutputTokens };
 }

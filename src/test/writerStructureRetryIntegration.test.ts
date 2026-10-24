@@ -251,8 +251,8 @@ ${includeImport ? 'from partition_sample import _read\n' : ''}class Test_read(un
                 assert.ok(prompt.includes(partitionCode('alpha', true)), 'the executed baseline remains complete');
                 const wire = requests.at(-1)!;
                 assert.equal(wire.options.num_ctx, 8572);
-                assert.equal(wire.options.num_predict, undefined,
-                    'a short partition fragment cannot size the output that must also preserve the complete baseline');
+                assert.equal(wire.options.num_predict, 1536,
+                    'the host-owned single addition returns a new method while the complete executed baseline stays with the host');
                 return previous;
             };
             const outputPath = path.join(directory, 'partition');

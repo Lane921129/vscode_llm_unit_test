@@ -1,7 +1,8 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { roleRequestBudget } from '../prompts/roleRequestBudget';
-import { estimatePromptTokens, promptFits } from '../prompts/promptBudget';
+import { roleRequestBudget, WRITER_ADDITION_OUTPUT_TOKEN_LIMIT } from '../prompts/roleRequestBudget';
+import { contextInputBudget, estimatePromptTokens, promptFits } from '../prompts/promptBudget';
+import { assessPromptCapacity } from '../prompts/promptCapacity';
 import { buildWriterRevisionRequest } from '../roles/roleContracts';
 import { buildOllamaPromptEnvelope } from '../llm/ollamaPrompt';
 import { getCompletedOllamaText, readOutputShapeDiagnostic } from '../llm/ollamaResponse';
@@ -12,6 +13,52 @@ const revision = { envType: 'local', mode: 'full', role: 'writer-revision', seed
 const original = { inputBudget: 5734, reservedOutputTokens: 2458 };
 const code = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
     + '    def test_existing(self):\n        self.assertEqual(increment(1), 2)\n';
+
+test('an explicit single-addition scope budgets the actual output rather than the complete baseline', () => {
+    for (const role of ['writer', 'writer-revision'] as const) {
+        const input = { ...revision, role, seedPending: false, writerOutputScope: 'single-test-addition' as const,
+            revisionCurrentCode: code.repeat(100) };
+        const budget = roleRequestBudget(input);
+        assert.deepEqual(budget, { inputBudget: 6656, reservedOutputTokens: WRITER_ADDITION_OUTPUT_TOKEN_LIMIT,
+            requestOutputTokens: WRITER_ADDITION_OUTPUT_TOKEN_LIMIT });
+        assert.equal(roleRequestBudget({ ...input, minimumOutputTokens: 4000 }).requestOutputTokens, 4000);
+        assert.equal(roleRequestBudget({ ...input, writerOutputScope: undefined }).requestOutputTokens, undefined,
+            'a complete candidate revision or an ordinary Writer must retain its existing policy');
+    }
+    for (const envType of ['cloud', 'custom'] as const) {
+        assert.deepEqual(roleRequestBudget({ ...revision, role: 'writer', seedPending: false, envType,
+            writerOutputScope: 'single-test-addition' }), original);
+    }
+    for (const role of ['reviewer', 'bug-fixer', 'analyst-quality'] as const) {
+        assert.deepEqual(roleRequestBudget({ ...revision, role, seedPending: false,
+            writerOutputScope: 'single-test-addition' }), original);
+    }
+    assert.deepEqual(roleRequestBudget({ ...revision, role: 'writer', mode: 'execution', seedPending: false,
+        writerOutputScope: 'single-test-addition' }), original);
+});
+
+test('addition capacity searches use the same scope and learned floor at every context', () => {
+    for (const role of ['writer', 'writer-revision'] as const) {
+        for (const minimumOutputTokens of [0, 4000]) {
+            const input = { ...revision, role, seedPending: false, writerOutputScope: 'single-test-addition' as const,
+                estimatedInputTokens: 6125, reservedInputTokens: 128, minimumOutputTokens,
+                modelContextLimit: 16384, modelContextLimitVerified: true, modelContextLimitSource: 'ollama-show' as const };
+            const capacity = assessPromptCapacity(input);
+            const minimum = capacity.minimumContextTokens!;
+            const required = input.estimatedInputTokens + input.reservedInputTokens;
+            const at = (contextWindow: number) => roleRequestBudget({ ...input, contextWindow,
+                inputBudget: contextInputBudget('', contextWindow) });
+            assert.ok(at(minimum).inputBudget >= required);
+            assert.ok(at(minimum - 1).inputBudget < required);
+            assert.equal(capacity.inputBudget, at(input.contextWindow).inputBudget);
+            assert.equal(capacity.limitReservedOutputTokens, at(16384).requestOutputTokens);
+            assert.equal(capacity.state, minimumOutputTokens ? 'growth-required' : 'fits-current');
+            assert.ok(!JSON.stringify(capacity).includes('single-test-addition'), 'capacity DTO stays numeric and enum-only');
+        }
+    }
+    assert.throws(() => assessPromptCapacity({ ...revision, estimatedInputTokens: 5000,
+        modelContextLimitVerified: false, writerOutputScope: 'prompt-word-guess' as any }), TypeError);
+});
 
 test('small complete Writer revision pairs its output cap with the selected context', () => {
     for (const seedPending of [true, false]) {

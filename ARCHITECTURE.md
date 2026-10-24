@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## 補測 Writer 的獨立契約與輸出預算（2026-10-23）
+
+第二輪起，`buildWriterAdditionSystemPrompt` 直接提供單方法補測契約，不先載入完整 suite 要求再附加覆寫。`buildWriterExpansionPrompt` 保留完整證據與已執行基線，只減少重複的固定說明。修訂中的完整未批准候選仍供診斷，合併永遠以原基線為準；新候選仍經原保留、Checker、Reviewer 及 coverage／mutation。
+
+`requestBudgetedOne` 由實際基線狀態決定 `writerOutputScope=single-test-addition`，不是從模型名稱、提示文字或單純非 seed 狀態推定。Local 新增方法與其修訂以1536為初始輸出預留，較小容量沿可用預留，較高 learned floor保持；`roleRequestBudget`、`assessPromptCapacity` 各容量重算、生成前預留與 wire `num_predict` 一致。既有角色 learned floor、一次輸出恢復、原 deadline 與完整證據要求保持；其他角色、完整檔案修訂與遠端 provider 不借此 scope。較短契約及有界 cap 不代表整個車輛專案已通過。
+
 ## 參數物件受控補測（2026-10-23）
 
 `parameter_fixture_experiments.py` 與 `parameterFixtureExperiments.ts` 補上頂層函式的物件參數實驗。它與既有實例狀態實驗分開：AST 只從通過候選解析受控物件與 callable 配方，按當前來源缺口選取參數屬性的缺少、假值及 getter 例外，worker 重新推導計畫後才在全新隔離程序呼叫真實目標。常數 factory 每次建立新的回傳；identity factory 返回實際收到的同一參數，不把任意 lambda 當成可求值程式。

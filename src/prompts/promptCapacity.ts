@@ -13,6 +13,7 @@ export interface PromptCapacityInput {
     reservedInputTokens?: number;
     revisionCurrentCode?: string;
     revisionWorkload?: WriterRevisionWorkload;
+    writerOutputScope?: 'single-test-addition';
     minimumOutputTokens?: number;
     modelContextLimit?: number;
     modelContextLimitVerified: boolean;
@@ -60,6 +61,7 @@ export function assessPromptCapacity(input: PromptCapacityInput): PromptCapacity
         || !nonnegative(effectiveInputTokens + reserve) || typeof input.modelContextLimitVerified !== 'boolean'
         || input.observedInputTokens !== undefined && !nonnegative(input.observedInputTokens)
         || input.minimumOutputTokens !== undefined && !nonnegative(input.minimumOutputTokens)
+        || input.writerOutputScope !== undefined && input.writerOutputScope !== 'single-test-addition'
         || input.modelContextLimitVerified && (!positive(input.modelContextLimit) || input.contextWindow > input.modelContextLimit)
         || input.modelContextLimitSource !== undefined && !sources.includes(input.modelContextLimitSource)) {
         throw new TypeError('Invalid prompt capacity inputs.');
@@ -68,7 +70,8 @@ export function assessPromptCapacity(input: PromptCapacityInput): PromptCapacity
     const budgetAt = (contextWindow: number) => roleRequestBudget({ envType: input.envType, mode: input.mode,
         role: input.role, seedPending: input.seedPending, contextWindow,
         inputBudget: contextInputBudget('', contextWindow), revisionCurrentCode: input.revisionCurrentCode,
-        revisionWorkload: input.revisionWorkload, minimumOutputTokens: input.minimumOutputTokens });
+        revisionWorkload: input.revisionWorkload, writerOutputScope: input.writerOutputScope,
+        minimumOutputTokens: input.minimumOutputTokens });
     const fitsAt = (capacity: number) => {
         const budget = budgetAt(capacity);
         return budget.reservedOutputTokens <= capacity && budget.inputBudget >= requiredInputTokens;

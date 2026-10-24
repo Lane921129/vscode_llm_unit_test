@@ -49,14 +49,23 @@ export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: bool
 }
 
 export function buildWriterAdditionSystemPrompt(systemPrompt: string): string {
-    return `${systemPrompt}\n\nWRITER_ADDITION_V1 OUTPUT MODE\n`
-        + 'For this request, replace the complete-file packaging requirement with one Python fence containing only the new test addition: '
-        + 'needed imports plus a unittest class, or a complete top-level test method for the single baseline class. '
-        + 'Replace comprehensive-suite and all-survivor scope with the current focus only: one NEW test method. '
-        + 'That method may contain multiple target calls and must exercise EVERY supplied bound case exactly; '
+    void systemPrompt; // An addition has its own contract, rather than contradictory suite instructions.
+    return 'WRITER_ADDITION_V1 OUTPUT MODE\n'
+        + 'Write one NEW unittest test method for the current focus. '
+        + 'It may contain multiple target calls and must exercise EVERY supplied bound case exactly; '
         + 'do not add unrelated zero, negative or exception inputs. '
+        + 'Return one Python fence: needed imports plus a unittest class, or a complete top-level test method for the single baseline class. '
+        + 'Use explicit imports, test_ methods and self.assert*; no pytest or top-level assert. Await only async targets. '
+        + 'Use the exact target module/class/property/constructor contract; never copy, redefine or mock the target or owner. '
+        + 'Expected values require exact verified observations or explicit same-test controls; source expressions, hypotheses and diagnostics are not assertion oracles. '
+        + 'Preserve observed input types, constructor and call order. Never calculate expected values by calling dependencies. '
+        + 'Use with self.assertRaises(ExactType) only for an evidenced exception. '
+        + 'Parameter.member needs an attribute-bearing fixture, not same-named dict keys; callable members need explicit controlled behavior. '
+        + 'Control external/ambient dependencies at source use points with fresh per-test state; never patch immutable built-in class members. '
+        + 'No direct test network, file I/O, shell, dynamic execution or shared SQLite; no skips, swallowed errors or tautologies. '
         + 'The host preserves and merges the executed baseline. Do not rewrite passing methods or fixtures. '
-        + 'All target binding, evidence, assertion and isolation rules above still apply.';
+        + 'Close the fence and stop. The merged candidate still needs execution, separate Reviewer approval and coverage/mutation measurement.'
+        + isolatedResourceSystemRule();
 }
 
 export function buildWriterSeedPrompt(evidencePrompt: string): string {
@@ -86,11 +95,8 @@ export function buildWriterExpansionPrompt(evidencePrompt: string, baselineCode:
         + 'Return only the Python addition for one focused test for this gap: imports if needed, followed by a unittest class containing the new test, or a complete top-level def test_...(self) method when the baseline has exactly one TestCase class. '
         + 'Use the baseline class name to inherit its existing fixtures; use a unique class name only when the addition needs its own fixtures. '
         + 'Do not return or rewrite passing tests. The host merges the addition while preserving the executed baseline unchanged; conflicting imports, fixtures and existing method changes are rejected. '
-        + 'You are responsible for writing the new test; tools provide observations and candidate inputs, never a preapproved test addition. '
-        + 'Use only exact verified observations or explicit same-test dependency controls for expected values. '
-        + 'For state observations, preserve the exact constructor and ordered target calls; assert only the observed return, exception arguments and state. '
-        + 'A measured implementation behavior is not independent proof that the implementation meets its requirements. '
-        + 'Keep the real target. Do not rename, delete, weaken, replace, or duplicate passing cases. '
+        + 'You are responsible for writing the new test; observations are not a preapproved test or independent requirements proof. '
+        + 'Preserve the exact constructor and ordered target calls; use only observed results or explicit same-test controls. '
         + 'If evidence cannot support an additional assertion, return the unchanged baseline. '
         + 'The host will validate and execute the addition, then obtain approval from a separate Reviewer before mutation; '
         + 'this request does not certify coverage or mutation quality. '

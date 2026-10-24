@@ -49,6 +49,11 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
         assert.match(request.prompt, /PARAMETER_FIXTURE_OBSERVATIONS_V1/);
         assert.match(request.prompt, /"operation":"raise"/);
         assert.match(request.prompt, /"type":"none"/);
+        assert.ok(request.prompt.includes(source), 'complete target source is still supplied');
+        assert.ok(request.prompt.includes(seed), 'the executed baseline stays whole');
+        assert.match(request.roleInstructions, /^WRITER_ADDITION_V1 OUTPUT MODE/);
+        assert.doesNotMatch(request.roleInstructions, /comprehensive|all-survivor|WRITER_SEED_V1/);
+        assert.equal(wire.options.num_predict, 1536, 'the real addition wire has the planned output cap');
         return response('import unittest\nfrom sample import choose\nclass Cases(unittest.TestCase):\n'
             + '    def test_read_exception(self):\n        class BrokenEvent:\n            @property\n'
             + '            def data(self):\n                raise Exception()\n        self.assertIsNone(choose(BrokenEvent()))\n');
@@ -71,6 +76,11 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
         assert.equal(writers, 2, JSON.stringify(knowledge.lastFailure));
         assert.equal(reviewers, 2, JSON.stringify(knowledge.lastFailure));
         assert.ok(events.some(e => e.stage === 'parameter-fixture-experiment' && e.status === 'observed'));
+        const addition = events.find(e => e.stage === 'model-request' && e.status === 'requested'
+            && e.detail.writerOutputScope === 'single-test-addition');
+        assert.equal(addition?.detail.requestOutputTokens, 1536);
+        assert.equal(addition?.detail.capacity.requestOutputTokens, addition?.detail.requestOutputTokens);
+        assert.equal(addition?.detail.inputBudget + addition?.detail.reservedOutputTokens, addition?.detail.contextWindow);
         assert.equal(events.filter(e => e.stage === 'mutation' && e.status === 'measured').length, 2);
         assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify(knowledge.lastFailure));
         assert.equal(knowledge.qualityAssessment.policyStatus, 'met');

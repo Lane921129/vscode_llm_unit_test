@@ -2025,6 +2025,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     methodBodyAuthor: 'model', scenarioDeduplicationPreserved: true });
             }
         }
+        const writerOutputScope = mode === 'full' && !seedPending && writerAdditionBaseline
+            && ['writer', 'writer-revision'].includes(role) ? 'single-test-addition' as const : undefined;
         let contractedSystem = addOutputContract(system, format);
         let completionPrefix = '';
         const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
@@ -2055,7 +2057,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 ? focusedSeedOutputFloor(requestContextWindow, requiredInputTokens, correctionReserve) : 0);
         const capacityAt = (contextWindow: number) => assessPromptCapacity({ envType: requestParams.envType, mode,
             role, seedPending, contextWindow, estimatedInputTokens, observedInputTokens,
-            reservedInputTokens: correctionReserve, revisionCurrentCode, revisionWorkload, minimumOutputTokens,
+            reservedInputTokens: correctionReserve, revisionCurrentCode, revisionWorkload, writerOutputScope, minimumOutputTokens,
             ...contextGrowthCeiling(activeModelProfile, contextWindow),
             modelContextLimitSource: modelSnapshot.localRuntimeMetadata?.source ?? 'unknown' });
         const initialCapacity = capacityAt(requestContextWindow);
@@ -2063,7 +2065,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         recordRole('model-capacity', 'assessed', initialCapacity);
         const currentRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode,
             role, seedPending, contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
-            revisionCurrentCode, revisionWorkload, minimumOutputTokens });
+            revisionCurrentCode, revisionWorkload, writerOutputScope, minimumOutputTokens });
         if (requestParams.envType === 'local'
             && (!promptFits(contractedSystem, prompt, currentRoleBudget.inputBudget, correctionReserve)
                 || requiredInputTokens + correctionReserve > currentRoleBudget.inputBudget)) {
@@ -2072,7 +2074,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const limitBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
                 contextWindow: activeModelProfile.contextLength,
                 inputBudget: contextInputBudget(activeModelProfile.paramSize, activeModelProfile.contextLength),
-                revisionCurrentCode, revisionWorkload, minimumOutputTokens });
+                revisionCurrentCode, revisionWorkload, writerOutputScope, minimumOutputTokens });
             const growth = planContextGrowth({ currentContextTokens: requestContextWindow,
                 ...contextGrowthCeiling(activeModelProfile, requestContextWindow),
                 estimatedPromptTokens: requiredInputTokens,
@@ -2081,7 +2083,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const grownRoleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
                     contextWindow: growth.contextTokens,
                     inputBudget: contextInputBudget(activeModelProfile.paramSize, growth.contextTokens),
-                    revisionCurrentCode, revisionWorkload, minimumOutputTokens });
+                    revisionCurrentCode, revisionWorkload, writerOutputScope, minimumOutputTokens });
                 if (!promptFits(contractedSystem, prompt, grownRoleBudget.inputBudget, correctionReserve)
                     || requiredInputTokens + correctionReserve > grownRoleBudget.inputBudget) {
                     const capacity = capacityAt(growth.contextTokens);
@@ -2175,13 +2177,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         const contextWindow = requestContextWindow;
         const roleBudget = roleRequestBudget({ envType: requestParams.envType, mode, role, seedPending,
-            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, revisionWorkload, minimumOutputTokens });
+            contextWindow, inputBudget: activeModelProfile.budgetTokens, revisionCurrentCode, revisionWorkload, writerOutputScope, minimumOutputTokens });
         // Probes are separate logical requests. Start this formal request's allowance
         // once after prerequisites, still within the original stage/shared/target cap.
         const formalAttemptStartedAt = Date.now();
         const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt, formalAttemptStartedAt);
         const metrics = { role, format, estimatedInputTokens,
             ...roleBudget, reservedInputTokens: correctionReserve,
+            ...(writerOutputScope ? { writerOutputScope } : {}),
             ...(role === 'writer-revision' && revisionWorkload ? { revisionWorkload } : {}),
             capacity: capacityAt(contextWindow),
             ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
@@ -3182,6 +3185,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (generationFocusCases) { generationEnvelope += '\n\n' + generationFocusCases; }
         const generationRoleBudget = roleRequestBudget({ envType: params.envType, mode, role: 'writer', seedPending,
             contextWindow: requestContextWindow, inputBudget: activeModelProfile.budgetTokens,
+            writerOutputScope: mode === 'full' && generationBaseline ? 'single-test-addition' : undefined,
             minimumOutputTokens: writerOutputBudget.minimumTokens });
         const generationBudget = Math.max(1, generationRoleBudget.inputBudget - estimateTokens(generationEnvelope));
         const writerContext = seedPending ? { ...astContext, writerGenerationPhase: 'seed',
