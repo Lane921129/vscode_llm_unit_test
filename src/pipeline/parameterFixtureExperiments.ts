@@ -10,13 +10,14 @@ import { pythonToolPath } from './pythonTools';
 import { canonicalExistingPath, existingRealPath } from '../utils/fileIdentity';
 import { runSpawn } from '../utils/processRunner';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { traceValuePythonLiteral } from './probeInputs';
 
 type Recipe = { kind: 'literal'; value: TraceValueSnapshot }
     | { kind: 'namespace'; attributes: Record<string, Recipe>; faults?: Record<string, string> }
     | { kind: 'callable'; mode: 'mock' | 'factory'; parameters?: string[]; returns: Recipe }
     | { kind: 'callable'; mode: 'identity'; parameters: string[]; argument: string };
 interface FixtureInputs { args: Recipe[]; kwargs: Record<string, Recipe> }
-interface FixtureEvidence {
+export interface FixtureEvidence {
     schemaVersion: 'parameter-fixture-evidence-v1'; sourceHash: string; target: string; seedHash: string;
     gapId: string; fingerprint: string; inputs: FixtureInputs; context: QualityExperimentContext;
     variation: { parameter: string; path: string[]; operation: 'remove' | 'false' | 'raise'; exception: string | null };
@@ -152,6 +153,78 @@ export async function prepareParameterFixtureExperiments(input: QualityExperimen
     return result;
 }
 
+/** This checks only a provable replay contradiction. A matched recipe is not
+ * execution/review approval; custom fixtures may be unknown and still run. */
+export async function checkParameterFixtureReplay(input: {
+    source: string; sourcePath: string; code: string; baseline: string; module: string; evidence: FixtureEvidence;
+    python: string; env?: NodeJS.ProcessEnv; knownSecrets?: readonly string[];
+}): Promise<{ status: 'matched' | 'contradicted' | 'unknown'; reasonCode: string }> {
+    const evidence = input.evidence;
+    validateParameterFixtureResult({ schemaVersion: 'parameter-fixture-result-v1', status: 'observed',
+        sourceHash: evidence.sourceHash, target: evidence.target, seedHash: evidence.seedHash, gapId: evidence.gapId,
+        context: evidence.context, assertionOracle: false,
+        experiments: [{ fingerprint: evidence.fingerprint, status: 'observed', evidence, evidenceHash: evidenceHash(canonical(evidence)) }] });
+    if (!safe(evidence, input.knownSecrets) || evidence.context.module !== input.module
+        || evidence.sourceHash !== evidenceHash(input.source)
+        || canonicalExistingPath(evidence.context.sourcePath) !== canonicalExistingPath(input.sourcePath)) { invalid(); }
+    const run = await runSpawn(input.python, ['-B', pythonToolPath('parameterFixtureExperiments'), '--check-replay'], {
+        input: JSON.stringify({ source: input.source, code: input.code, baseline: input.baseline, module: input.module, evidence }),
+        timeout: 5000, env: { ...(input.env ?? process.env), PYTHONIOENCODING: 'utf-8' }
+    });
+    if (run.code !== 0 || !safe(run.stdout, input.knownSecrets)) { invalid(); }
+    let value: any;
+    try { value = JSON.parse(run.stdout); } catch { invalid(); }
+    const statuses = { matched: 'fixture-replay-matched', contradicted: 'fixture-replay-input-mismatch', unknown: 'fixture-replay-unknown-setup' };
+    if (!object(value) || !keys(value, ['schemaVersion', 'status', 'reasonCode', 'sourceHash', 'codeHash', 'baselineHash', 'fingerprint'])
+        || value.schemaVersion !== 'parameter-fixture-replay-v1' || !Object.hasOwn(statuses, value.status)
+        || value.reasonCode !== statuses[value.status as keyof typeof statuses]
+        || value.sourceHash !== evidence.sourceHash || value.codeHash !== evidenceHash(input.code)
+        || value.baselineHash !== evidenceHash(input.baseline) || value.fingerprint !== evidence.fingerprint) { invalid(); }
+    return { status: value.status, reasonCode: value.reasonCode };
+}
+
+/** Re-present complete observed controls; never author a test or compute a new oracle. */
+export function parameterFixtureReplayInstruction(evidence: FixtureEvidence): string {
+    const { parameter, path, operation, exception } = evidence.variation;
+    const member = path.at(-1)!;
+    const control = operation === 'raise'
+        ? `READING ${parameter}.${path.join('.')} must raise built-in ${exception}() with no arguments. `
+            + `Declare a fresh test-owned fixture class with @property def ${member}(self); write its raising body yourself. `
+            + 'Do not assign None to this property or replace it with a dict key or Mock return_value.'
+        : operation === 'remove' ? `Keep ${parameter}.${path.join('.')} absent, not set to None.`
+            : `Set ${parameter}.${path.join('.')} to the exact supplied None value, not False or zero.`;
+    const describe = (value: Recipe, depth = 0): string | undefined => {
+        if (depth > 6) { return undefined; }
+        if (value.kind === 'literal') { return traceValuePythonLiteral(value.value.value); }
+        if (value.kind === 'namespace') {
+            const members = [...new Set([...Object.keys(value.attributes), ...Object.keys(value.faults || {})])]
+                .map(member => {
+                    if (value.faults?.[member]) { return `${member}: read raises ${value.faults[member]}()`; }
+                    const described = describe(value.attributes[member], depth + 1);
+                    return described === undefined ? undefined : `${member}: ${described}`;
+                });
+            return members.some(member => member === undefined) ? undefined : `attribute object {${members.join(', ')}}`;
+        }
+        if (value.mode === 'identity') { return `identity(${value.parameters.join(', ')}) returns supplied ${value.argument}`; }
+        const returns = describe(value.returns, depth + 1);
+        return returns === undefined ? undefined : `${value.mode === 'mock' ? 'fixed Mock return' : 'fresh factory return'} ${returns}`;
+    };
+    const inputs = [...evidence.inputs.args.map((value, index) => [String(index), value] as const),
+        ...Object.entries(evidence.inputs.kwargs)].map(([label, value]) => {
+            const described = describe(value);
+            return described === undefined ? undefined : `input[${label}]: ${described}`;
+        });
+    const outcome = evidence.outcome.status === 'returned' ? traceValuePythonLiteral(evidence.outcome.result.value) : undefined;
+    const summary = inputs.every(value => value !== undefined) && outcome !== undefined
+        ? '\nEXACT CONTROL READ SUMMARY (full storage recipe remains in the packet):\n' + inputs.join('\n')
+            + '\nObserved return with those controls: ' + outcome + '\n' : '';
+    return '\n\nPARAMETER_FIXTURE_REPLAY_TASK_V1\n' + control + '\n'
+        + (evidence.outcome.status === 'returned' ? 'The target returned normally in this case: assert its observed return, not assertRaises around the target. '
+            : 'The target raised in this case: use the exact observed exception and arguments. ')
+        + 'Preserve all other controls from the full case packet. A control reminder is not execution, review or quality approval.'
+        + (summary.length > 0 && summary.length <= 1500 ? summary : '\nUse the full case packet for all remaining controls and the observed outcome.');
+}
+
 /** Complete cases only. Recipes are setup descriptions, never Python test code. */
 export function parameterFixturePrompt(result: ParameterFixtureResult, maxChars = 8000, secrets: readonly string[] = [],
     onProjected?: (fingerprint: string) => void): string {
@@ -163,6 +236,9 @@ export function parameterFixturePrompt(result: ParameterFixtureResult, maxChars 
         + 'factory means a fresh fixed return per call, mock means Mock(return_value=...). faults means an attribute read raises '
         + 'the named exception; identity means return the named supplied argument itself, preserving its identity. '
         + 'Fault exceptions are built-in classes with no arguments; missing attributes remain absent. Literal values use trace-value-v1. '
+        + 'A faults member must RAISE WHEN READ, not hold None, a dict key or a Mock return value. '
+        + 'Use an explicit test-owned property/getter for that fault; the target may catch it and return normally. '
+        + 'Only a raised observed outcome justifies assertRaises around the target call. '
         + 'Write ONE new unittest for the FIRST included case; preserve passing tests. Reproduce its full setup and observed outcome. '
         + 'These observations describe implementation behavior, not independent requirements. No case is a test or quality approval.\n'
         + JSON.stringify({ sourceHash: result.sourceHash, target: result.target, gapId: result.gapId, context: result.context,
@@ -191,7 +267,7 @@ export class ParameterFixtureSession {
             while (this.observations.length > 8 || JSON.stringify(this.observations).length > 1000000) { this.observations.shift(); }
         }
     }
-    prompt(result: ParameterFixtureResult, maxChars: number, secrets: readonly string[]): string {
+    prompt(result: ParameterFixtureResult, maxChars: number, secrets: readonly string[], onEvidence?: (evidence: FixtureEvidence) => void): string {
         validateParameterFixtureResult(result);
         if (!result.context) { return ''; }
         const available = this.observations.filter(item => item.sourceHash === result.sourceHash && item.target === result.target
@@ -201,7 +277,10 @@ export class ParameterFixtureSession {
             const next = structuredClone(item);
             next.experiments = next.experiments.filter(e => e.status === 'observed' && !this.presented.has(e.fingerprint));
             if (!next.experiments.length) { continue; }
-            const prompt = parameterFixturePrompt(next, maxChars, secrets, fingerprint => this.presented.add(fingerprint));
+            const prompt = parameterFixturePrompt(next, maxChars, secrets, fingerprint => {
+                this.presented.add(fingerprint);
+                onEvidence?.(structuredClone(next.experiments.find(experiment => experiment.fingerprint === fingerprint)!.evidence!));
+            });
             if (prompt) { return prompt; }
         }
         return '';

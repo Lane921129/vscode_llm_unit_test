@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 物件配方重放核對（2026-10-24）
+
+`ParameterFixtureSession.prompt` 以 callback 交付與實際提示完全相同的一份案例副本；未容納案例不交接。`requestBudgetedOne` 在新增方法簽名前附上精確控制提醒，例如讀取哪個屬性必須拋出哪種內建例外，以及目標實際正常返回或拋例外，避免把 getter 例外誤寫成 None 值或把已捕捉的例外包成目標的 assertRaises。完整配方與來源仍保留。
+
+`prepareWriterCandidate` 合併後呼叫 `checkParameterFixtureReplay`；Python 的 `--check-replay` 只解析來源與測試 AST，不 import 應用或執行候選。排除目前基線方法後，只核對可保守解碼的一個新方法；明確控制矛盾記為 `parameter-fixture-replay / contradicted`，沿原新增範圍拒絕與 Writer 修訂。自訂 property class 等未支援語法保持 unknown，照常實跑重審，不能冒稱已匹配；matched 也只表示靜態配方一致。來源、模組、native 路徑、候選與目前基線 hash，以及原觀測指紋皆核對；觀測的 seed provenance 與後續基線身份分開，不能借原方法完成新案例。
+
+Bug Fixer 可在 Writer 合併鉤子之外產生新的可執行基線。`writerAdditionMethodInstruction` 若缺少該完整基線 hash 的盤點，會透過同一個 AST 盤點工具重新取得方法，再選取新增名稱；失敗仍明確停止。這只補足當前候選的方法身份，不重用舊盤點、不更改基線，也不授予新的執行或審查資格。
+
 ## 補測 Writer 的獨立契約與輸出預算（2026-10-23）
 
 第二輪起，`buildWriterAdditionSystemPrompt` 直接提供單方法補測契約，不先載入完整 suite 要求再附加覆寫。`buildWriterExpansionPrompt` 保留完整證據與已執行基線，只減少重複的固定說明。修訂中的完整未批准候選仍供診斷，合併永遠以原基線為準；新候選仍經原保留、Checker、Reviewer 及 coverage／mutation。

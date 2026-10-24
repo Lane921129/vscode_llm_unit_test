@@ -15,7 +15,7 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('node:module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>(), state = new Map<string, unknown>();
-    let writers = 0, reviewers = 0;
+    let writers = 0, reviewers = 0, fixers = 0;
     const seed = 'import unittest\nimport types\nfrom sample import choose\nclass Cases(unittest.TestCase):\n'
         + '    def test_seed(self):\n        self.assertEqual(choose(types.SimpleNamespace(data="value")), "value")\n';
     const vscode = { ExtensionMode: { Test: 3, Development: 2 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
@@ -43,17 +43,37 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
             reviewers++;
             return response('{"findings":[]}');
         }
+        if (wire.format?.properties?.replacement || request.roleInstructions.includes('Python unittest Bug Fixer')) {
+            fixers++;
+            assert.match(request.prompt, /BUG_FIX_REQUEST_V5/);
+            return response(JSON.stringify({ method: 'test_seed', imports: [],
+                replacement: 'def test_seed(self):\n    self.assertEqual(choose(types.SimpleNamespace(data="value")), "value")\n' }));
+        }
         if (wire.format?.properties?.tasks) { return response('{"tasks":[]}'); }
         writers++;
-        if (writers === 1) { return response(seed); }
+        if (writers === 1) { return response(seed.replace(', "value")', ', "wrong")')); }
         assert.match(request.prompt, /PARAMETER_FIXTURE_OBSERVATIONS_V1/);
         assert.match(request.prompt, /"operation":"raise"/);
         assert.match(request.prompt, /"type":"none"/);
         assert.ok(request.prompt.includes(source), 'complete target source is still supplied');
-        assert.ok(request.prompt.includes(seed), 'the executed baseline stays whole');
+        const baselineFile = fs.readdirSync(output, { recursive: true }).map(String)
+            .find(file => /loop[\\/]1[\\/]loop1_test\.py$/.test(file))!;
+        const executedBaseline = fs.readFileSync(path.join(output, baselineFile), 'utf8').trim();
+        assert.ok(request.prompt.includes(executedBaseline), 'the actual fixed and executed baseline stays whole');
         assert.match(request.roleInstructions, /^WRITER_ADDITION_V1 OUTPUT MODE/);
         assert.doesNotMatch(request.roleInstructions, /comprehensive|all-survivor|WRITER_SEED_V1/);
         assert.equal(wire.options.num_predict, 1536, 'the real addition wire has the planned output cap');
+        assert.match(request.prompt, /PARAMETER_FIXTURE_REPLAY_TASK_V1/);
+        assert.ok(request.prompt.lastIndexOf('PARAMETER_FIXTURE_REPLAY_TASK_V1')
+            < request.prompt.lastIndexOf('WRITER_ADDITION_METHOD_V1'));
+        if (writers === 2) {
+            // This candidate would execute successfully with the same return,
+            // but it silently replaces the requested getter exception by None.
+            return response('import unittest\nimport types\nfrom sample import choose\nclass Cases(unittest.TestCase):\n'
+                + '    def test_wrong_control(self):\n        self.assertIsNone(choose(types.SimpleNamespace(data=None)))\n');
+        }
+        assert.match(request.prompt, /named attribute must raise.*when READ/);
+        assert.match(request.prompt, /WRITER_ADDITION_REVISION_V1/);
         return response('import unittest\nfrom sample import choose\nclass Cases(unittest.TestCase):\n'
             + '    def test_read_exception(self):\n        class BrokenEvent:\n            @property\n'
             + '            def data(self):\n                raise Exception()\n        self.assertIsNone(choose(BrokenEvent()))\n');
@@ -73,9 +93,15 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
         const knowledge = JSON.parse(fs.readFileSync(path.join(output, journal), 'utf8'));
         const eventsFile = files.find(file => path.basename(file) === 'role_events.jsonl')!;
         const events = fs.readFileSync(path.join(output, eventsFile), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-        assert.equal(writers, 2, JSON.stringify(knowledge.lastFailure));
+        assert.equal(writers, 3, JSON.stringify(knowledge.lastFailure));
         assert.equal(reviewers, 2, JSON.stringify(knowledge.lastFailure));
+        assert.equal(fixers, 1, 'the initial real failure creates a separately repaired executable baseline');
+        assert.ok(events.some(e => e.stage === 'candidate-methods' && e.status === 'inventoried'
+            && e.detail.role === 'executable-baseline'), 'the new baseline hash gets its own AST inventory before expansion');
         assert.ok(events.some(e => e.stage === 'parameter-fixture-experiment' && e.status === 'observed'));
+        assert.ok(events.some(e => e.stage === 'parameter-fixture-replay' && e.status === 'contradicted'));
+        assert.ok(events.some(e => e.stage === 'parameter-fixture-replay' && e.status === 'unknown'),
+            'the corrected local property is executed and reviewed without claiming static replay proof');
         const addition = events.find(e => e.stage === 'model-request' && e.status === 'requested'
             && e.detail.writerOutputScope === 'single-test-addition');
         assert.equal(addition?.detail.requestOutputTokens, 1536);
@@ -88,6 +114,7 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
         const accepted = fs.readFileSync(path.join(output, candidate), 'utf8');
         assert.match(accepted, /test_seed/);
         assert.match(accepted, /test_read_exception/);
+        assert.doesNotMatch(accepted, /test_wrong_control/);
         assert.equal(fs.readFileSync(sourceFile, 'utf8'), source);
     } finally {
         globalThis.fetch = originalFetch; Module._load = originalLoad;

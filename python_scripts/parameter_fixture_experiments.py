@@ -83,7 +83,7 @@ def recipe(node, bindings, aliases, depth=0):
     return {'kind': 'literal', 'value': encoded}, {id(node)} if type(value) in (list, dict, set) else set()
 
 
-def seed_inputs(code, module, target, diagnostics=None):
+def seed_inputs(code, module, target, diagnostics=None, include_literals=False):
     tree = ast.parse(code)
     aliases, targets, harnesses = {}, set(), {'unittest.TestCase'}
     imported = set()
@@ -147,7 +147,7 @@ def seed_inputs(code, module, target, diagnostics=None):
                         combine(terms)
                         args = [t[0] for t in terms[:len(call.args)]]
                         kwargs = {k.arg: t[0] for k, t in zip(call.keywords, terms[len(call.args):])}
-                        if any(t[0]['kind'] == 'namespace' for t in terms):
+                        if include_literals or any(t[0]['kind'] == 'namespace' for t in terms):
                             found.append({'args': args, 'kwargs': kwargs})
                         break
                     checked(isinstance(statement, ast.Assign) and len(statement.targets) == 1, 'fixture-setup-statement')
@@ -397,6 +397,80 @@ def worker(payload):
     return output
 
 
+def check_replay(payload):
+    """AST-only contradiction check, not execution or an assertion oracle.
+
+    Only one new, explicitly decoded method is compared. Unknown fixture classes,
+    decorators, setup, aliases or extra calls keep their unknown status and still
+    need the normal execution/review gates. The baseline cannot lend a match.
+    """
+    source, code, baseline = payload['source'], payload['code'], payload['baseline']
+    expected = payload['evidence']
+    checked(all(isinstance(value, str) and len(value) <= 250000 for value in (source, code, baseline)), 'fixture-replay-budget')
+    # The observation keeps its original seed provenance. A later baseline may
+    # grow while an unpresented observation remains valid for the same source.
+    checked(digest(source) == expected['sourceHash'], 'fixture-replay-identity')
+    output = {'schemaVersion': 'parameter-fixture-replay-v1', 'status': 'unknown', 'reasonCode': 'fixture-replay-unknown-setup',
+              'sourceHash': digest(source), 'codeHash': digest(code), 'baselineHash': digest(baseline),
+              'fingerprint': expected['fingerprint']}
+    try:
+        tree, previous = ast.parse(code), ast.parse(baseline)
+        checked(sum(1 for _ in ast.walk(tree)) <= 20000, 'fixture-replay-ast-budget')
+        original = {(cls.name, method.name) for cls in previous.body if isinstance(cls, ast.ClassDef)
+                    for method in cls.body if isinstance(method, ast.FunctionDef) and method.name.startswith('test_')}
+        added = []
+        for cls in tree.body:
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            # An unrelated class body could rebind imports at definition time.
+            # Never ignore that code and then claim a definite fixture shape.
+            checked(len(cls.bases) == 1 and dotted(cls.bases[0]) in ('unittest.TestCase', 'TestCase'), 'fixture-replay-class-scope')
+            kept = []
+            for method in cls.body:
+                if isinstance(method, ast.FunctionDef) and method.name.startswith('test_'):
+                    if (cls.name, method.name) in original:
+                        continue
+                    added.append(method)
+                kept.append(method)
+            cls.body = kept or [ast.Pass()]
+        checked(len(added) == 1, 'fixture-replay-new-method-scope')
+        # A conservative lower bound only. Alias/dynamic calls stay unknown;
+        # the decoder below separately proves the canonical import binding.
+        checked(sum(isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] == expected['target']
+                    for node in ast.walk(added[0])) == 1, 'fixture-replay-call-scope')
+        values = seed_inputs(ast.unparse(tree), payload['module'], expected['target'], include_literals=True)
+        checked(len(values) == 1, 'fixture-replay-unknown-setup')
+        actual = values[0]
+        if canonical(actual) == canonical(expected['inputs']):
+            output.update(status='matched', reasonCode='fixture-replay-matched')
+            return output
+        fn = target_node(source, expected['target'])
+        names = [arg.arg for arg in fn.args.posonlyargs + fn.args.args]
+        parameters = {**dict(zip(names, actual['args'])), **actual['kwargs']}
+        variation = expected['variation']
+        current = parameters.get(variation['parameter'])
+        for member in variation['path'][:-1]:
+            checked(current is not None, 'fixture-replay-unknown-setup')
+            current = current.get('returns') if member == '$return' else current.get('attributes', {}).get(member)
+        checked(current is not None, 'fixture-replay-unknown-setup')
+        if current['kind'] != 'namespace':
+            output.update(status='contradicted', reasonCode='fixture-replay-input-mismatch')
+        else:
+            member = variation['path'][-1]
+            attributes = current['attributes']
+            # A decoded SimpleNamespace has neither custom getters nor dynamic
+            # attribute lookup. Literal/absent members cannot replay a fault.
+            mismatch = variation['operation'] == 'raise'
+            mismatch = mismatch or variation['operation'] == 'remove' and member in attributes
+            mismatch = mismatch or variation['operation'] == 'false' and (
+                member not in attributes or attributes[member] != {'kind': 'literal', 'value': snapshot_value(None)})
+            if mismatch:
+                output.update(status='contradicted', reasonCode='fixture-replay-input-mismatch')
+    except (Unsupported, SyntaxError, ValueError, TypeError, KeyError, RecursionError):
+        pass
+    return output
+
+
 def run(payload):
     result = plan(payload)
     if result['status'] != 'planned':
@@ -428,4 +502,5 @@ def run(payload):
 
 if __name__ == '__main__':
     data = json.load(sys.stdin)
-    print(json.dumps(worker(data) if sys.argv[1:] == ['--worker'] else run(data), ensure_ascii=True, allow_nan=False))
+    result = check_replay(data) if sys.argv[1:] == ['--check-replay'] else worker(data) if sys.argv[1:] == ['--worker'] else run(data)
+    print(json.dumps(result, ensure_ascii=True, allow_nan=False))

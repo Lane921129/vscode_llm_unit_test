@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from parameter_fixture_experiments import plan, run, worker, seed_inputs
+from parameter_fixture_experiments import plan, run, worker, seed_inputs, check_replay
 from quality_experiment_runner import digest, canonical
 
 SOURCE = '''def select_label(context, event):
@@ -52,6 +52,54 @@ class ParameterFixtureExperimentsTests(unittest.TestCase):
         return {'sourcePath': str(self.source), 'source': source, 'sourceHash': digest(source),
                 'target': 'select_label', 'module': 'sample', 'testCode': tests,
                 'focus': {'id': 'gap:' + str(line), 'kind': 'coverage', 'evidence': 'line:' + str(line), 'line': line}}
+
+    def replay(self, addition, operation='raise', baseline=TESTS):
+        payload = self.payload(tests=baseline)
+        evidence = next(item for item in plan(payload)['experiments'] if item['variation']['operation'] == operation)
+        return check_replay({'source': SOURCE, 'code': baseline + addition, 'baseline': baseline,
+                             'module': 'sample', 'evidence': evidence})
+
+    def test_replay_rejects_none_and_dict_instead_of_an_attribute_getter_fault(self):
+        for event in ('types.SimpleNamespace(data=None, key="key")', '{"data": None, "key": "key"}',
+                      'types.SimpleNamespace(key="key")'):
+            addition = '\n    def test_new(self):\n        context = types.SimpleNamespace(lookup=lambda key: types.SimpleNamespace(data="selected"))\n'
+            addition += '        event = ' + event + '\n        self.assertEqual(select_label(context, event), "selected")\n'
+            result = self.replay(addition)
+            self.assertEqual(result['status'], 'contradicted', result)
+            self.assertEqual(result['reasonCode'], 'fixture-replay-input-mismatch')
+
+    def test_replay_matches_explicit_false_recipe_but_never_borrows_the_seed_call(self):
+        addition = '\n    def test_new(self):\n        context = types.SimpleNamespace(lookup=lambda key: types.SimpleNamespace(data="selected"))\n'
+        addition += '        event = types.SimpleNamespace(data=None, key="key")\n        self.assertEqual(select_label(context, event), "selected")\n'
+        self.assertEqual(self.replay(addition, 'false')['status'], 'matched')
+        self.assertEqual(self.replay('', 'false')['status'], 'unknown')
+        self.assertEqual(self.replay(addition, 'remove')['status'], 'contradicted')
+        self.assertEqual(self.replay(addition.replace('data=None, ', ''), 'false')['status'], 'contradicted')
+
+    def test_replay_keeps_local_getter_fixture_unknown_without_running_candidate_code(self):
+        addition = '\n    def test_new(self):\n        class Event:\n            @property\n            def data(self):\n                raise Exception()\n'
+        addition += '        context = types.SimpleNamespace(lookup=lambda key: types.SimpleNamespace(data="selected"))\n'
+        addition += '        self.assertEqual(select_label(context, Event()), "selected")\n'
+        self.assertEqual(self.replay(addition)['status'], 'unknown')
+        marker = self.root / 'must-not-execute.txt'
+        malicious = '\n    def test_new(self):\n        open(' + repr(str(marker)) + ', "w").write("bad")\n'
+        malicious += '        self.assertEqual(select_label(None, None), None)\n'
+        self.assertEqual(self.replay(malicious)['status'], 'unknown')
+        self.assertFalse(marker.exists())
+
+    def test_replay_does_not_decode_rebound_aliases_or_unrelated_class_side_effects(self):
+        addition = '\n    def test_new(self):\n        types = None\n        self.assertEqual(select_label(None, None), None)\n'
+        self.assertEqual(self.replay(addition)['status'], 'unknown')
+        addition = '\nclass Setup:\n    types.SimpleNamespace = None\n'
+        addition += '\nclass NewTests(unittest.TestCase):\n    def test_new(self):\n        self.assertEqual(select_label(None, None), None)\n'
+        self.assertEqual(self.replay(addition)['status'], 'unknown')
+
+    def test_replay_refuses_identity_drift_before_decoding_any_fixture(self):
+        payload = self.payload()
+        evidence = plan(payload)['experiments'][0]
+        with self.assertRaises(ValueError):
+            check_replay({'source': SOURCE + '\n# changed', 'code': TESTS, 'baseline': TESTS,
+                          'module': 'sample', 'evidence': evidence})
 
     def test_plans_only_explicit_fixture_inputs_and_replays_observations(self):
         payload = self.payload()

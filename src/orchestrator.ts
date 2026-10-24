@@ -137,7 +137,7 @@ import { diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrecti
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
-import { prepareParameterFixtureExperiments, ParameterFixtureSession } from './pipeline/parameterFixtureExperiments';
+import { prepareParameterFixtureExperiments, ParameterFixtureSession, checkParameterFixtureReplay, parameterFixtureReplayInstruction, type FixtureEvidence } from './pipeline/parameterFixtureExperiments';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
 import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
@@ -1740,6 +1740,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const analystOutputBudget = new WriterOutputBudget();
     let writerAdditionBaseline: string | undefined;
     const methodInventories = new Map<string, ScenarioIdentity[]>();
+    let inventoryExecutedBaseline: ((baseline: string) => Promise<void>) | undefined;
     let activeSeedCaseIds: string[] | undefined;
     let activeSeedCaseFacts = '';
     let focusedMockSetup = '';
@@ -1853,6 +1854,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const qualityExperiments = new QualityImprovementSession();
     let qualityObservationEvidence = '';
     const parameterFixtureExperiments = new ParameterFixtureSession();
+    let activeParameterFixtureEvidence: FixtureEvidence | undefined;
     let qualityTraceProjection = '';
     let qualityTraceReference = '';
     const appendQualityEvidence = (prompt: string): string => {
@@ -1954,8 +1956,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             + 'Observations describe this test setup, not production data, network or GUI startup.'
             + '\n\n' + resourceContext.context;
     };
-    const writerAdditionMethodInstruction = (baseline: string): string => {
+    const writerAdditionMethodInstruction = async (baseline: string): Promise<string> => {
         const baselineHash = evidenceHash(baseline);
+        if (!methodInventories.has(baselineHash)) {
+            // Bug Fixer can produce a new executable hash without going through
+            // the Writer composition hook. Re-read that exact baseline's AST;
+            // never borrow names from an older candidate or guess a first method.
+            await inventoryExecutedBaseline?.(baseline);
+        }
         const methods = methodInventories.get(baselineHash);
         if (!methods?.length) {
             throw new AnalysisStageError('validation', 'writer-addition-context',
@@ -2013,13 +2021,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             prompt = buildWriterSeedPrompt(prompt);
         }
         if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
+            if (activeParameterFixtureEvidence) { prompt += parameterFixtureReplayInstruction(activeParameterFixtureEvidence); }
             const focusCases = qualityFocusCasesForPrompt(writerCaseMode?.evidence || activeQualityTaskEvidence);
             if (focusCases && !prompt.includes(focusCases)) { prompt += '\n\n' + focusCases; }
             if (writerCaseMode) {
                 prompt += `\n\nREQUIRED NEW METHOD SIGNATURE (body must be authored by you):\ndef ${writerCaseMode.methodName}(self):\n`;
             } else {
                 const baselineHash = evidenceHash(writerAdditionBaseline);
-                const instruction = writerAdditionMethodInstruction(writerAdditionBaseline);
+                const instruction = await writerAdditionMethodInstruction(writerAdditionBaseline);
                 prompt += instruction;
                 recordRole('writer-addition', 'scope-selected', { signatureHash: evidenceHash(instruction), baselineCodeHash: baselineHash,
                     methodBodyAuthor: 'model', scenarioDeduplicationPreserved: true });
@@ -2469,6 +2478,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             baselineCodeHash: evidenceHash(baseline), baselineMethods
         });
     };
+    inventoryExecutedBaseline = baseline => recordCandidateMethods(baseline, 'merged', 'executable-baseline', baseline);
     const bindSingleAdditionInventory = (code: string, mergedCode: string, baseline: string,
         addedMethods: Array<{ className: string; name: string }>, role: string) => {
         if (methodInventories.get(evidenceHash(code))?.length !== 0 || addedMethods.length !== 1) { return; }
@@ -2642,7 +2652,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reasonCode: merged.reasonCode, gate: 'revision-scope' });
             return code;
         }
-        if (activeQualityTaskEvidence && merged.addedMethodsCount === 0) {
+        if ((activeQualityTaskEvidence || activeParameterFixtureEvidence) && merged.addedMethodsCount === 0) {
             const reasonCode = 'writer-addition-no-focus-test';
             recordRejected(code, attempt, 'revision-scope', reasonCode);
             additionRejections.set(evidenceHash(merged.mergedCode), { gate: 'revision-scope', reasonCode,
@@ -2651,7 +2661,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     + 'do not copy the existing baseline or claim it already exercises different inputs.' });
             recordRole('writer-addition', 'rejected', { reasonCode, baselineCodeHash: evidenceHash(writerAdditionBaseline),
                 additionCodeHash: evidenceHash(code), codeHash: evidenceHash(merged.mergedCode),
-                focusId: activeQualityTaskEvidence.focusId, addedMethodsCount: 0 });
+                focusId: activeQualityTaskEvidence?.focusId || activeParameterFixtureEvidence?.gapId, addedMethodsCount: 0 });
             return merged.mergedCode;
         }
         recordRole('writer-addition', 'merged', { baselineCodeHash: evidenceHash(writerAdditionBaseline),
@@ -2662,6 +2672,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // merger resolves its unique baseline class; only that completed proof
         // may finish the earlier method inventory (never a guessed count).
         bindSingleAdditionInventory(code, merged.mergedCode, writerAdditionBaseline, merged.addedMethods, role);
+        if (activeParameterFixtureEvidence) {
+            const replay = await checkParameterFixtureReplay({ source: initialSource, sourcePath: params.filePath, code: merged.mergedCode,
+                baseline: writerAdditionBaseline, module: targetImportModule, evidence: activeParameterFixtureEvidence,
+                python: pythonExecutable, env: testExecutionEnv, knownSecrets });
+            recordRole('parameter-fixture-replay', replay.status, { ...replay, codeHash: evidenceHash(merged.mergedCode),
+                fingerprint: activeParameterFixtureEvidence.fingerprint, gapId: activeParameterFixtureEvidence.gapId });
+            if (replay.status === 'contradicted') {
+                additionRejections.set(evidenceHash(merged.mergedCode), { gate: 'revision-scope', reasonCode: replay.reasonCode,
+                    reason: 'The new method does not replay the exact PARAMETER_FIXTURE_OBSERVATIONS_V1 input control. '
+                        + 'For operation=raise, the named attribute must raise the specified built-in exception when READ: '
+                        + 'write an explicit test-owned property/getter, not an attribute value of None, a dict key, or Mock return_value. '
+                        + 'The target may catch this getter exception and return normally; assert its supplied observed outcome. '
+                        + 'For remove keep the attribute absent; for false use the exact supplied None value. '
+                        + 'Preserve every other supplied fixture control and the executed baseline; replace only the unaccepted addition.' });
+            }
+        }
         if (activeQualityTaskEvidence) {
             const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
             const facts = await buildReviewFacts({ ...identity, code: merged.mergedCode, module: targetImportModule,
@@ -3172,7 +3198,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         let generationEnvelope = addOutputContract(generationSystem, generationFormat) + '\n'
             + (seedPending ? buildWriterSeedPrompt('') : buildWriterExpansionPrompt('', generationBaseline, analystTasks));
         if (mode === 'full' && generationBaseline) {
-            generationEnvelope += writerAdditionMethodInstruction(generationBaseline);
+            generationEnvelope += await writerAdditionMethodInstruction(generationBaseline);
         }
         if (mode === 'full' && seedPending && activeSeedCaseFacts) { generationEnvelope += '\n\n' + activeSeedCaseFacts; }
         if (qualityObservationEvidence) { generationEnvelope += '\n\n' + qualityObservationEvidence; }
@@ -4276,6 +4302,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         analystTasks = focusedQualityFeedback;
         if (!pendingQualityGap) {
             qualityObservationEvidence = '';
+            activeParameterFixtureEvidence = undefined;
             qualityTraceProjection = '';
             qualityTraceReference = '';
         }
@@ -4283,6 +4310,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             try {
                 let taskEvidence: QualityTaskEvidence | undefined;
                 activeQualityTaskEvidence = undefined;
+                activeParameterFixtureEvidence = undefined;
                 // Measured comparison survivors can propose bounded numeric inputs
                 // without another model call. Only isolated observations become oracles.
                 let observedBoundary = false;
@@ -4334,7 +4362,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     recordRole('parameter-fixture-experiment', result.status, { gapId: focus.id,
                         fingerprints: result.experiments.map(item => item.fingerprint), reason: result.reason });
                     const nextEvidence = parameterFixtureExperiments.prompt(result,
-                        Math.min(8000, Math.floor(activeModelProfile.budgetTokens * 0.6)), knownSecrets);
+                        Math.min(8000, Math.floor(activeModelProfile.budgetTokens * 0.6)), knownSecrets,
+                        evidence => { activeParameterFixtureEvidence = evidence; });
                     if (nextEvidence) {
                         qualityObservationEvidence = nextEvidence;
                         qualityTraceProjection = '';
