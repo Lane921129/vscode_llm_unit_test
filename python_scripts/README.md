@@ -14,9 +14,9 @@
 | 斷言證據 | `validate_assertion_evidence.py` | 檢查同一呼叫的 literal 斷言是否與已驗證行為觀測矛盾 |
 | 情境識別 | `scenario_inventory.py` | 為測試 AST 與設定建立指紋，不執行測試 |
 | 品質補測觀測 | `quality_experiment_runner.py`、`parameter_fixture_experiments.py` | 分別觀察實例有序狀態及頂層函式的受控物件參數；只回傳觀測，由 AI 新增測試，再重跑、審查與量測。參見[參數物件受控補測](../docs/參數物件受控補測.md) |
-| 物件重放核對 | `parameter_fixture_experiments.py --check-replay` | 僅 AST 核對新增方法的可解析控制，將明確配方矛盾交 Writer；自訂 fixture 保持 unknown，matched 不代替實跑或審查 |
+| 物件重放核對 | `parameter_fixture_experiments.py --check-replay` | 僅AST核對新增方法；簡單封閉getter類別按真正receiver比對，巢狀property物件不能冒充外層讀取。其他未知fixture保持unknown；不執行類別或代替實跑審查，規劃／worker能力不因此擴張 |
 | 格式救援 | `rescue_unittest.py` | 受限制的 unittest 產物整理 |
-| 品質測量 | `basic_mutation_runner.py` | 每個變異體使用獨立目錄並停用 bytecode 後執行 |
+| 品質測量 | `basic_mutation_runner.py` | 每個變異體使用獨立目錄並停用bytecode；原測試與基線保留原位元組，避免Windows換行重複轉換。選定突變來源的自相依可在可信trial映射重綁，其他相依漂移仍拒絕 |
 
 Checker 是不呼叫 LLM 的工具階段；Writer 撰寫測試與預期答案，Reviewer 以 LLM 審查輸入、預期值及其依據。Checker 通過表示實際案例符合測試內斷言，不證明預期答案符合獨立業務需求。
 

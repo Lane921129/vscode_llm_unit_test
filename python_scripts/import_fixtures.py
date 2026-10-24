@@ -355,9 +355,16 @@ def mutation_environment(environment, trial_root, source_file, copy_bindings):
                         raise ValueError('Ambiguous mutation fixture dependency binding')
                     if destinations:
                         copied = destinations[0]
-                        if not copied.is_relative_to(trial_root) or hashlib.sha256(copied.read_bytes()).hexdigest() != dependency['sourceHash']:
+                        if not copied.is_relative_to(trial_root):
                             raise ValueError('Mutation fixture source dependency changed during copy')
-                        rebound.append(dict(dependency, resolvedFile=str(copied)))
+                        copied_hash = hashlib.sha256(copied.read_bytes()).hexdigest()
+                        # A source can belong to its own initialization closure.
+                        # Only the driver's selected target is intentionally
+                        # changed; original approvals and all other copied
+                        # dependencies still require their approved bytes.
+                        if dep_original != source_file and copied_hash != dependency['sourceHash']:
+                            raise ValueError('Mutation fixture source dependency changed during copy')
+                        rebound.append(dict(dependency, resolvedFile=str(copied), sourceHash=copied_hash))
                     else:
                         rebound.append(dict(dependency))
                 copy['sourceDependencies'] = rebound

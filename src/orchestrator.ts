@@ -2683,6 +2683,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     reason: 'The new method does not replay the exact PARAMETER_FIXTURE_OBSERVATIONS_V1 input control. '
                         + 'For operation=raise, the named attribute must raise the specified built-in exception when READ: '
                         + 'write an explicit test-owned property/getter, not an attribute value of None, a dict key, or Mock return_value. '
+                        + 'The getter belongs on the object the target reads; putting a getter object inside an ordinary attribute does not trigger it. '
                         + 'The target may catch this getter exception and return normally; assert its supplied observed outcome. '
                         + 'For remove keep the attribute absent; for false use the exact supplied None value. '
                         + 'Preserve every other supplied fixture control and the executed baseline; replace only the unaccepted addition.' });

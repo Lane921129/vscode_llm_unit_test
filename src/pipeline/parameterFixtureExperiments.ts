@@ -190,6 +190,7 @@ export function parameterFixtureReplayInstruction(evidence: FixtureEvidence): st
     const control = operation === 'raise'
         ? `READING ${parameter}.${path.join('.')} must raise built-in ${exception}() with no arguments. `
             + `Declare a fresh test-owned fixture class with @property def ${member}(self); write its raising body yourself. `
+            + `Use the fixture instance AS the owner of ${member}; do not store that instance inside the ${member} attribute. `
             + 'Do not assign None to this property or replace it with a dict key or Mock return_value.'
         : operation === 'remove' ? `Keep ${parameter}.${path.join('.')} absent, not set to None.`
             : `Set ${parameter}.${path.join('.')} to the exact supplied None value, not False or zero.`;

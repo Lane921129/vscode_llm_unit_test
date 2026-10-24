@@ -533,11 +533,13 @@ def prepare_trial_directory(source_file, test_file, trial_root, source_text):
     """
     trial_root.mkdir(parents=True, exist_ok=False)
     test_copy = trial_root / test_file.name
-    test_copy.write_text(test_file.read_text(encoding='utf-8'), encoding='utf-8')
+    # Keep baseline/test identities byte-for-byte. On Windows write_text would
+    # expand an already-CRLF source into CRCRLF and invalidate approvals.
+    test_copy.write_bytes(test_file.read_bytes())
     layout = mutation_import_layout(source_file, test_file, trial_root)
     package_mutant_targets(source_file, test_file, trial_root, layout)
     for target_copy in layout['targets']:
-        target_copy.write_text(source_text, encoding='utf-8')
+        target_copy.write_bytes(source_text.encode('utf-8'))
     return test_copy
 
 

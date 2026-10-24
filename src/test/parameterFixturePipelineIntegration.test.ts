@@ -67,10 +67,12 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
         assert.ok(request.prompt.lastIndexOf('PARAMETER_FIXTURE_REPLAY_TASK_V1')
             < request.prompt.lastIndexOf('WRITER_ADDITION_METHOD_V1'));
         if (writers === 2) {
-            // This candidate would execute successfully with the same return,
-            // but it silently replaces the requested getter exception by None.
+            // A getter object stored as data does not move its descriptor onto
+            // the event receiver, exactly as the real-model failure demonstrated.
             return response('import unittest\nimport types\nfrom sample import choose\nclass Cases(unittest.TestCase):\n'
-                + '    def test_wrong_control(self):\n        self.assertIsNone(choose(types.SimpleNamespace(data=None)))\n');
+                + '    def test_wrong_control(self):\n        class WrongOwner:\n            @property\n'
+                + '            def data(self):\n                raise Exception()\n'
+                + '        self.assertIsNone(choose(types.SimpleNamespace(data=WrongOwner())))\n');
         }
         assert.match(request.prompt, /named attribute must raise.*when READ/);
         assert.match(request.prompt, /WRITER_ADDITION_REVISION_V1/);
@@ -100,8 +102,8 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
             && e.detail.role === 'executable-baseline'), 'the new baseline hash gets its own AST inventory before expansion');
         assert.ok(events.some(e => e.stage === 'parameter-fixture-experiment' && e.status === 'observed'));
         assert.ok(events.some(e => e.stage === 'parameter-fixture-replay' && e.status === 'contradicted'));
-        assert.ok(events.some(e => e.stage === 'parameter-fixture-replay' && e.status === 'unknown'),
-            'the corrected local property is executed and reviewed without claiming static replay proof');
+        assert.ok(events.some(e => e.stage === 'parameter-fixture-replay' && e.status === 'matched'),
+            'only the property on the actual receiver matches and still needs real execution, review and mutation');
         const addition = events.find(e => e.stage === 'model-request' && e.status === 'requested'
             && e.detail.writerOutputScope === 'single-test-addition');
         assert.equal(addition?.detail.requestOutputTokens, 1536);

@@ -16,6 +16,41 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class ImportFixtureTests(unittest.TestCase):
+    def test_selected_mutant_rebinds_self_dependency_without_approving_other_changes(self):
+        sys.path.insert(0, str(TOOLS))
+        from import_fixtures import ImportFixtures, mutation_environment
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, dependency = root / 'neutral.py', root / 'settings.py'
+            source.write_bytes(b'def target(value):\r\n    return value + 1\r\n')
+            dependency.write_bytes(b'VALUE = 1\n')
+            original = source.read_bytes()
+            dependencies = [{'file': file.name, 'sourceHash': hashlib.sha256(file.read_bytes()).hexdigest()}
+                            for file in (source, dependency)]
+            plan = self.plan(root, [{'file': source.name, 'sourceDependencies': dependencies}])
+            environment = {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan)}
+            trial = root / 'trial'
+            trial.mkdir()
+            copied, copied_dependency = trial / source.name, trial / dependency.name
+            copied.write_bytes(b'def target(value):\n    return value + 2\n')
+            copied_dependency.write_bytes(dependency.read_bytes())
+            bindings = [(source, copied, False), (dependency, copied_dependency, False)]
+            rebound = mutation_environment(environment, trial, source, bindings)
+            rebound_rule = json.loads(rebound['LLM_UNIT_TEST_IMPORT_FIXTURES'])['rules'][-1]
+            self.assertEqual(rebound_rule['sourceHash'], hashlib.sha256(copied.read_bytes()).hexdigest())
+            self.assertEqual(rebound_rule['sourceDependencies'][0]['sourceHash'], rebound_rule['sourceHash'])
+            with patch.dict(os.environ, rebound), ImportFixtures():
+                pass
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(plan['rules'][0]['sourceDependencies'], dependencies)
+            copied_dependency.write_bytes(b'VALUE = 2\n')
+            with self.assertRaisesRegex(ValueError, 'dependency changed during copy'):
+                mutation_environment(environment, trial, source, bindings)
+            copied_dependency.write_bytes(dependency.read_bytes())
+            source.write_bytes(original + b'# drift\n')
+            with self.assertRaisesRegex(ValueError, 'dependency changed before mutation'):
+                mutation_environment(environment, trial, source, bindings)
+
     def test_schema_dependency_approval_expires_in_workers_and_mutation_copies(self):
         from import_fixtures import ImportFixtures, mutation_environment
         with tempfile.TemporaryDirectory() as directory:

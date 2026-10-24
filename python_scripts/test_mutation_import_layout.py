@@ -129,6 +129,23 @@ class MutationImportLayoutTests(unittest.TestCase):
         self.write_test('from app import target')
         self.assert_scored_mutation()
 
+    def test_trial_copy_preserves_exact_utf8_source_and_test_newline_bytes(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': ''}):
+            root = Path(directory)
+            source, test = root / 'neutral.py', root / 'test_neutral.py'
+            for index, newline in enumerate(('\n', '\r\n', '\r')):
+                source_bytes = newline.join(('def target():', '    return "測試"', '')).encode('utf-8')
+                test_bytes = newline.join(('import unittest', 'from neutral import target',
+                    'class Cases(unittest.TestCase):', '    def test_value(self): self.assertEqual(target(), "測試")', '')).encode('utf-8')
+                source.write_bytes(source_bytes)
+                test.write_bytes(test_bytes)
+                trial = root / ('trial_' + str(index))
+                copied = prepare_trial_directory(source, test, trial, source_bytes.decode('utf-8'))
+                self.assertEqual((trial / source.name).read_bytes(), source_bytes)
+                self.assertEqual(copied.read_bytes(), test_bytes)
+                self.assertEqual(source.read_bytes(), source_bytes)
+                self.assertEqual(test.read_bytes(), test_bytes)
+
     def test_mixed_imports_keep_both_copies_and_still_reject_genuine_resource_alias_ambiguity(self):
         from isolated_resources import IsolatedResources
         self.write_test('from app import target\nfrom container.project.app import target as packaged')

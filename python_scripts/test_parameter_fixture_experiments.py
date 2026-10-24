@@ -87,6 +87,49 @@ class ParameterFixtureExperimentsTests(unittest.TestCase):
         self.assertEqual(self.replay(malicious)['status'], 'unknown')
         self.assertFalse(marker.exists())
 
+    def getter_addition(self, wrapped=False, getter='data', exception='Exception', constructor=False):
+        fields = ('            def __init__(self):\n                self.key = "key"\n' if constructor
+                  else '            key = "key"\n')
+        addition = '\n    def test_new(self):\n        class Event:\n' + fields
+        addition += '            @property\n            def ' + getter + '(self):\n                raise ' + exception + '()\n'
+        addition += '        context = types.SimpleNamespace(lookup=lambda key: types.SimpleNamespace(data="selected"))\n'
+        addition += ('        event = types.SimpleNamespace(data=Event(), key="key")\n' if wrapped else '        event = Event()\n')
+        return addition + '        self.assertEqual(select_label(context, event), "selected")\n'
+
+    def test_replay_decodes_closed_getters_on_the_actual_receiver_without_executing_them(self):
+        for constructor in (False, True):
+            addition = self.getter_addition(constructor=constructor)
+            self.assertEqual(self.replay(addition)['status'], 'matched', addition)
+            # Planning remains restricted to the original explicit recipe set.
+            self.assertEqual(seed_inputs(TESTS + addition, 'sample', 'select_label'), seed_inputs(TESTS, 'sample', 'select_label'))
+
+    def test_replay_rejects_a_getter_object_stored_inside_the_requested_attribute(self):
+        self.assertEqual(self.replay(self.getter_addition(wrapped=True))['status'], 'contradicted')
+        self.assertEqual(self.replay(self.getter_addition(getter='other'))['status'], 'contradicted')
+        self.assertEqual(self.replay(self.getter_addition(exception='RuntimeError'))['status'], 'contradicted')
+        self.assertEqual(self.replay(self.getter_addition(), 'false')['status'], 'contradicted')
+
+    def test_replay_getters_keep_unknown_binding_inheritance_setters_and_executable_setup_unknown(self):
+        marker = self.root / 'getter-must-not-execute.txt'
+        addition = self.getter_addition()
+        unsafe = [addition.replace('class Event:', 'class Event(object):'),
+                  addition.replace('raise Exception()', 'raise make_exception()'),
+                  addition.replace('class Event:', 'class Exception:').replace('event = Event()', 'event = Exception()'),
+                  addition.replace('class Event:', 'class property:').replace('event = Event()', 'event = property()'),
+                  addition.replace('class Event:', 'class Event:\n            marker = open(' + repr(str(marker)) + ', "w")'),
+                  addition.replace('def data(self):', 'def data(self, x=side_effect()):'),
+                  addition.replace('        event = Event()', '        Event = Other\n        event = Event()'),
+                  addition.replace('        event = Event()', '        event = Event()\n        event.data = None'),
+                  addition.replace('        event = Event()', '        event = Event()\n        alias = event\n        alias.key = "changed"'),
+                  addition.replace('        event = Event()', '        event = Event()\n        Exception = ValueError'),
+                  addition.replace('            @property', '            @unknown_decorator'),
+                  addition.replace('        event = Event()', '        event = Event()\n        property = other')]
+        unsafe.append(addition.replace('        context = types.SimpleNamespace',
+                      '            @data.setter\n            def data(self, value):\n                pass\n        context = types.SimpleNamespace'))
+        for candidate in unsafe:
+            self.assertEqual(self.replay(candidate)['status'], 'unknown', candidate)
+        self.assertFalse(marker.exists())
+
     def test_replay_does_not_decode_rebound_aliases_or_unrelated_class_side_effects(self):
         addition = '\n    def test_new(self):\n        types = None\n        self.assertEqual(select_label(None, None), None)\n'
         self.assertEqual(self.replay(addition)['status'], 'unknown')
@@ -146,6 +189,9 @@ class ParameterFixtureExperimentsTests(unittest.TestCase):
                                 "selected = types.SimpleNamespace(data='selected')\n        context.lookup = lambda key: selected")
         self.assertFalse(seed_inputs(shared, 'sample', 'select_label'))
         self.assertFalse(seed_inputs(captured, 'sample', 'select_label'))
+        aliased = TESTS.replace('        result = select_label',
+                               '        alias = event\n        alias.data = None\n        result = select_label')
+        self.assertEqual(plan(self.payload(tests=aliased))['status'], 'unsupported')
 
     def test_fingerprint_survives_renaming_and_worker_rechecks_the_current_plan(self):
         data = self.payload()

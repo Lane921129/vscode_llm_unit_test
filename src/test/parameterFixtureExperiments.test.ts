@@ -76,6 +76,7 @@ test('parameter fixtures execute exact controls and validate identity, hashes an
         const instruction = parameterFixtureReplayInstruction(handoff);
         assert.match(instruction, /READING event\.data must raise built-in Exception\(\)/);
         assert.match(instruction, /@property def data\(self\)/);
+        assert.match(instruction, /instance AS the owner of data/);
         assert.match(instruction, /EXACT CONTROL READ SUMMARY/);
         assert.match(instruction, /fallback: fresh factory return "fallback"/);
         assert.match(instruction, /Observed return with those controls: "fallback"/);

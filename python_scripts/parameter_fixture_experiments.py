@@ -47,14 +47,80 @@ def combine(terms):
     return seen
 
 
-def recipe(node, bindings, aliases, depth=0):
+def getter_fixture(node, rebound):
+    """Decode a closed test-owned getter class for static replay checks only.
+
+    No class body, descriptor, constructor or annotation is executed. Unknown
+    inheritance, setters, setup or name binding must remain unknown.
+    """
+    checked(not node.bases and not node.keywords and not node.decorator_list
+            and not getattr(node, 'type_params', []), 'fixture-getter-class')
+    checked(not rebound.intersection({'property', *FAULTS}), 'fixture-getter-binding')
+    attributes, faults, members, initialized = {}, {}, set(), set()
+
+    def statements(body):
+        return [item for item in body if not (isinstance(item, ast.Pass)
+                or isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str))]
+
+    def field(value):
+        try:
+            literal = ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError):
+            raise Unsupported('fixture-getter-field') from None
+        checked(type(literal) in (type(None), bool, int, float, str, bytes), 'fixture-getter-field')
+        encoded = snapshot_value(literal)
+        checked(encoded['replayable'], 'fixture-getter-field')
+        return {'kind': 'literal', 'value': encoded}
+
+    for member in statements(node.body):
+        if isinstance(member, ast.Assign):
+            checked(len(member.targets) == 1 and isinstance(member.targets[0], ast.Name), 'fixture-getter-field')
+            key = member.targets[0].id
+            checked(simple_name(key) and key not in members and key not in {'property', *FAULTS}, 'fixture-getter-member')
+            attributes[key] = field(member.value)
+            members.add(key)
+            continue
+        checked(isinstance(member, ast.FunctionDef) and member.name not in members, 'fixture-getter-method')
+        args = member.args
+        checked(not member.returns and not member.type_comment and not getattr(member, 'type_params', [])
+                and not args.posonlyargs and len(args.args) == 1
+                and not args.args[0].annotation and args.args[0].arg not in {'property', *FAULTS}
+                and not args.defaults and not args.kwonlyargs and not args.vararg and not args.kwarg, 'fixture-getter-signature')
+        members.add(member.name)
+        body = statements(member.body)
+        if member.name == '__init__':
+            checked(not member.decorator_list, 'fixture-getter-constructor')
+            for assignment in body:
+                checked(isinstance(assignment, ast.Assign) and len(assignment.targets) == 1, 'fixture-getter-constructor')
+                target = assignment.targets[0]
+                checked(isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                        and target.value.id == args.args[0].arg and simple_name(target.attr)
+                        and target.attr not in initialized, 'fixture-getter-constructor')
+                initialized.add(target.attr)
+                attributes[target.attr] = field(assignment.value)
+            continue
+        checked(simple_name(member.name) and len(member.decorator_list) == 1
+                and isinstance(member.decorator_list[0], ast.Name) and member.decorator_list[0].id == 'property'
+                and len(body) == 1 and isinstance(body[0], ast.Raise) and body[0].cause is None, 'fixture-getter-body')
+        raised = body[0].exc
+        checked(isinstance(raised, ast.Call) and isinstance(raised.func, ast.Name) and raised.func.id in FAULTS
+                and not raised.args and not raised.keywords, 'fixture-getter-exception')
+        faults[member.name] = raised.func.id
+    checked(faults and not initialized.intersection(faults) and len(attributes) + len(faults) <= 8, 'fixture-getter-members')
+    return {'kind': 'namespace', 'attributes': attributes, 'faults': faults}
+
+
+def recipe(node, bindings, aliases, depth=0, fixture_classes=None):
     checked(depth <= 6, 'fixture-depth')
     if isinstance(node, ast.Name) and node.id in bindings:
         return copy.deepcopy(bindings[node.id])
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (fixture_classes or {}):
+        checked(not node.args and not node.keywords, 'fixture-getter-constructor')
+        return copy.deepcopy(fixture_classes[node.func.id]), {id(node)}
     if isinstance(node, ast.Call) and dotted(node.func) in aliases:
         kind = aliases[dotted(node.func)]
         checked(not node.args and len(node.keywords) <= 8 and all(k.arg for k in node.keywords), 'fixture-constructor')
-        terms = [recipe(k.value, bindings, aliases, depth + 1) for k in node.keywords]
+        terms = [recipe(k.value, bindings, aliases, depth + 1, fixture_classes) for k in node.keywords]
         refs = combine(terms) | {id(node)}
         if kind == 'namespace':
             checked(all(simple_name(k.arg) for k in node.keywords), 'fixture-member')
@@ -71,7 +137,7 @@ def recipe(node, bindings, aliases, depth=0):
         checked(not any(isinstance(n, ast.Name) and n.id in names for n in ast.walk(node.body)), 'fixture-lambda-input-dependent')
         # A factory must create its object on each call; returning an existing
         # object would introduce shared identity which this protocol cannot encode.
-        body, refs = recipe(node.body, bindings, aliases, depth + 1)
+        body, refs = recipe(node.body, bindings, aliases, depth + 1, fixture_classes)
         checked(not refs.intersection(set().union(*(v[1] for v in bindings.values()))), 'fixture-lambda-captured-object')
         return {'kind': 'callable', 'mode': 'factory', 'parameters': names, 'returns': body}, {id(node)}
     try:
@@ -83,7 +149,7 @@ def recipe(node, bindings, aliases, depth=0):
     return {'kind': 'literal', 'value': encoded}, {id(node)} if type(value) in (list, dict, set) else set()
 
 
-def seed_inputs(code, module, target, diagnostics=None, include_literals=False):
+def seed_inputs(code, module, target, diagnostics=None, include_literals=False, include_getters=False):
     tree = ast.parse(code)
     aliases, targets, harnesses = {}, set(), {'unittest.TestCase'}
     imported = set()
@@ -129,9 +195,17 @@ def seed_inputs(code, module, target, diagnostics=None, include_literals=False):
             continue
         for method in cls.body:
             try:
-                bindings = {}
+                bindings, fixture_classes = {}, {}
+                rebound = imported | {item.id for item in ast.walk(method) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)}
+                rebound.update(item.name for item in ast.walk(tree) if isinstance(item, ast.ClassDef))
+                rebound.update(arg.arg for arg in method.args.posonlyargs + method.args.args + method.args.kwonlyargs)
                 for statement in method.body:
                     if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+                        continue
+                    if include_getters and isinstance(statement, ast.ClassDef):
+                        checked(statement.name not in bindings and statement.name not in fixture_classes
+                                and statement.name not in roots, 'fixture-getter-binding')
+                        fixture_classes[statement.name] = getter_fixture(statement, rebound)
                         continue
                     calls = [n for n in ast.walk(statement) if isinstance(n, ast.Call) and dotted(n.func) in targets]
                     if calls:
@@ -143,7 +217,8 @@ def seed_inputs(code, module, target, diagnostics=None, include_literals=False):
                             and statement.value.args and statement.value.args[0] is call)
                         checked(direct, 'fixture-target-call-expression')
                         checked(len(call.args) <= 6 and len(call.keywords) <= 6 and all(k.arg for k in call.keywords), 'fixture-call-signature')
-                        terms = [recipe(n, bindings, aliases) for n in call.args] + [recipe(k.value, bindings, aliases) for k in call.keywords]
+                        terms = [recipe(n, bindings, aliases, fixture_classes=fixture_classes) for n in call.args]
+                        terms += [recipe(k.value, bindings, aliases, fixture_classes=fixture_classes) for k in call.keywords]
                         combine(terms)
                         args = [t[0] for t in terms[:len(call.args)]]
                         kwargs = {k.arg: t[0] for k, t in zip(call.keywords, terms[len(call.args):])}
@@ -152,15 +227,17 @@ def seed_inputs(code, module, target, diagnostics=None, include_literals=False):
                         break
                     checked(isinstance(statement, ast.Assign) and len(statement.targets) == 1, 'fixture-setup-statement')
                     assigned = statement.targets[0]
-                    value = recipe(statement.value, bindings, aliases)
+                    value = recipe(statement.value, bindings, aliases, fixture_classes=fixture_classes)
                     if isinstance(assigned, ast.Name):
-                        checked(assigned.id not in roots, 'fixture-import-rebound')
+                        checked(assigned.id not in roots and assigned.id not in fixture_classes, 'fixture-import-rebound')
+                        checked(not (isinstance(statement.value, ast.Name) and value[1]), 'shared-fixture-reference')
                         bindings[assigned.id] = value
                     else:
                         checked(isinstance(assigned, ast.Attribute) and isinstance(assigned.value, ast.Name)
                                 and assigned.value.id in bindings and simple_name(assigned.attr), 'fixture-assignment')
                         current, refs = bindings[assigned.value.id]
                         checked(current['kind'] == 'namespace', 'fixture-assignment-receiver')
+                        checked(assigned.attr not in current.get('faults', {}), 'fixture-getter-assignment')
                         combine([(current, refs), value])
                         current['attributes'][assigned.attr] = value[0]
                         checked(len(current['attributes']) <= 8, 'fixture-member-budget')
@@ -438,10 +515,22 @@ def check_replay(payload):
         # the decoder below separately proves the canonical import binding.
         checked(sum(isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] == expected['target']
                     for node in ast.walk(added[0])) == 1, 'fixture-replay-call-scope')
-        values = seed_inputs(ast.unparse(tree), payload['module'], expected['target'], include_literals=True)
+        values = seed_inputs(ast.unparse(tree), payload['module'], expected['target'], include_literals=True, include_getters=True)
         checked(len(values) == 1, 'fixture-replay-unknown-setup')
         actual = values[0]
-        if canonical(actual) == canonical(expected['inputs']):
+        def reads(value):
+            # A getter overrides storage at its owner; an object stored inside
+            # that attribute does not move the getter to the outer receiver.
+            if isinstance(value, dict):
+                result = {key: reads(item) for key, item in value.items()}
+                if value.get('kind') == 'namespace':
+                    result['attributes'] = {key: reads(item) for key, item in value['attributes'].items()
+                                            if key not in value.get('faults', {})}
+                return result
+            if isinstance(value, list):
+                return [reads(item) for item in value]
+            return value
+        if canonical(reads(actual)) == canonical(reads(expected['inputs'])):
             output.update(status='matched', reasonCode='fixture-replay-matched')
             return output
         fn = target_node(source, expected['target'])
@@ -458,12 +547,13 @@ def check_replay(payload):
         else:
             member = variation['path'][-1]
             attributes = current['attributes']
-            # A decoded SimpleNamespace has neither custom getters nor dynamic
-            # attribute lookup. Literal/absent members cannot replay a fault.
-            mismatch = variation['operation'] == 'raise'
-            mismatch = mismatch or variation['operation'] == 'remove' and member in attributes
+            faults = current.get('faults', {})
+            # Only a closed property on this exact receiver can replay a read
+            # fault. A nested property's object or a different member cannot.
+            mismatch = variation['operation'] == 'raise' and faults.get(member) != variation['exception']
+            mismatch = mismatch or variation['operation'] == 'remove' and (member in attributes or member in faults)
             mismatch = mismatch or variation['operation'] == 'false' and (
-                member not in attributes or attributes[member] != {'kind': 'literal', 'value': snapshot_value(None)})
+                member in faults or member not in attributes or attributes[member] != {'kind': 'literal', 'value': snapshot_value(None)})
             if mismatch:
                 output.update(status='contradicted', reasonCode='fixture-replay-input-mismatch')
     except (Unsupported, SyntaxError, ValueError, TypeError, KeyError, RecursionError):
