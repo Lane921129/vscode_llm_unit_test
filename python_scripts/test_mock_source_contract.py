@@ -93,6 +93,27 @@ class MockSourceContractTests(unittest.TestCase):
         target_patch = candidate('sample.target')
         self.assertFalse(validate_bindings(target_patch, self.context())['valid'])
 
+    def test_from_import_class_binding_can_be_replaced_without_claiming_provider_equivalence(self):
+        fragment = 'def target():\n    return clock.now()\n'
+        source = 'from datetime import datetime as clock\n' + fragment
+        code = ('import unittest\nfrom unittest.mock import patch\nimport sample\n'
+                'class Cases(unittest.TestCase):\n    def test_value(self):\n'
+                '        controlled = object()\n        with patch("sample.clock") as clock_stub:\n'
+                '            clock_stub.now.return_value = controlled\n'
+                '            self.assertIs(sample.target(), controlled)\n'
+                '            clock_stub.now.assert_called_once_with()\n')
+        context = self.context(source, source=fragment)
+        self.assertTrue(validate_bindings(code, context)['valid'])
+        self.assertIn('sample.clock', self.scaffold(source)['namespace_patches'])
+        self.assertFalse(validate_bindings(code.replace('sample.clock', 'datetime.datetime'), context)['valid'])
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, 'sample.py').write_text(source, encoding='utf-8')
+            Path(folder, 'generated.py').write_text(code, encoding='utf-8')
+            run = subprocess.run([sys.executable, '-B', '-m', 'unittest', 'generated'], cwd=folder,
+                                 capture_output=True, text=True, encoding='utf-8', timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn('Ran 1 test', run.stderr)
+
     def test_class_member_source_selection_has_no_same_named_module_fallback(self):
         source = 'import sqlite3 as sql\nclass Owner:\n    @staticmethod\n    def target():\n        return sql.connect(":memory:")\n'
         code = candidate().replace('sample.target()', 'sample.Owner.target()').replace('sample.DB_NAME', '":memory:"')
@@ -392,6 +413,20 @@ class MockSourceContractTests(unittest.TestCase):
         context = {'module': 'sample', 'target': 'target', 'source': source,
                    'moduleSource': source, 'requireMockBehavior': True, 'requireTargetBehavior': True}
         self.assertTrue(validate_bindings(code, context)['valid'])
+
+    def test_recognized_from_import_namespace_does_not_hide_a_target_call_before_the_patch(self):
+        fragment = 'def target():\n    return clock.now()\n'
+        source = 'from datetime import datetime as clock\n' + fragment
+        code = candidate(body='sample.target()\nwith patch("sample.clock") as dep:\n'
+                              '    dep.now.assert_called_once_with()\n')
+        result = validate_bindings(code, self.context(source, source=fragment))
+        self.assertFalse(result['valid'])
+        self.assertNotIn('Unrecognized or non-use-point patch target(s): sample.clock', result['reason'])
+        self.assertIn('Recognized source-bound dependency namespace(s): sample.clock', result['reason'])
+        self.assertIn('inside the active patch scope', result['reason'])
+        controlled = candidate(body='with patch("sample.clock") as dep:\n'
+                                    '    sample.target()\n    dep.now.assert_called_once_with()\n')
+        self.assertTrue(validate_bindings(controlled, self.context(source, source=fragment))['valid'])
 
     def test_datetime_patch_rejection_requires_an_unchanged_current_source_binding(self):
         fragment = 'def target():\n    return datetime.now()\n'

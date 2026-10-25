@@ -142,6 +142,25 @@ class MockNamespaceBehaviorTests(unittest.TestCase):
                     self.assertEqual(source_namespace_use_points({'module': 'package.sample', 'target': target,
                         'className': 'Worker', 'source': source, 'moduleSource': module_source}), {})
 
+    def test_from_import_member_binding_is_controlled_at_the_application_not_the_provider(self):
+        source = 'def target():\n    return clock.now()\n'
+        module_source = 'from datetime import datetime as clock\n' + source
+        imports = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
+        body = 'with patch("sample.clock") as controlled:\n    target()\n    controlled.now.assert_called_once_with()'
+        self.assertTrue(self.check(body, imports=imports, source=source, module_source=module_source))
+        self.assertFalse(self.check(body.replace('sample.clock', 'datetime.datetime'), imports=imports,
+                                    source=source, module_source=module_source))
+        self.assertFalse(self.check(body.replace('controlled.now.assert_called_once_with()', 'controlled.unused.assert_not_called()'),
+                                    imports=imports, source=source, module_source=module_source))
+        for invalid in (module_source + '\nclock = object()\n', 'from somewhere import *\n' + module_source):
+            self.assertFalse(self.check(body, imports=imports, source=source, module_source=invalid))
+
+    def test_from_import_package_alias_cannot_patch_the_selected_owner(self):
+        source = 'def target(self):\n    return dep.other()\n'
+        module_source = 'from package.sample import Worker as dep\nclass Worker:\n' + ''.join('    ' + line + '\n' for line in source.splitlines())
+        self.assertEqual(source_namespace_use_points({'module': 'package.sample', 'target': 'target',
+            'className': 'Worker', 'source': source, 'moduleSource': module_source}), {})
+
 
 if __name__ == '__main__':
     unittest.main()

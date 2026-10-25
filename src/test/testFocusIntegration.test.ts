@@ -8,7 +8,7 @@ import { estimatePromptTokens } from '../prompts/promptBudget';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
 
-async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' | 'shells' = 'none', unknownFixture = false, preferredCompletion = false) {
+async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' | 'shells' | 'scope' = 'none', unknownFixture = false, preferredCompletion = false) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-seed-output-'));
     const source = path.join(directory, 'sample.py');
     fs.writeFileSync(source, unknownFixture ? 'def increment(value: object):\n    return value.amount\n'
@@ -82,7 +82,11 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         }
         if (repetition !== 'none') {
             if (writerAttempts === 1 || repetition === 'persistent') {
-                const response = repetition === 'shells'
+                const response = repetition === 'scope'
+                    ? '```python\nimport unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
+                        + '    def test_one(self):\n        self.assertEqual(increment(1), 2)\n'
+                        + '    def test_two(self):\n        self.assertEqual(increment(2), 3)\n```\n'
+                    : repetition === 'shells'
                     ? '```python\nimport unittest\nclass Tests(unittest.TestCase):\n    def test_seed(self):\n        # output not converged\n```\n'.repeat(12)
                     : '# output not converged\n'.repeat(40);
                 return Response.json({ response, done: true, done_reason: 'length' });
@@ -144,9 +148,10 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         }
         if (repetition !== 'none') {
             const failures = events.filter(event => event.stage === 'model-request' && event.status === 'error');
-            assert.equal(failures[0].detail.outputDiagnosis, repetition === 'shells' ? 'repetitive-test-shells' : 'repetitive-without-tests');
+            assert.equal(failures[0].detail.outputDiagnosis, repetition === 'scope' ? 'seed-scope-overrun'
+                : repetition === 'shells' ? 'repetitive-test-shells' : 'repetitive-without-tests');
             assert.equal(failures[0].detail.responsePreview.executable, false);
-            assert.ok(failures[0].detail.responsePreview.samples.some((sample: any) => sample.text.includes('output not converged')));
+            if (repetition !== 'scope') { assert.ok(failures[0].detail.responsePreview.samples.some((sample: any) => sample.text.includes('output not converged'))); }
             assert.equal(events.filter(event => event.status === 'output-format-retry').length, 1);
             assert.equal(events.filter(event => event.stage === 'writer-seed' && event.status === 'completion-selected').length, 1);
             assert.ok(!events.some(event => event.status === 'output-budget-grown'));
@@ -156,7 +161,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
             const failureReport = artifacts.find(name => path.basename(name) === 'failure_report.md' && !name.includes('loop'))!;
             const report = fs.readFileSync(path.join(output, failureReport), 'utf8');
             assert.match(report, /模型輸出失敗診斷|Model output failure diagnostics/);
-            assert.match(report, /output not converged/);
+            assert.match(report, repetition === 'scope' ? /單一種子工作範圍|outside the single-test seed scope/ : /output not converged/);
             const roundFailure = artifacts.find(name => /loop[\\/]1[\\/]failure_report\.md$/.test(name))!;
             assert.doesNotMatch(fs.readFileSync(path.join(output, roundFailure), 'utf8'),
                 /本輪沒有記錄失敗事件|No failure events were recorded/);
@@ -210,6 +215,10 @@ test('explicit code completion starts on the first Writer request while Analyst 
     () => verifyFocusedWorkflow(false, true, 'none', false, true));
 test('repetitive preferred code completion falls back once to instruction mode without growing output',
     () => verifyFocusedWorkflow(false, true, 'shells', false, true));
+test('a multi-method seed at the output limit is corrected once instead of allocating a larger suite',
+    () => verifyFocusedWorkflow(false, true, 'scope'));
+test('a preferred completion that expands into a suite switches once back to the original instruction scope',
+    () => verifyFocusedWorkflow(false, true, 'scope', false, true));
 test('a second repetitive Writer output stops without another retry or executing partial output',
     () => verifyFocusedWorkflow(false, true, 'persistent'));
 test('a truncated code continuation never becomes a candidate despite its complete-looking assertion',

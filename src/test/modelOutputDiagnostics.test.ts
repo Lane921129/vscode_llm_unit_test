@@ -79,6 +79,26 @@ test('excerpts preserve useful repetition while excluding complete replies, prom
     assert.doesNotMatch(JSON.stringify(readModelOutputPreview({ ...preview, raw: 'ENVELOPE_NOT_SAVED' })), /ENVELOPE_NOT_SAVED/);
 });
 
+test('a host-owned seed scope treats multiple method signatures as scope overrun even when assertions are present', () => {
+    const shape = { version: 'output-shape-v1', sampleComplete: true, nonemptyLines: 151, repeatedLines: 135,
+        pythonFences: 2, testMethods: 11, assertionCalls: 24 };
+    assert.equal(diagnoseModelOutput(shape), 'test-structure-present', 'ordinary full-suite output keeps the existing route');
+    assert.equal(diagnoseModelOutput(shape, { singleTestSeed: true }), 'seed-scope-overrun');
+    assert.equal(diagnoseModelOutput({ ...shape, testMethods: 1 }, { singleTestSeed: true }), 'test-structure-present');
+    assert.equal(diagnoseModelOutput({ ...shape, sampleComplete: false }, { singleTestSeed: true }), 'unknown');
+    assert.match(writerOutputFormatCorrection(true, 'seed-scope-overrun'), /multiple test methods outside/);
+    const previous = getLanguage();
+    try {
+        setLanguage('en');
+        const diagnostic = failure('```python\nclass Cases(unittest.TestCase):\n    def test_one(self):\n        self.assertEqual(1, 1)\n'
+            + '    def test_two(self):\n        self.assertEqual(2, 2)\n```');
+        const report = renderModelOutputDiagnostics([{ sequence: 1, stage: 'model-request', status: 'error',
+            detail: { role: 'writer', ...diagnostic, outputScope: 'single-test-seed' } }]);
+        assert.match(report, /outside the single-test seed scope/);
+        assert.doesNotMatch(report, /[\u3400-\u9fff]/);
+    } finally { setLanguage(previous); }
+});
+
 test('formal length errors include a bounded diagnostic excerpt without provider envelopes or executable content', () => {
     const diagnostic = failure('Repeated diagnostic phrase\n'.repeat(40), {});
     assert.equal(diagnostic.reasonCode, 'output-token-limit');

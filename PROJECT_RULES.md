@@ -2,10 +2,15 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+## 2026-10-25 種子範圍恢復與依賴綁定
+
+- 當 host 已明確持有初始單測 seed 範圍，完整 length 的詞法樣本有多個測試方法簽名時，標為 `seed-scope-overrun`；即使已有斷言，也使用既有唯一格式恢復，不為完成整份 suite 增額。未知樣本、單方法、完整候選修訂及補測不借此 scope；詞法計數不是有效測試數。原來源／證據、floor、期限與最多兩次保持。
+- 未重綁且與完整來源中唯一目標一致的絕對 `from import`，可在應用的 canonical 依賴綁定位置替換，僅認來源實際使用成員的 Mock 斷言。不據此宣稱 provider 屬性 patch 等價；wildcard、重綁、動態 namespace、target／owner 及指回它們的 package alias 仍拒絕。合法 namespace 位置但未證明觀察時須保留失敗，不能誤報位置未知；真目標仍須在 patch 生效時呼叫。
+
 ## 2026-10-25 重複測試外框恢復
 
 - `writerSeedPromptMode` 是使用者明確的本機 Writer 初始種子偏好，於 run 啟動時固定；預設 instruction，明選 code-completion 時從首問使用無 body 的 canonical 外框與完整可逆註解證據。full／execution 初始種子共用；其他角色、完整修訂及新增補測不借此 scope，未知外框保持指令模式，不按模型名稱判斷能力。續寫仍須明確 stop。偏好續寫後若完整 length 高度重複，既有唯一恢復切回原完整指令契約；不能層層重包提示、增設第三問或改寫模型內容。
-- 完整 length 回覆高度重複、至少兩個 `test_` 簽名及四個 Python fence，且沒有可辨識 `self.assert*` 時，判為 `repetitive-test-shells`，優先使用原有唯一格式／seed 續寫恢復，不僅因方法外框存在就提高輸出額度。單方法 setup、已有斷言、樣本不完整或未達重複門檻保留既有路由；詞法分類不授予 AST、執行或品質批准。
+- 完整 length 回覆高度重複、至少兩個 `test_` 簽名及四個 Python fence，且沒有可辨識 `self.assert*` 時，判為 `repetitive-test-shells`，優先使用原有唯一格式／seed 續寫恢復，不僅因方法外框存在就提高輸出額度。除上節明確單一 seed 超出範圍外，單方法 setup、已有斷言、樣本不完整或未達重複門檻保留既有路由；詞法分類不授予 AST、執行或品質批准。
 - 恢復仍保留完整必要證據、原輸出 floor、原期限與兩次上限，不能採用截斷前綴。歷史節錄無法還原原文，不把外框次數冒充有效測試方法數。
 
 ## 2026-10-25 執行模式的來源片段修復

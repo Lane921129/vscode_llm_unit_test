@@ -20,11 +20,13 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
         if (event.status !== 'error' || d.reasonCode !== 'output-token-limit') { continue; }
         const shape = readOutputShapeDiagnostic(d.responseShape);
         const timing = transport.get(role);
-        const diagnosis = diagnoseModelOutput(shape);
+        const diagnosis = diagnoseModelOutput(shape, { singleTestSeed: d.outputScope === 'single-test-seed' });
         const explanation = diagnosis === 'repetitive-without-tests'
             ? localize('回覆高度重複，沒有可辨識的測試方法或斷言；提高輸出額度未必能改善。')
             : diagnosis === 'repetitive-test-shells'
                 ? localize('回覆高度重複，多次出現測試方法與程式區塊外框，但沒有可辨識的 unittest 斷言；不能將外框數量當成有效生成進度。')
+            : diagnosis === 'seed-scope-overrun'
+                ? localize('詞法辨識到多個測試方法簽名，超出單一種子工作範圍；增加額度不能解決範圍偏離，這些計數不是有效測試數。')
             : diagnosis === 'test-structure-present'
                 ? localize('回覆已有可辨識的測試結構，但尚未完整結束，不能採用前綴。')
                 : diagnosis === 'no-test-structure'

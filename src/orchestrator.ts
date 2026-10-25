@@ -1285,7 +1285,8 @@ async function requestLlmApiUnlocked(
                 excludedTexts: [contractedSystemPrompt, userPrompt],
                 // Never whitelist a runtime prompt, source, fixture or candidate.
                 publicInstructionTexts: [buildWriterSeedSystemPrompt('', true), buildWriterSeedSystemPrompt('', false),
-                    buildWriterSeedSystemPrompt(''), writerOutputFormatCorrection(true), writerOutputFormatCorrection(false)]
+                    buildWriterSeedSystemPrompt(''), writerOutputFormatCorrection(true), writerOutputFormatCorrection(false),
+                    writerOutputFormatCorrection(true, 'seed-scope-overrun')]
             }, params.requestSeedCompletion);
         } else if (params.envType === 'custom') {
             const customText = getCustomChatCompletionText(resJson);
@@ -2073,6 +2074,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         let contractedSystem = addOutputContract(system, format);
         let completionPrefix = '';
         const instructionSystem = contractedSystem, instructionPrompt = prompt;
+        const singleTestSeedOutput = !sourceSelectionScope && (mode === 'full' && seedPending
+            && ['writer', 'writer-revision'].includes(role)
+            || mode === 'execution' && role === 'writer' && requestParams.requestSeedCompletion === true);
         const preferredCompletion = requestParams.envType === 'local' && role === 'writer'
             && modelSnapshot.writerSeedPromptMode === 'code-completion' && Boolean(seedPackagingPrefix)
             && (mode === 'full' && seedPending || mode === 'execution' && requestParams.requestSeedCompletion === true);
@@ -2290,11 +2294,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
                 ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; responseShape?: unknown;
                     responsePreview?: unknown; phase?: unknown; transportStarted?: unknown } : undefined;
+            const outputDiagnosis = diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic?.responseShape), { singleTestSeed: singleTestSeedOutput });
             recordRole('model-request', 'error', { ...metrics, elapsedMs: Date.now() - started,
                 category: error instanceof AnalysisStageError ? error.category : 'unknown',
                 ...(diagnostic?.reasonCode === 'output-token-limit'
                     ? { reasonCode: 'output-token-limit', outputTokenLimit: diagnostic.outputTokenLimit,
-                        outputDiagnosis: diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)),
+                        outputDiagnosis, ...(singleTestSeedOutput ? { outputScope: 'single-test-seed' } : {}),
                         ...(readModelOutputPreview(diagnostic.responsePreview)
                             ? { responsePreview: readModelOutputPreview(diagnostic.responsePreview) } : {}),
                         ...(readOutputShapeDiagnostic(diagnostic.responseShape)
@@ -2309,8 +2314,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
                 if (['writer', 'writer-revision'].includes(role)
-                    && ['repetitive-without-tests', 'repetitive-test-shells'].includes(
-                        diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)))) {
+                    && ['repetitive-without-tests', 'repetitive-test-shells', 'seed-scope-overrun'].includes(outputDiagnosis)) {
                     // A changed prompt cannot borrow timing or measured input counts
                     // from the discarded response. Reserve a complete retry allowance.
                     const recovery = planOutputRecoveryRetry(outputStage, roleBudget.requestOutputTokens || 1);
@@ -2320,7 +2324,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throw error;
                     }
                     const seed = mode === 'full' && seedPending;
-                    prompt = instructionPrompt + writerOutputFormatCorrection(seed || mode === 'execution');
+                    prompt = instructionPrompt + writerOutputFormatCorrection(seed || mode === 'execution', outputDiagnosis);
                     system = instructionSystem; contractedSystem = instructionSystem;
                     completionPrefix = '';
                     if (seed && seedPackagingPrefix && !preferredCompletion) {
@@ -2336,7 +2340,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     recordRole('model-request', 'output-format-retry', { role, ...recovery,
                         ...(preferredCompletion ? { previousWriterPromptMode: 'seed-code-completion-v1' } : {}),
                         writerPromptMode: completionPrefix ? 'seed-code-completion-v1' : 'instruction',
-                        outputDiagnosis: diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)), requestOutputTokens: roleBudget.requestOutputTokens,
+                        outputDiagnosis, requestOutputTokens: roleBudget.requestOutputTokens,
                         previousOutputTokens: diagnostic.outputTokenLimit, responseShape: readOutputShapeDiagnostic(diagnostic.responseShape),
                         retry: 1, deadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true,
                         evidencePreserved: true, discardedOutputReused: false });
@@ -2345,7 +2349,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             packagingPrefixHash: evidenceHash(completionPrefix), methodBodyAuthor: 'model',
                             evidencePreserved: true, discardedOutputReused: false, targetDeadlinePreserved: true });
                     }
-                    requestLog(localize('[輸出恢復] {0} 回覆高度重複且未形成可辨識測試；改送一次格式修正，保留原期限。', role));
+                    requestLog(outputDiagnosis === 'seed-scope-overrun'
+                        ? localize('[輸出恢復] {0} 超出單一種子範圍；改送一次格式修正，不以增額要求完成整份測試集。', role)
+                        : localize('[輸出恢復] {0} 回覆高度重複且未形成可辨識測試；改送一次格式修正，保留原期限。', role));
                     continue;
                 }
                 const stats = completedTransport?.ollama;
@@ -2810,10 +2816,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const executionNamespaceSetup = Array.isArray(namespaceOptions) && namespaceOptions.length
             && namespaceOptions.every(point => typeof point === 'string' && point.startsWith(targetImportModule + '.')
                 && !protectedUsePoints.has(point))
-            ? '\nSOURCE_MODULE_NAMESPACE_OPTIONS_V1 (source-bound imported module bindings, not target outputs):\n'
+            ? '\nSOURCE_MODULE_NAMESPACE_OPTIONS_V1 (source-bound imported dependency bindings, not target outputs):\n'
                 + JSON.stringify(namespaceOptions.map(point => ({ binding: point,
                     setup: `with patch(${JSON.stringify(point)}) as dependency_module:` })))
-                + '\nThese are alternative setup scopes, not instructions to patch every module. If a dependency module has several source-used member calls, choose its exact listed canonical binding and a distinct local alias. '
+                + '\nThese are alternative setup scopes, not instructions to patch every binding. If an imported dependency has source-used member calls, choose its exact listed canonical binding and a distinct local alias. '
                 + 'Configure only source-consumed members/return chains; keep the real target and all assertions inside that scope. '
                 + 'Assert calls only on source-used members, not the module object or invented members. '
                 + 'Dependency fixture values and meaningful assertions must still be authored by you. Never patch the selected target or its owner.\n' : '';

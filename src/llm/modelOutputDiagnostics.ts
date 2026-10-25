@@ -1,9 +1,9 @@
 import { containsCredential, WITHHELD_SENSITIVE_CONTENT } from '../pipeline/artifactSafety';
 
-export type OutputDiagnosis = 'repetitive-without-tests' | 'repetitive-test-shells' | 'test-structure-present' | 'no-test-structure' | 'unknown';
+export type OutputDiagnosis = 'repetitive-without-tests' | 'repetitive-test-shells' | 'seed-scope-overrun' | 'test-structure-present' | 'no-test-structure' | 'unknown';
 
 /** Chooses recovery only. Lexical counts never establish Python validity. */
-export function diagnoseModelOutput(value: unknown): OutputDiagnosis {
+export function diagnoseModelOutput(value: unknown, scope?: { singleTestSeed?: boolean }): OutputDiagnosis {
     if (!value || typeof value !== 'object') { return 'unknown'; }
     const shape = value as Record<string, unknown>;
     if (shape.version !== 'output-shape-v1' || shape.sampleComplete !== true
@@ -20,6 +20,7 @@ export function diagnoseModelOutput(value: unknown): OutputDiagnosis {
         if (Number(shape.testMethods) > 1 && Number.isSafeInteger(shape.pythonFences)
             && Number(shape.pythonFences) >= 4) { return 'repetitive-test-shells'; }
     }
+    if (scope?.singleTestSeed === true && Number(shape.testMethods) > 1) { return 'seed-scope-overrun'; }
     return Number(shape.testMethods) || Number(shape.assertionCalls) ? 'test-structure-present' : 'no-test-structure';
 }
 
@@ -94,9 +95,11 @@ export function readModelOutputPreview(value: unknown): ModelOutputPreview | und
         responseCharacters: data.responseCharacters, sampledLines: data.sampledLines, samples };
 }
 
-export function writerOutputFormatCorrection(seed: boolean): string {
+export function writerOutputFormatCorrection(seed: boolean, reason?: OutputDiagnosis): string {
     return '\n\nWRITER_OUTPUT_FORMAT_REPAIR_V1\n'
-        + 'The previous response reached its output cap and repeated instructions or test wrappers without recognizable unittest assertions. '
+        + (reason === 'seed-scope-overrun'
+            ? 'The previous response reached its output cap while writing multiple test methods outside the requested single-test seed scope. '
+            : 'The previous response reached its output cap and repeated instructions or test wrappers without recognizable unittest assertions. ')
         + 'Do not repeat instructions, headings, source implementation or analysis. '
         + (seed ? 'Return exactly ONE runnable unittest method and ONE real target call inside a complete test file. '
             : 'Return only the test artifact in the ORIGINAL requested scope; preserve the required baseline and repair boundaries. ')

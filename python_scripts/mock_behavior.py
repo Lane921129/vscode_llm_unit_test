@@ -60,8 +60,8 @@ def source_function(tree, context, fragment=False):
     return functions[0] if len(functions) == 1 else None
 
 
-def source_module_imports(context):
-    """Prove module-object identity from full AST, never from a name hint.
+def _source_import_bindings(context, include_from=False):
+    """Prove unchanged canonical bindings; provider equivalence excludes from-imports.
 
     A from-import copies a binding and is intentionally not an equivalent
     provider patch. Rebinding, attribute writes and dynamic namespaces revoke
@@ -79,7 +79,9 @@ def source_module_imports(context):
     if not selected or not expected or ast.dump(selected) != ast.dump(expected):
         return {}
     bindings = {}
-    direct_imports = {id(node) for node in tree.body if isinstance(node, ast.Import)}
+    direct_imports = {id(node) for node in tree.body if isinstance(node, ast.Import)
+                      or include_from and isinstance(node, ast.ImportFrom) and node.level == 0
+                      and node.module and node.module != '__future__'}
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -88,6 +90,12 @@ def source_module_imports(context):
                     bindings[name] = None
                 else:
                     bindings[name] = alias.name if alias.asname else alias.name.split('.')[0]
+        elif include_from and isinstance(node, ast.ImportFrom) and id(node) in direct_imports:
+            for alias in node.names:
+                if alias.name == '*':
+                    return {}
+                name = alias.asname or alias.name
+                bindings[name] = None if name in bindings else node.module + '.' + alias.name
     for node in ast.walk(tree):
         if isinstance(node, ast.Import) and id(node) not in direct_imports:
             for alias in node.names:
@@ -95,6 +103,8 @@ def source_module_imports(context):
         elif isinstance(node, ast.ImportFrom):
             if any(alias.name == '*' for alias in node.names):
                 return {}
+            if include_from and id(node) in direct_imports:
+                continue
             for alias in node.names:
                 bindings.pop(alias.asname or alias.name, None)
         elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
@@ -115,6 +125,11 @@ def source_module_imports(context):
                 'globals', 'locals', 'vars', 'eval', 'exec', 'setattr', 'delattr', '__import__', 'reload'}:
             return {}
     return {name: origin for name, origin in bindings.items() if origin}
+
+
+def source_module_imports(context):
+    """Only module imports prove equivalent provider-member patch identity."""
+    return _source_import_bindings(context)
 
 
 def possible_test_origins(tree):
@@ -150,11 +165,11 @@ def target_use_points(context):
     return {f"{context['module']}.{call}" for call in calls if call.split('.')[0] in roots}, isinstance(selected, ast.AsyncFunctionDef)
 
 
-def source_namespace_use_points(context, bindings=None):
-    """Canonical imported-module lookups, distinct from provider equivalence."""
+def source_namespace_use_points(context):
+    """Canonical dependency bindings, distinct from provider-member equivalence."""
     module, target, owner = (context.get(key, '') for key in ('module', 'target', 'className'))
     points, _ = target_use_points(context)
-    identities = source_module_imports(context) if bindings is None else bindings
+    identities = _source_import_bindings(context, include_from=True)
     qualified_target = target if not owner or target.startswith(owner + '.') else owner + '.' + target
     protected = {module + '.' + qualified_target}
     if owner:
@@ -194,7 +209,7 @@ def has_mock_behavior(tree, context):
     # binding remains intact. A test that replaces that binding cannot borrow
     # this proof for a simultaneous patch on the unrelated provider object.
     equivalent = source_module_imports(context)
-    namespace_points = source_namespace_use_points(context, equivalent)
+    namespace_points = source_namespace_use_points(context)
     permitted.update(namespace_points)
     revocation_aliases = possible_test_origins(tree)
 

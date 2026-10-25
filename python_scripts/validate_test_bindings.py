@@ -8,7 +8,7 @@ import io
 import textwrap
 import tokenize
 from mock_behavior import (has_mock_behavior, imports as mock_imports,
-                           source_function, source_module_imports, target_use_points)
+                           source_function, source_module_imports, source_namespace_use_points, target_use_points)
 from target_result_evidence import has_target_result_assertion
 
 
@@ -270,6 +270,7 @@ def _source_patch_facts(context):
     return {
         'parameters': [param for param in parameters if param not in module_globals],
         'use_points': use_points,
+        'namespace_points': source_namespace_use_points(context),
         'equivalent': equivalent,
         'from_imports': from_imports,
         'immutable_datetime': immutable_datetime,
@@ -454,7 +455,7 @@ def validate_bindings(code, context):
         return {'valid': False, **failure, 'repairRole': 'writer',
                 'reason': reason}
     if context.get('requireMockBehavior') and not has_mock_behavior(tree, context):
-        permitted = set(facts['use_points']) - forbidden
+        permitted = (set(facts['use_points']) | set(facts['namespace_points'])) - forbidden
         for use_point in list(permitted):
             if module and use_point.startswith(module + '.'):
                 root_call, sep, tail_call = use_point[len(module) + 1:].partition('.')
@@ -464,6 +465,11 @@ def validate_bindings(code, context):
         extra = ''
         if unpermitted:
             extra += f' Unrecognized or non-use-point patch target(s): {", ".join(unpermitted[:6])}.'
+        recognized_namespaces = [path for path in dict.fromkeys(patch_paths) if path in facts['namespace_points']]
+        if recognized_namespaces:
+            extra += (f' Recognized source-bound dependency namespace(s): {", ".join(recognized_namespaces[:6])}. '
+                      'Keep the real target call inside the active patch scope and assert on a source-used member '
+                      'of the same controlled mock; setup calls or assertions outside that scope do not prove observation.')
         if permitted:
             extra += f' Direct target use points in {qualified}: {", ".join(sorted(permitted)[:10])}.'
         elif facts['parameters']:

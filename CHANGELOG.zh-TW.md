@@ -4,6 +4,13 @@
 
 ## 2026-10-25
 
+### 單一種子超出範圍與 from-import Mock 綁定
+
+- 真實本機 Qwen3B 首問續寫車輛函式時，在1536輸出cap寫出11個方法簽名／24個斷言，既有路由誤當成進度並增加額度，最終仍未生成候選。新增 host-owned `seed-scope-overrun`，用原有唯一恢復修正單一種子範圍；不延長期限、不採截斷、不放寬正式候選 gate。單方法與完整候選修訂保留原增額行為。
+- 支援同源且未重綁的絕對 `from import` 在應用 canonical 依賴位置隔離，只認來源使用成員；provider patch 不因此視為等價，target／owner、wildcard、重綁及動態來源仍拒絕。修正已辨識 namespace 的失敗文字，分開位置合法與尚未證明 Mock 觀察。
+- 必要驗證：輸出診斷 Node7／7、兩項正式流程整合及 Mock Python50／50通過；整合使用固定模型回覆配合真實Python、Reviewer契約及builtin品質執行，不代表原Codellama實測。TypeScript、lint、生產建置及Webview語法通過，未跑全量開發回歸。
+- 車輛既有 `update_vehicle_loading` 草稿重驗仍失敗：真目標在patch前已呼叫，且把兩次execute各寫成once斷言，不能只因位置合法就算成功。完整範圍仍8檔／215目標，當次快照105執行通過、86失敗、24待生成；同Codellama13B實驗室重測仍待使用者提供新結果。
+
 ### 可選 Writer 首問程式碼續寫
 
 - 新增 `llmUnitTest.writerSeedPromptMode` 與命令「LLM Unit Test: 選擇 Writer 生成方式」，可保存 instruction／code-completion。預設保留指令模式；明選續寫後，Local Writer 在full／execution初始種子首問即以canonical無body外框及完整註解證據請模型續寫，不先耗用一次長指令失敗。Analyst、Reviewer、Bug Fixer及補測仍保持原角色請求，不依模型名稱建立例外。

@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## 種子範圍及來源依賴綁定（2026-10-25）
+
+`requestBudgetedOne` 由目前工作狀態標記 `single-test-seed`，不從提示字串或模型名稱猜測。完整 length 回覆若已寫出多個方法，即使含斷言，也以 `seed-scope-overrun` 使用原有一次格式修正；不擴大額度完成非本次範圍的 suite。首問續寫可切回原完整指令，原始指令 seed 則沿既有續寫恢復；仍重算輸入、保留 floor、同期限及兩次上限。單方法與其他 scope 維持原路由，截斷內容不當候選。
+
+`mock_behavior.py` 分開 canonical 依賴綁定與 provider 等價證明：完整來源中穩定的 `from datetime import datetime as clock` 可供 `patch("application.clock")` 隔離來源的 `clock.now()`；不能據此推定 `patch("datetime.datetime")` 會改到該拷貝綁定。兩種證明共用同源唯一目標、重綁／反射撤證及 target／owner 防護。Mock 仍須實際傳入或在生效 patch 內觀察到真目標，合法位置本身不是通過；診斷不把「未證明觀察」誤寫為「位置未知」。
+
 ## 物件配方重放核對（2026-10-24）
 
 `ParameterFixtureSession.prompt` 以 callback 交付與實際提示完全相同的一份案例副本；未容納案例不交接。`requestBudgetedOne` 在新增方法簽名前附上精確控制提醒，例如讀取哪個屬性必須拋出哪種內建例外，以及目標實際正常返回或拋例外，避免把 getter 例外誤寫成 None 值或把已捕捉的例外包成目標的 assertRaises。完整配方與來源仍保留。

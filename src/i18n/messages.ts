@@ -1,5 +1,7 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    '詞法辨識到多個測試方法簽名，超出單一種子工作範圍；增加額度不能解決範圍偏離，這些計數不是有效測試數。': 'Lexical diagnostics found multiple test method signatures outside the single-test seed scope. More output does not correct the scope; these counts are not valid test counts.',
+    '[輸出恢復] {0} 超出單一種子範圍；改送一次格式修正，不以增額要求完成整份測試集。': '[Output recovery] {0} exceeded the single-test seed scope; sending one format correction instead of expanding output for a full suite.',
     'Writer：程式碼續寫優先': 'Writer: Code completion first',
     'Writer：指令模式': 'Writer: Instruction mode',
     '選擇下次執行的 Writer 初始生成方式；不影響 Analyst 或 Reviewer。': 'Choose the next run\'s initial Writer mode; Analyst and Reviewer requests are unchanged.',
