@@ -1,5 +1,11 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    'Writer：程式碼續寫優先': 'Writer: Code completion first',
+    'Writer：指令模式': 'Writer: Instruction mode',
+    '選擇下次執行的 Writer 初始生成方式；不影響 Analyst 或 Reviewer。': 'Choose the next run\'s initial Writer mode; Analyst and Reviewer requests are unchanged.',
+    'Writer 生成方式已儲存，下次開始測試時生效。': 'Writer generation mode saved for the next run.',
+    '回覆高度重複，多次出現測試方法與程式區塊外框，但沒有可辨識的 unittest 斷言；不能將外框數量當成有效生成進度。': 'The output repeats test methods and fenced wrappers without recognizable unittest assertions. Wrapper counts do not establish useful generation progress.',
+    '模型回覆反覆輸出測試外框，沒有可辨識的 unittest 斷言（本次 num_predict={0} tokens）；未採用截斷內容，詳見失敗報告。': 'Model output repeats test wrappers without recognizable unittest assertions (num_predict={0} tokens). Truncated content was not accepted; see the failure report.',
     '模型回覆高度重複且沒有可辨識測試結構（本次 num_predict={0} tokens）；未採用或執行截斷測試，詳見失敗報告的輸出診斷。': 'Model output is highly repetitive without recognizable test structure (num_predict={0} tokens). Truncated tests were not accepted or executed; see output diagnostics in the failure report.',
     '模型回覆因長度限制未完成（本次 num_predict={0} tokens）；未採用或執行截斷測試，失敗報告另列輸出診斷與去密節錄。': 'Model output stopped at its length limit (num_predict={0} tokens). Truncated tests were not accepted or executed; see output diagnostics and redacted excerpts in the failure report.',
     '[輸出恢復] {0} 回覆高度重複且未形成可辨識測試；改送一次格式修正，保留原期限。': '[Output recovery] {0} repeated output without recognizable tests; sending one format correction within the original deadline.',

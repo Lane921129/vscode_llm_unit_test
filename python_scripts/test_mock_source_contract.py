@@ -49,6 +49,23 @@ class MockSourceContractTests(unittest.TestCase):
                 self.assertEqual(run.returncode, 0, run.stderr)
                 self.assertIn('Ran 1 test', run.stderr)
 
+    def test_canonical_module_namespace_patch_runs_real_target_and_preserves_provider_identity_rules(self):
+        code = candidate('sample.sql', body='with patch("sample.sql") as dep:\n'
+            '    controlled = object()\n    dep.connect.return_value = controlled\n'
+            '    self.assertIs(sample.target(), controlled)\n'
+            '    dep.connect.assert_called_once_with(sample.DB_NAME)\n')
+        self.assertTrue(validate_bindings(code, self.context())['valid'])
+        setup = self.scaffold(SOURCE)
+        self.assertIn('sample.sql', setup['namespace_patches'])
+        self.assertNotIn('sample.sql', self.scaffold(SOURCE + '\nsql = object()\n')['namespace_patches'])
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, 'sample.py').write_text(SOURCE, encoding='utf-8')
+            Path(folder, 'generated.py').write_text(code, encoding='utf-8')
+            run = subprocess.run([sys.executable, '-B', '-m', 'unittest', 'generated'], cwd=folder,
+                                 capture_output=True, text=True, timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn('Ran 1 test', run.stderr)
+
     def test_equivalence_requires_current_complete_source_and_an_unchanged_module_object(self):
         invalid_sources = [SOURCE.replace('import sqlite3 as sql', 'from somewhere import sql'),
                            SOURCE.replace('DB_NAME =', 'sql = object()\nDB_NAME ='),

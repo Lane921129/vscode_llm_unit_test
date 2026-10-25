@@ -54,7 +54,11 @@ export function mutationArguments(selection: SelectedMutationEngine, source: str
     target: string, className: string, stageSeconds: number): string[] {
     const args = [source, tests, '0', String(Math.min(5, stageSeconds)), target, className,
         String(stageSeconds), String(selection.workers)];
-    return selection.actual === 'builtin'
+    const execution = selection.actual === 'builtin'
         ? [pythonToolPath('mutation'), ...args, selection.operatorSetVersion]
         : [pythonToolPath('externalMutation'), selection.actual, ...args];
+    // Builtin function-body trials may defer the selected body until after the
+    // unchanged module has initialized. Mutatest still measures its own copies.
+    return selection.actual === 'builtin' && target && !className && !target.includes('.')
+        ? [...execution, '--activate-functions'] : execution;
 }

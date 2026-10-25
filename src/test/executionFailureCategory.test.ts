@@ -19,6 +19,18 @@ test('classifies execution validation separately from unknown diagnostics', () =
     assert.strictEqual(classifyExecutionFailure('unexpected diagnostic value'), 'unknown');
 });
 
+test('completed unittest failures keep business values separate from host failures', () => {
+    for (const value of ['超時 26859:22', 'timeout', 'cancelled', "No module named 'business_field'", 'HTTP 503']) {
+        const output = `FAIL: test_result (generated.Tests.test_result)\n`
+            + `AssertionError: expected value differs from ${value}\n`
+            + 'Ran 1 test in 0.015s\nFAILED (failures=1)';
+        assert.strictEqual(classifyExecutionFailure(output), 'validation');
+    }
+    assert.strictEqual(classifyExecutionFailure('執行超時 (超過 30 秒)'), 'timeout');
+    assert.strictEqual(classifyExecutionFailure("No module named 'required_package'"), 'environment');
+    assert.strictEqual(classifyExecutionFailure('HTTP 503 - service unavailable'), 'model-api');
+});
+
 test('model request diagnostics retain only numeric HTTP error statuses from the transport stage', () => {
     assert.strictEqual(modelRequestHttpStatus(new AnalysisStageError('model-api', 'model-request', 'safe',
         { httpStatus: 500, body: 'not-for-logs', headers: { authorization: 'not-for-logs' } })), 500);

@@ -4,7 +4,7 @@ import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, formatDependencyMockContract, formatSourceImport, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, formatDependencyMockContract, formatSourceImport, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { referenceRepeatedTestFile } from './roleContracts';
 
 const PURE_STDLIB_INPUT_GUIDANCE = 'For pure standard-library parsing, formatting or calculation, prefer real target calls with source-supported literal inputs. '
@@ -18,6 +18,7 @@ Read-only source/imports/signatures/constructors/dependencies. Exact target bind
 Use unittest.mock at external use points${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}; set returns/side effects per test. Assert real target result/source-supported exception/observed dependency call.
 ${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
 ${TEST_IMPORT_GUIDANCE}
+${EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE}
 For calculations without external operations, use the real target without mocks. Check inputs/units/arithmetic/rounding/every returned field; thresholds are not expected.
 Expected: reachable literals/simple source-supported relationships/test-controlled dependencies; hypotheses until executed. Invent no requirements/APIs/constructors/ambient values/exceptions. Never call/copy target for expected.
 No tautologies/weaker or removed assertions/skip/expectedFailure/swallowed exceptions/unrelated checks. No direct file/network/process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}`;
@@ -25,7 +26,7 @@ No tautologies/weaker or removed assertions/skip/expectedFailure/swallowed excep
 
 export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {
     return `EXECUTION_VERIFICATION_V1\n${code === undefined ? evidence : referenceRepeatedTestFile(evidence, code)}\n`
-        + (code !== undefined ? `\nCURRENT TEST FILE\n\`\`\`python\n${code}\n\`\`\`\nACTUAL VALIDATION FAILURE\n${referenceRepeatedTestFile(failure || '', code)}\nRepair the test setup or unsupported test hypothesis using the source evidence. For multiple failed methods, correct all supported failures together. Recheck every returned field: an earlier failed assertion can hide a later wrong expectation in the same method. Preserve inputs, fixtures, valid passing cases and assertion strength when correcting arithmetic constants. Do not edit the target or copy actual output without source justification.\n` : '\nGenerate the complete test file.\n');
+        + (code !== undefined ? `\nCURRENT TEST FILE\n\`\`\`python\n${code}\n\`\`\`\nACTUAL VALIDATION FAILURE\n${referenceRepeatedTestFile(failure || '', code)}\nRepair the test setup or unsupported test hypothesis using the source evidence. For multiple failed methods, correct all supported failures together. Recheck every returned field: an earlier failed assertion can hide a later wrong expectation in the same method. Preserve inputs, fixtures, valid passing cases and assertion strength when correcting arithmetic constants. Do not edit the target or copy actual output without source justification.\n` : '\nGenerate a complete test file with ONE useful unittest method for the first executable source-supported scenario. Use one real target call (a property read for a property target), explicit imports and the required controlled setup. Finish this small executable test first; broader case expansion belongs to a later quality pass. Return only the Python test file in one fence.\n');
 }
 
 /**

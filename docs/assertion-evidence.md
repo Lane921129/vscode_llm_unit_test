@@ -25,3 +25,11 @@
 「未知」不是批准：結構、隔離執行、Trace 基線保存、Reviewer 與突變測量仍繼續生效。這不是任意 Python 程式的形式化正確性證明。
 
 Trace 只描述觀察到的行為。要證明程式符合業務需求，還需要外部規格或契約；不能把目前程式輸出一律當成業務正確答案。
+
+## 輸入物件狀態的斷言關聯
+
+`target_result_evidence.py` 另行核對斷言是否觀察到真目標結果；這不等於上述 Trace 的預期值核實。測試自行建立且未共享的 `SimpleNamespace`，在真目標呼叫後可觀察來源明確寫入的直接屬性。來源含 `if` 時只保留所有正常完成路徑共同寫入的屬性；測試明確建立標準 `set`／`list`／`dict`，且來源呼叫對應 `add`／`remove` 等 mutator 時也算寫入，不因方法同名就推測任意物件型別。單邊分支、未寫入就返回、迴圈、反射或參數重綁不藉此取得證據。
+
+測試可使用標準 `unittest.mock.patch` context manager 控制來源直接呼叫的 helper。只接受一個明確字串使用點，不能替換受測目標或 `types.SimpleNamespace`，也不能以 `as` 重綁後沿用原物件身分；未知 helper 或測試自行改寫仍撤銷狀態證據。這只讓有相關性的測試進入執行，不提供預期答案、不證明分支已執行。完整品質模式仍須 Reviewer 及品質量測；`execution` 模式只回報已完成的隔離單元測試執行。
+
+真實回傳物件的方法結果也可延續關聯，例如 `connection = target()`、`cursor = connection.cursor()`、`row = cursor.fetchone()` 後斷言 `row`。此規則不決定 row 的正確值；任意 helper 回傳、反射、receiver 重綁或測試覆寫方法都不能藉此取得關聯。

@@ -23,6 +23,8 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
         const diagnosis = diagnoseModelOutput(shape);
         const explanation = diagnosis === 'repetitive-without-tests'
             ? localize('回覆高度重複，沒有可辨識的測試方法或斷言；提高輸出額度未必能改善。')
+            : diagnosis === 'repetitive-test-shells'
+                ? localize('回覆高度重複，多次出現測試方法與程式區塊外框，但沒有可辨識的 unittest 斷言；不能將外框數量當成有效生成進度。')
             : diagnosis === 'test-structure-present'
                 ? localize('回覆已有可辨識的測試結構，但尚未完整結束，不能採用前綴。')
                 : diagnosis === 'no-test-structure'

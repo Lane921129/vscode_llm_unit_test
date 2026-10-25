@@ -25,6 +25,35 @@ test('recovery distinguishes complete repetitive output from code progress and i
     assert.doesNotMatch(writerOutputFormatCorrection(true), /Repeating the same/);
 });
 
+test('repeated fenced test shells do not masquerade as progress, while real assertions and a single fixture retain growth', () => {
+    const wrapper = '```python\nimport unittest\nclass Tests(unittest.TestCase):\n    def test_seed(self):\n        # model has not written its test body\n```\n';
+    const diagnostic = failure(wrapper.repeat(12));
+    assert.equal(diagnoseModelOutput(diagnostic.responseShape), 'repetitive-test-shells');
+    for (const observed of [
+        { nonemptyLines: 103, repeatedLines: 87, testMethods: 7, assertionCalls: 0, pythonFences: 14 },
+        { nonemptyLines: 157, repeatedLines: 141, testMethods: 10, assertionCalls: 0, pythonFences: 21 }
+    ]) {
+        assert.equal(diagnoseModelOutput({ version: 'output-shape-v1', sampleComplete: true, ...observed }), 'repetitive-test-shells');
+    }
+    const shape = diagnostic.responseShape;
+    assert.equal(diagnoseModelOutput({ ...shape, assertionCalls: 1 }), 'test-structure-present');
+    assert.equal(diagnoseModelOutput({ ...shape, testMethods: 1 }), 'test-structure-present');
+    assert.equal(diagnoseModelOutput({ ...shape, pythonFences: 2 }), 'test-structure-present');
+    assert.equal(diagnoseModelOutput({ ...shape, pythonFences: undefined }), 'test-structure-present');
+    assert.equal(diagnoseModelOutput({ ...shape, repeatedLines: 0 }), 'test-structure-present');
+    assert.equal(diagnoseModelOutput({ ...shape, sampleComplete: false }), 'unknown');
+    const previous = getLanguage();
+    try {
+        for (const language of ['en', 'zh-tw']) {
+            setLanguage(language);
+            const report = renderModelOutputDiagnostics([{ sequence: 1, stage: 'model-request', status: 'error',
+                detail: { role: 'writer', ...diagnostic } }]);
+            assert.match(report, language === 'en' ? /Wrapper counts do not establish/ : /不能將外框數量/);
+            if (language === 'en') { assert.doesNotMatch(report, /[\u3400-\u9fff]/); }
+        }
+    } finally { setLanguage(previous); }
+});
+
 test('excerpts preserve useful repetition while excluding complete replies, prompt echoes, locations and credentials', () => {
     const response = 'Repeated explanatory line\n'.repeat(100);
     const preview = buildModelOutputPreview(response, {});

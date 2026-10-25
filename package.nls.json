@@ -1,4 +1,6 @@
 {
+  "contributes.commands.configureWriterSeedPromptMode.title": "LLM Unit Test: Choose Writer generation mode",
+  "contributes.configuration.properties.llmUnitTest.writerSeedPromptMode.description": "Local Writer seed mode: instruction preserves the model template; code-completion starts with a body-free Python wrapper and complete commented evidence. Other roles keep their normal requests. Changes apply to the next run; actual execution and quality checks remain required.",
   "contributes.configuration.properties.llmUnitTest.requireRoleQualification.description": "Optional pre-run role qualification. Off by default: generate directly without fixed capability probes. On: require matching model/endpoint/context role evidence. Actual execution, Reviewer approval and quality checks always remain required.",
   "contributes.configuration.properties.llmUnitTest.traceTimeoutSeconds.description": "Total controlled Python Trace allowance, including startup and cleanup (seconds). Default 60; always bounded by the original target deadline. This is separate from model request timeout.",
   "contributes.configuration.properties.llmUnitTest.tracePlanningTimeoutSeconds.description": "Trace import and input planning allowance (seconds). Default 15; bounded by the total Trace and target deadlines.",

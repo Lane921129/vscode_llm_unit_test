@@ -4,6 +4,20 @@ import { buildWriterAdditionRevisionPrompt, buildWriterAdditionSystemPrompt, bui
     buildWriterSeedPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
     selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from '../roles/writerPhases';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
+import { getExecutionWriterSystemPrompt } from '../roles/unittestWriter';
+
+test('execution-only seed and revision isolate helper behavior while full evidence policy stays unchanged', () => {
+    for (const prompt of [buildWriterSeedSystemPrompt('', false, true), getExecutionWriterSystemPrompt()]) {
+        assert.match(prompt, /Isolate unrelated UI\/service helpers with scoped source-use-point patches/);
+        assert.match(prompt, /Host resources prepare imports; they do not require running every helper/);
+        assert.match(prompt, /Keep source-consumed return shapes and the declared resource contract/);
+        assert.match(prompt, /Never patch the target or its owner/);
+    }
+    const full = buildWriterSeedSystemPrompt('', false);
+    assert.doesNotMatch(full, /they do not require running every helper/);
+    assert.match(full, /Never guess outputs/);
+    assert.match(full, /independent Reviewer approval remains required/);
+});
 
 test('addition packaging selects stable fresh names across all AST-proven baseline classes', () => {
     const baselineHash = 'a'.repeat(64);

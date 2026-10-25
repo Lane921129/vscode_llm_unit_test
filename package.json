@@ -42,6 +42,10 @@
     },
     "commands": [
       {
+        "command": "llm-unit-test.configureWriterSeedPromptMode",
+        "title": "%contributes.commands.configureWriterSeedPromptMode.title%"
+      },
+      {
         "command": "llm-unit-test.runCaptureAndTest",
         "title": "%contributes.commands.0.title%"
       },
@@ -69,6 +73,12 @@
     "configuration": {
       "title": "%contributes.configuration.title%",
       "properties": {
+        "llmUnitTest.writerSeedPromptMode": {
+          "type": "string",
+          "enum": ["instruction", "code-completion"],
+          "default": "instruction",
+          "description": "%contributes.configuration.properties.llmUnitTest.writerSeedPromptMode.description%"
+        },
         "llmUnitTest.traceTimeoutSeconds": {
           "type": "integer", "default": 60, "minimum": 1, "maximum": 300,
           "description": "%contributes.configuration.properties.llmUnitTest.traceTimeoutSeconds.description%"

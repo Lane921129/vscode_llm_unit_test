@@ -12,7 +12,7 @@ import sys
 import ast
 import json
 import os
-from mock_behavior import imports, dotted
+from mock_behavior import imports, dotted, source_namespace_use_points
 from ast_extractor import (function_scope_bindings, function_scope_usage, extract_parameters,
                            receiver_exclusions, method_kind as source_method_kind)
 from dependency_fixture_contract import build_dependency_fixture_contract
@@ -250,6 +250,8 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     # consumption. Preserve the default mock receiver only when the existing
     # lexical contract proves that a patched call's result is consumed again.
     target_source = ast.get_source_segment(source, target_func) or ''
+    namespace_points = source_namespace_use_points({'module': target_module, 'target': selected_method_name,
+        'className': class_name, 'source': target_source, 'moduleSource': source})
     fixture_contract = build_dependency_fixture_contract(
         target_func, target_source, func_name, set(import_bindings) | set(local_helpers))
     for patch_path, mock_name in zip(patches, mock_names):
@@ -318,6 +320,7 @@ def generate_scaffold(file_path: str, func_name: str, trace_result: dict = None,
     return {
         "scaffold": scaffold,
         "patches": patches,
+        "namespace_patches": sorted(namespace_points),
         "mock_names": mock_names,
         "func_params": func_params,
         "parameter_bindings": parameter_bindings,

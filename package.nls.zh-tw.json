@@ -1,4 +1,6 @@
 {
+  "contributes.commands.configureWriterSeedPromptMode.title": "LLM Unit Test: 選擇 Writer 生成方式",
+  "contributes.configuration.properties.llmUnitTest.writerSeedPromptMode.description": "本機 Writer 初始種子：instruction 保留模型模板；code-completion 以無測試內容的 Python 外框和完整註解證據開始續寫。其他角色保持原請求方式。下次執行生效，仍須實跑及品質驗證。",
   "contributes.configuration.properties.llmUnitTest.requireRoleQualification.description": "可選的事先角色資格要求，預設關閉：直接生成，不插入固定能力探針。開啟時須有相同模型／端點／容量的角色資格。正式候選的實際執行、Reviewer 核准與品質檢查始終保留。",
   "contributes.configuration.properties.llmUnitTest.traceTimeoutSeconds.description": "受控 Python Trace 的總時間，包含啟動與清理（秒）。預設 60 秒，仍受原目標總期限限制；與模型請求超時分開。",
   "contributes.configuration.properties.llmUnitTest.tracePlanningTimeoutSeconds.description": "Trace 匯入與輸入規劃時間（秒）。預設 15 秒，仍受 Trace 總時間及目標期限限制。",

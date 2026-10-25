@@ -68,6 +68,7 @@ const pythonTests = [
     'python_scripts/test_review_test_facts.py',
     'python_scripts/test_mutation_baseline_repair.py',
     'python_scripts/test_mutation_import_layout.py',
+    'python_scripts/test_mutation_activation.py',
     'python_scripts/test_mutation_improvement.py',
     'python_scripts/test_mutation_v2.py',
     'python_scripts/test_mutation_engine_policy.py',

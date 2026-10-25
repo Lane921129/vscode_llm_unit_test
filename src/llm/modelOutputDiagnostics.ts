@@ -1,6 +1,6 @@
 import { containsCredential, WITHHELD_SENSITIVE_CONTENT } from '../pipeline/artifactSafety';
 
-export type OutputDiagnosis = 'repetitive-without-tests' | 'test-structure-present' | 'no-test-structure' | 'unknown';
+export type OutputDiagnosis = 'repetitive-without-tests' | 'repetitive-test-shells' | 'test-structure-present' | 'no-test-structure' | 'unknown';
 
 /** Chooses recovery only. Lexical counts never establish Python validity. */
 export function diagnoseModelOutput(value: unknown): OutputDiagnosis {
@@ -10,9 +10,17 @@ export function diagnoseModelOutput(value: unknown): OutputDiagnosis {
         || ['nonemptyLines', 'repeatedLines', 'testMethods', 'assertionCalls'].some(key =>
             !Number.isSafeInteger(shape[key]) || Number(shape[key]) < 0)
         || Number(shape.repeatedLines) > Number(shape.nonemptyLines)) { return 'unknown'; }
-    if (Number(shape.testMethods) || Number(shape.assertionCalls)) { return 'test-structure-present'; }
-    return Number(shape.nonemptyLines) >= 16 && Number(shape.repeatedLines) * 5 >= Number(shape.nonemptyLines) * 4
-        ? 'repetitive-without-tests' : 'no-test-structure';
+    const repetitive = Number(shape.nonemptyLines) >= 16
+        && Number(shape.repeatedLines) * 5 >= Number(shape.nonemptyLines) * 4;
+    if (repetitive && Number(shape.assertionCalls) === 0) {
+        if (Number(shape.testMethods) === 0) { return 'repetitive-without-tests'; }
+        // Repeated fenced wrappers are not progress merely because they repeat
+        // def test_*. A single unfinished fixture or an existing assertion keeps
+        // the original growth route. This still grants no candidate validity.
+        if (Number(shape.testMethods) > 1 && Number.isSafeInteger(shape.pythonFences)
+            && Number(shape.pythonFences) >= 4) { return 'repetitive-test-shells'; }
+    }
+    return Number(shape.testMethods) || Number(shape.assertionCalls) ? 'test-structure-present' : 'no-test-structure';
 }
 
 export interface ModelOutputPreview {
@@ -88,7 +96,7 @@ export function readModelOutputPreview(value: unknown): ModelOutputPreview | und
 
 export function writerOutputFormatCorrection(seed: boolean): string {
     return '\n\nWRITER_OUTPUT_FORMAT_REPAIR_V1\n'
-        + 'The previous response reached its output cap and repeated lines without a recognizable unittest method or assertion. '
+        + 'The previous response reached its output cap and repeated instructions or test wrappers without recognizable unittest assertions. '
         + 'Do not repeat instructions, headings, source implementation or analysis. '
         + (seed ? 'Return exactly ONE runnable unittest method and ONE real target call inside a complete test file. '
             : 'Return only the test artifact in the ORIGINAL requested scope; preserve the required baseline and repair boundaries. ')

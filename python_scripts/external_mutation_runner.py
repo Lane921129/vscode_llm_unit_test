@@ -214,6 +214,11 @@ def probe_engine(engine):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    activate_functions = '--activate-functions' in argv
+    if argv.count('--activate-functions') > 1:
+        print(json.dumps({'error': 'invalid-arguments'}))
+        return 2
+    argv = [argument for argument in argv if argument != '--activate-functions']
     if len(argv) == 2 and argv[0] == '--probe':
         print(json.dumps(probe_engine(argv[1]), ensure_ascii=True))
         return 0
@@ -235,7 +240,7 @@ def main(argv=None):
         result = run_mutation_trials(source, tests, max_mutations=maximum, timeout_seconds=timeout,
                                      target_function=function, target_class=class_name,
                                      stage_timeout_seconds=stage_timeout, workers=workers,
-                                     candidate_provider=mutatest_candidates)
+                                     candidate_provider=mutatest_candidates, activate_functions=activate_functions)
         if result.get('engine') != engine:
             # Target lookup/provider failure can precede the shared runner's
             # metadata handoff. Preserve the selected engine on that failure,

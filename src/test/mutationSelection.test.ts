@@ -14,6 +14,8 @@ test('builtin selection is explicit and does not launch an external probe', asyn
     const args = mutationArguments(selected, 'source with spaces.py', 'test with spaces.py', 'compute', 'Calculator', 30);
     assert.equal(path.basename(args[0]), 'basic_mutation_runner.py');
     assert.deepEqual(args.slice(1), ['source with spaces.py', 'test with spaces.py', '0', '5', 'compute', 'Calculator', '30', '2', 'builtin-ast-v3']);
+    assert.deepEqual(mutationArguments(selected, 'source.py', 'test_source.py', 'compute', '', 30).slice(-2),
+        ['builtin-ast-v3', '--activate-functions']);
 });
 
 test('external selection retains requested engine and builds the real adapter command', async () => {

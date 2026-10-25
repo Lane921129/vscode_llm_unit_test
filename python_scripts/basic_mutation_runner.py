@@ -26,6 +26,7 @@ from import_fixtures import mutation_environment, read_plan as import_fixture_pl
 from isolated_resources import validate_resources
 from mutation_operators_v2 import VERSION as OPERATOR_SET_VERSION_V2, iter_mutations
 from mutation_operators_v3 import VERSION as OPERATOR_SET_VERSION_V3, iter_mutations as iter_mutations_v3
+from mutation_activation import BACKEND as FUNCTION_BACKEND, POLICY as ACTIVATION_POLICY, eligible as activation_eligible, write_manifest, validate_evidence as valid_activation
 
 
 COMPARISON_REPLACEMENTS = {
@@ -574,7 +575,7 @@ def trial_environment(temp_root, source_file, test_file):
     }, temp_root, source_file, layout['bindings'])
 
 
-def read_trial_result(path, expected_fixture_id=None):
+def read_trial_result(path, expected_fixture_id=None, expected_activation=None):
     """Read the guarded runner's bounded report; never infer failures from text."""
     try:
         if path.stat().st_size > 512000:
@@ -588,6 +589,8 @@ def read_trial_result(path, expected_fixture_id=None):
         return None
     if expected_fixture_id and (not isinstance(result.get('importFixtures'), dict)
             or result['importFixtures'].get('id') != expected_fixture_id):
+        return None
+    if expected_activation and not valid_activation(result.get('functionActivation'), expected_activation):
         return None
     for failure in result['testFailures']:
         if not isinstance(failure, dict) or failure.get('kind') not in ('failure', 'error', 'unexpected-success'):
@@ -603,7 +606,8 @@ def read_trial_result(path, expected_fixture_id=None):
 
 def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
                         target_function=None, target_class=None, stage_timeout_seconds=None,
-                        operator_version=OPERATOR_SET_VERSION_V2, workers=2, candidate_provider=None):
+                        operator_version=OPERATOR_SET_VERSION_V2, workers=2, candidate_provider=None,
+                        activate_functions=False):
     """Measure selected mutants without treating incomplete execution as a kill.
 
     ``total``/``errors`` remain legacy display fields. Consumers must use the
@@ -632,6 +636,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     original_test_bytes = test_file.read_bytes()
     source_hash = hashlib.sha256(original_source.encode('utf-8')).hexdigest()
     tree = ast.parse(original_source, filename=str(source_file))
+    activate_function = bool(activate_functions and target_function and not target_class and '.' not in target_function
+                             and activation_eligible(tree, target_function))
     scope = find_target_scope(tree, target_function, target_class)
     scope_name = (target_function if target_function and '.' in target_function
                   else f'{target_class + "." if target_class else ""}{target_function or "module"}')
@@ -640,7 +646,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         'importFixtureId': (import_fixture_plan() or {}).get('id'),
         'engine': 'builtin',
         'operatorSetVersion': operator_version,
-        'executionBackend': 'isolated-unittest-v1',
+        'executionBackend': FUNCTION_BACKEND if activate_function else 'isolated-unittest-v1',
+        **({'activationPolicy': ACTIVATION_POLICY} if activate_function else {}),
         'workers': workers,
         'scopeVersion': FUNCTION_SCOPE_VERSION if target_function else MODULE_SCOPE_VERSION,
         'candidateSetId': None,
@@ -743,6 +750,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             record.pop('codeChange', None)
             if code_change is not None:
                 record['codeChange'] = code_change
+            if activate_function:
+                record['variantSourceHash'] = hashlib.sha256(mutant_source.encode('utf-8')).hexdigest()
             candidates.append((record, mutant_source))
     except Exception as error:
         result['counts']['available'] = None
@@ -775,6 +784,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
         try:
             baseline_test = prepare_trial_directory(source_file, snapshot_test, baseline_root, original_source)
             baseline_environment = trial_environment(baseline_root, source_file, baseline_test)
+            baseline_activation = write_manifest(baseline_root, original_source.encode('utf-8'), target_function,
+                mutation_import_layout(source_file, baseline_test, baseline_root)['targets'], baseline_test) if activate_function else None
         except (OSError, ValueError):
             result.update(baselineStatus='error', diagnosticCode='mutation-trial-setup-failed',
                           baseline_output='Mutation trial import layout or fixture setup failed')
@@ -790,7 +801,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             baseline_started = time.monotonic()
             baseline = subprocess.run(
                 [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem,
-                 '--result-json', str(baseline_result_path)],
+                 '--result-json', str(baseline_result_path),
+                 *(['--function-mutation-manifest', str(baseline_activation)] if baseline_activation else [])],
                 cwd=baseline_root,
                 env=baseline_environment,
                 capture_output=True,
@@ -799,7 +811,11 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 errors='replace',
                 timeout=result['baselineAllocatedSeconds'],
             )
-            baseline_result = read_trial_result(baseline_result_path, result['importFixtureId'])
+            baseline_result = read_trial_result(baseline_result_path, result['importFixtureId'],
+                {'sourceHash': source_hash, 'variantHash': source_hash, 'testHash': result['testHash'], 'target': target_function}
+                if activate_function else None)
+            if activate_function and baseline_result:
+                result['baselineFunctionActivation'] = baseline_result['functionActivation']
             result['baselineImportFixtures'] = baseline_result.get('importFixtures') if baseline_result else None
             if (baseline.returncode or baseline_result is None or baseline_result.get('status') != 'passed'
                     or baseline_result['testFailures']):
@@ -867,6 +883,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             try:
                 mutant_test = prepare_trial_directory(source_file, snapshot_test, mutant_root, mutant_source)
                 mutant_environment = trial_environment(mutant_root, source_file, mutant_test)
+                activation = write_manifest(mutant_root, original_source.encode('utf-8'), target_function,
+                    mutation_import_layout(source_file, mutant_test, mutant_root)['targets'], mutant_test) if activate_function else None
             except (OSError, ValueError) as error:
                 return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
                         'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
@@ -879,7 +897,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             try:
                 completed = subprocess.run(
                     [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), mutant_test.stem,
-                     '--result-json', str(trial_result_path)],
+                     '--result-json', str(trial_result_path),
+                     *(['--function-mutation-manifest', str(activation)] if activation else [])],
                     cwd=mutant_root,
                     env=mutant_environment,
                     capture_output=True,
@@ -890,7 +909,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 )
                 # A forbidden external operation is missing test isolation,
                 # never proof that an assertion killed the mutant.
-                detail = read_trial_result(trial_result_path, result['importFixtureId'])
+                detail = read_trial_result(trial_result_path, result['importFixtureId'],
+                    {'sourceHash': source_hash, 'variantHash': candidate['variantSourceHash'],
+                     'testHash': result['testHash'], 'target': target_function} if activate_function else None)
                 status = 'ERROR'
                 if detail is not None:
                     if completed.returncode == 0 and detail.get('status') == 'passed' and not detail['testFailures']:
@@ -912,6 +933,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                       'allocatedSeconds': allocated_seconds,
                       'importFixtures': detail.get('importFixtures') if detail else None,
                       'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
+            if activate_function and detail:
+                record['functionActivation'] = detail['functionActivation']
             if status == 'KILLED':
                 record['killedBy'] = sorted({item['testId'] for item in detail['testFailures']})
                 record['testFailures'] = detail['testFailures']
@@ -960,6 +983,11 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
 
 
 if __name__ == '__main__':
+    activate_functions = '--activate-functions' in sys.argv
+    if sys.argv.count('--activate-functions') > 1:
+        print(json.dumps({'error': 'invalid-arguments'}))
+        sys.exit(2)
+    sys.argv = [argument for argument in sys.argv if argument != '--activate-functions']
     if len(sys.argv) < 3:
         print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class] [stage_timeout_seconds] [workers] [operator_version]'}))
         sys.exit(2)
@@ -972,6 +1000,6 @@ if __name__ == '__main__':
     operator_version = sys.argv[9] if len(sys.argv) >= 10 else OPERATOR_SET_VERSION_V2
     print(json.dumps(
         run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name, stage_timeout,
-                            operator_version=operator_version, workers=workers),
+                            operator_version=operator_version, workers=workers, activate_functions=activate_functions),
         ensure_ascii=True
     ))

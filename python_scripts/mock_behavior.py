@@ -150,6 +150,31 @@ def target_use_points(context):
     return {f"{context['module']}.{call}" for call in calls if call.split('.')[0] in roots}, isinstance(selected, ast.AsyncFunctionDef)
 
 
+def source_namespace_use_points(context, bindings=None):
+    """Canonical imported-module lookups, distinct from provider equivalence."""
+    module, target, owner = (context.get(key, '') for key in ('module', 'target', 'className'))
+    points, _ = target_use_points(context)
+    identities = source_module_imports(context) if bindings is None else bindings
+    qualified_target = target if not owner or target.startswith(owner + '.') else owner + '.' + target
+    protected = {module + '.' + qualified_target}
+    if owner:
+        protected.add(module + '.' + owner)
+    result = {}
+    for binding, origin in identities.items():
+        point = module + '.' + binding
+        if origin == module or binding in (target, owner):
+            continue
+        members = {value[len(point) + 1:] for value in points if value.startswith(point + '.')}
+        # Preserve self-target/owner protection even through a package alias.
+        if any(origin + '.' + member == blocked or (origin + '.' + member).startswith(blocked + '.')
+               for member in members for blocked in protected):
+            continue
+        members = {member for member in members if all(part.isidentifier() for part in member.split('.'))}
+        if members:
+            result[point] = members
+    return result
+
+
 def has_mock_behavior(tree, context):
     module = context.get('module', '')
     owner = context.get('className')
@@ -169,6 +194,8 @@ def has_mock_behavior(tree, context):
     # binding remains intact. A test that replaces that binding cannot borrow
     # this proof for a simultaneous patch on the unrelated provider object.
     equivalent = source_module_imports(context)
+    namespace_points = source_namespace_use_points(context, equivalent)
+    permitted.update(namespace_points)
     revocation_aliases = possible_test_origins(tree)
 
     def possible(node):
@@ -219,6 +246,7 @@ def has_mock_behavior(tree, context):
             mock_roots, configured_children = set(), set()
             namespace_members = {}
             mock_children = {}
+            namespace_patch_paths = {}
             serial = 0
 
             def resolve(node):
@@ -335,11 +363,26 @@ def has_mock_behavior(tree, context):
                 if value not in permitted:
                     return 0
                 serial += 1
+                if value in namespace_points:
+                    namespace_patch_paths[serial] = namespace_points[value]
                 # Configured return values/attributes need not be mocks. The
                 # patch itself is still a real Mock and supports call assertions.
                 patch_blocked[serial] = {k.arg for k in call.keywords
                                          if k.arg not in ('spec', 'spec_set', 'autospec')}
                 return serial
+
+            def namespace_assertion_allowed(node, value):
+                roots = [root for root in namespace_patch_paths if value in injected_tokens(root)]
+                if not roots:
+                    return True
+                name = dotted(node)
+                for root in roots:
+                    for prefix, bound in bindings.items():
+                        if bound == root and name.startswith(prefix + '.'):
+                            member = name[len(prefix) + 1:]
+                            if member in namespace_patch_paths[root]:
+                                return True
+                return False
 
             def is_target(call):
                 if resolve(call.func) == target_path:
@@ -370,6 +413,7 @@ def has_mock_behavior(tree, context):
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ASSERTIONS:
                     value = token(node.func.value)
                     return found or (value is not None and token(node.func) == value and value in observed and value not in manual
+                                     and namespace_assertion_allowed(node.func.value, value)
                                      and (value not in configured_children or dotted(node.func.value) in mock_roots))
                 value = token(node.func)
                 if value is not None:

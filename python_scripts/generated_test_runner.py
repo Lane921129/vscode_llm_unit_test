@@ -15,6 +15,7 @@ from target_invocation import TargetInvocationTracker, canonical_path
 from import_fixtures import evidence as import_fixture_evidence
 from isolated_resources import set_generated_test_file
 from runtime_policy import ISOLATION_EXIT_CODE, ISOLATION_MARKER, POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, guarded_runtime
+from mutation_activation import FunctionMutationActivation
 
 
 _target_tracking = False
@@ -164,6 +165,7 @@ def main(argv=None):
     parser.add_argument('--target-evidence')
     parser.add_argument('--target-run-id')
     parser.add_argument('--target-test-file')
+    parser.add_argument('--function-mutation-manifest')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args(argv)
     run_id = uuid4().hex
@@ -202,8 +204,11 @@ def main(argv=None):
     structured_result = None
     load_diagnostics = None
     observation = tracker.observe() if tracker else nullcontext()
+    activation = None
     try:
-        with observation:
+        if args.function_mutation_manifest:
+            activation = FunctionMutationActivation(args.function_mutation_manifest)
+        with activation if activation else nullcontext(), observation:
             _target_tracking = bool(tracker)
             with guarded_test_runtime() as violations:
                 # A fresh loader prevents errors from an earlier main() call
@@ -270,12 +275,17 @@ def main(argv=None):
         if tracker:
             tracker.save(args.target_evidence, 'passed' if exit_code == 0 and not violation else 'failed',
                          coverage.get_data().data_filename() if coverage else None, test_result)
+    activation_evidence = activation.evidence() if activation else None
+    if activation_evidence and activation_evidence['status'] != 'activated':
+        exit_code = 1
+        structured_result = None
     if violation:
         if args.result_json:
             with open(args.result_json, 'w', encoding='utf-8') as report:
                 json.dump({'schemaVersion': 'generated-test-result-v1', 'status': 'isolation-blocked',
                            'importFixtures': import_fixture_evidence(),
                            'testsRun': test_result['testsRun'] if test_result else 0, 'testFailures': [],
+                           **({'functionActivation': activation_evidence} if activation else {}),
                            **({'identity': result_identity(tracker)} if tracker else {})}, report)
         print(f'{ISOLATION_MARKER}: {violation}; mock the dependency at its target use point.', file=sys.stderr)
         record('completed', status='isolation-blocked', operation=violation)
@@ -289,6 +299,7 @@ def main(argv=None):
                        'importFixtures': import_fixture_evidence(),
                        'testsRun': test_result['testsRun'] if test_result else 0,
                        'testFailures': failures,
+                       **({'functionActivation': activation_evidence} if activation else {}),
                        **({'identity': result_identity(tracker)} if tracker else {}),
                        **({'loadDiagnostics': load_diagnostics} if load_diagnostics else {})}, report)
     record('completed', status='passed' if exit_code == 0 else 'failed',

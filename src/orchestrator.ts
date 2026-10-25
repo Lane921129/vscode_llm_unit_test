@@ -38,7 +38,10 @@ import { collectNumericRepairEvidence } from './pipeline/numericTestSkill';
 import { NumericEvidenceLedger } from './pipeline/numericEvidenceLedger';
 import { verificationMode, VerificationMode } from './pipeline/verificationMode';
 import { runExecutionVerification } from './pipeline/executionVerification';
+import { readSavedWriterCandidate, SavedWriterCandidateRequest } from './pipeline/savedWriterCandidate';
+import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, executionHelperRepairGuidance, sourceHelperUsePointNames, sourceLiteralRepairGuidance } from './prompts/dependencyMockContract';
 import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './roles/unittestWriter';
+import { repairSourceLiteralArgument, repairSourceMockReceiver, repairSourceTestBinding } from './pipeline/sourceLiteralArgumentRepair';
 import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
@@ -229,7 +232,7 @@ async function runMockScaffold(
     traceResult: any,
     targetModule?: string,
     pythonExecutable: string = 'python'
-): Promise<{ scaffold: string; patches: string[]; mock_names: string[]; class_name?: string | null; is_async?: boolean } | null> {
+): Promise<{ scaffold: string; patches: string[]; namespace_patches?: string[]; mock_names: string[]; class_name?: string | null; is_async?: boolean } | null> {
     const script = pythonToolPath('scaffold');
     const scriptArgs = [script, filePath, funcName];
     if (traceResult || targetModule) {
@@ -277,6 +280,7 @@ function defaultModelProfile(): ModelProfile {
 let currentModelProfile: ModelProfile = defaultModelProfile();
 let storedModelProfiles: StoredModelProfile[] = [];
 interface ModelSnapshot {
+    writerSeedPromptMode?: 'instruction' | 'code-completion';
     requireRoleQualification?: boolean;
     current: ModelProfile;
     stored: StoredModelProfile[];
@@ -364,6 +368,10 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
     const config = vscode.workspace.getConfiguration('llmUnitTest');
     const required = params.requireRoleQualification ?? config.get<unknown>('requireRoleQualification', false);
     if (typeof required !== 'boolean') { throw new AnalysisStageError('validation', 'qualification-policy', 'Invalid role qualification policy.'); }
+    const writerSeedPromptMode = config.get<unknown>('writerSeedPromptMode', 'instruction');
+    if (writerSeedPromptMode !== 'instruction' && writerSeedPromptMode !== 'code-completion') {
+        throw new AnalysisStageError('validation', 'writer-prompt-policy', 'Invalid Writer seed prompt mode.');
+    }
     const environmentLease = AnalysisEnvironmentLease.acquire(pythonEnvironmentActivity);
     if (!environmentLease) {
         const hadActiveAnalysis = analysisRuns.hasActiveRun;
@@ -376,6 +384,7 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
     const selectedParams = params.envType === 'local' ? { ...params,
         ollamaUrl: params.ollamaUrl || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434') } : params;
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
+        writerSeedPromptMode,
         requireRoleQualification: required,
         runtimeContextTokens: config.get<unknown>('runtimeContextTokens', 0),
         runtimeContextPreferences: sidebar.runtimeContextPreferencesSnapshot(),
@@ -468,6 +477,8 @@ function getContextBudget(profile: ModelProfile): number {
 interface AnalysisParams {
     requireRoleQualification?: boolean;
     validationMode?: VerificationMode;
+    /** Explicit saved AI candidate; revalidated and re-executed, never trusted as a pass. */
+    replayCandidate?: SavedWriterCandidateRequest;
     envType: 'local' | 'cloud' | 'custom';
     modelName: string;
     filePath: string;
@@ -493,7 +504,9 @@ interface AnalysisParams {
     requestContextTokens?: number;
     /** Role-owned output cap paired with the final input budget; local transport only. */
     requestOutputTokens?: number;
-    /** Internal, observed-echo recovery only; not a saved model capability. */
+    /** Optional caller-owned Ollama prompt-evaluation batch; neither context nor output limit. */
+    requestPromptBatchTokens?: number;
+    /** Internal seed completion scope; not a saved model capability. */
     requestSeedCompletion?: boolean;
     /** Internal batch inventory; never serialized with provider credentials. */
     batchJournal?: BatchJournal;
@@ -594,6 +607,15 @@ export function activate(context: vscode.ExtensionContext) {
     const environmentController = new PythonEnvironmentController(context.globalState,
         message => { void sidebarProvider.webview?.postMessage(message); });
     const importSetup = new ImportSetupController(message => { void sidebarProvider.webview?.postMessage(message); });
+    context.subscriptions.push(vscode.commands.registerCommand('llm-unit-test.configureWriterSeedPromptMode', async () => {
+        const selected = await vscode.window.showQuickPick([
+            { label: localize('Writer：程式碼續寫優先'), mode: 'code-completion' },
+            { label: localize('Writer：指令模式'), mode: 'instruction' }
+        ], { placeHolder: localize('選擇下次執行的 Writer 初始生成方式；不影響 Analyst 或 Reviewer。') });
+        if (!selected) { return; }
+        await vscode.workspace.getConfiguration('llmUnitTest').update('writerSeedPromptMode', selected.mode, vscode.ConfigurationTarget.Global);
+        await vscode.window.showInformationMessage(localize('Writer 生成方式已儲存，下次開始測試時生效。'));
+    }));
     context.subscriptions.push(importSetup, vscode.commands.registerCommand('llm-unit-test.prepareImportSetup',
         (params?: { projectRoot?: string; outputPath?: string }) => importSetup.prepare(params?.projectRoot, params?.outputPath)));
     context.subscriptions.push(vscode.commands.registerCommand('llm-unit-test.configureTestResources',
@@ -1121,6 +1143,10 @@ async function requestLlmApiUnlocked(
         || outputFormat === 'mutant-triage-json';
 
     if (params.envType === 'local') {
+        if (params.requestPromptBatchTokens !== undefined
+            && (!Number.isSafeInteger(params.requestPromptBatchTokens) || params.requestPromptBatchTokens <= 0)) {
+            throw new AnalysisStageError('validation', 'model-runtime', 'Ollama prompt batch must be a positive safe integer.');
+        }
         const baseUrl = params.ollamaUrl || 'http://127.0.0.1:11434';
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
         bodyData = {
@@ -1129,7 +1155,8 @@ async function requestLlmApiUnlocked(
                 : buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt)),
             stream: true,
             options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
-                ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}) },
+                ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}),
+                ...(params.requestPromptBatchTokens ? { num_batch: params.requestPromptBatchTokens } : {}) },
             ...(expectsJsonObject ? { format: ['semantic-json', 'review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
         };
     } else if (params.envType === 'custom') {
@@ -1646,6 +1673,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
 async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView, projectRoot: string) {
     params = { ...params, ...normalizeExecutionSettings(params) };
     const mode = verificationMode(params.validationMode);
+    if (params.replayCandidate && mode !== 'execution') {
+        throw new AnalysisStageError('validation', 'candidate-replay', 'Saved candidate replay requires explicit execution mode.');
+    }
     const gateDescription = mode === 'full' ? localize("結構、執行、覆蓋率與突變驗證") : localize("結構、真實目標呼叫與隔離執行驗證");
     throwIfExecutionCancelled();
     const modelSnapshot = currentExecution<ModelSnapshot>()?.snapshot
@@ -1979,8 +2009,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
         sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string,
         writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }, initialAttemptDeadlineAt?: number,
-        revisionWorkload?: WriterRevisionWorkload
+        revisionWorkload?: WriterRevisionWorkload, sourceSelectionScope?: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-receiver-binding'
     ): Promise<string> => {
+        if (sourceSelectionScope && (mode !== 'execution' || format !== 'text'
+            || (['test-binding', 'mock-receiver-binding'].includes(sourceSelectionScope) ? role !== 'writer-revision' : role !== 'bug-fixer'))) {
+            throw new AnalysisStageError('validation', 'source-selection-scope', 'Source selection requires its execution-only Writer or Bug Fixer task.');
+        }
         if (role === 'writer' && mode === 'full' && !writerCaseMode) {
             writerAdditionBaseline = seedPending ? undefined : checkpoints.executable?.code || bestCode || undefined;
             if (!seedPending) {
@@ -2003,7 +2037,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             system = buildWriterSeedSystemPrompt(system, seedTargetIsAsync);
             if (activeSeedCaseFacts && !prompt.includes(activeSeedCaseFacts)) { prompt += '\n\n' + activeSeedCaseFacts; }
         }
-        if (!writerCaseMode) { prompt = appendQualityEvidence(prompt); }
+        if (!writerCaseMode && !sourceSelectionScope) { prompt = appendQualityEvidence(prompt); }
         if (mode === 'full' && numericEvidence.hasEvidence && !writerCaseMode) {
             const observations = numericEvidencePrompt();
             if (!prompt.includes(observations)) { prompt += '\n\n' + observations; }
@@ -2014,7 +2048,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (focusedWorkflow && seedPending && role === 'writer' && focusedMockSetup) {
             prompt += '\n\nSOURCE MOCK SETUP (non-executable TODO guidance, not output evidence):\n' + focusedMockSetup;
         }
-        prompt += importResourcePrompt();
+        if (!sourceSelectionScope) { prompt += importResourcePrompt(); }
         if (mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
             // Finish both generation and correction with the same small task.
             // Wider focus/resource context must not become a request to expand.
@@ -2038,7 +2072,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             && ['writer', 'writer-revision'].includes(role) ? 'single-test-addition' as const : undefined;
         let contractedSystem = addOutputContract(system, format);
         let completionPrefix = '';
-        const recoveryAllowed = requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
+        const instructionSystem = contractedSystem, instructionPrompt = prompt;
+        const preferredCompletion = requestParams.envType === 'local' && role === 'writer'
+            && modelSnapshot.writerSeedPromptMode === 'code-completion' && Boolean(seedPackagingPrefix)
+            && (mode === 'full' && seedPending || mode === 'execution' && requestParams.requestSeedCompletion === true);
+        if (preferredCompletion) {
+            completionPrefix = seedPackagingPrefix;
+            prompt = writerSeedCompletionPrompt(contractedSystem, prompt, completionPrefix);
+            system = ''; contractedSystem = '';
+            recordRole('writer-seed', 'completion-selected', { version: 'seed-code-completion-v1', selection: 'configured-preference',
+                packagingPrefixHash: evidenceHash(completionPrefix), methodBodyAuthor: 'model', evidencePreserved: true });
+        }
+        const recoveryAllowed = !sourceSelectionScope && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
             && localRuntime?.ok === true;
         const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
             sharedDeadlineAt, initialAttemptDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
@@ -2192,6 +2237,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const formalAttemptStartedAt = Date.now();
         const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt, formalAttemptStartedAt);
         const metrics = { role, format, estimatedInputTokens,
+            ...(sourceSelectionScope ? { requestScope: sourceSelectionScope === 'literal-argument'
+                ? 'source-literal-selection-v1' : sourceSelectionScope === 'test-binding'
+                    ? 'source-test-binding-selection-v1' : sourceSelectionScope === 'mock-receiver-binding'
+                        ? 'source-mock-receiver-binding-selection-v1' : 'source-mock-receiver-selection-v1' } : {}),
             ...roleBudget, reservedInputTokens: correctionReserve,
             ...(writerOutputScope ? { writerOutputScope } : {}),
             ...(role === 'writer-revision' && revisionWorkload ? { revisionWorkload } : {}),
@@ -2260,7 +2309,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
                 if (['writer', 'writer-revision'].includes(role)
-                    && diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)) === 'repetitive-without-tests') {
+                    && ['repetitive-without-tests', 'repetitive-test-shells'].includes(
+                        diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)))) {
                     // A changed prompt cannot borrow timing or measured input counts
                     // from the discarded response. Reserve a complete retry allowance.
                     const recovery = planOutputRecoveryRetry(outputStage, roleBudget.requestOutputTokens || 1);
@@ -2270,20 +2320,23 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throw error;
                     }
                     const seed = mode === 'full' && seedPending;
-                    prompt += writerOutputFormatCorrection(seed);
-                    if (seed && seedPackagingPrefix) {
+                    prompt = instructionPrompt + writerOutputFormatCorrection(seed || mode === 'execution');
+                    system = instructionSystem; contractedSystem = instructionSystem;
+                    completionPrefix = '';
+                    if (seed && seedPackagingPrefix && !preferredCompletion) {
                         // A completed instruction echo is evidence for trying completion;
                         // it does not establish a permanent capability or grant execution.
                         completionPrefix = seedPackagingPrefix;
-                        prompt = writerSeedCompletionPrompt(contractedSystem, prompt, completionPrefix);
+                        prompt = writerSeedCompletionPrompt(instructionSystem, prompt, completionPrefix);
                         system = ''; contractedSystem = '';
                     }
                     recoveryMode = 'format-correction';
                     observedInputTokens = undefined;
                     recoveryTransport = undefined;
                     recordRole('model-request', 'output-format-retry', { role, ...recovery,
+                        ...(preferredCompletion ? { previousWriterPromptMode: 'seed-code-completion-v1' } : {}),
                         writerPromptMode: completionPrefix ? 'seed-code-completion-v1' : 'instruction',
-                        outputDiagnosis: 'repetitive-without-tests', requestOutputTokens: roleBudget.requestOutputTokens,
+                        outputDiagnosis: diagnoseModelOutput(readOutputShapeDiagnostic(diagnostic.responseShape)), requestOutputTokens: roleBudget.requestOutputTokens,
                         previousOutputTokens: diagnostic.outputTokenLimit, responseShape: readOutputShapeDiagnostic(diagnostic.responseShape),
                         retry: 1, deadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true,
                         evidencePreserved: true, discardedOutputReused: false });
@@ -2436,6 +2489,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 && (astContext?.calls || []).includes(item.alias || item.bound_name || item.name))
             .map((item: any) => [item.alias || item.bound_name || item.name, `${item.module}.${item.name}`])) as Record<string, string>
     };
+    const sourceMockUsePointNames = [...new Set([
+        ...Object.keys(testBindingContext.dependencies), ...sourceHelperUsePointNames(astContext)
+    ])];
     if (astContext && !astContext.error) {
         astContext.target_import_module = targetImportModule;
     }
@@ -2497,7 +2553,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     };
     const requestBudgeted: typeof requestBudgetedOne = async (requestParams, system, prompt, requestLog,
         format = 'text', role = 'writer', sharedDeadlineAt, reservedInputTokens = 0, revisionCurrentCode,
-        writerCaseMode, initialAttemptDeadlineAt, revisionWorkload) => {
+        writerCaseMode, initialAttemptDeadlineAt, revisionWorkload, sourceSelectionScope) => {
         const evidence = activeQualityTaskEvidence;
         const baseline = checkpoints.executable?.code || bestCode;
         // Candidate revisions must retain their exact execution/Reviewer finding
@@ -2507,7 +2563,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             || !baseline || !evidence || evidence.cases.length < 2
             || astContext?.class_name !== null || astContext.is_async !== false || astContext.method_kind !== 'module') {
             return requestBudgetedOne(requestParams, system, prompt, requestLog, format, role,
-                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt, revisionWorkload);
+                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt, revisionWorkload, sourceSelectionScope);
         }
         writerAdditionBaseline = baseline;
         // Every case and its bounded correction shares this family's original
@@ -2729,17 +2785,71 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             throw new AnalysisStageError('validation', 'writer-qualification',
                 localize("Auto 的 Writer 尚未通過此模型的生成探測。請先執行「測試連線」，或明確選擇手動 Tier；執行驗證模式不會改用 Trace 代替生成。"));
         }
-        const evidence = getReviewEvidence('', '', targetFuncName, astContext.args, astContext.code,
-            astContext, targetImportModule, undefined,
-            Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
-            + '\nCaller setup context (source literals are input hints, not output facts):\n'
-            + JSON.stringify((astContext.callerContexts || []).map(callerForPrompt));
+        const executionSetup = await runMockScaffold(params.filePath, params.funcName, undefined,
+            targetImportModule, pythonExecutable);
+        throwIfExecutionCancelled();
+        if (evidenceHash(fs.readFileSync(params.filePath, 'utf8')) !== journal.sourceHash
+            || !sourceVersionsCurrent(astContext.sourceVersions || preflight!.sourceVersions)) {
+            throw new AnalysisStageError('validation', 'source-changed', localize('來源版本已改變，停止使用舊證據。'));
+        }
+        const protectedUsePoints = new Set([`${targetImportModule}.${params.funcName}`,
+            ...(astContext.class_name ? [`${targetImportModule}.${astContext.class_name}`] : [])]);
+        const executionUsePoints = [...new Set([
+            ...sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`),
+            ...(executionSetup && Array.isArray(executionSetup.patches)
+                && executionSetup.patches.every(point => typeof point === 'string') ? executionSetup.patches : [])
+        ])].filter(point => !protectedUsePoints.has(point));
+        const executionMockSetup = executionUsePoints.length
+            ? '\nSOURCE MOCK USE POINTS (source-derived setup guidance, not result facts):\n'
+                + JSON.stringify(executionUsePoints)
+                + '\nFor a controlled dependency case, import unittest.mock.patch and use a with patch(...) as mock_dependency '
+                + 'context around the real target call. Configure the consumed receiver/return chain shown in the source contract. '
+                + 'Creating a local Mock or SimpleNamespace does not replace a module dependency: bind it at its exact use point. '
+                + 'The host supplies no decorator arguments or dependency values. Author setup and assertions yourself; never patch the target or owner.\n' : '';
+        const namespaceOptions = executionSetup?.namespace_patches;
+        const executionNamespaceSetup = Array.isArray(namespaceOptions) && namespaceOptions.length
+            && namespaceOptions.every(point => typeof point === 'string' && point.startsWith(targetImportModule + '.')
+                && !protectedUsePoints.has(point))
+            ? '\nSOURCE_MODULE_NAMESPACE_OPTIONS_V1 (source-bound imported module bindings, not target outputs):\n'
+                + JSON.stringify(namespaceOptions.map(point => ({ binding: point,
+                    setup: `with patch(${JSON.stringify(point)}) as dependency_module:` })))
+                + '\nThese are alternative setup scopes, not instructions to patch every module. If a dependency module has several source-used member calls, choose its exact listed canonical binding and a distinct local alias. '
+                + 'Configure only source-consumed members/return chains; keep the real target and all assertions inside that scope. '
+                + 'Assert calls only on source-used members, not the module object or invented members. '
+                + 'Dependency fixture values and meaningful assertions must still be authored by you. Never patch the selected target or its owner.\n' : '';
+        if (executionMockSetup) {
+            recordRole('writer-context', 'mock-setup-selected', { origin: 'source-use-points', executable: false,
+                patchCount: executionUsePoints.length, allModelSizes: true, validationMode: 'execution',
+                style: 'context-manager-guidance' });
+        }
+        const executionRules = dispatchTestRules(astContext.code, astContext);
+        recordRole('rule-dispatcher', 'deterministic', { ...executionRules, validationMode: 'execution' });
+        const executionEvidence: WriterEvidenceBundleV3 = {
+            schemaVersion: 'writer-evidence-v3', sourceHash: evidenceHash(astContext.code),
+            semanticGuidance: '', ruleSelection: executionRules,
+            evidencePriority: ['executed-observations', 'explicit-source-paths', 'ast-structure', 'analyst-hypotheses-and-rule-guidance']
+        };
+        const evidence = getUserPrompt(params.filePath, targetFuncName, astContext.code, 'small',
+            { ...astContext, target_import_module: targetImportModule, writerGenerationPhase: 'seed' },
+            undefined, activeModelProfile.budgetTokens, params.modelName, executionEvidence) + executionMockSetup + executionNamespaceSetup;
+        seedPackagingPrefix = writerSeedCodePrefix(targetImportModule, params.funcName, astContext);
         const accepted = await runExecutionVerification({ directory: sessionDir, artifactDirectory: roundDirectory(sessionDir, 1), file: params.filePath,
             target: params.funcName, python: pythonExecutable, env: testExecutionEnv,
             targetModule: targetImportModule,
             dependencies: astContext.sourceVersions || [], journal,
-            generate: async () => sanitizeLlmResponse(await requestBudgeted(params,
-                getExecutionWriterSystemPrompt(), getExecutionWriterPrompt(evidence), log, testGenerationResponseFormat)),
+            generate: async () => {
+                if (params.replayCandidate) {
+                    const saved = readSavedWriterCandidate(params.replayCandidate, { sourceFile: params.filePath,
+                        sourceHash: journal.sourceHash, target: params.funcName, model: params.modelName,
+                        modelIdentity: `${params.envType}/${params.modelName}` });
+                    journal.knowledge({ generationOrigin: saved.origin });
+                    recordRole('writer', 'candidate-replayed', saved.origin);
+                    return saved.code;
+                }
+                return sanitizeLlmResponse(await requestBudgeted({ ...params, requestSeedCompletion: true },
+                    buildWriterSeedSystemPrompt('', astContext.is_async, true),
+                    buildWriterSeedPrompt(getExecutionWriterPrompt(evidence), true), log, testGenerationResponseFormat));
+            },
             hooks: {
                 event: recordRole,
                 validate: async code => {
@@ -2750,15 +2860,84 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 },
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
                 revise: async (code, failure, role, attempt, repairEvidence) => {
+                    if (params.replayCandidate && params.replayCandidate.repair !== true) {
+                        throw new AnalysisStageError('validation', 'candidate-replay', failure);
+                    }
                     if (role === 'bug-fixer' && !mayUseModelAuthoredRepair) {
                         throw new AnalysisStageError('validation', 'fixer-qualification', localize("Auto 的 Bug Fixer 尚未通過資格探測；已保存失敗測試。"));
                     }
-                    const system = role === 'bug-fixer' ? getBugFixerSystemPrompt() : getExecutionWriterSystemPrompt();
+                    if (role === 'writer' && /Writer binding repair: [_\p{ID_Start}][_\p{ID_Continue}]* is undefined or read before its local binding in [_\p{ID_Start}][_\p{ID_Continue}]*\./u.test(failure)) {
+                        const bindingCandidate = await repairSourceTestBinding({ source: astContext.code,
+                            code, failure, target: params.funcName || targetFuncName, python: pythonExecutable,
+                            module: targetImportModule, moduleSource: fs.readFileSync(params.filePath, 'utf8'), moduleSourceHash: journal.sourceHash,
+                            checkCurrent: () => {
+                                throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
+                                if (!runtimeQualifications.current()) {
+                                    throw new AnalysisStageError('validation', 'source-changed', 'Source scope changed during binding repair.');
+                                }
+                            },
+                            request: (system, prompt) => requestBudgeted(params, system, prompt, log,
+                                'text', 'writer-revision', undefined, 0, undefined, undefined, undefined, undefined, 'test-binding'),
+                            event: (status, detail) => recordRole('writer', status, detail) });
+                        if (bindingCandidate !== undefined) {
+                            recordRole('writer', 'candidate', { code: bindingCandidate,
+                                repairMode: 'source-test-binding-repair-v1', contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision });
+                            return bindingCandidate;
+                        }
+                    }
+                    if (role === 'writer' && failure.startsWith('Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.')) {
+                        const bindingCandidate = await repairSourceMockReceiver({ source: astContext.code,
+                            code, failure, target: params.funcName || targetFuncName, python: pythonExecutable, module: targetImportModule,
+                            moduleSource: fs.readFileSync(params.filePath, 'utf8'), moduleSourceHash: journal.sourceHash,
+                            checkCurrent: () => {
+                                throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
+                                if (!runtimeQualifications.current()) {
+                                    throw new AnalysisStageError('validation', 'source-changed', 'Source scope changed during Mock binding repair.');
+                                }
+                            },
+                            request: (system, prompt) => requestBudgeted(params, system, prompt, log,
+                                'text', 'writer-revision', undefined, 0, undefined, undefined, undefined, undefined, 'mock-receiver-binding'),
+                            event: (status, detail) => recordRole('writer', status, detail) });
+                        if (bindingCandidate !== undefined) {
+                            recordRole('writer', 'candidate', { code: bindingCandidate,
+                                repairMode: 'source-mock-receiver-binding-selection-v1', contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision });
+                            return bindingCandidate;
+                        }
+                    }
+                    if (role === 'bug-fixer') {
+                        for (const kind of ['literal-argument', 'mock-receiver'] as const) {
+                            const sourceRepair = kind === 'literal-argument' ? repairSourceLiteralArgument : repairSourceMockReceiver;
+                            const sourceCandidate = await sourceRepair({ source: astContext.code,
+                                code, failure, target: params.funcName || targetFuncName,
+                                python: pythonExecutable, module: targetImportModule,
+                                ...(kind === 'mock-receiver' ? { moduleSource: fs.readFileSync(params.filePath, 'utf8'), moduleSourceHash: journal.sourceHash } : {}),
+                                checkCurrent: () => {
+                                    throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
+                                    if (!runtimeQualifications.current()) {
+                                        throw new AnalysisStageError('validation', 'source-changed', 'Source scope changed during spelling repair.');
+                                    }
+                                },
+                                request: (system, prompt) => requestBudgeted(params, system, prompt, log,
+                                    'text', 'bug-fixer', undefined, 0, undefined, undefined, undefined, undefined, kind),
+                                event: (status, detail) => recordRole('bug-fixer', status, detail) });
+                            if (sourceCandidate !== undefined) {
+                                recordRole('bug-fixer', 'candidate', { code: sourceCandidate,
+                                    repairMode: kind === 'literal-argument' ? 'source-literal-argument-repair-v1'
+                                        : 'source-mock-receiver-repair-v1', contractVersion: ROLE_CONTRACT_VERSIONS.bugFix });
+                                return sourceCandidate;
+                            }
+                        }
+                    }
+                    const system = role === 'bug-fixer'
+                        ? getBugFixerSystemPrompt() + '\n' + EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE : getExecutionWriterSystemPrompt();
                     const prompt = (role === 'bug-fixer'
                         ? getBugFixerUserPrompt(code, failure, targetFuncName, astContext.args, astContext.code,
                             astContext, targetImportModule, undefined,
-                            Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`))
-                        : getExecutionWriterPrompt(evidence, code, failure)) + '\n' + (repairEvidence || '');
+                            sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`))
+                        : getExecutionWriterPrompt(evidence, code, failure)) + '\n' + (repairEvidence || '')
+                        + executionHelperRepairGuidance(failure, targetImportModule, params.filePath,
+                            astContext, sourceMockUsePointNames)
+                        + sourceLiteralRepairGuidance(failure, targetImportModule, astContext);
                     const raw = await requestBudgeted(params, system, prompt, log,
                         role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision', undefined, 0,
@@ -3586,11 +3765,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
                 code, failure, targetFuncName, astContext?.args || [], astContext?.code || targetCode,
                 astContext, targetImportModule, undefined,
-                Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`)
+                sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`)
             );
             const roleEvidence = appendQualityEvidence(getReviewEvidence('', '', targetFuncName, astContext?.args || [],
                 astContext?.code || targetCode, astContext, targetImportModule, undefined,
-                Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`)));
+                sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`)));
             const inventories = new Map<string, ScenarioIdentity[]>();
             const inventory = async (code: string): Promise<ScenarioIdentity[]> => {
                 const hash = evidenceHash(code);
@@ -3753,7 +3932,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             functionName: targetFuncName,
                             evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
                                 source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
-                                allowedMockTargets: Object.keys(testBindingContext.dependencies).map(name => `${targetImportModule}.${name}`) })
+                                allowedMockTargets: sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`) })
                         });
                     if (role === 'writer' && writerAdditionBaseline) {
                         prompt = buildWriterAdditionRevisionPrompt(prompt, writerAdditionBaseline, code, failure);
@@ -4528,8 +4707,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const message = error instanceof Error ? error.message : String(error);
         const category = isExecutionCancelled() ? 'cancelled'
             : error instanceof RepairResponseError ? 'model-format'
+                : error instanceof CandidateValidationError ? error.category
                 : error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
         const stage = error instanceof RepairResponseError ? 'bug-fixer-response'
+            : error instanceof CandidateValidationError ? error.stage
             : error instanceof AnalysisStageError ? error.stage : 'pipeline';
         journal.knowledge({ terminalStatus: category === 'cancelled' ? 'cancelled' : stage === 'source-changed' ? 'source-changed' : 'failed',
             failure: message, failureCategory: category, failureStage: stage,

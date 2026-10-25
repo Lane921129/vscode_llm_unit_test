@@ -2,7 +2,58 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-25
+
+### 可選 Writer 首問程式碼續寫
+
+- 新增 `llmUnitTest.writerSeedPromptMode` 與命令「LLM Unit Test: 選擇 Writer 生成方式」，可保存 instruction／code-completion。預設保留指令模式；明選續寫後，Local Writer 在full／execution初始種子首問即以canonical無body外框及完整註解證據請模型續寫，不先耗用一次長指令失敗。Analyst、Reviewer、Bug Fixer及補測仍保持原角色請求，不依模型名稱建立例外。
+- 偏好在整批啟動時固定，修改設定只影響下次執行。若首問續寫仍重複，以原完整指令切回一次；保留原輸出floor、容量核算、期限／計數、明確stop與所有候選 gate。不把註解包裝重複嵌套，也不把新設定冒標為模型資格。
+- 必要相關 Node 回歸73／73通過，另三項正式流程整合通過，涵蓋首問raw、其他角色不受影響、一次反向恢復及真正Python／builtin品質執行。TypeScript編譯通過；同Codellama13B尚待實驗室驗收，未執行全量開發回歸。重測步驟見本次BMI分析文件。
+- 本次整合原有生成／Mock／候選重驗與突變WIP；相關Python55項案例已核對通過（其中3項首次受CP950解碼影響，改用既有UTF-8測試環境後重驗通過），另namespace22項、source contract24項已通過。package的TypeScript／lint／生產建置、Webview語法及密鑰掃描通過。車輛範圍仍為8檔／215目標，目前105執行通過、86失敗、24待生成；完整專案未完成，不借BMI整合回歸宣稱整車達標。
+- 內建頂層函式突變明確使用 `--activate-functions`：隔離載入保留原初始化函式，完成後只啟用同一來源／測試／變體hash綁定的選定函式body。須有baseline與逐變體activation證據才可計分；類別／修飾器／不支援目標不套用。Python API與CLI省略仍保舊行為，Mutatest擴充路徑保持其原副本模式，不切換引擎。中性整合已通過；車輛完整突變仍未驗收。
+
+### BMI 重複測試外框的恢復誤判
+
+- 新批 `bmi_2026_10_25_15_02` 的環境、兩批 Trace 與 Analyst 均完成；Writer 兩次 HTTP200，實測輸入3121 tokens，輸出4096／6144皆 length，重複行87/103及141/157。詞法雖見7／10個方法簽名，沒有可辨識 `self.assert*`，尚未形成候選；不能歸因於網路、覆蓋／突變門檻或計算失敗。
+- 修正方法簽名優先導致的恢復誤判：多個 fenced 測試外框、高度重複且無 unittest 斷言時，選原有唯一格式／seed raw 續寫恢復，不盲目擴張輸出。單方法長 setup、已有斷言、不完整樣本或缺少多外框證據維持原路由；沒有新增第三問、截斷採用、模型名稱特例或放寬品質 gate。
+- 必要驗證：TypeScript 編譯、6項輸出診斷回歸及1項正式 orchestrator 固定回覆整合通過；後者實際執行 Python、Reviewer 契約與 builtin 突變，核對同一原期限、一次 raw 恢復且無 output growth。固定回覆不是 Codellama 真實復測；本機僅有 Qwen 3B／CodeGemma 2B，同一 `codellama:13b-code` 尚待實驗室重跑。詳見 `docs/BMI結果分析_2026_10_25_1502.md`。
+
+### 持續生成全車單元測試與精確 setup 修復
+
+- 將來源片段指令擴至既有明確 patch 的 Mock receiver；AI 只能選來源消費鏈，不能更改斷言方法、次數、參數或其他程式。實測零呼叫或斷言 receiver 本身的 AttributeError 才能進入；後者須對齊唯一 native test frame 的行號及完整原文，目標／setup 內的例外、錯行與歧義仍拒絕。真3B修正備份 `delete_vehicle`、`delete_loading_level` 及 `add_loading_level` 後均取得實際目標與隔離成功證據。
+- 新增 Writer 專屬的未綁定名稱片段修復：以完整模組 hash／唯一目標 AST 核對來源 import／global，或明確標準測試 helper；AI 選一行方法內 import，完整模組不灌入提示、工具不載入應用、不猜 helper 答案。`parse_actual_finish_time` 已成功插入缺失 import，但後續預期值仍錯，保留失敗；不將 import 修好冒稱測試通過。
+- 修正同一測試同時缺少 `patch`／`MagicMock` 時逐項補正互相丟失的流程：靜態重用原 Checker 掃描全部未綁定名稱，僅同源標準測試 helper 可原子補入同一行 import；不同／未知來源回原 Writer，不保留未通過結構的中間候選或延長修訂次數。
+- Receiver 修復可沿已明確配置的獨立標準 Mock 身分追蹤 factory return value；配置／建構必須唯一且在實際 target 呼叫前，晚綁定、覆寫、constructor 遮蔽與多方法歧義仍拒絕。只有一個可證明的結構 receiver 差異時交 Writer 選片段，並以 `static-binding` 明示尚無 native 失敗；原實測失敗仍交 Bug Fixer，不製造 traceback 或改斷言次數。
+- 全模組來源僅供工具內 AST 核對同一目標與 global 宣告，綁定完整 module hash 後補齊消費圖的名稱資訊；不把來源已宣告的獨立 clock 呼叫當成未解析而放棄 connection receiver 修復。仍要求完整消費契約、不匯入應用、不把完整模組灌入模型、亦不增加 patch／oracle 授權。
+- 已證明未重綁的來源 module import，可在 canonical namespace 上明確 patch，且只認來源實際呼叫的成員斷言；未使用成員、未知／重綁來源及指回 target／owner class 的 package alias 仍拒絕。execution Writer 取得具體 namespace setup 選項，沒有替模型產生 fixture 值或 expected。相關 Python 共46項通過（22項 namespace、24項 source contract，後者含真實 unittest）；UI 生成改善仍待真模型執行，不冒稱整車通過。全範圍暫達105／215執行驗證通過，來源8檔保持。
+- 必要相關驗證：TypeScript 編譯及13項 Node／真 Python 工具回歸通過，含非法指令、取消、來源漂移、歧義、helper 拒絕、錯誤 traceback 位置、雙 helper 原子修訂、Mock 身分及來源宣告核對。真車輛單元生成暫達102／215，仍有失敗與待生成，完整範圍8檔未縮減；未執行 Reviewer、coverage、mutation 或全量開發回歸。
+
+- 同檔直接 helper 使用點修正後，真實 Qwen 3B 已為 `toggle_vehicle_selection` 加上正確隔離並保留真實目標與斷言，通過 native 呼叫及完整隔離執行；相同完整來源副本只移轉 AI 草稿，也在自己的 native 來源重新執行通過。生成進度由72增至74，後續新增案例已達81；全部8檔／215目標尚未完成，現行逐目標狀態以本機 `generation_manifest.json` 為準。
+- 真實 `is_admin` 失敗揭露混合存取的輸入形狀誤用：外層屬性物件的內層可能仍須字典。seed 與共用 setup 提示改為逐層區分 `.member` 及 `["key"]`，對 namespace 不可下標的實際失敗另附條件式修復提醒；不提供資料值或斷言、不把所有巢狀值一律轉為 namespace。
+- 真實備份刪除函式及既有新增函式的 Mock 失敗，源於模型把含換行的字串參數壓成單行。實測 call-argument 不符時提醒沿原來源保留精確空白／換行與型別，不抄錯誤訊息的 Expected，也不透過正規化兩側掩蓋差異；原 Mock 關聯與執行門檻保持。
+- 實跑發現單加提醒仍未修正，因為來源 call-setup 名單只含模組綁定呼叫，沒有 `cur.execute(...)` 這類區域 receiver。另增來源片段 hash 綁定的 `literalCallArguments`，只保留本目標內含換行／tab 的靜態字串參數拼字與位置，排除巢狀函式；不把區域 receiver 放入 module use points、不解析值或授權 patch。完整64事實／16KiB上限保持，提示僅另列少量完整字面值導航，原完整資料不裁切。相關真 Python 正反案例亦涵蓋此區域 receiver 與來源漂移拒絕。
+- 只執行必要相關驗證：TypeScript 編譯與5項選取的 Node 測試通過，包含真正 Python 的混合形狀／精確字串正反案例；錯誤預期及不同內容仍失敗。沒有重跑全量開發回歸、Reviewer、覆蓋率或突變，沒有宣稱完整品質通過。
+- 查明多次修復原樣返回確為模型輸出：原回覆 hash 與既有完整測試外框相符，並非解析器丟棄了修改。真3B在短任務中重打字串仍丟失空白，改回覆來源片段指令則可正確選取。新增限定 execution Bug Fixer 的 AST／hash 綁定單字串片段修復，AI只選已列出的來源片段，其他程式鎖定；重新規劃並核對位元組後仍走原修復範圍、綁定與隔離執行，不自動把來源回傳式當 expected。
+- 新工具使用 `-I` 防止應用 Python 路徑介入規劃，ASCII-safe JSON 保留中文與原測試位元組。3項必要 Node／真 Python 工具回歸通過，涵蓋精確套用、歧義拒絕、非法指令及取消；未擴大開發測試。真車輛備份 `delete_user` 已由 AI 指令修正並取得 native 呼叫與隔離成功證據，進度到90／215；其餘尚未完成。另修正外層請求包裝漏傳窄任務旗標，保留原期限／計數，只在此受限任務省略無法修改的資源 schema。
+
 ## 2026-10-24
+
+### 優先生成可執行單元測試
+
+- `execution` 初次 Writer 改用獨立的一案例種子契約及無答案的 canonical 包裝，避免先要求完整 suite。來源支持的預期值在本模式明示為待實跑的假說；完整品質模式的觀測／Reviewer／覆蓋及突變要求保持。生成與修訂取得相同來源工具的完整 Mock 使用點名單及 `with patch(...)` 指引，配合無額外注入參數的種子簽名，不另附 decorator 方法骨架；仍不提供依賴值、輸入或斷言。版本漂移或取消不得繼續送出請求。
+- Local 執行模式也採成對的輸入／wire 輸出預算，初問1536起、較高 learned floor保留；完整修訂依原候選及工作量配置。沒有取消 Context、截斷拒絕、實際目標呼叫或隔離驗證。
+- 修正執行模式誤用 Reviewer 證據文字作 Writer 語境：改用正式 Writer 證據投影與 AST 規則分派，保留完整來源、setup、caller、相依及必要參數／receiver／return 消費形狀，移除審查行號指令及重複外框；不新增 Analyst 模型請求或假造 Trace。
+- 來源已證明參數方法呼叫時，setup 指引明確區分普通 lambda／函式與 Mock 呼叫紀錄；若測試要檢查 `.called`／`assert_called*`，須以 Mock 配置該方法。這不是放寬 AST 斷言關聯檢查，也不假設呼叫次數或預期回傳。
+- 修正已完成 unittest 失敗中的業務字串（例如回傳「超時」）被誤判為宿主逾時。執行模式保留 typed `CandidateValidationError` 的分類與階段，不再重新以訊息猜測；診斷分類不得作為模型／環境故障的排程依據。僅對這項實際阻斷補必要回歸，未擴大開發測試。
+- 車輛真實候選揭露集合狀態斷言誤拒：來源在 `if` 兩條正常路徑均修改同一輸入屬性時，AST 改取路徑交集，支援測試明確新建的標準集合及直接 mutator；單邊寫入、提早返回未寫入、迴圈、反射、同名自訂方法及參數重綁仍未知。明確 `unittest.mock.patch` 控制來源直接 helper 使用點時，可保留新建 SimpleNamespace 的狀態關聯；禁止 target／factory patch、未知替身及 `as` 重綁借用舊物件證據。只證明斷言相關性，錯誤預期仍須由隔離執行拒絕。此項相關 Python 回歸18／18通過，未重跑全量套件。
+- 真實 `_connect` 候選揭露回傳物件方法鏈的關聯遺失，造成 `connection → cursor → fetchone` 的實際觀察被誤拒。保守追蹤未重綁回傳物件的非反射方法回傳，維持 helper／常數／測試改寫後的撤證；錯誤預期仍在實跑失敗。最後同檔相關 Python20／20通過。
+- 新增分析命令的明確 `replayCandidate`：按原 run、事件 sequence、原文 hash、來源／目標及 provider／模型重讀已完成 AI 候選；預設不呼叫模型修訂，仍走原綁定與隔離執行。完整來源內容完全相同的副本可明確選擇只移轉草稿，所有 native 呼叫與執行證據重新取得，不借原通過或資源批准。七項相關 Node 回歸與 TypeScript 編譯通過；未新增側欄操作或跑全量套件。
+- 執行模式的 seed、Writer 修訂及 Bug Fixer 明示僅隔離非目標 helper，批准資源用來準備載入，不要求測完整 helper 圖。對真實 AttributeError 的同來源、唯一直接 helper，另提供精確 `with patch(...)` 非可執行 setup 指引；不供測資或斷言，不授權 patch，類別、歧義及未知來源不猜。提示同檔15項及 helper 指引3項回歸通過；完整品質模式提示政策保持。
+- 查明 UI 修復回覆不變的決策缺口：角色使用點名單原只列 `from import`，漏掉 AST 已檢索的同檔直接 helper，因而把可用的隔離點提示成「none supplied」。補入 depth1、唯一來源檢索且 snippet hash 相符的 helper，供各角色一致使用；不改 Python 的 import-origin 映射或 patch gate。helper 名單／精確修復指引最後4項回歸通過。
+- 真實 `hash_password` 揭露 SHA-256 被模型誤寫為 MD5 預期值。Python 只解析已失敗案例的 literal 輸入與簡單 `hashlib(...encode()).hexdigest()` 描述，宿主以內建 crypto 計算參考；不匯入或執行應用，也不由工具改寫測試。計算仍是未驗證假說，交 AI 修訂後沿原隔離執行核實；原始輸入位元組不寫入證據。相關 Python14／14、Node3／3及編譯通過。真實3B已採用參考修訂，來源未改並通過該目標的隔離執行；已保存候選 hash 與標準參考的來源關係。
+- Local 分析命令可明確指定正整數 `requestPromptBatchTokens`，傳為 Ollama `num_batch`，不更動 Context 或輸出 cap、預設不新增 wire 參數。以真實車輛生成比較 prompt evaluation 耗時，僅保留數字紀錄；尚未加入側欄選項，也不把未控制的前後負載比較宣稱為效能保證。
+- 依使用者指示先生成全車單測，不執行 Reviewer、coverage、mutation 或額外全量開發回歸。真實本機 Qwen3B 的全8檔／215目標清單已開始逐項生成，成功與失敗分別保留、已成功項目重核證據後續跑；原來源未改，進度以本機 `generation_manifest.json` 為準，尚不能宣稱整車完成。完整模式原有首敗即停政策未改。
+- 本機全範圍進度：已生成或重用 AI 草稿並重新取得實際 native 目標與隔離完成證據，通過由35增至69；後續真3B新生成的備份 `get_conn`／`close_dialog` 及工具輔助修復的 `hash_password` 也通過，暫為72／215。尚有36失敗及107待生成，整車未完成；草稿重驗沒有新增生成請求，並非借用舊成功布林或品質分數。
 
 ### Getter receiver 核對及 Windows 突變副本
 

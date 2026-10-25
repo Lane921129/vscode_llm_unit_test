@@ -15,6 +15,7 @@ import re
 DEFINITION = json.loads((Path(__file__).resolve().parent.parent / 'contracts' / 'quality-policy-v1.json').read_text(encoding='utf-8'))
 MUTATION_ENGINES = json.loads((Path(__file__).resolve().parent.parent / 'contracts' / 'mutation-engines-v1.json').read_text(encoding='utf-8'))
 MAX_SAFE_INTEGER = 9007199254740991
+from mutation_activation import BACKEND as FUNCTION_BACKEND, POLICY as ACTIVATION_POLICY, validate_evidence as valid_activation
 
 
 def _integer(value):
@@ -138,7 +139,7 @@ def read_stored_mutation_run(raw, context):
             or type(raw.get('baselinePassed')) is not bool \
             or raw.get('operatorSetVersion') not in MUTATION_ENGINES['operatorSets'][raw['engine']] \
             or raw.get('scopeVersion') != DEFINITION['mutationVersions']['scopeVersion'] \
-            or (raw['operatorSetVersion'] != 'builtin-ast-v1' and raw.get('executionBackend') != MUTATION_ENGINES['executionBackend']) \
+            or (raw['operatorSetVersion'] != 'builtin-ast-v1' and raw.get('executionBackend') not in MUTATION_ENGINES['executionBackends']) \
             or (raw['engine'] == 'mutatest' and raw.get('engineVersion') != '3.1.0'):
         return failure
     if any(not _digest(raw.get(key)) or raw[key] != context.get(key) for key in ('sourceHash', 'testHash')) \
@@ -151,6 +152,12 @@ def read_stored_mutation_run(raw, context):
         return failure
     if raw.get('baselineStatus') not in ('passed', 'failed', 'timeout', 'error', 'not-run') \
             or raw['baselinePassed'] != (raw['baselineStatus'] == 'passed'):
+        return failure
+    function_backend = raw.get('executionBackend') == FUNCTION_BACKEND
+    activation_context = {'sourceHash': raw['sourceHash'], 'testHash': raw['testHash'], 'target': scope['qualifiedName']}
+    if function_backend and (scope['kind'] != 'function' or '.' in scope['qualifiedName'] or raw.get('activationPolicy') != ACTIVATION_POLICY
+                            or raw['baselinePassed'] and not valid_activation(raw.get('baselineFunctionActivation'),
+                                                                             dict(activation_context, variantHash=raw['sourceHash']))):
         return failure
     timing = ('baselineTimeoutSeconds', 'baselineAllocatedSeconds', 'baselineElapsedMs')
     if any(key in raw for key in timing):
@@ -203,6 +210,9 @@ def read_stored_mutation_run(raw, context):
                 or ('output' in item and type(item['output']) is not str):
             return failure
         if raw['operatorSetVersion'] != 'builtin-ast-v1' and item['status'] == 'KILLED' and not item.get('killedBy'):
+            return failure
+        if function_backend and (not _digest(item.get('variantSourceHash')) or item['status'] in ('KILLED', 'SURVIVED')
+                                 and not valid_activation(item.get('functionActivation'), dict(activation_context, variantHash=item['variantSourceHash']))):
             return failure
         if 'allocatedSeconds' in item:
             allocation = item['allocatedSeconds']

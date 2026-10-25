@@ -7,8 +7,15 @@ export type MutationEngine = ExternalMutationEngine | 'builtin';
 export type MutationOutcome = 'KILLED' | 'SURVIVED' | 'TIMEOUT' | 'ERROR' | 'NOT_RUN';
 export const BUILTIN_MUTATION_OPERATOR_SET_VERSION = 'builtin-ast-v3';
 const mutationEngines = require('../../contracts/mutation-engines-v1.json') as {
-    executionBackend: string; operatorSets: Record<MutationEngine, string[]>;
+    executionBackend: string; executionBackends: string[]; operatorSets: Record<MutationEngine, string[]>;
 };
+export const FUNCTION_MUTATION_BACKEND = 'isolated-unittest-function-v2';
+export const FUNCTION_ACTIVATION_POLICY = 'after-module-initialization-v1';
+export interface FunctionMutationActivation {
+    schemaVersion: 'mutation-function-activation-v1'; policy: typeof FUNCTION_ACTIVATION_POLICY;
+    sourceHash: string; variantHash: string; testHash: string; target: string;
+    status: 'activated'; activatedModules: number;
+}
 export const FUNCTION_BODY_MUTATION_SCOPE_VERSION = 'selected-function-body-v1';
 export const MODULE_MUTATION_SCOPE_VERSION = 'module-ast-v1';
 export interface MutationScope {
@@ -56,6 +63,8 @@ export interface MutationRecord {
     elapsedMs?: number;
     /** Actual subprocess allowance, capped by the shared stage time remaining. */
     allocatedSeconds?: number;
+    variantSourceHash?: string;
+    functionActivation?: FunctionMutationActivation;
 }
 export interface MutationRun extends MutationContext {
     schemaVersion: 1;
@@ -82,6 +91,8 @@ export interface MutationRun extends MutationContext {
     diagnostic?: string;
     excluded?: { noop: number; duplicate: number; invalid: number };
     executionBackend?: string;
+    activationPolicy?: typeof FUNCTION_ACTIVATION_POLICY;
+    baselineFunctionActivation?: FunctionMutationActivation;
     engineVersion?: string;
     workers?: number;
     elapsedMs?: number;
@@ -90,6 +101,14 @@ export interface MutationRun extends MutationContext {
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+function validFunctionActivation(value: unknown, context: MutationContext, variantHash: unknown): value is FunctionMutationActivation {
+    const keys = ['schemaVersion', 'policy', 'sourceHash', 'variantHash', 'testHash', 'target', 'status', 'activatedModules'];
+    return record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
+        && value.schemaVersion === 'mutation-function-activation-v1' && value.policy === FUNCTION_ACTIVATION_POLICY
+        && value.status === 'activated' && integer(value.activatedModules) && value.activatedModules >= 1 && value.activatedModules <= 64
+        && digest(variantHash) && value.variantHash === variantHash && value.sourceHash === context.sourceHash
+        && value.testHash === context.testHash && value.target === context.targetScope.qualifiedName;
+}
 const outcomes: MutationOutcome[] = ['KILLED', 'SURVIVED', 'TIMEOUT', 'ERROR', 'NOT_RUN'];
 const sourceBasename = (value: string) => path.posix.basename(value.replace(/\\/g, '/'));
 
@@ -144,7 +163,7 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
     const engine = value.engine as MutationEngine;
     const scopeVersion = context.targetScope.kind === 'function' ? FUNCTION_BODY_MUTATION_SCOPE_VERSION : MODULE_MUTATION_SCOPE_VERSION;
     if (typeof value.operatorSetVersion !== 'string' || !mutationEngines.operatorSets[engine].includes(value.operatorSetVersion)
-        || (value.operatorSetVersion !== 'builtin-ast-v1' && value.executionBackend !== mutationEngines.executionBackend)
+        || (value.operatorSetVersion !== 'builtin-ast-v1' && !mutationEngines.executionBackends.includes(String(value.executionBackend)))
         || (engine === 'mutatest' && value.engineVersion !== '3.1.0')
         || value.scopeVersion !== scopeVersion) {
         return fail('Unsupported mutation operator set or scope version');
@@ -155,6 +174,9 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
     }
     if (!record(value.targetScope) || value.targetScope.kind !== context.targetScope.kind
         || value.targetScope.qualifiedName !== context.targetScope.qualifiedName) { return fail('Mutation scope does not match selected target'); }
+    const functionBackend = value.executionBackend === FUNCTION_MUTATION_BACKEND;
+    if (functionBackend && (context.targetScope.kind !== 'function' || context.targetScope.qualifiedName.includes('.')
+        || value.activationPolicy !== FUNCTION_ACTIVATION_POLICY)) { return fail('Invalid function mutation activation policy'); }
     for (const field of ['startLine', 'endLine'] as const) {
         const observed = value.targetScope[field];
         if ((observed !== undefined && (!integer(observed) || observed < 1))
@@ -166,6 +188,9 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         || typeof value.baselineStatus !== 'string' || !['passed', 'failed', 'timeout', 'error', 'not-run'].includes(value.baselineStatus)
         || value.baseline_passed !== (value.baselineStatus === 'passed') || (!value.scope_found && value.baseline_passed)) {
         return fail('Invalid mutation baseline evidence');
+    }
+    if (functionBackend && value.baseline_passed && !validFunctionActivation(value.baselineFunctionActivation, context, value.sourceHash)) {
+        return fail('Missing or invalid function mutation baseline activation');
     }
     const fields = ['available', 'selected', 'executed', 'notRun', 'killed', 'survived', 'timeout', 'error'] as const;
     if (!record(value.counts) || fields.some(field => field === 'available' && (value.counts as Record<string, unknown>)[field] === null
@@ -195,6 +220,10 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
             || typeof item.from !== 'string' || typeof item.to !== 'string' || !outcomes.includes(item.status as MutationOutcome)
             || (item.output !== undefined && typeof item.output !== 'string')) { return fail('Invalid or duplicate mutation record'); }
         seen.add(item.id);
+        if (functionBackend && (!digest(item.variantSourceHash) || (['KILLED', 'SURVIVED'].includes(String(item.status))
+            && !validFunctionActivation(item.functionActivation, context, item.variantSourceHash)))) {
+            return fail('Missing or invalid function mutation trial activation');
+        }
         if (item.id !== candidateIds[mutants.length]) { return fail('Selected mutant does not match the enumerated candidate universe'); }
         observedCounts[item.status as MutationOutcome]++;
         const killedBy = Array.isArray(item.killedBy) && item.killedBy.length <= 1000
@@ -205,6 +234,7 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
             return fail('Invalid mutation failure attribution');
         }
         mutants.push({ ...item, codeChange: readMutationCodeChange(item.codeChange), killedBy,
+            functionActivation: functionBackend && validFunctionActivation(item.functionActivation, context, item.variantSourceHash) ? item.functionActivation : undefined,
             elapsedMs: integer(item.elapsedMs) ? item.elapsedMs : undefined } as unknown as MutationRecord);
     }
     if (value.baseline_passed && (observedCounts.KILLED !== counts.killed || observedCounts.SURVIVED !== counts.survived
@@ -249,7 +279,10 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
     return { ok: true, run: { ...context, targetScope: { ...value.targetScope } as unknown as MutationScope,
         schemaVersion: 1, engine, ...state, baselinePassed: value.baseline_passed,
         operatorSetVersion: value.operatorSetVersion, scopeVersion,
-        executionBackend: value.executionBackend === mutationEngines.executionBackend ? value.executionBackend : undefined,
+        executionBackend: mutationEngines.executionBackends.includes(String(value.executionBackend)) ? String(value.executionBackend) : undefined,
+        activationPolicy: functionBackend ? FUNCTION_ACTIVATION_POLICY : undefined,
+        baselineFunctionActivation: functionBackend && validFunctionActivation(value.baselineFunctionActivation, context, value.sourceHash)
+            ? value.baselineFunctionActivation : undefined,
         engineVersion: typeof value.engineVersion === 'string' && /^[0-9][\w.+-]{0,60}$/.test(value.engineVersion) ? value.engineVersion : undefined,
         workers: integer(value.workers) && value.workers >= 1 && value.workers <= 4 ? value.workers : undefined,
         elapsedMs: integer(value.elapsedMs) ? value.elapsedMs : undefined,

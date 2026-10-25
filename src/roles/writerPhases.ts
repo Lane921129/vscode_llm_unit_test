@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
+import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, SOURCE_INPUT_SHAPE_GUIDANCE } from '../prompts/dependencyMockContract';
 
 /** Select packaging only. The model still authors the complete test body. */
 export function selectWriterAdditionMethodName(baselineHash: string, focus: string,
@@ -23,7 +24,7 @@ export function buildWriterAdditionMethodInstruction(methodName: string): string
 /** A seed has its own small contract. Do not first ask for a comprehensive
  * suite and then ask a small model to override that instruction. The complete
  * target, setup and evidence are supplied separately, unchanged. */
-export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: boolean): string {
+export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: boolean, executionOnly = false): string {
     void systemPrompt; // Retain the existing call signature, not wider suite instructions.
     const invocation = isAsync === true
         ? 'The selected target is async: use unittest.IsolatedAsyncioTestCase, async def test_ and await its call. '
@@ -36,15 +37,22 @@ export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: bool
         + invocation + 'Use test_ methods and self.assert*. No pytest or top-level assert. '
         + 'Use the exact target module/class/property/constructor contract; never copy, redefine or mock the target or owner. '
         + 'When WRITER_SEED_CASE_FACTS_V1 is supplied, use ONLY that selected executed case and its exact input; copy targetCall when provided. '
-        + 'Otherwise use one source-supported same-test controlled dependency case. Never guess outputs, exceptions, fixtures or imports; source expressions and diagnostics are not assertion oracles. '
-        + 'Use exact observed results or explicit same-test controls; never call dependencies to calculate expected values. '
+        + (executionOnly
+            ? 'Otherwise propose one source-supported expectation or explicit same-test controlled dependency case as an unverified hypothesis until isolated execution. Invent no requirements, APIs, constructors, ambient values or exceptions. '
+            : 'Otherwise use one source-supported same-test controlled dependency case. Never guess outputs, exceptions, fixtures or imports; source expressions and diagnostics are not assertion oracles. ')
+        + (executionOnly ? 'Prefer exact observed results or explicit same-test controls; '
+            : 'Use exact observed results or explicit same-test controls; ')
+        + 'never call dependencies to calculate expected values. '
         + 'Use with self.assertRaises(ExactType) for an evidenced exception, no message second argument. '
         + 'Pure calculations need no mocks; control external/ambient boundaries only at their source use points with fresh per-test state. '
-        + 'Source parameter.member needs an attribute-bearing fixture (for example types.SimpleNamespace), not a dict of same-named keys. '
+        + (executionOnly ? EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE + ' ' : '')
+        + SOURCE_INPUT_SHAPE_GUIDANCE + ' '
         + 'Give callable members explicit unittest.mock.Mock behavior; preserve the source receiver shape. '
         + 'Never patch immutable built-in class members; replace the owning module binding. '
         + 'No direct test network, file I/O, shell, dynamic execution or shared SQLite; no skip, swallowed errors or tautologies. '
-        + 'After this one test, close the code fence and stop. Expansion follows successful execution; independent Reviewer approval remains required.'
+        + 'After this one test, close the code fence and stop. '
+        + (executionOnly ? 'This execution-first pass ends after the runnable seed; quality review is deferred.'
+            : 'Expansion follows successful execution; independent Reviewer approval remains required.')
         + isolatedResourceSystemRule();
 }
 
@@ -68,13 +76,16 @@ export function buildWriterAdditionSystemPrompt(systemPrompt: string): string {
         + isolatedResourceSystemRule();
 }
 
-export function buildWriterSeedPrompt(evidencePrompt: string): string {
+export function buildWriterSeedPrompt(evidencePrompt: string, executionOnly = false): string {
     return `${evidencePrompt}\n\nWRITER_SEED_V1\n`
         + 'One test method and one real target call; explicit imports/fixtures. '
-        + 'Use WRITER_SEED_CASE_FACTS_V1 if supplied; else one source-supported, same-test controlled dependency case. '
+        + (executionOnly
+            ? 'Use WRITER_SEED_CASE_FACTS_V1 if supplied; else propose one source-supported expectation or same-test controlled dependency case, unverified until executed. '
+            : 'Use WRITER_SEED_CASE_FACTS_V1 if supplied; else one source-supported, same-test controlled dependency case. ')
         + 'Diagnostics never supply fixture values/types/imports. '
         + 'No guesses, speculative tests, copied source or target mocks. '
-        + 'Pass execution before expansion; existing output contract.';
+        + (executionOnly ? 'Pass isolated execution; broader quality validation is deferred.'
+            : 'Pass execution before expansion; existing output contract.');
 }
 
 /** A prefix inside a larger unapproved draft is not a complete baseline unit. */

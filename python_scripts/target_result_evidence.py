@@ -17,10 +17,11 @@ def dotted(node):
 
 
 def direct_parameter_writes(context):
-    """Prove only straight-line writes on an unrebound module-function input.
+    """Prove writes on every normal path of an unrebound function input.
 
     This identifies observable state, never its expected value. Unsupported
-    ownership, control flow or parameter binding yields no state evidence.
+    ownership, loops, exceptional flow or parameter binding yields no evidence.
+    An if contributes only the intersection of its paths, never an expected value.
     """
     if context.get('className') or context.get('targetUsage') == 'property':
         return None, {}
@@ -39,7 +40,7 @@ def direct_parameter_writes(context):
     if function.decorator_list or function.args.vararg or function.args.kwarg:
         return None, {}
     parameters = {arg.arg for arg in [*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs]}
-    if any(not isinstance(node, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Return, ast.Pass)) for node in function.body):
+    if sum(1 for _ in ast.walk(function)) > 10000:
         return None, {}
     if any(isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and node.id in parameters
            or isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)) and
@@ -47,16 +48,58 @@ def direct_parameter_writes(context):
            or isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] in
            {'setattr', 'delattr', 'globals', 'locals', 'vars', 'exec', 'eval'} for node in ast.walk(function)):
         return None, {}
+    def input_attribute(node):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id in parameters and not node.attr.startswith('__')):
+            return node.value.id, node.attr
+        return None
+
+    def common(*paths):
+        paths = [path for path in paths if path is not None]
+        return set.intersection(*paths) if paths else None
+
+    mutators = {'set': {'add', 'remove', 'discard', 'clear', 'pop', 'update'},
+                'list': {'append', 'extend', 'insert', 'pop', 'remove', 'clear', 'sort', 'reverse'},
+                'dict': {'clear', 'pop', 'update', 'setdefault'}}
+
+    def scan(nodes, incoming, depth=0):
+        if depth > 16:
+            raise ValueError('unsupported-state-flow')
+        live, returned = incoming.copy(), None
+        for node in nodes:
+            if live is None:
+                break
+            if isinstance(node, ast.If):
+                yes, yes_return = scan(node.body, live, depth + 1)
+                no, no_return = scan(node.orelse, live, depth + 1)
+                live = common(yes, no)
+                returned = common(returned, yes_return, no_return)
+            elif isinstance(node, ast.Return):
+                returned = common(returned, live)
+                live = None
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                if node.value is not None:
+                    for destination in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                        attribute = input_attribute(destination)
+                        if attribute:
+                            live.update((*attribute, kind) for kind in ('any', *mutators))
+            elif isinstance(node, ast.Expr):
+                call = node.value
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+                    attribute = input_attribute(call.func.value)
+                    if attribute:
+                        live.update((*attribute, kind) for kind, methods in mutators.items() if call.func.attr in methods)
+            elif not isinstance(node, ast.Pass):
+                raise ValueError('unsupported-state-flow')
+        return live, returned
+
+    try:
+        live, returned = scan(function.body, set())
+    except (ValueError, RecursionError):
+        return None, {}
     writes = {}
-    for node in function.body:
-        if isinstance(node, ast.Return):
-            break
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
-            continue
-        for destination in node.targets if isinstance(node, ast.Assign) else [node.target]:
-            if (isinstance(destination, ast.Attribute) and isinstance(destination.value, ast.Name)
-                    and destination.value.id in parameters and not destination.attr.startswith('__')):
-                writes.setdefault(destination.value.id, set()).add(destination.attr)
+    for parameter, attribute, kind in common(live, returned) or ():
+        writes.setdefault(parameter, {}).setdefault(attribute, set()).add(kind)
     return function, writes
 
 
@@ -117,6 +160,7 @@ def has_target_result_assertion(tree, context):
             aliases = module_aliases.copy()
             namespace_aliases = namespace_module_aliases.copy()
             namespaces, states = set(), set()
+            namespace_containers = {}
             state_safe = not method.decorator_list and not any(
                 isinstance(node, ast.Call) and dotted(node.func).split('.')[-1] in
                 {'setattr', 'delattr', 'globals', 'locals', 'vars', 'exec', 'eval'} for node in ast.walk(method))
@@ -131,7 +175,11 @@ def has_target_result_assertion(tree, context):
                 if isinstance(node, ast.Await):
                     return derived(node.value)
                 if isinstance(node, ast.Call):
-                    return is_target(node.func) or (resolve(node.func, hidden) in (
+                    returned_receiver = (isinstance(node.func, ast.Attribute) and not node.func.attr.startswith('__')
+                                         and not any(isinstance(child, ast.Attribute) and child.attr.startswith('__')
+                                                     for child in ast.walk(node.func.value))
+                                         and derived(node.func.value))
+                    return is_target(node.func) or returned_receiver or (resolve(node.func, hidden) in (
                         'len', 'bool', 'str', 'int', 'float', 'abs', 'round', 'sorted', 'list', 'tuple', 'type', 'isinstance')
                         and any(derived(arg) for arg in node.args))
                 if isinstance(node, (ast.Name, ast.Attribute)):
@@ -159,6 +207,9 @@ def has_target_result_assertion(tree, context):
                                                  if item == affected or item.startswith(affected + '.'))
                         namespaces.discard(affected)
                         namespace_aliases.pop(affected.split('.')[0], None)
+                        for item in list(namespace_containers):
+                            if item == affected or item.startswith(affected + '.'):
+                                namespace_containers.pop(item)
                     if not name:
                         # Mutation of an element invalidates the containing result.
                         if isinstance(node, ast.Subscript):
@@ -184,6 +235,20 @@ def has_target_result_assertion(tree, context):
                 origin = namespace_aliases.get(head)
                 return bool(namespace_authorized and head not in hidden and origin and
                             origin + ('.' + tail if tail else '') == 'types.SimpleNamespace')
+
+            def controlled_source_patch(node):
+                # Only the standard context manager and a literal, direct source
+                # lookup. This cannot replace the namespace factory or target.
+                if (not state_function or not isinstance(node, ast.Call) or len(node.args) != 1
+                        or node.keywords or resolve(node.func, hidden) != 'unittest.mock.patch'
+                        or dotted(node.func).split('.')[0] in module_defined_names
+                        or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str)):
+                    return False
+                name = node.args[0].value
+                use_points = {context.get('module', '') + '.' + call.func.id for call in ast.walk(state_function)
+                              if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                              and call.func.id not in function_scope_bindings(state_function)}
+                return name in use_points and name not in (selected, 'types.SimpleNamespace')
 
             def observe_state_call(node, enabled=True):
                 """Follow actual evaluation order; unsupported calls revoke state."""
@@ -213,7 +278,8 @@ def has_target_result_assertion(tree, context):
                     for parameter, attributes in parameter_writes.items():
                         argument = bound.get(parameter)
                         if isinstance(argument, ast.Name) and argument.id in namespaces:
-                            states.update(argument.id + '.' + attribute for attribute in attributes)
+                            states.update(argument.id + '.' + attribute for attribute, kinds in attributes.items()
+                                          if 'any' in kinds or namespace_containers.get(argument.id + '.' + attribute) in kinds)
                     return
                 pure = (isinstance(node.func, ast.Name) and node.func.id not in module_defined_names
                         and resolve(node.func, hidden) in ('len', 'bool', 'str', 'int', 'float', 'abs', 'round', 'sorted', 'list', 'tuple', 'type', 'isinstance', 'set', 'dict'))
@@ -267,6 +333,15 @@ def has_target_result_assertion(tree, context):
                             states.clear(); namespaces.clear()
                         if fresh_namespace and namespace_authorized and len(targets) == 1 and isinstance(targets[0], ast.Name):
                             namespaces.add(targets[0].id)
+                            for keyword in value.keywords:
+                                item = keyword.value
+                                kind = {ast.List: 'list', ast.Set: 'set', ast.Dict: 'dict'}.get(type(item))
+                                if (isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
+                                        and item.func.id not in module_defined_names
+                                        and resolve(item.func, hidden) in ('list', 'set', 'dict')):
+                                    kind = resolve(item.func, hidden)
+                                if kind:
+                                    namespace_containers[targets[0].id + '.' + keyword.arg] = kind
                     elif isinstance(node, (ast.AugAssign, ast.Delete)):
                         for dest in node.targets if isinstance(node, ast.Delete) else [node.target]:
                             assign(dest, False)
@@ -285,19 +360,24 @@ def has_target_result_assertion(tree, context):
                                 and all(derived(item) for item in [node.test.left, *node.test.comparators])):
                             return True
                     elif isinstance(node, (ast.With, ast.AsyncWith)):
+                        controlled = bool(node.items) and all(controlled_source_patch(item.context_expr) for item in node.items)
                         for item in node.items:
-                            observe_state_call(item.context_expr, assertions)
+                            if not controlled_source_patch(item.context_expr):
+                                observe_state_call(item.context_expr, assertions)
+                            if item.optional_vars is not None:
+                                assign(item.optional_vars, False)
                         raises = any(isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Attribute)
                             and dotted(item.context_expr.func.value) == 'self' and item.context_expr.func.attr in ('assertRaises', 'assertRaisesRegex') for item in node.items)
                         if assertions and raises and any(isinstance(child, ast.Call) and is_target(child.func) for child in ast.walk(node)):
                             return True
                         if statements(node.body, assertions):
                             return True
-                        states.clear(); namespaces.clear()
+                        if not controlled:
+                            states.clear(); namespaces.clear()
                     elif isinstance(node, ast.If):
                         # Check assertions within branches, but do not carry uncertain writes out.
                         observe_state_call(node.test, assertions)
-                        old = values.copy(), instances.copy(), hidden.copy(), aliases.copy(), states.copy(), namespaces.copy(), namespace_aliases.copy()
+                        old = values.copy(), instances.copy(), hidden.copy(), aliases.copy(), states.copy(), namespaces.copy(), namespace_aliases.copy(), namespace_containers.copy()
                         for branch in (node.body, node.orelse):
                             values.clear(); values.update(old[0])
                             instances.clear(); instances.update(old[1])
@@ -306,6 +386,7 @@ def has_target_result_assertion(tree, context):
                             states.clear(); states.update(old[4])
                             namespaces.clear(); namespaces.update(old[5])
                             namespace_aliases.clear(); namespace_aliases.update(old[6])
+                            namespace_containers.clear(); namespace_containers.update(old[7])
                             if statements(branch, assertions):
                                 return True
                         values.clear(); instances.clear()

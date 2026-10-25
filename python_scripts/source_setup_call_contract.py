@@ -105,10 +105,12 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
                 'sourceHashKind': 'normalized-target-source', 'authority': 'source-spelling-only',
                 'spellingKind': 'ast-normalized',
                 'assertionOracle': False, 'patchAuthorization': False, 'status': 'complete',
-                'optionalLookups': [], 'calls': [], 'sourceLocations': [], 'parameterMembers': []}
+                'optionalLookups': [], 'calls': [], 'sourceLocations': [], 'parameterMembers': [],
+                'literalCallArguments': []}
 
     def unsupported(reason):
-        contract.update(status='unsupported', optionalLookups=[], calls=[], sourceLocations=[], parameterMembers=[], reason=reason)
+        contract.update(status='unsupported', optionalLookups=[], calls=[], sourceLocations=[], parameterMembers=[],
+                        literalCallArguments=[], reason=reason)
         return contract
 
     if not isinstance(module_tree, ast.Module):
@@ -192,10 +194,23 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
                         'usage': 'write' if isinstance(node.ctx, ast.Store)
                         else 'call' if isinstance(parent, ast.Call) and parent.func is node else 'read',
                         'line': node.lineno})
-                    if len(contract['parameterMembers']) + len(contract['calls']) + len(contract['optionalLookups']) > MAX_FACTS:
+                    if sum(len(contract[key]) for key in ('parameterMembers', 'calls', 'optionalLookups', 'literalCallArguments')) > MAX_FACTS:
                         return unsupported('contract-limit-exceeded')
         if not isinstance(node, ast.Call):
             continue
+        # A local receiver's argument spelling is still a source fact. It does
+        # not resolve the receiver or add it to authorized module use points.
+        if isinstance(node.func, (ast.Name, ast.Attribute)):
+            def record_literal(value, **position):
+                if isinstance(value, ast.Constant) and isinstance(value.value, str) and any(
+                        char in value.value for char in ('\n', '\r', '\t')):
+                    contract['literalCallArguments'].append({'callee': ast.unparse(node.func),
+                        **position, 'source': ast.unparse(value), 'line': node.lineno})
+            for index, value in enumerate(node.args):
+                record_literal(value, position=index + 1)
+            for keyword in node.keywords:
+                if keyword.arg is not None:
+                    record_literal(keyword.value, keyword=keyword.arg)
         root = _root_name(node.func)
         if (isinstance(node.func, ast.Name) and node.func.id == 'getattr' and 'getattr' not in locals_ | declarations
                 and not any('getattr' in _bound_names(statement) for statement in module_tree.body)
@@ -210,7 +225,7 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
             contract['calls'].append({'callee': ast.unparse(node.func), 'args': [argument(arg) for arg in node.args],
                                       'keywords': [{'name': keyword.arg, **argument(keyword.value)} for keyword in node.keywords],
                                       'line': node.lineno})
-        if len(contract['calls']) + len(contract['optionalLookups']) + len(contract['parameterMembers']) > MAX_FACTS:
+        if sum(len(contract[key]) for key in ('parameterMembers', 'calls', 'optionalLookups', 'literalCallArguments')) > MAX_FACTS:
             return unsupported('contract-limit-exceeded')
     if len(json.dumps(contract, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
         return unsupported('contract-limit-exceeded')

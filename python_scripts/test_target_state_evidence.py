@@ -101,6 +101,91 @@ class TargetStateEvidenceTests(unittest.TestCase):
         branch = candidate('obj = SimpleNamespace(items=[1])\nif flag:\n    reset(obj)\nself.assertEqual(obj.items, [])')
         self.assertFalse(self.proven(branch))
 
+    def test_collection_mutation_on_both_source_paths_is_observable(self):
+        source = ('def reset(obj):\n    if not hasattr(obj, "items"):\n        obj.items = set()\n'
+                  '    if "entry" in obj.items:\n        obj.items.remove("entry")\n'
+                  '    else:\n        obj.items.add("entry")')
+        code = candidate('obj = SimpleNamespace(items=set())\nreset(obj)\nself.assertEqual(obj.items, {"entry"})')
+        self.assertTrue(self.proven(code, {**CONTEXT, 'source': source}))
+        self.assertTrue(validate_bindings(code, {**CONTEXT, 'source': source})['valid'])
+        for uncertain in [source.replace('obj.items.remove("entry")', 'return'),
+                          'def reset(obj):\n    if obj.items:\n        obj.items.clear()',
+                          'def reset(obj):\n    return\n    obj.items.clear()',
+                          'def reset(obj):\n    helper(obj)']:
+            with self.subTest(source=uncertain):
+                self.assertFalse(self.proven(code, {**CONTEXT, 'source': uncertain}))
+
+    def test_direct_source_helper_patch_preserves_real_input_state(self):
+        source = 'def reset(obj):\n    obj.items.clear()\n    repaint(obj)'
+        body = ('obj = SimpleNamespace(items=[1])\nwith patch("subject.repaint"):\n'
+                '    reset(obj)\nself.assertEqual(obj.items, [])')
+        imports = 'from types import SimpleNamespace\nfrom unittest.mock import patch'
+        code = candidate(body, imports)
+        self.assertTrue(self.proven(code, {**CONTEXT, 'source': source}))
+        self.assertTrue(validate_bindings(code, {**CONTEXT, 'source': source})['valid'])
+        for replacement in ['with patch("subject.unrelated"):',
+                            'with patch("types.SimpleNamespace"):',
+                            'with patch("subject.repaint") as obj:']:
+            with self.subTest(replacement=replacement):
+                self.assertFalse(self.proven(candidate(body.replace('with patch("subject.repaint"):', replacement), imports),
+                                             {**CONTEXT, 'source': source}))
+        rebound = candidate(body, imports, 'def patch(name):\n    return name\n')
+        self.assertFalse(self.proven(rebound, {**CONTEXT, 'source': source}))
+
+    def test_mutator_name_alone_does_not_prove_an_arbitrary_member_is_a_collection(self):
+        source = 'def reset(obj):\n    obj.items.clear()'
+        for setup in ['obj = SimpleNamespace(items=SimpleNamespace(clear=lambda: None))',
+                      'obj = SimpleNamespace(items=[])\nobj.items = SimpleNamespace(clear=lambda: None)',
+                      'obj = SimpleNamespace(items=None)']:
+            with self.subTest(setup=setup):
+                self.assertFalse(self.proven(candidate(setup + '\nreset(obj)\nself.assertIsNotNone(obj.items)'),
+                                             {**CONTEXT, 'source': source}))
+
+    def test_methods_on_the_real_return_keep_their_result_lineage(self):
+        for body in ['connection = reset(None)\ncursor = connection.cursor()\ncursor.execute("SELECT 1")\n'
+                     'row = cursor.fetchone()\nself.assertIsNotNone(row)',
+                     'value = reset(2).copy().pop()\nself.assertEqual(value, 2)']:
+            with self.subTest(body=body):
+                self.assertTrue(self.proven(candidate(body)))
+        for body in ['reset(None)\nconnection = object()\nself.assertIsNotNone(connection.cursor())',
+                     'connection = reset(None)\nconnection = object()\nself.assertIsNotNone(connection.cursor())',
+                     'connection = reset(None)\ncursor = connection.cursor()\ncursor.fetchone = lambda: 1\n'
+                     'self.assertEqual(cursor.fetchone(), 1)',
+                     'connection = reset(None)\nvalue = helper(connection)\nself.assertIsNotNone(value)',
+                     'connection = reset(None)\nvalue = connection.__class__.custom()\nself.assertIsNotNone(value)']:
+            with self.subTest(body=body):
+                self.assertFalse(self.proven(candidate(body)))
+
+    def test_return_method_lineage_does_not_make_an_incorrect_expectation_pass(self):
+        source = 'def reset(value):\n    return [value]'
+        code = candidate('value = reset(2).copy().pop()\nself.assertEqual(value, 2)')
+        with tempfile.TemporaryDirectory(prefix='target-return-method-') as directory:
+            Path(directory, 'subject.py').write_text(source, encoding='utf-8')
+            for name, expected, status in [('valid_case', '2', 0), ('wrong_case', '9', 1)]:
+                value = code.replace('self.assertEqual(value, 2)', f'self.assertEqual(value, {expected})')
+                self.assertTrue(self.proven(value, {**CONTEXT, 'source': source}))
+                Path(directory, name + '.py').write_text(value, encoding='utf-8')
+                result = subprocess.run([sys.executable, '-B', '-m', 'unittest', name], cwd=directory,
+                                        capture_output=True, text=True, timeout=10, env={**os.environ, 'PYTHONPATH': ''})
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertIn('Ran 1 test', result.stderr)
+
+    def test_controlled_patch_state_still_requires_correct_runtime_expectation(self):
+        source = 'def reset(obj):\n    obj.items.clear()\n    repaint(obj)'
+        code = candidate('obj = SimpleNamespace(items=[1])\nwith patch("subject.repaint"):\n'
+                         '    reset(obj)\nself.assertEqual(obj.items, [])',
+                         'from types import SimpleNamespace\nfrom unittest.mock import patch')
+        with tempfile.TemporaryDirectory(prefix='target-state-patch-') as directory:
+            Path(directory, 'subject.py').write_text(source + '\ndef repaint(obj):\n    raise RuntimeError("not isolated")\n', encoding='utf-8')
+            for name, expected, status in [('valid_case', '[]', 0), ('wrong_case', '[9]', 1)]:
+                value = code.replace('self.assertEqual(obj.items, [])', f'self.assertEqual(obj.items, {expected})')
+                self.assertTrue(self.proven(value, {**CONTEXT, 'source': source}))
+                Path(directory, name + '.py').write_text(value, encoding='utf-8')
+                result = subprocess.run([sys.executable, '-B', '-m', 'unittest', name], cwd=directory,
+                                        capture_output=True, text=True, timeout=10, env={**os.environ, 'PYTHONPATH': ''})
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertIn('Ran 1 test', result.stderr)
+
     def test_source_rebinding_unreachable_write_duplicate_definition_and_owner_are_unknown(self):
         code = candidate('obj = SimpleNamespace(items=[1])\nreset(obj)\nself.assertEqual(obj.items, [])')
         for source in ['def reset(obj):\n    obj = None\n    obj.items = []',

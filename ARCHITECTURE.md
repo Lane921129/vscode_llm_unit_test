@@ -38,6 +38,8 @@ Bug Fixer 可在 Writer 合併鉤子之外產生新的可執行基線。`writerA
 
 ## Writer 種子程式碼續寫恢復（2026-10-23）
 
+2026-10-25補充：`writerSeedPromptMode` 於分析run啟動時固定，預設instruction。使用者可由命令「LLM Unit Test: 選擇 Writer 生成方式」保存code-completion；只有Local初始Writer seed（full與execution）可從首問使用同一完整可逆提示及無body外框，其他角色維持原傳輸。偏好續寫仍重複時，原唯一恢復切回指令契約，不重複嵌套註解或增加第三問。缺合法外框不猜碼；明確stop、來源／候選綁定及原候選品質流程保持。多個重複fenced方法外框且無unittest斷言另列repetitive-test-shells，不再只因test_簽名就擴大輸出。設定不是模型資格；同模型實測仍必要。
+
 `writerSeedCompletion.ts` 只處理實測高度重複、尚無測試結構的 Local seed 恢復。一般生成維持模型模板；唯一重試可把完整角色與證據轉成可逆的逐行註解，結尾接 `targetContract.ts` 的 canonical import／class／方法簽名，以 `raw:true`（不送 system/template）請模型續寫。此包裝沒有測資、目標呼叫或預期值；原回覆丟棄，不續寫截斷內容。新輸入重算容量且不借舊耗時，原 deadline／計數與兩次上限保持。只有完整 stop 才接合模型原字串；完整 fence 則直接保留。後續仍經相同 AST、執行、Reviewer、coverage 與 mutation，模式選擇不授予模型資格或測試批准。
 
 角色事件與 failure report 區分文字格式補正及程式碼續寫。固定框架指令可在有界去密節錄保留，但動態來源與秘密不能藉此公開。通用 seed 指引另外明示屬性物件不等於同名鍵字典、callable 成員須明確控制，避免 UI 參數 setup 與來源存取方式不符；不替模型提供 fixture 值或斷言。

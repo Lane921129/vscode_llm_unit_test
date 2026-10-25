@@ -66,6 +66,50 @@ class StructureEvidenceTests(unittest.TestCase):
         self.assertFalse(self.validate(suite('result = metric(50, 160)\nassert result == result')))
 
 
+class DigestReferenceTests(unittest.TestCase):
+    def proposal(self, source, body='password = "1234"\nresult = digest_value(password)\nself.assertEqual(result, "wrong")'):
+        code = ('import unittest\nfrom subject import digest_value\nclass Cases(unittest.TestCase):\n'
+                '    def test_seed(self):\n' + '\n'.join('        ' + line for line in body.splitlines()) + '\n')
+        return repair({'code': code, 'source': source, 'failure': 'FAIL: test_seed (candidate.Cases.test_seed)',
+                       'module': 'subject', 'target': 'digest_value'})
+
+    def test_describes_reference_without_importing_source_or_rewriting_test(self):
+        source = ('import hashlib\nraise RuntimeError("source must not execute")\n'
+                  'def digest_value(password):\n    return hashlib.sha256(password.encode("utf-8")).hexdigest()')
+        result = self.proposal(source)
+        self.assertFalse(result['changed'])
+        self.assertNotIn('code', result)
+        self.assertEqual(result['basis'], 'hashlib-reference-v1')
+        operation = result['referenceOperations'][0]
+        self.assertEqual((operation['algorithm'], operation['encoding'], operation['inputBytesHex']),
+                         ('sha256', 'utf-8', '31323334'))
+        self.assertEqual(operation['previous'], 'wrong')
+
+    def test_import_aliases_and_exact_keyword_input(self):
+        for source in [('import hashlib as h\ndef digest_value(password):\n'
+                        '    return h.sha256(password.encode()).hexdigest()'),
+                       ('from hashlib import sha256 as digest\ndef digest_value(password):\n'
+                        '    return digest(password.encode("utf8")).hexdigest()')]:
+            result = self.proposal(source, 'result = digest_value(password="1234")\nself.assertEqual(result, "wrong")')
+            self.assertEqual(result['referenceOperations'][0]['inputBytesHex'], '31323334')
+
+    def test_rebound_dynamic_or_unproven_inputs_do_not_become_reference_operations(self):
+        source = 'import hashlib\ndef digest_value(password):\n    return hashlib.sha256(password.encode()).hexdigest()'
+        for unsupported in [source.replace('import hashlib', 'import hashlib\nhashlib = other'),
+                            source.replace('import hashlib', 'import hashlib\ndef hashlib():\n    pass'),
+                            source.replace('import hashlib', 'import hashlib\nimport other as hashlib'),
+                            source.replace('password.encode()', 'external(password)'),
+                            source.replace('password.encode()', 'password.encode(encoding)'),
+                            source.replace('hashlib.sha256', 'unknown.sha256')]:
+            with self.subTest(source=unsupported):
+                self.assertNotIn('referenceOperations', self.proposal(unsupported))
+        for body in ['result = digest_value(unknown)\nself.assertEqual(result, "wrong")',
+                     'result = digest_value("1234")\nself.assertEqual(result, result)',
+                     'result = digest_value("1234")\nself.assertEqual(result, "wrong")\nopen("not-allowed")']:
+            with self.subTest(body=body):
+                self.assertNotIn('referenceOperations', self.proposal(source, body))
+
+
 class SourceExpectationTests(unittest.TestCase):
     def repair(self, code, source=SOURCE, failure='FAIL: test_value (candidate.TestMetric.test_value)\nAssertionError: deliberately untrusted observed output 999'):
         return repair({'code': code, 'source': source, 'failure': failure, 'module': 'metrics', 'target': 'metric'})

@@ -46,10 +46,10 @@ export function roleRequestBudget(input: {
         && Number.isSafeInteger(input.minimumOutputTokens) && (input.minimumOutputTokens as number) > 0
         ? input.minimumOutputTokens as number : 0;
     const boundedPlan = input.role === 'analyst-planning';
-    const boundedSeed = input.mode === 'full' && input.role === 'writer' && input.seedPending;
+    const boundedSeed = input.role === 'writer' && (input.mode === 'execution' || input.seedPending);
     const boundedAddition = input.mode === 'full' && !input.seedPending
         && ['writer', 'writer-revision'].includes(input.role) && input.writerOutputScope === 'single-test-addition';
-    const boundedRevision = input.mode === 'full' && input.role === 'writer-revision'
+    const boundedRevision = input.role === 'writer-revision'
         && !boundedAddition && typeof input.revisionCurrentCode === 'string' && input.revisionCurrentCode.trim().length > 0;
     if (input.envType !== 'local' || (!boundedPlan && !boundedSeed && !boundedRevision && !boundedAddition)
         || !Number.isSafeInteger(input.contextWindow) || input.contextWindow <= 0

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { buildCompactWriterContext, buildWriterRevisionContext } from '../prompts/compactWriterContext';
-import { formatFixtureReceiverGuidance, formatDependencyMockContract, executionFailureRepairGuidance } from '../prompts/dependencyMockContract';
+import { formatFixtureReceiverGuidance, formatDependencyMockContract, executionFailureRepairGuidance, sourceSetupCallGuidance, sourceLiteralRepairGuidance } from '../prompts/dependencyMockContract';
 import { WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { generatedUnittestArguments, resolvePythonExecutable } from '../utils/pythonTestEnvironment';
@@ -16,6 +16,77 @@ const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..
 const source = 'import sqlite3 as storage\n'
     + 'def target():\n    connection = storage.connect("controlled")\n    cursor = connection.cursor()\n'
     + '    cursor.execute("first")\n    cursor.execute("second")\n    connection.commit()\n';
+
+test('mixed attribute and mapping input repairs retain the real call and exact expectation', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mixed-input-shape-'));
+    const targetSource = 'def target(record):\n    return record.profile["active"] is True\n';
+    const candidate = 'import unittest\nfrom types import SimpleNamespace\nfrom sample import target\n'
+        + 'class Cases(unittest.TestCase):\n    def test_target(self):\n'
+        + '        record = SimpleNamespace(profile=SimpleNamespace(active=True))\n'
+        + '        self.assertIs(target(record), True)\n';
+    try {
+        extract(directory, targetSource);
+        const failed = run(directory, candidate);
+        assert.notEqual(failed.status, 0);
+        assert.match(failed.stderr, /SimpleNamespace.*not subscriptable/);
+        const hint = executionFailureRepairGuidance(failed.stderr);
+        assert.match(hint, /obj\.member\["key"\] needs a mapping-valued member/);
+        assert.match(hint, /obj\.member\.key needs attribute-bearing values/);
+        assert.match(hint, /preserve the real target call, controlled values and assertion strength/);
+        const corrected = candidate.replace('profile=SimpleNamespace(active=True)', 'profile={"active": True}');
+        const passed = run(directory, corrected);
+        assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+        const wrongExpected = run(directory, corrected.replace('target(record), True', 'target(record), False'));
+        assert.notEqual(wrongExpected.status, 0);
+        assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), targetSource);
+        assert.equal(executionFailureRepairGuidance('TypeError: unrelated'), '');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('call argument repair preserves source string whitespace instead of weakening the comparison', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'exact-source-call-'));
+    const targetSource = 'from unittest.mock import Mock\nboundary = Mock()\n'
+        + 'def target():\n    receiver = boundary()\n'
+        + '    def unrelated():\n        receiver.finish("\\nINNER_ONLY\\n")\n'
+        + '    receiver.finish("\\n  first\\n  second\\n")\n';
+    const candidate = 'import unittest\nfrom unittest.mock import patch\nimport sample\n'
+        + 'class Cases(unittest.TestCase):\n    def test_target(self):\n'
+        + '        with patch("sample.boundary") as factory:\n'
+        + '            dependency = factory.return_value\n'
+        + '            sample.target()\n'
+        + '            dependency.finish.assert_called_once_with("first second")\n';
+    try {
+        const context = extract(directory, targetSource);
+        const sourceFacts = sourceSetupCallGuidance('sample', context);
+        assert.match(sourceFacts, /SOURCE LITERAL SPELLINGS/);
+        assert.ok(sourceFacts.includes("receiver.finish, arg 1: '\\n  first\\n  second\\n'"));
+        assert.doesNotMatch(JSON.stringify(context.source_setup_call_contract.literalCallArguments), /INNER_ONLY/);
+        assert.ok(context.source_setup_call_contract.calls.every((call: any) => call.callee !== 'receiver.finish'));
+        assert.equal(context.source_setup_call_contract.patchAuthorization, false);
+        assert.equal(context.source_setup_call_contract.assertionOracle, false);
+        assert.match(sourceFacts, /not target output expectations/);
+        assert.equal(sourceSetupCallGuidance('sample', { ...context, code: context.code + '\n# drift' }), '');
+        const failed = run(directory, candidate);
+        assert.notEqual(failed.status, 0);
+        const hint = executionFailureRepairGuidance(failed.stderr);
+        assert.match(hint, /exact whitespace and newlines/);
+        assert.match(hint, /original source literal/);
+        assert.match(hint, /Do not normalize either side merely to hide a mismatch/);
+        const focus = sourceLiteralRepairGuidance(failed.stderr, 'sample', context);
+        assert.match(focus, /SOURCE_LITERAL_REPAIR_V1/);
+        assert.ok(focus.includes("receiver.finish, arg 1: '\\n  first\\n  second\\n'"));
+        assert.match(focus, /This invalid argument may be corrected/);
+        assert.equal(sourceLiteralRepairGuidance('OK', 'sample', context), '');
+        assert.equal(sourceLiteralRepairGuidance(failed.stderr, 'sample', { ...context, code: 'changed' }), '');
+        const corrected = candidate.replace('assert_called_once_with("first second")',
+            'assert_called_once_with("\\n  first\\n  second\\n")');
+        const passed = run(directory, corrected);
+        assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+        const wrongOrder = run(directory, corrected.replace('first\\n  second', 'second\\n  first'));
+        assert.notEqual(wrongOrder.status, 0);
+        assert.equal(fs.readFileSync(path.join(directory, 'sample.py'), 'utf8'), targetSource);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 function extract(directory: string, code = source): any {
     const file = path.join(directory, 'sample.py');

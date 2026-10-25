@@ -34,7 +34,9 @@ test('an explicit single-addition scope budgets the actual output rather than th
             writerOutputScope: 'single-test-addition' }), original);
     }
     assert.deepEqual(roleRequestBudget({ ...revision, role: 'writer', mode: 'execution', seedPending: false,
-        writerOutputScope: 'single-test-addition' }), original);
+        writerOutputScope: 'single-test-addition' }), { inputBudget: 6656,
+        reservedOutputTokens: 1536, requestOutputTokens: 1536 },
+        'execution initial Writer is a bounded seed even though full-mode addition scope does not apply');
 });
 
 test('addition capacity searches use the same scope and learned floor at every context', () => {
@@ -61,9 +63,11 @@ test('addition capacity searches use the same scope and learned floor at every c
 });
 
 test('small complete Writer revision pairs its output cap with the selected context', () => {
-    for (const seedPending of [true, false]) {
-        assert.deepEqual(roleRequestBudget({ ...revision, seedPending, revisionCurrentCode: code }),
-            { inputBudget: 6656, reservedOutputTokens: 1536, requestOutputTokens: 1536 });
+    for (const mode of ['full', 'execution'] as const) {
+        for (const seedPending of [true, false]) {
+            assert.deepEqual(roleRequestBudget({ ...revision, mode, seedPending, revisionCurrentCode: code }),
+                { inputBudget: 6656, reservedOutputTokens: 1536, requestOutputTokens: 1536 });
+        }
     }
 });
 
@@ -114,11 +118,10 @@ test('unknown or invalid work retains the original reserve and learned floors ne
     }
 });
 
-test('remote, execution, other roles, missing and invalid current candidates retain the prior policy', () => {
+test('remote, other roles, missing and invalid current candidates retain the prior policy', () => {
     const cases = [
         { ...revision, envType: 'cloud' as const, revisionCurrentCode: code },
         { ...revision, envType: 'custom' as const, revisionCurrentCode: code },
-        { ...revision, mode: 'execution' as const, revisionCurrentCode: code },
         { ...revision, role: 'reviewer' as const, revisionCurrentCode: code },
         { ...revision, role: 'bug-fixer' as const, revisionCurrentCode: code },
         { ...revision }, { ...revision, revisionCurrentCode: '' }, { ...revision, revisionCurrentCode: ' \r\n' },

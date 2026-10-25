@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from mock_behavior import has_mock_behavior
+from mock_behavior import has_mock_behavior, source_namespace_use_points
 from validate_test_bindings import validate_bindings
 
 
@@ -14,11 +14,13 @@ IMPORTS = 'import unittest\nfrom unittest.mock import MagicMock\nfrom types impo
 
 
 class MockNamespaceBehaviorTests(unittest.TestCase):
-    def check(self, body, *, imports=IMPORTS, setup='', source=SOURCE):
+    def check(self, body, *, imports=IMPORTS, setup='', source=SOURCE, module_source=None):
         code = imports + 'class Cases(unittest.TestCase):\n' + setup
         code += '    def test_case(self):\n' + ''.join('        ' + line + '\n' for line in body.splitlines())
         context = {'module': 'sample', 'target': 'target', 'source': source,
                    'dependencies': {}, 'requireMockBehavior': True, 'requireTargetBehavior': True}
+        if module_source is not None:
+            context['moduleSource'] = module_source
         actual = has_mock_behavior(ast.parse(code), context)
         self.assertEqual(validate_bindings(code, context)['valid'], actual)
         return actual
@@ -110,6 +112,35 @@ class MockNamespaceBehaviorTests(unittest.TestCase):
     def test_namespace_cycles_do_not_loop_or_fabricate_mock_members(self):
         self.assertTrue(self.check('page = SimpleNamespace(update=MagicMock())\npage.self = page\ntarget(page)\npage.update.assert_called_once()'))
         self.assertFalse(self.check('page = SimpleNamespace()\npage.self = page\ntarget(page)\npage.update.assert_called_once()'))
+
+    def test_source_module_namespace_patch_observes_only_source_used_members(self):
+        source = 'def target(width):\n    return ui.Panel(width)\n'
+        module_source = 'import widgets as ui\n' + source
+        imports = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
+        body = 'with patch("sample.ui") as controlled:\n    target(5)\n    controlled.Panel.assert_called_once_with(5)'
+        self.assertTrue(self.check(body, imports=imports, source=source, module_source=module_source))
+        unrelated = body.replace('controlled.Panel.assert_called_once_with(5)', 'controlled.unrelated.assert_not_called()')
+        self.assertFalse(self.check(unrelated, imports=imports, source=source, module_source=module_source))
+        configured = body.replace('    target(5)', '    controlled.unrelated = unittest.mock.MagicMock()\n    target(5)')
+        configured = configured.replace('controlled.Panel.assert_called_once_with(5)', 'controlled.unrelated.assert_not_called()')
+        self.assertFalse(self.check(configured, imports=imports, source=source, module_source=module_source))
+
+    def test_source_namespace_patch_cannot_borrow_missing_rebound_or_self_module_identity(self):
+        source = 'def target(width):\n    return ui.Panel(width)\n'
+        imports = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
+        body = 'with patch("sample.ui") as controlled:\n    target(5)\n    controlled.Panel.assert_called_once_with(5)'
+        for module_source in (None, 'import widgets as ui\n' + source + '\nui = object()\n', 'import sample as ui\n' + source):
+            with self.subTest(module_source=module_source):
+                self.assertFalse(self.check(body, imports=imports, source=source, module_source=module_source))
+
+    def test_package_alias_cannot_patch_the_target_class_or_its_members(self):
+        for member in ('target', 'other'):
+            source = f'def target(self):\n    return package.sample.Worker.{member}()\n'
+            module_source = 'import package\nclass Worker:\n' + ''.join('    ' + line + '\n' for line in source.splitlines())
+            for target in ('target', 'Worker.target'):
+                with self.subTest(member=member, target=target):
+                    self.assertEqual(source_namespace_use_points({'module': 'package.sample', 'target': target,
+                        'className': 'Worker', 'source': source, 'moduleSource': module_source}), {})
 
 
 if __name__ == '__main__':

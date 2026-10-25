@@ -12,6 +12,8 @@ const seed = { envType: 'local', mode: 'full', role: 'writer', seedPending: true
 
 test('one-case seed input and wire output reserve share the unchanged capacity', () => {
     const budget = roleRequestBudget(seed);
+    assert.deepEqual(roleRequestBudget({ ...seed, mode: 'execution', seedPending: false }), budget,
+        'execution-first initial generation owns the same bounded seed output, independently of the full-mode phase flag');
     assert.deepEqual(budget, { inputBudget: 6656, reservedOutputTokens: 1536, requestOutputTokens: 1536 });
     const envelope = buildOllamaPromptEnvelope('Complete role instructions', 'x'.repeat(22000));
     const separator = envelope.prompt.indexOf('\n');
@@ -34,10 +36,10 @@ test('low-capacity seeds retain their original thirty-percent output allowance',
     }
 });
 
-test('other roles, revisions, expansion, execution and remote providers keep the existing allowance', () => {
+test('other roles, revisions, expansion and remote providers keep the existing allowance', () => {
     const roles: BudgetedModelRole[] = ['writer-revision', 'reviewer', 'bug-fixer', 'analyst-quality'];
     const cases = [ ...roles.map(role => ({ ...seed, role })), { ...seed, seedPending: false },
-        { ...seed, mode: 'execution' as const }, { ...seed, envType: 'cloud' as const },
+        { ...seed, envType: 'cloud' as const },
         { ...seed, envType: 'custom' as const } ];
     for (const input of cases) {
         assert.deepEqual(roleRequestBudget(input), { inputBudget: 5734, reservedOutputTokens: 2458 });

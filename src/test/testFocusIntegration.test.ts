@@ -8,7 +8,7 @@ import { estimatePromptTokens } from '../prompts/promptBudget';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
 
-async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' = 'none', unknownFixture = false) {
+async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, repetition: 'none' | 'repair' | 'persistent' | 'shells' = 'none', unknownFixture = false, preferredCompletion = false) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-seed-output-'));
     const source = path.join(directory, 'sample.py');
     fs.writeFileSync(source, unknownFixture ? 'def increment(value: object):\n    return value.amount\n'
@@ -24,7 +24,8 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
             getConfiguration: () => ({ get: (key: string, fallback: unknown) =>
-                key === 'pythonPath' ? python : key === 'runtimeContextTokens' ? 8192 : fallback }),
+                key === 'pythonPath' ? python : key === 'runtimeContextTokens' ? 8192
+                    : key === 'writerSeedPromptMode' ? preferredCompletion ? 'code-completion' : 'instruction' : fallback }),
             openTextDocument: async () => ({}) },
         window: { registerWebviewViewProvider: (_: string, provider: any) => {
             provider.webview = { postMessage: async () => true }; return { dispose() {} };
@@ -43,12 +44,14 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         requests.push(request);
         assert.equal(request.options.num_ctx, 8192, 'explicit run capacity stays unchanged');
         if (request.roleInstructions.includes('dependency_behaviors')) {
+            assert.notEqual(request.raw, true, 'Writer preference never changes Analyst transport');
             assert.equal(request.options.num_predict, 1024, 'Analyst uses its own short-plan output cap');
             return new Response(JSON.stringify({ response: JSON.stringify({ dependency_behaviors: [],
                 test_strategy: { approach: 'Exercise increment with the exact verified observed input and result.' } }),
                 done: true, done_reason: 'stop' }), { status: 200 });
         }
         if (request.roleInstructions.includes('You are the test Reviewer')) {
+            assert.notEqual(request.raw, true, 'Writer preference never changes Reviewer transport');
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             return Response.json({ response: reviewAccepted ? '{"findings":[]}' : 'invalid review', done: true, done_reason: 'stop' });
         }
@@ -73,17 +76,29 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         assert.equal(request.options.num_predict, 4096);
         assert.ok(estimatePromptTokens(request.transmittedPrompt) <= 8192 - request.options.num_predict);
         writerAttempts++;
+        if (preferredCompletion && writerAttempts === 1) {
+            assert.equal(request.raw, true);
+            assert.match(request.transmittedPrompt, /\nclass GeneratedSeedTests\(unittest.TestCase\):\n    def test_seed\(self\):\n$/);
+        }
         if (repetition !== 'none') {
             if (writerAttempts === 1 || repetition === 'persistent') {
-                return Response.json({ response: '# output not converged\n'.repeat(40), done: true, done_reason: 'length' });
+                const response = repetition === 'shells'
+                    ? '```python\nimport unittest\nclass Tests(unittest.TestCase):\n    def test_seed(self):\n        # output not converged\n```\n'.repeat(12)
+                    : '# output not converged\n'.repeat(40);
+                return Response.json({ response, done: true, done_reason: 'length' });
             }
             assert.match(request.prompt, /WRITER_OUTPUT_FORMAT_REPAIR_V1/);
             assert.match(request.prompt, /value \+ 1/);
             assert.doesNotMatch(request.prompt, /# output not converged/);
-            assert.equal(request.raw, true);
-            assert.match(request.transmittedPrompt, /\nclass GeneratedSeedTests\(unittest.TestCase\):\n    def test_seed\(self\):\n$/);
-            return Response.json({ response: '        self.assertEqual(increment(1), 2)\n',
+            assert.equal(request.raw === true, !preferredCompletion);
+            if (!preferredCompletion) { assert.match(request.transmittedPrompt, /\nclass GeneratedSeedTests\(unittest.TestCase\):\n    def test_seed\(self\):\n$/); }
+            return Response.json({ response: preferredCompletion
+                ? 'import unittest\nfrom sample import increment\nclass Tests(unittest.TestCase):\n    def test_seed(self):\n        self.assertEqual(increment(1), 2)\n'
+                : '        self.assertEqual(increment(1), 2)\n',
                 done: true, done_reason: truncated ? 'length' : 'stop' });
+        }
+        if (preferredCompletion) {
+            return Response.json({ response: '        self.assertEqual(increment(1), 2)\n', done: true, done_reason: 'stop' });
         }
         return new Response(JSON.stringify({ response: 'import unittest\nfrom sample import increment\n'
             + 'class Tests(unittest.TestCase):\n    def test_increment(self):\n        self.assertEqual(increment(1), 2)\n',
@@ -118,6 +133,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         assert.equal(writer.detail.inputBudget, 4096);
         assert.equal(writer.detail.reservedOutputTokens, 4096);
         assert.equal(writer.detail.requestOutputTokens, 4096);
+        if (preferredCompletion) { assert.equal(writer.detail.writerPromptMode, 'seed-code-completion-v1'); }
         if (unknownFixture) {
             const shape = events.find(event => event.stage === 'writer-seed-input' && event.status === 'rejected');
             assert.equal(shape?.detail.reasonCode, 'writer-seed-call-count');
@@ -128,7 +144,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
         }
         if (repetition !== 'none') {
             const failures = events.filter(event => event.stage === 'model-request' && event.status === 'error');
-            assert.equal(failures[0].detail.outputDiagnosis, 'repetitive-without-tests');
+            assert.equal(failures[0].detail.outputDiagnosis, repetition === 'shells' ? 'repetitive-test-shells' : 'repetitive-without-tests');
             assert.equal(failures[0].detail.responsePreview.executable, false);
             assert.ok(failures[0].detail.responsePreview.samples.some((sample: any) => sample.text.includes('output not converged')));
             assert.equal(events.filter(event => event.status === 'output-format-retry').length, 1);
@@ -188,6 +204,12 @@ test('optional qualification never substitutes for actual Reviewer approval befo
     () => verifyFocusedWorkflow(false, false));
 test('repetitive Writer output receives one format correction and then completes real review and mutation',
     () => verifyFocusedWorkflow(false, true, 'repair'));
+test('repeated test shells use one raw recovery without growing output, then reach execution review and mutation',
+    () => verifyFocusedWorkflow(false, true, 'shells'));
+test('explicit code completion starts on the first Writer request while Analyst and Reviewer keep instruction transport',
+    () => verifyFocusedWorkflow(false, true, 'none', false, true));
+test('repetitive preferred code completion falls back once to instruction mode without growing output',
+    () => verifyFocusedWorkflow(false, true, 'shells', false, true));
 test('a second repetitive Writer output stops without another retry or executing partial output',
     () => verifyFocusedWorkflow(false, true, 'persistent'));
 test('a truncated code continuation never becomes a candidate despite its complete-looking assertion',

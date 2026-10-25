@@ -1,10 +1,16 @@
 import { createHash } from 'node:crypto';
+import { sameRecordedFile } from '../utils/fileIdentity';
+
+export const SOURCE_INPUT_SHAPE_GUIDANCE = 'Source parameter.member needs an attribute-bearing fixture (for example types.SimpleNamespace), not a dict of same-named keys. '
+    + 'Follow mixed accesses one level at a time: obj.member["key"] needs a mapping-valued member; obj.member.key needs attribute-bearing values. '
+    + 'Do not turn all nested values into namespaces.';
 
 /** Source consumption is setup guidance, never a dependency or target oracle. */
 export const DEPENDENCY_MOCK_SHAPE_GUIDANCE = 'Mock only source-shown receivers: factory(...).finish() needs factory_mock.return_value.finish.return_value; keep its return object. '
     + 'A direct factory(...) uses factory_mock.return_value. Never add layers or infer expected values from this pattern. '
     + 'Source connection.cursor() needs separate connection/cursor objects: put scalar/row results on the consumed method, never replace the connection with a string. '
-    + 'Source with/async with needs __enter__/__aenter__; do not invent that layer otherwise.';
+    + 'Source with/async with needs __enter__/__aenter__; do not invent that layer otherwise. '
+    + SOURCE_INPUT_SHAPE_GUIDANCE;
 
 export const TEST_IMPORT_GUIDANCE = 'Import test helpers (patch/Mock aliases) in test scope; target or other-method imports do not bind them. '
     + 'Use explicit target imports, never wildcard imports: underscore-prefixed targets are not imported by *. '
@@ -18,6 +24,45 @@ export const OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE = "For a source-proven optional ge
     + 'Do not invent APIs, patch the target/class, hide target AttributeError, or infer expected outputs from this setup. '
     + 'Source-location names such as __file__ belong to the target module, not the generated test. '
     + 'Control source-shown path conversions at their exact use points with explicit mocks; never run test-side Path.resolve() or file operations to compute expected values.';
+
+export const EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE = 'Focus on the real target. Isolate unrelated UI/service helpers with scoped source-use-point patches. Use with patch(...) contexts. '
+    + 'Host resources prepare imports; they do not require running every helper. Keep source-consumed return shapes and the declared resource contract. '
+    + 'Never patch the target or its owner.';
+
+/** Direct, uniquely bound same-module retrievals are setup hints, not permissions. */
+export function sourceHelperUsePointNames(context: any): string[] {
+    if (!Array.isArray(context?.calls) || !Array.isArray(context?.localDependencyContexts)
+        || context.localDependencyContexts.length > 6) { return []; }
+    return [...new Set<string>(context.localDependencyContexts.filter((helper: any) => helper
+        && typeof helper.name === 'string' && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(helper.name)
+        && helper.name !== context.name && context.calls.includes(helper.name)
+        && helper.retrieval?.kind === 'same-module-symbol' && helper.retrieval.depth === 1
+        && typeof helper.code === 'string' && typeof helper.sourceHash === 'string'
+        && createHash('sha256').update(helper.code).digest('hex') === helper.sourceHash)
+        .map((helper: any) => helper.name))];
+}
+
+/** A traceback navigates to a source-proven option; it never authorizes a patch. */
+export function executionHelperRepairGuidance(failure: string, module: string, file: string,
+    context: any, knownHelpers: readonly string[]): string {
+    if (!/^AttributeError:/m.test(failure) || context?.class_name || !Array.isArray(context?.calls)
+        || !/^[_\p{ID_Start}][_\p{ID_Continue}]*(?:\.[_\p{ID_Start}][_\p{ID_Continue}]*)*$/u.test(module)) { return ''; }
+    const names = new Set(knownHelpers.filter(name => name !== context.name
+        && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(name) && context.calls.includes(name)));
+    const mentioned = new Set<string>();
+    for (const frame of failure.matchAll(/^\s{2}File "([^"\r\n]+)", line [1-9]\d*, in ([_\p{ID_Start}][_\p{ID_Continue}]*)\s*$/gmu)) {
+        if (names.has(frame[2]) && sameRecordedFile(frame[1], file)) { mentioned.add(frame[2]); }
+    }
+    if (mentioned.size !== 1) { return ''; }
+    const point = module + '.' + [...mentioned][0];
+    return '\n\nEXECUTION_HELPER_BOUNDARY_REPAIR_V1\n'
+        + `The failure traceback mentions direct source helper use point ${point}. This is a source-backed isolation option, not a new target. `
+        + 'You may edit setup local to the failing test method. Keep passing methods and module/class fixtures unchanged. '
+        + 'When isolating this helper, keep the real target call and its assertions inside the scoped context below; '
+        + 'preserve consumed return shapes. This scaffold supplies no inputs or expected values and is not executable.\n'
+        + 'from unittest.mock import patch\n' + `with patch("${point}"):\n`
+        + '    # keep the real target call and its assertions here\n';
+}
 
 const TOPOLOGY_LEGEND = 'sourceConsumption steps: return_value = preceding call result; member = attribute; context-enter = source-proven with only. '
     + 'Keep each recorded receiver; never add a return_value or __enter__ layer. Unknown steps remain unknown.';
@@ -85,7 +130,8 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         const methods = calls.filter(call => call.startsWith(parameter + '.'))
             .map(call => call.slice(parameter.length + 1)).filter(method => /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(method));
         return methods.length ? [`Input ${parameter} is used with methods ${[...new Set(methods)].join(', ')}; `
-            + 'for those source paths pass a controlled protocol object, not a string/scalar. Configure the consumed method, not unrelated methods.'] : [];
+            + 'for those source paths pass a controlled protocol object, not a string/scalar. Configure the consumed method, not unrelated methods. '
+            + 'If asserting call history, make that method a unittest.mock.Mock: a lambda/plain function has no .called or assert_called* history.'] : [];
     }).join('\n');
     const sourceCalls = sourceSetupCallGuidance(module, context);
     // Source-bound fixture consumption is necessary setup, including in the
@@ -135,13 +181,15 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
     const facts = context?.source_setup_call_contract;
     const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
     const parameterMembers = facts?.parameterMembers ?? [];
+    const literalCallArguments = facts?.literalCallArguments ?? [];
     if (!facts || facts.schemaVersion !== 'source-setup-call-contract-v1' || facts.status !== 'complete'
         || facts.sourceHashKind !== 'normalized-target-source' || facts.authority !== 'source-spelling-only'
         || facts.assertionOracle !== false || facts.patchAuthorization !== false || !source
         || facts.targetSourceHash !== createHash('sha256').update(source).digest('hex')
         || facts.target !== (context?.class_name ? `${context.class_name}.${context.name}` : context?.name)
         || !Array.isArray(facts.calls) || !Array.isArray(facts.optionalLookups) || !Array.isArray(facts.sourceLocations)
-        || !Array.isArray(parameterMembers) || facts.calls.length + facts.optionalLookups.length + parameterMembers.length > 64
+        || !Array.isArray(parameterMembers) || !Array.isArray(literalCallArguments)
+        || facts.calls.length + facts.optionalLookups.length + parameterMembers.length + literalCallArguments.length > 64
         || Buffer.byteLength(JSON.stringify(facts), 'utf8') > 16384) { return ''; }
     const identifier = (value: unknown): value is string => typeof value === 'string'
         && /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(value.normalize('NFKC'));
@@ -159,12 +207,37 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
             || item.keywords.some((keyword: any) => !argument(keyword) || keyword.name !== null && !identifier(keyword.name))
             || !Number.isSafeInteger(item.line) || item.line <= 0)
         || facts.sourceLocations.some((name: unknown) => name !== '__file__')
+        || literalCallArguments.some((item: any) => !item || !spelling(item.callee) || !spelling(item.source)
+            || !Number.isSafeInteger(item.line) || item.line <= 0
+            || !(Number.isSafeInteger(item.position) && item.position > 0 && item.keyword === undefined
+                || item.position === undefined && identifier(item.keyword)))
         || parameterMembers.some((item: any) => !item || !identifier(item.parameter)
             || !declaredParameters.includes(item.parameter) || item.parameter === instanceReceiver
             || !Array.isArray(item.members) || !item.members.length || item.members.length > 8 || !item.members.every(identifier)
             || !['read', 'write', 'call'].includes(item.usage) || !Number.isSafeInteger(item.line) || item.line <= 0)) { return ''; }
-    if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length && !parameterMembers.length) { return ''; }
+    if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length
+        && !parameterMembers.length && !literalCallArguments.length) { return ''; }
     const lines = ['SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts)];
+    const literalHighlights: string[] = [];
+    for (const item of literalCallArguments) {
+        if (item.source.length <= 600) {
+            const position = item.position === undefined ? `keyword ${item.keyword}` : `arg ${item.position}`;
+            literalHighlights.push(`Source literal at line ${item.line}, ${item.callee}, ${position}: ${item.source}`);
+        }
+    }
+    for (const call of facts.literalCallArguments === undefined ? facts.calls : []) {
+        for (const [index, item] of call.args.entries()) {
+            if (item.scope === 'literal' && /\\[nrt]|[\r\n]/.test(item.source) && item.source.length <= 600) {
+                literalHighlights.push(`Source literal at line ${call.line}, ${call.callee}, arg ${index + 1}: ${item.source}`);
+            }
+        }
+    }
+    // Optional navigation repeats whole spellings; the complete facts above are never cut.
+    if (literalHighlights.length > 0 && literalHighlights.length <= 6
+        && literalHighlights.join('\n').length <= 2400) {
+        lines.push('SOURCE LITERAL SPELLINGS (retain escapes and whitespace; source argument facts, not target output expectations):',
+            ...literalHighlights);
+    }
     for (const lookup of facts.optionalLookups) {
         lines.push(`Optional source lookup ${lookup.source}: owner is ${module}.${lookup.owner}. `
             + `For its controlled attribute use patch.object(${module}.${lookup.owner}, ${JSON.stringify(lookup.attribute)}, controlled_value, create=True); `
@@ -204,6 +277,19 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
             + 'A path-constructor argument is input, not the returned resolved parent. Preserve the consumed return object/member and assert its explicitly controlled value.');
     }
     return lines.join('\n') + '\n';
+}
+
+/** Repeat only verified source spellings at the end of a concrete argument repair. */
+export function sourceLiteralRepairGuidance(output: string, module: string, context?: any): string {
+    if (!/^AssertionError: expected call not found\.\r?$/m.test(output)) { return ''; }
+    const literals = sourceSetupCallGuidance(module, context).split('\n')
+        .filter(line => /^Source literal at line [1-9]\d*, /.test(line));
+    if (!literals.length) { return ''; }
+    return '\n\nSOURCE_LITERAL_REPAIR_V1\n' + literals.join('\n')
+        + '\nRepair the failing call-argument assertion using the matching original source spelling. '
+        + 'This invalid argument may be corrected; preserve valid assertions and the source-consumed receiver. '
+        + 'Keep escapes inside Python string literals exactly; do not flatten their whitespace. '
+        + 'These facts supply no target return-value oracle or patch permission. Return the repaired code, not the old unchanged method.\n';
 }
 
 /** Only existing lexical receiver facts select these setup examples. No source is
@@ -360,6 +446,10 @@ export function missingNameRepairGuidance(output: string): string {
 /** Conditional repair hints for mock call-count and call-argument AssertionErrors. */
 export function executionFailureRepairGuidance(output: string): string {
     const hints: string[] = [];
+    if (/^TypeError: '(?:types\.)?SimpleNamespace' object is not subscriptable\r?$/m.test(output)) {
+        hints.push('INPUT SHAPE REPAIR CHECK: ' + SOURCE_INPUT_SHAPE_GUIDANCE
+            + ' Inspect the actual failing receiver in the supplied source; preserve the real target call, controlled values and assertion strength.');
+    }
     const multiCall = [...output.matchAll(/^AssertionError: Expected '([A-Za-z_][A-Za-z_0-9]{0,79})' to be called once\. Called ([2-9]|\d{2,}) times\.\r?$/gm)].at(-1);
     if (multiCall) {
         hints.push(`MOCK CALL COUNT CHECK: "${multiCall[1]}" was called ${multiCall[2]} times in its recorded mock history. `
@@ -374,7 +464,9 @@ export function executionFailureRepairGuidance(output: string): string {
     }
     if (/^AssertionError: expected call not found\.\r?$/m.test(output)) {
         hints.push('MOCK CALL ARGUMENT CHECK: Compare Expected vs Actual call arguments against TARGET SOURCE and SOURCE CALL SETUP. '
-            + 'Retain source-shown argument conversions (such as str(path) vs Path) and read module-global arguments from the canonical target module rather than an upstream variable.');
+            + 'Retain source-shown argument conversions (such as str(path) vs Path) and read module-global arguments from the canonical target module rather than an upstream variable. '
+            + 'String call arguments include exact whitespace and newlines: use the original source literal, not a flattened paraphrase or the failing Expected value. '
+            + 'Do not normalize either side merely to hide a mismatch.');
     }
     const immutablePatch = [...output.matchAll(/^TypeError: cannot set '([^'\r\n]+)' attribute of immutable type '([^'\r\n]+)'\r?$/gm)].at(-1);
     if (immutablePatch) {

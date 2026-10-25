@@ -195,6 +195,112 @@ def source_result(function, args, kwargs, calculator):
         'result_snapshot': snapshot_value(result)})
 
 
+def digest_reference_operations(tree, source_tree, function, target, module, failed):
+    """Describe a fixed stdlib digest operation; never import or run the source.
+
+    The host calculates the reference with its own builtin crypto implementation.
+    This remains an unverified source hypothesis until the AI test reexecutes.
+    """
+    spec = function.args
+    parameters = [arg.arg for arg in [*spec.posonlyargs, *spec.args]]
+    body = [node for node in function.body if not (isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str))]
+    if (function.decorator_list or spec.vararg or spec.kwarg or spec.kwonlyargs or len(parameters) != 1
+            or len(body) != 1 or not isinstance(body[0], ast.Return)):
+        return []
+    outer = body[0].value
+    if not (isinstance(outer, ast.Call) and not outer.args and not outer.keywords
+            and isinstance(outer.func, ast.Attribute) and outer.func.attr == 'hexdigest'):
+        return []
+    constructor = outer.func.value
+    if not isinstance(constructor, ast.Call) or len(constructor.args) != 1 or constructor.keywords:
+        return []
+    modules, functions = set(), {}
+    for node in source_tree.body:
+        if isinstance(node, ast.Import):
+            modules.update(item.asname or item.name for item in node.names if item.name == 'hashlib')
+        elif isinstance(node, ast.ImportFrom) and node.module == 'hashlib' and not node.level:
+            functions.update((item.asname or item.name, item.name) for item in node.names if item.name != '*')
+    bound_names = modules | set(functions)
+    if parameters[0] in bound_names or any(isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            and node.name in bound_names for node in source_tree.body) or any(
+            isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and node.id in bound_names
+            or isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del))
+            and isinstance(node.value, ast.Name) and node.value.id in bound_names for node in ast.walk(source_tree)):
+        return []
+    for node in source_tree.body:
+        if isinstance(node, ast.Import) and any((item.asname or item.name.split('.')[0]) in bound_names
+                                               and item.name != 'hashlib' for item in node.names):
+            return []
+        if isinstance(node, ast.ImportFrom) and node.module != 'hashlib' and any(
+                (item.asname or item.name) in bound_names for item in node.names):
+            return []
+    callee = constructor.func
+    algorithm = (callee.attr if isinstance(callee, ast.Attribute) and isinstance(callee.value, ast.Name)
+                 and callee.value.id in modules else functions.get(callee.id) if isinstance(callee, ast.Name) else None)
+    if algorithm not in ('md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512',
+                          'sha3_224', 'sha3_256', 'sha3_384', 'sha3_512'):
+        return []
+    encoded = constructor.args[0]
+    if not (isinstance(encoded, ast.Call) and isinstance(encoded.func, ast.Attribute)
+            and isinstance(encoded.func.value, ast.Name) and encoded.func.value.id == parameters[0]
+            and encoded.func.attr == 'encode' and len(encoded.args) <= 1 and not encoded.keywords):
+        return []
+    encoding = encoded.args[0].value if encoded.args and isinstance(encoded.args[0], ast.Constant) else 'utf-8'
+    if encoded.args and not isinstance(encoded.args[0], ast.Constant):
+        return []
+    if encoding not in ('utf-8', 'utf8', 'ascii', 'latin-1', 'latin1'):
+        return []
+    aliases = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            aliases.update((item.asname or item.name) + '.' + target for item in node.names if item.name == module)
+        elif isinstance(node, ast.ImportFrom) and node.module == module and not node.level:
+            aliases.update(item.asname or item.name for item in node.names if item.name == target)
+    if not aliases:
+        return []
+    operations = []
+    for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+        for method in (node for node in cls.body if isinstance(node, ast.FunctionDef)):
+            if method.decorator_list or not any(method.name == test and identifier.endswith('.' + cls.name + '.' + test)
+                                                for test, identifier in failed):
+                continue
+            calculator, values, pending = Calculator(), {}, []
+            def value(node):
+                if isinstance(node, ast.Call) and ast.unparse(node.func) in aliases:
+                    args = node.args or ([node.keywords[0].value] if len(node.keywords) == 1
+                            and node.keywords[0].arg == parameters[0] and not spec.posonlyargs else [])
+                    if len(args) != 1 or node.args and node.keywords:
+                        raise Unsupported('digest call binding')
+                    literal = calculator.expression(args[0], values)
+                    if literal.origin or type(literal.data) is not str:
+                        raise Unsupported('digest input')
+                    return Value(None, {'version': 'hashlib-reference-v1', 'algorithm': algorithm,
+                        'encoding': encoding, 'inputBytesHex': literal.data.encode(encoding).hex()})
+                return calculator.expression(node, values)
+            try:
+                for statement in method.body:
+                    if isinstance(statement, ast.Assign):
+                        item = value(statement.value)
+                        for destination in statement.targets:
+                            assign(destination, item, values)
+                    elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
+                        continue
+                    elif (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+                          and ast.unparse(statement.value.func) == 'self.assertEqual'
+                          and len(statement.value.args) == 2 and not statement.value.keywords):
+                        actual, expected = value(statement.value.args[0]), calculator.expression(statement.value.args[1], values)
+                        if actual.origin and not expected.origin and type(expected.data) is str:
+                            pending.append({**actual.origin, 'method': cls.name + '.' + method.name,
+                                            'line': statement.lineno, 'previous': expected.data})
+                    else:
+                        raise Unsupported('digest test scope')
+                operations.extend(pending)
+            except (Unsupported, ValueError, KeyError, TypeError):
+                continue
+    return operations[:32] if len(operations) <= 32 else []
+
+
 def repair(payload):
     code, source, failure = (payload.get(key, '') for key in ('code', 'source', 'failure'))
     empty = {'changed': False, 'reason': 'unsupported-or-no-proven-correction', 'corrections': []}
@@ -215,6 +321,11 @@ def repair(payload):
     if len(functions) != 1:
         return empty
     function = functions[0]
+    if not numeric_skill:
+        operations = digest_reference_operations(tree, source_tree, function, target, module, failed)
+        if operations:
+            return {'changed': False, 'basis': 'hashlib-reference-v1', 'referenceOperations': operations,
+                    'corrections': [], 'limitation': 'Unverified stdlib reference hypothesis; never source execution or a requirement oracle.'}
     # Reject *all* unsupported source operations, even in unselected branches.
     permitted = (ast.FunctionDef, ast.arguments, ast.arg, ast.Expr, ast.Constant, ast.Assign, ast.Name, ast.Load, ast.Store,
         ast.If, ast.Return, ast.BinOp, ast.UnaryOp, ast.Compare, ast.Call, ast.Tuple, ast.List,

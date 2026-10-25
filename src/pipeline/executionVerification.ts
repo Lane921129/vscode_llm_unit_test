@@ -14,6 +14,7 @@ import { pythonToolPath } from './pythonTools';
 import { currentImportFixtures } from './importFixtures';
 import { readResourceSetupFailure } from './resourceSetupFailure';
 import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics } from './generatedRunnerDiagnostics';
+import { digestReferenceHypotheses } from './digestReference';
 
 interface ExecutionVerificationOptions {
     directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
@@ -61,9 +62,11 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 return undefined;
             }
             try {
-                const value = JSON.parse(result.stdout);
-                if (value.changed !== true || typeof value.code !== 'string' || !Array.isArray(value.corrections)
-                    || value.corrections.length === 0 || value.basis !== 'source-derived-arithmetic-v1') { return undefined; }
+                const raw = JSON.parse(result.stdout);
+                const digest = digestReferenceHypotheses(raw);
+                const value = digest ? { ...digest, changed: true } : raw;
+                if (!digest && (value.changed !== true || typeof value.code !== 'string' || !Array.isArray(value.corrections)
+                    || value.corrections.length === 0 || value.basis !== 'source-derived-arithmetic-v1')) { return undefined; }
                 const [proofPath] = reserveArtifactFiles(artifacts, ['arithmetic'], 'json');
                 const evidence = { basis: value.basis, limitation: value.limitation, sourceHash: journal.sourceHash,
                     previousTestHash: evidenceHash(code), corrections: value.corrections, assertionOracle: false };
@@ -72,7 +75,8 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 journal.knowledge({ expectationRepair: { file: path.basename(proofPath), ...evidence } });
                 return 'SOURCE-DERIVED CALCULATION HYPOTHESES (not independently verified):\n'
                     + JSON.stringify(evidence) + '\nThe AI must revise the test; execution must validate the revision. Preserve passing cases.';
-            } catch {
+            } catch (error) {
+                if (error instanceof AnalysisStageError) { throw error; }
                 hooks.event('source-expectation-repair', 'unavailable', { reason: localize("算術檢查結果無效，保留模型修復流程") });
                 return undefined;
             }

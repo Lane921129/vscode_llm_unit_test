@@ -41,6 +41,14 @@ export function classifyExecutionFailure(message: string): ExecutionFailureCateg
     const normalized = message.split(/\r?\n/)
         .filter(line => !/^\s*(?:File ["']|at |test_\w+.*\.\.\.)/.test(line))
         .join('\n').toLowerCase();
+    // Completed unittest failures may quote arbitrary business values. Words
+    // such as "timeout", "cancelled" or "No module named" inside an assertion
+    // do not describe the host transport or Python environment.
+    if (/^(?:fail|error): \S+/m.test(normalized)
+        && /^ran \d+ tests? in \d+(?:\.\d+)?s$/m.test(normalized)
+        && /^failed \([^\n]*(?:failures|errors)=\d+[^\n]*\)$/m.test(normalized)) {
+        return /^(?:syntaxerror|indentationerror|taberror):/m.test(normalized) ? 'model-format' : 'validation';
+    }
     if (normalized.includes('使用者強制中止') || normalized.includes('cancelled')) {
         return 'cancelled';
     }

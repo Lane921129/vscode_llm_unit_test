@@ -44,7 +44,9 @@ export function getCompletedOllamaText(payload: Record<string, unknown>, outputT
             knownLimit
                 ? diagnosis === 'repetitive-without-tests'
                     ? localize('模型回覆高度重複且沒有可辨識測試結構（本次 num_predict={0} tokens）；未採用或執行截斷測試，詳見失敗報告的輸出診斷。', outputTokenLimit)
-                    : localize('模型回覆因長度限制未完成（本次 num_predict={0} tokens）；未採用或執行截斷測試，失敗報告另列輸出診斷與去密節錄。', outputTokenLimit)
+                    : diagnosis === 'repetitive-test-shells'
+                        ? localize('模型回覆反覆輸出測試外框，沒有可辨識的 unittest 斷言（本次 num_predict={0} tokens）；未採用截斷內容，詳見失敗報告。', outputTokenLimit)
+                        : localize('模型回覆因長度限制未完成（本次 num_predict={0} tokens）；未採用或執行截斷測試，失敗報告另列輸出診斷與去密節錄。', outputTokenLimit)
                 : localize('模型回覆達到輸出上限而未完成；未保存或執行截斷內容。'),
             { reasonCode: 'output-token-limit',
                 ...(shape ? { responseShape: shape,
