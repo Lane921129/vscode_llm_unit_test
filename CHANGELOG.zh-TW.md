@@ -4,6 +4,13 @@
 
 ## 2026-10-26
 
+### 資源與 Mock 提示衝突及 execution 固定說明精簡
+
+- 移除共用資源規則「declared resources, not mocks」及 execution 的「without host-declared resources」限制，統一為宿主資源準備應用 I/O、測試可控制來源支持的相依及呼叫端參數。明示參數不是模組 patch 位置，Mock 案例不等於真實資源驗證；不改原批准、schema／seed、runtime、Checker、斷言、真目標或隔離 gate。
+- execution Writer 的固定 system 說明由普通無資源時2550字元縮為1574字元，保留原角色標記及關鍵契約；完整來源、必要 setup、候選及觀測未裁切。查明既有2000-token中性案例原本已超額，精簡後同完整來源可容納；不是提高預算或省略證據。初始 seed 仍使用獨立契約。
+- 關聯回歸40項最終通過，含跨角色資源文字、不可直接 I/O、2000-token完整證據、原生 Mock／import 修訂與修復範圍；TypeScript、lint及生產建置通過。未跑全量開發回歸。
+- 車輛剩餘8目標均已嘗試，完整8檔／215目標現為107執行通過、108失敗，來源未改。兩份歷史 clock 草稿重驗及code-completion對照仍未通過，包含模組參數誤patch、錯誤fixture及缺有效斷言；本輪提示修正後的3B案例亦仍未通過，不宣稱通過率提升、Codellama驗收或整車完成。首要工作仍是讓模型形成正確的最小單元案例，並核對未證明的Mock關聯，不能用放寬gate代替。
+
 ### 來源綁定的 clock Mock 設定修復與呼叫診斷
 
 - execution 的 Writer 可針對 Checker 已核實的 immutable datetime/date patch 問題，選取 `REPLACE setup-1 WITH source-1`。工具核對完整模組、唯一目標與未重綁的來源使用點，把既有方法 patch 改為 canonical class 綁定，並同步原 Mock 成員前綴；只複製原 literal fixture 與斷言，不產生 expected、次數或新測資。完整目標、失敗方法及整個替換 scope 交模型判斷，其他位元組鎖定；未知或歧義回原有限修訂，不延長期限。

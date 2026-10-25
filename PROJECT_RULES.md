@@ -2,6 +2,11 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+## 2026-10-26 資源與單元隔離提示一致性
+
+- 宿主批准的資源負責應用匯入及已宣告 I/O，不把函式參數變成模組屬性，也不代表所有單元案例都禁止 Mock。來源已核實的相依使用點可明確替換，呼叫端參數可使用測試自有的相容 fixture；生成測試仍不得直接 I/O、patch 目標或以不相容 scalar 取代 connection。
+- 使用 Mock 的案例只驗證其明確控制的單元行為，不能宣稱已驗證真實資源或外部整合。資源批准、schema／seed、來源身分、native frame、斷言與隔離 gate 均保持；提示精簡只改固定重述，不裁切來源、候選、必要 setup 或觀測。
+
 ## 2026-10-26 來源 Mock setup 選取
 
 - execution Writer 只可對原 Checker 重新核實的 immutable datetime/date patch 問題選取封閉 setup 修復。須核對完整來源模組 hash、唯一目標、穩定 from-import 與單一來源呼叫成員；唯一普通測試的既有標準 patch scope、alias 及成員使用亦須可證明。未知 class 使用、別名重綁／逃逸、反射或來源改寫不推導。

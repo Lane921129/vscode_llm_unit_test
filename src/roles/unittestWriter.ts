@@ -4,7 +4,7 @@ import { formatTargetContract } from '../pipeline/targetContract';
 import { buildCompactWriterContext } from '../prompts/compactWriterContext';
 import { buildVerifiedConstructorCall } from '../tier/tier1TestBuilder';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, formatDependencyMockContract, formatSourceImport, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
+import { DEPENDENCY_MOCK_SHAPE_GUIDANCE, EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, formatDependencyMockContract, formatSourceImport, SOURCE_INPUT_SHAPE_GUIDANCE, TEST_IMPORT_GUIDANCE } from '../prompts/dependencyMockContract';
 import { referenceRepeatedTestFile } from './roleContracts';
 
 const PURE_STDLIB_INPUT_GUIDANCE = 'For pure standard-library parsing, formatting or calculation, prefer real target calls with source-supported literal inputs. '
@@ -13,15 +13,14 @@ const PURE_STDLIB_INPUT_GUIDANCE = 'For pure standard-library parsing, formattin
     + 'Inputs and source expressions do not prove expected values; retain verified-observation or explicit same-test evidence requirements.';
 
 export function getExecutionWriterSystemPrompt(): string {
-    return `EXECUTION_VERIFICATION_V1 Writer: complete unittest file; one python fence, no prose. No Trace/coverage/mutation.
-Read-only source/imports/signatures/constructors/dependencies. Exact target binding; never copy/redefine/mock target/class.
-Use unittest.mock at external use points${isolatedResourceSystemRule() ? ' without host-declared resources' : ''}; set returns/side effects per test. Assert real target result/source-supported exception/observed dependency call.
-${DEPENDENCY_MOCK_SHAPE_GUIDANCE}
-${TEST_IMPORT_GUIDANCE}
+    return `EXECUTION_VERIFICATION_V1 Writer: complete unittest, one Python fence. Import unittest/target; no wildcard. Never copy/redefine/mock target/class.
+Mock only source-shown receivers: factory(...).finish() needs factory_mock.return_value.finish.return_value. A direct factory(...) uses factory_mock.return_value. Never add layers or infer expected values. Connections/cursors are objects; preserve consumed layers.
+Import helpers; target or other-method imports do not bind them. Never patch immutable types; replace source module bindings.
+${SOURCE_INPUT_SHAPE_GUIDANCE}
 ${EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE}
-For calculations without external operations, use the real target without mocks. Check inputs/units/arithmetic/rounding/every returned field; thresholds are not expected.
-Expected: reachable literals/simple source-supported relationships/test-controlled dependencies; hypotheses until executed. Invent no requirements/APIs/constructors/ambient values/exceptions. Never call/copy target for expected.
-No tautologies/weaker or removed assertions/skip/expectedFailure/swallowed exceptions/unrelated checks. No direct file/network/process operations; use mocks or isolated in-memory SQLite.${isolatedResourceSystemRule()}`;
+For calculations without external operations, use the real target without mocks.
+Expected: observations, test controls or reachable source literals/relations; hypotheses until executed. No invented APIs, inputs, exceptions or ambient values. No dependency calls for expected.
+No tautologies, weaker assertions, skip/expectedFailure/swallowed errors or direct file/network/shell/dynamic execution/shared SQLite.${isolatedResourceSystemRule()}`;
 }
 
 export function getExecutionWriterPrompt(evidence: string, code?: string, failure?: string): string {

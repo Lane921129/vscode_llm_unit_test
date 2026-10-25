@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## 資源與單元相依的提示分工（2026-10-26）
+
+`isolatedResourceSystemRule` 與完整資源角色規則共用同一分工：資源計畫準備已批准的應用 I/O，參數仍由測試提供，來源支持的相依 Mock 仍可隔離單元。移除「declared resources, not mocks」及 execution 的「without host-declared resources」絕對限制，避免與既有 helper 隔離規則互相矛盾；不改資源計畫、runtime、Checker 或品質 gate。Mock 成功不等於真實資源驗證。
+
+execution Writer 固定 system 說明去除重複教學，普通無資源時由2550字元縮為1574字元，保留來源形狀、匯入、不可變綁定、假說及隔離約束。既有中性案例在完整來源不變時回到2000輸入tokens內；此數字不是實際 tokenizer 或任意專案可容納的保證。初始 seed 仍使用自己的契約，完整來源／必要 setup／觀測不裁切。
+
 ## 來源綁定的 Mock setup 修復（2026-10-26）
 
 execution 的結構修訂遇到已核實 immutable datetime/date 屬性 patch 時，`source_mock_setup_repair.py` 重新執行同一靜態 Checker，核對完整模組 hash、唯一普通目標及單一普通測試方法。只接受來源穩定 from-import 的單一呼叫成員，以及明確標準 `with patch(...) as alias`；來源其他成員／constructor、別名逃逸／重綁、反射及來源改寫使計畫失效。規劃不匯入應用。

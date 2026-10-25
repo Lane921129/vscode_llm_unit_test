@@ -16,6 +16,7 @@ import { fitReviewPrompt, getTestReviewerSystemPrompt } from '../roles/testRevie
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 import { validateUnittestStructure } from '../validation/generatedTestValidator';
 import { canonicalExternalResourcePath, canonicalUncResourcePath } from '../pipeline/isolatedResources';
+import { buildWriterSeedSystemPrompt } from '../roles/writerPhases';
 
 const plan = (): ImportFixturePlan => ({ schemaVersion: 'import-fixtures-v1', id: 'a'.repeat(64), root: '/private/application',
     rules: [{ file: 'settings.py', sourceHash: 'b'.repeat(64), resourceSourceHash: 'b'.repeat(64), resources: [
@@ -205,6 +206,24 @@ test('host resource support does not allow generated tests to perform direct fil
     }
     const code = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(target(), 1)\n';
     assert.equal(validateUnittestStructure(code, 'target', 'sample').valid, true);
+});
+
+test('declared resources do not forbid controlled parameter fixtures or source-proven dependency isolation', () => {
+    const approved = plan(), before = JSON.stringify(approved);
+    withImportFixtures(approved, () => {
+        const context = buildIsolatedResourceContext(approved);
+        const prompts = [context, getExecutionWriterSystemPrompt(), buildWriterSeedSystemPrompt('', false, true),
+            buildWriterSeedSystemPrompt('', false, false), getBugFixerSystemPrompt(), getTestReviewerSystemPrompt()];
+        for (const prompt of prompts) {
+            assert.doesNotMatch(prompt, /for declared resources, not mocks|without host-declared resources/);
+            assert.match(prompt, /Source-proven dependency mocks remain allowed/);
+            assert.match(prompt, /(?:run|Run) the real target/);
+            assert.match(prompt, /direct test I\/O/);
+        }
+        assert.match(context, /Caller parameters need test-local fixtures, not module patches/);
+        assert.match(context, /a mocked resource does not verify real resource behavior/);
+        assert.equal(JSON.stringify(approved), before, 'role instructions must not change approved resources');
+    });
 });
 
 function projectedFixture(operation: (value: { root: string; plan: ImportFixturePlan; evidence: IsolatedResourceSourceEvidence }) => void) {

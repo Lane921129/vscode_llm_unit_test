@@ -89,12 +89,12 @@ export function buildTargetIsolatedResourceContext(plan: ImportFixturePlan | und
 }
 
 /** The exception is for application code, never a generated test's direct I/O. */
-export const ISOLATED_RESOURCE_ROLE_RULE = 'When HOST_ISOLATED_RESOURCE_CONTEXT (prompt section, never a Python import) is supplied, the host prepares only its declared resources before import. Call the real target through its public API; do not create files, open database connections, invent tables, or replace a declared connection with a scalar mock. The seed is controlled input, not proof of an expected output. Each process starts fresh, but methods in one unittest suite share resources: arrange and clean up through public application APIs so tests do not depend on order. Undeclared boundaries still need explicit use-point mocks; network, shell, direct test I/O and shared databases remain forbidden.';
+export const ISOLATED_RESOURCE_ROLE_RULE = 'When HOST_ISOLATED_RESOURCE_CONTEXT (prompt section, never a Python import) is supplied, the host prepares only its declared resources before import. Run the real target. Caller parameters need test-local fixtures, not module patches. Source-proven dependency mocks remain allowed; a mocked resource does not verify real resource behavior. Do not create files, open database connections, invent tables, or replace a connection with a scalar. The seed is controlled input, not proof of an expected output. Each process starts fresh, but methods in one unittest suite share resources: arrange and clean up through public application APIs so tests do not depend on order. Undeclared boundaries still need explicit use-point mocks; network, shell, direct test I/O and shared databases remain forbidden.';
 
 /** Keep ordinary functions and qualification probes at their original prompt size. */
 export function isolatedResourceSystemRule(): string {
     return currentImportFixtures()?.rules.some(rule => rule.resources?.length)
-        ? '\nUse HOST_ISOLATED_RESOURCE_CONTEXT (prompt section, never an import) for declared resources, not mocks; call real target APIs. Seeds are inputs, not oracles. Direct test I/O stays forbidden.' : '';
+        ? '\nHOST_ISOLATED_RESOURCE_CONTEXT is prompt data, not an import. Source-proven dependency mocks remain allowed; use test-local inputs. Run the real target. No direct test I/O; seeds are not oracles.' : '';
 }
 
 /** Whole records only: an incomplete seed/schema must never look complete. */
