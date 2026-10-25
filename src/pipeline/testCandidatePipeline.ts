@@ -31,6 +31,9 @@ export class CandidateValidationError extends Error {
 
 export interface CandidatePipelineHooks {
     reviewRequired?: boolean;
+    /** Execution-only, before any native attempt: revise the latest unapproved
+     * structure draft without promoting it to a retained/executable baseline. */
+    continueUnexecutedWriterDraft?: boolean;
     validate(code: string): Promise<string | { reason: string; gate: CandidateRejectionGate; reasonCode: string } | undefined>;
     review(code: string): Promise<TestReview | undefined>;
     revise(code: string, feedback: string, role: 'writer' | 'bug-fixer', attempt: number, repairEvidence?: string): Promise<string>;
@@ -74,6 +77,7 @@ export async function validateTestCandidate(
     let executionRepairRole: 'writer' | undefined;
     let toolRepairAttempts = 0;
     let unresolvedReview = false;
+    let executionAttempted = Boolean(baseline);
     // One reserved handoff after a no-op or unusable method repair response.
     // It still consumes the enclosing target's candidate/request/time budgets.
     const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change' | 'response-format'): boolean => {
@@ -222,12 +226,20 @@ export async function validateTestCandidate(
                 typeof invalid === 'string' ? 'unittest-structure' : invalid.gate,
                 typeof invalid === 'string' ? 'candidate-structure-rejected' : invalid.reasonCode);
             lastFailure = invalidReason!;
-            code = retainedCode;
+            if (hooks.reviewRequired === false && hooks.continueUnexecutedWriterDraft === true
+                && !executionAttempted && !baseline && role === 'writer') {
+                if (code !== retainedCode) {
+                    hooks.event('writer-draft', 'continued', { attempt, codeHash: repairHash(code),
+                        retainedCodeHash: repairHash(retainedCode), reasonCode: 'unexecuted-structure-repair',
+                        executable: false, approved: false, executionAttempted: false });
+                }
+            } else { code = retainedCode; }
             // A malformed file has no proven failing method to replace.
             role = 'writer';
             if (writerRecoveryAttempt) { break; }
             continue;
         }
+        executionAttempted = true;
         const execution = await hooks.execute(code);
         executionRepairRole = execution.ok ? undefined : execution.repairRole;
         hooks.checkCancelled();

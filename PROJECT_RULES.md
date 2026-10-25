@@ -2,6 +2,11 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+## 2026-10-26 初始 execution 草稿接續
+
+- 只有 execution 的可信呼叫端可啟用 `continueUnexecutedWriterDraft`。尚無 baseline 且從未進入 native 執行時，完整模型候選即使被結構檢查拒絕，也可作下一次 Writer 修訂的未批准草稿，避免已補 import 因第二項錯誤被回復而遺失。候選仍保存為 rejected，事件 `writer-draft/continued` 必須標 executable／approved 為false；不把草稿提升為保留或執行基線。
+- full、未啟用、已有 baseline、任何 native 嘗試後及修訂範圍拒絕，仍採原保留／回復政策。結構、綁定、範圍、有效斷言、真目標 frame及完整隔離證據都保留；不得借此採用截斷回覆、續期限或增加修訂次數。
+
 ## 2026-10-25 種子範圍恢復與依賴綁定
 
 - 當 host 已明確持有初始單測 seed 範圍，完整 length 的詞法樣本有多個測試方法簽名時，標為 `seed-scope-overrun`；即使已有斷言，也使用既有唯一格式恢復，不為完成整份 suite 增額。未知樣本、單方法、完整候選修訂及補測不借此 scope；詞法計數不是有效測試數。原來源／證據、floor、期限與最多兩次保持。

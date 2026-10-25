@@ -1,5 +1,9 @@
 # 專案閱讀入口
 
+## 初始執行草稿的修訂接續（2026-10-26）
+
+`runExecutionVerification` 明確啟用候選流程的 `continueUnexecutedWriterDraft`。沒有基線且尚未嘗試 native 執行時，結構拒絕保留目前完整候選供下一次 Writer 修訂，例如補 import 後再修下一項 clock setup；`retainedCode` 不前移，草稿仍 rejected／不可執行。`writer-draft/continued` 只保存摘要及未批准狀態。首次 native 嘗試後、已有基線或 scope 拒絕仍回復原保留版本；full 與其他呼叫端預設不啟用，原期限與次數不變。
+
 ## 種子範圍及來源依賴綁定（2026-10-25）
 
 `requestBudgetedOne` 由目前工作狀態標記 `single-test-seed`，不從提示字串或模型名稱猜測。完整 length 回覆若已寫出多個方法，即使含斷言，也以 `seed-scope-overrun` 使用原有一次格式修正；不擴大額度完成非本次範圍的 suite。首問續寫可切回原完整指令，原始指令 seed 則沿既有續寫恢復；仍重算輸入、保留 floor、同期限及兩次上限。單方法與其他 scope 維持原路由，截斷內容不當候選。

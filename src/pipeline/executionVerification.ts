@@ -48,7 +48,8 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
     const initial = await options.generate();
     hooks.event('writer', 'candidate', { code: initial, validationMode: 'execution' });
     const candidate = await validateTestCandidate(initial, {
-        ...hooks, reviewRequired: false, review: async () => undefined, checkCancelled: checkCurrent,
+        ...hooks, reviewRequired: false, continueUnexecutedWriterDraft: true,
+        review: async () => undefined, checkCancelled: checkCurrent,
         repairEvidence: async (code, failure) => {
             if (!options.targetModule || !/^FAIL: test_/m.test(failure)) { return undefined; }
             checkCurrent();

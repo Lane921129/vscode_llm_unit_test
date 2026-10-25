@@ -2,6 +2,14 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-26
+
+### 初始單元草稿的結構修訂接續
+
+- 真實3B車輛 `export_trip_records` 揭露：AI選取的 import 修復已套用，下一項 immutable clock setup 拒絕後卻退回缺 import 的舊稿，讓兩個問題互相循環。execution 現在可在沒有基線且尚未原生執行時，以最新完整但未批准的結構草稿接續 Writer 修訂；不提升為可執行成果，不改 full、scope 拒絕或 native 嘗試後的保護。
+- 新增7項必要回歸，包含真實Python的「缺import→import修復→clock修復→有效斷言／原目標frame／完整隔離」；加上相關既有案例，共21項已核對通過。其中1項既有產物hardlink回歸首次受沙箱EPERM阻擋，以原生權限單獨重驗通過；未執行全量開發回歸。TypeScript、lint及生產建置通過。
+- 真3B重驗確認 import 修訂已保存並交接，原循環消失；但模型對下一項 immutable datetime patch 仍原樣回覆，該函式尚未通過。車輛來源8檔未變，當次範圍215目標為105通過、88失敗、22待生成；繼續產生剩餘單測，不冒稱整車完成或完整品質達標。
+
 ## 2026-10-25
 
 ### 單一種子超出範圍與 from-import Mock 綁定
