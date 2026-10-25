@@ -53,6 +53,13 @@ test('invalid AI instructions and cancellation never apply a source edit', async
     assert.equal(requested, false);
 });
 
+test('the documented ABSTAIN directive declines a source edit without claiming a model format error', async () => {
+    const events: string[] = [];
+    assert.equal(await repairSourceLiteralArgument({ source, code, failure, target: 'target', python,
+        checkCurrent() {}, request: async () => 'ABSTAIN', event: status => events.push(status) }), undefined);
+    assert.deepEqual(events, ['literal-selection-planned', 'literal-selection-abstained']);
+});
+
 const receiverSource = 'def target():\n    connection = factory()\n    cursor = connection.cursor()\n'
     + '    cursor.execute("query")\n    connection.commit()\n    connection.close()\n';
 const receiverCode = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'

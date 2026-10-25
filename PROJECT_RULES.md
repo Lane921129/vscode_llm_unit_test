@@ -2,6 +2,12 @@
 
 本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
 
+## 2026-10-26 來源 Mock setup 選取
+
+- execution Writer 只可對原 Checker 重新核實的 immutable datetime/date patch 問題選取封閉 setup 修復。須核對完整來源模組 hash、唯一目標、穩定 from-import 與單一來源呼叫成員；唯一普通測試的既有標準 patch scope、alias 及成員使用亦須可證明。未知 class 使用、別名重綁／逃逸、反射或來源改寫不推導。
+- AI 必須收到完整目標、方法與替換 scope。工具只改 canonical patch 綁定與同 alias 的標準 Mock 成員前綴，不產生 fixture／expected／呼叫次數；Python 重規劃與 Node 位元組重組皆核對 hash，其餘原文鎖定。合法 `ABSTAIN` 是放棄選取，交回原有限修訂；非法指令、取消或漂移不採用，計數與期限不續，套用不授執行批准。
+- 實測 once 斷言出現多次呼叫時可附同源呼叫拼字導航，要求模型核對精確參數、順序、次數及 setup 歷史；靜態呼叫站不當 runtime 次數，不能自動降低斷言或把來源拼字當輸出 oracle。可省略的 literal 導航須整段保留或整份省略，完整來源／契約不裁切。
+
 ## 2026-10-26 初始 execution 草稿接續
 
 - 只有 execution 的可信呼叫端可啟用 `continueUnexecutedWriterDraft`。尚無 baseline 且從未進入 native 執行時，完整模型候選即使被結構檢查拒絕，也可作下一次 Writer 修訂的未批准草稿，避免已補 import 因第二項錯誤被回復而遺失。候選仍保存為 rejected，事件 `writer-draft/continued` 必須標 executable／approved 為false；不把草稿提升為保留或執行基線。

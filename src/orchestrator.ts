@@ -41,7 +41,7 @@ import { runExecutionVerification } from './pipeline/executionVerification';
 import { readSavedWriterCandidate, SavedWriterCandidateRequest } from './pipeline/savedWriterCandidate';
 import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, executionHelperRepairGuidance, sourceHelperUsePointNames, sourceLiteralRepairGuidance } from './prompts/dependencyMockContract';
 import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './roles/unittestWriter';
-import { repairSourceLiteralArgument, repairSourceMockReceiver, repairSourceTestBinding } from './pipeline/sourceLiteralArgumentRepair';
+import { repairSourceLiteralArgument, repairSourceMockReceiver, repairSourceTestBinding, repairSourceMockSetup } from './pipeline/sourceLiteralArgumentRepair';
 import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
 import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analysisJournal';
 import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
@@ -2010,10 +2010,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
         sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string,
         writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }, initialAttemptDeadlineAt?: number,
-        revisionWorkload?: WriterRevisionWorkload, sourceSelectionScope?: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-receiver-binding'
+        revisionWorkload?: WriterRevisionWorkload, sourceSelectionScope?: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-receiver-binding' | 'mock-setup'
     ): Promise<string> => {
         if (sourceSelectionScope && (mode !== 'execution' || format !== 'text'
-            || (['test-binding', 'mock-receiver-binding'].includes(sourceSelectionScope) ? role !== 'writer-revision' : role !== 'bug-fixer'))) {
+            || (['test-binding', 'mock-receiver-binding', 'mock-setup'].includes(sourceSelectionScope) ? role !== 'writer-revision' : role !== 'bug-fixer'))) {
             throw new AnalysisStageError('validation', 'source-selection-scope', 'Source selection requires its execution-only Writer or Bug Fixer task.');
         }
         if (role === 'writer' && mode === 'full' && !writerCaseMode) {
@@ -2243,7 +2243,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const metrics = { role, format, estimatedInputTokens,
             ...(sourceSelectionScope ? { requestScope: sourceSelectionScope === 'literal-argument'
                 ? 'source-literal-selection-v1' : sourceSelectionScope === 'test-binding'
-                    ? 'source-test-binding-selection-v1' : sourceSelectionScope === 'mock-receiver-binding'
+                    ? 'source-test-binding-selection-v1' : sourceSelectionScope === 'mock-setup'
+                        ? 'source-mock-setup-selection-v1' : sourceSelectionScope === 'mock-receiver-binding'
                         ? 'source-mock-receiver-binding-selection-v1' : 'source-mock-receiver-selection-v1' } : {}),
             ...roleBudget, reservedInputTokens: correctionReserve,
             ...(writerOutputScope ? { writerOutputScope } : {}),
@@ -2889,6 +2890,25 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             recordRole('writer', 'candidate', { code: bindingCandidate,
                                 repairMode: 'source-test-binding-repair-v1', contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision });
                             return bindingCandidate;
+                        }
+                    }
+                    if (role === 'writer' && failure.startsWith('Do not patch immutable datetime/date attribute ')) {
+                        const setupCandidate = await repairSourceMockSetup({ source: astContext.code,
+                            code, failure, target: params.funcName || targetFuncName, python: pythonExecutable,
+                            module: targetImportModule, moduleSource: fs.readFileSync(params.filePath, 'utf8'), moduleSourceHash: journal.sourceHash,
+                            checkCurrent: () => {
+                                throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
+                                if (!runtimeQualifications.current()) {
+                                    throw new AnalysisStageError('validation', 'source-changed', 'Source scope changed during Mock setup repair.');
+                                }
+                            },
+                            request: (system, prompt) => requestBudgeted(params, system, prompt, log,
+                                'text', 'writer-revision', undefined, 0, undefined, undefined, undefined, undefined, 'mock-setup'),
+                            event: (status, detail) => recordRole('writer', status, detail) });
+                        if (setupCandidate !== undefined) {
+                            recordRole('writer', 'candidate', { code: setupCandidate,
+                                repairMode: 'source-mock-setup-repair-v1', contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision });
+                            return setupCandidate;
                         }
                     }
                     if (role === 'writer' && failure.startsWith('Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.')) {

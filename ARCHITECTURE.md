@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 來源綁定的 Mock setup 修復（2026-10-26）
+
+execution 的結構修訂遇到已核實 immutable datetime/date 屬性 patch 時，`source_mock_setup_repair.py` 重新執行同一靜態 Checker，核對完整模組 hash、唯一普通目標及單一普通測試方法。只接受來源穩定 from-import 的單一呼叫成員，以及明確標準 `with patch(...) as alias`；來源其他成員／constructor、別名逃逸／重綁、反射及來源改寫使計畫失效。規劃不匯入應用。
+
+AI 看完整目標、完整方法與完整替換 scope，只能選既有 ID 或 `ABSTAIN`。替換把 immutable method patch 移到 canonical class 綁定，同步同 alias 的標準 Mock 成員前綴，保留 literal fixture、斷言方法／參數／次數及 scope 外位元組。Python 重新規劃、Node 獨立重組並核對 source／test／plan／candidate hash；事件永遠未批准。合法放棄回原有限角色修訂，不增加第三次恢復或重置計數。
+
+真正 native once 斷言失敗且被呼叫至少兩次時，`sourceLiteralRepairGuidance` 可附同源同成員的完整 literal 呼叫提示。這只導航來源，要求 AI 區分 setup 與 target 呼叫、保留精確參數與順序，不把靜態呼叫站數當 runtime 次數或以弱斷言掩蓋失敗。修訂後仍走原範圍、綁定及實際隔離執行；full 不啟用此 setup 片段路徑。
+
 ## 初始執行草稿的修訂接續（2026-10-26）
 
 `runExecutionVerification` 明確啟用候選流程的 `continueUnexecutedWriterDraft`。沒有基線且尚未嘗試 native 執行時，結構拒絕保留目前完整候選供下一次 Writer 修訂，例如補 import 後再修下一項 clock setup；`retainedCode` 不前移，草稿仍 rejected／不可執行。`writer-draft/continued` 只保存摘要及未批准狀態。首次 native 嘗試後、已有基線或 scope 拒絕仍回復原保留版本；full 與其他呼叫端預設不啟用，原期限與次數不變。

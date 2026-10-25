@@ -176,6 +176,25 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         + 'A configured mock alone is not an assertion: assert the real target result or the source-shown dependency call with controlled arguments.';
 }
 
+/** Call only after the containing source contract has been validated. */
+function sourceLiteralHighlights(facts: any): Array<{ callee: string; text: string }> {
+    const rows: Array<{ callee: string; text: string }> = [];
+    for (const item of facts.literalCallArguments ?? []) {
+        if (item.source.length <= 600) {
+            const position = item.position === undefined ? `keyword ${item.keyword}` : `arg ${item.position}`;
+            rows.push({ callee: item.callee, text: `Source literal at line ${item.line}, ${item.callee}, ${position}: ${item.source}` });
+        }
+    }
+    for (const call of facts.literalCallArguments === undefined ? facts.calls : []) {
+        for (const [index, item] of call.args.entries()) {
+            if (item.scope === 'literal' && /\\[nrt]|[\r\n]/.test(item.source) && item.source.length <= 600) {
+                rows.push({ callee: call.callee, text: `Source literal at line ${call.line}, ${call.callee}, arg ${index + 1}: ${item.source}` });
+            }
+        }
+    }
+    return rows;
+}
+
 /** Exact AST spellings reduce setup guesswork, not the execution or assertion gates. */
 export function sourceSetupCallGuidance(module: string, context?: any): string {
     const facts = context?.source_setup_call_contract;
@@ -218,20 +237,7 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
     if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length
         && !parameterMembers.length && !literalCallArguments.length) { return ''; }
     const lines = ['SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts)];
-    const literalHighlights: string[] = [];
-    for (const item of literalCallArguments) {
-        if (item.source.length <= 600) {
-            const position = item.position === undefined ? `keyword ${item.keyword}` : `arg ${item.position}`;
-            literalHighlights.push(`Source literal at line ${item.line}, ${item.callee}, ${position}: ${item.source}`);
-        }
-    }
-    for (const call of facts.literalCallArguments === undefined ? facts.calls : []) {
-        for (const [index, item] of call.args.entries()) {
-            if (item.scope === 'literal' && /\\[nrt]|[\r\n]/.test(item.source) && item.source.length <= 600) {
-                literalHighlights.push(`Source literal at line ${call.line}, ${call.callee}, arg ${index + 1}: ${item.source}`);
-            }
-        }
-    }
+    const literalHighlights = sourceLiteralHighlights(facts).map(item => item.text);
     // Optional navigation repeats whole spellings; the complete facts above are never cut.
     if (literalHighlights.length > 0 && literalHighlights.length <= 6
         && literalHighlights.join('\n').length <= 2400) {
@@ -281,10 +287,19 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
 
 /** Repeat only verified source spellings at the end of a concrete argument repair. */
 export function sourceLiteralRepairGuidance(output: string, module: string, context?: any): string {
-    if (!/^AssertionError: expected call not found\.\r?$/m.test(output)) { return ''; }
-    const literals = sourceSetupCallGuidance(module, context).split('\n')
-        .filter(line => /^Source literal at line [1-9]\d*, /.test(line));
-    if (!literals.length) { return ''; }
+    const multiple = /^AssertionError: Expected '([A-Za-z_]\w{0,79})' to (?:be called once|have been called once)\. Called ([2-9]|[1-9]\d{1,4}) times\.\r?$/m.exec(output);
+    if (!multiple && !/^AssertionError: expected call not found\.\r?$/m.test(output)) { return ''; }
+    if (!sourceSetupCallGuidance(module, context)) { return ''; }
+    const rows = sourceLiteralHighlights(context.source_setup_call_contract);
+    const literals = rows.filter(item => !multiple || item.callee.split('.').at(-1) === multiple[1]).map(item => item.text);
+    if (!literals.length || literals.length > 6 || literals.join('\n').length > 2400) { return ''; }
+    if (multiple) {
+        return '\n\nSOURCE_CALL_COUNT_REPAIR_V1\n' + literals.join('\n')
+            + '\nThe failing once-only assertion is not a preservation requirement. Compare its asserted arguments with these source calls; do not keep an unsupported call assumption. '
+            + 'First distinguish setup history from calls made by the real target for the controlled inputs; static call sites do not determine runtime count. '
+            + 'Repair only the failing assertion with source-supported exact arguments, order and total count. Exact call_args_list equality can check all three; assert_any_call alone would lose precision. '
+            + 'Preserve passing cases and fixture control. These source spellings provide no target return-value oracle or patch permission. Return a substantive repair, not the unchanged method.\n';
+    }
     return '\n\nSOURCE_LITERAL_REPAIR_V1\n' + literals.join('\n')
         + '\nRepair the failing call-argument assertion using the matching original source spelling. '
         + 'This invalid argument may be corrected; preserve valid assertions and the source-consumed receiver. '

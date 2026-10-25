@@ -4,6 +4,14 @@
 
 ## 2026-10-26
 
+### 來源綁定的 clock Mock 設定修復與呼叫診斷
+
+- execution 的 Writer 可針對 Checker 已核實的 immutable datetime/date patch 問題，選取 `REPLACE setup-1 WITH source-1`。工具核對完整模組、唯一目標與未重綁的來源使用點，把既有方法 patch 改為 canonical class 綁定，並同步原 Mock 成員前綴；只複製原 literal fixture 與斷言，不產生 expected、次數或新測資。完整目標、失敗方法及整個替換 scope 交模型判斷，其他位元組鎖定；未知或歧義回原有限修訂，不延長期限。
+- 來源片段修復的合法 `ABSTAIN` 現在記為模型放棄選取，回原角色流程，不誤報格式失敗。非法指令、取消、來源漂移仍不套用。選取／套用事件不是執行批准，候選仍需原綁定、範圍及原生隔離驗證；full 流程保持原契約。
+- 唯一實測 once 斷言收到多次呼叫時，在修訂尾端重申同 hash 的對應來源呼叫拼字，提醒區分 setup 歷史與 target 呼叫，按控制輸入修正精確參數、順序與次數，不用 `assert_any_call` 掩蓋錯誤。靜態呼叫站數不當執行次數；多行 literal 導航整段保留，不拆斷字串。
+- 必要相關 Node／真 Python 回歸30／30通過，包含新設定修復、hash／別名／反射拒絕、合法放棄、多行 literal 及真正 native frame／完整隔離證據。TypeScript、lint、生產建置通過；未執行全量開發回歸。
+- 真實 Qwen 3B 在995輸入 tokens、10輸出 tokens 的窄任務選取設定修復，HTTP200／stop，總耗時約3.536秒；clock 阻擋解除並進入原生測試，下一項仍因來源 UPDATE／INSERT 兩次 execute、測試卻要求一次 SELECT 而失敗。新呼叫提示已在正式 Fixer／Writer 請求送出，但模型仍原樣返回，不能宣稱該目標已修好或做出效能比較。全8檔來源未改，215目標暫為107通過、100失敗、8待生成；未完成整車／Codellama實驗室或完整品質驗收。
+
 ### 初始單元草稿的結構修訂接續
 
 - 真實3B車輛 `export_trip_records` 揭露：AI選取的 import 修復已套用，下一項 immutable clock setup 拒絕後卻退回缺 import 的舊稿，讓兩個問題互相循環。execution 現在可在沒有基線且尚未原生執行時，以最新完整但未批准的結構草稿接續 Writer 修訂；不提升為可執行成果，不改 full、scope 拒絕或 native 嘗試後的保護。
