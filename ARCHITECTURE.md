@@ -6,6 +6,12 @@
 
 execution Writer 固定 system 說明去除重複教學，普通無資源時由2550字元縮為1574字元，保留來源形狀、匯入、不可變綁定、假說及隔離約束。既有中性案例在完整來源不變時回到2000輸入tokens內；此數字不是實際 tokenizer 或任意專案可容納的保證。初始 seed 仍使用自己的契約，完整來源／必要 setup／觀測不裁切。
 
+## 呼叫端參數 Mock 的結構修復（2026-10-26）
+
+`source_parameter_mock_repair.py` 處理已被 Checker 證明錯把函式參數當模組屬性的 patch。完整來源 hash、唯一普通目標／測試、qualified 標準 patch、唯一 target call 及其 positional／keyword 參數必須一致。工具提出只改結構的封閉選項：移除錯誤 patch，建立測試自有的標準 MagicMock，原 alias 繼續傳入目標；既有設定及斷言只增加來源已使用的單層成員前綴。原測值、expected、斷言方法／參數／次數保持；整理 scope 縮排時使用 token 位置保護多行字串，保留註解與空行。
+
+這條路徑沿用 `sourceLiteralArgumentRepair.ts` 的 AI 選取、Python 重規劃、Node 獨立位元組重組與 hash 核驗，新增 `parameter-mock` request scope，限制 execution 的 Writer 修訂。完整目標、失敗方法與選項交 AI；不傳整份模組或資源 schema，不據此產生 oracle。未知綁定、setup hook、重綁、展開與 alias 逃逸回原有限 Writer 修訂；套用仍未批准，必須新 native／真目標／隔離證據，full 及品質政策不變。
+
 ## 來源綁定的 Mock setup 修復（2026-10-26）
 
 execution 的結構修訂遇到已核實 immutable datetime/date 屬性 patch 時，`source_mock_setup_repair.py` 重新執行同一靜態 Checker，核對完整模組 hash、唯一普通目標及單一普通測試方法。只接受來源穩定 from-import 的單一呼叫成員，以及明確標準 `with patch(...) as alias`；來源其他成員／constructor、別名逃逸／重綁、反射及來源改寫使計畫失效。規劃不匯入應用。

@@ -29,23 +29,29 @@ export async function repairSourceMockSetup(options: LiteralArgumentRepairOption
     return repairSourceSpelling(options, 'mock-setup');
 }
 
+export async function repairSourceParameterMock(options: LiteralArgumentRepairOptions): Promise<string | undefined> {
+    return repairSourceSpelling(options, 'parameter-mock');
+}
+
 async function repairSourceSpelling(options: LiteralArgumentRepairOptions,
-    kind: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-setup'): Promise<string | undefined> {
+    kind: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-setup' | 'parameter-mock'): Promise<string | undefined> {
     const { source, code, failure, target, python } = options;
     const literal = kind === 'literal-argument';
     const binding = kind === 'test-binding';
-    const setup = kind === 'mock-setup';
+    const parameter = kind === 'parameter-mock';
+    const setup = kind === 'mock-setup' || parameter;
     const receiverModule = !literal && !binding && !setup && options.moduleSource !== undefined;
     const fullModule = binding || setup || receiverModule;
-    if (setup ? !failure.startsWith('Do not patch immutable datetime/date attribute ')
+    if (parameter ? !/^Do not patch .+: .+ is a parameter of .+, not a module attribute of .+\./.test(failure)
+        : setup ? !failure.startsWith('Do not patch immutable datetime/date attribute ')
         : binding ? !/Writer binding repair: [_\p{ID_Start}][_\p{ID_Continue}]* is undefined or read before its local binding in [_\p{ID_Start}][_\p{ID_Continue}]*\./u.test(failure)
         : literal ? !/^AssertionError: expected call not found\.\r?$/m.test(failure)
         : !/^AssertionError: Expected '[^'\r\n]+' to (?:be called once|have been called once)\. Called 0 times\.\r?$/m.test(failure)
             && !/^AttributeError: '[^'\r\n]+' object has no attribute '[A-Za-z_]\w{0,79}'\r?$/m.test(failure)
             && !failure.startsWith('Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.')) { return undefined; }
-    const version = setup ? 'source-mock-setup-repair-v1' : binding ? 'source-test-binding-repair-v1' : literal ? 'source-literal-argument-repair-v1' : 'source-mock-receiver-repair-v1';
+    const version = parameter ? 'source-parameter-mock-repair-v1' : setup ? 'source-mock-setup-repair-v1' : binding ? 'source-test-binding-repair-v1' : literal ? 'source-literal-argument-repair-v1' : 'source-mock-receiver-repair-v1';
     const slot = setup ? 'setup-1' : binding ? 'import-1' : literal ? 'argument-1' : 'receiver-1';
-    const prefix = setup ? 'setup-selection' : binding ? 'binding-selection' : literal ? 'literal-selection' : 'receiver-selection';
+    const prefix = parameter ? 'parameter-selection' : setup ? 'setup-selection' : binding ? 'binding-selection' : literal ? 'literal-selection' : 'receiver-selection';
     if ((binding || setup) && (!options.moduleSource || !hash(options.moduleSourceHash))) { return undefined; }
     if (fullModule && evidenceHash(options.moduleSource!) !== options.moduleSourceHash) {
         throw new AnalysisStageError('validation', 'source-changed', 'Source module changed before binding repair.');
@@ -57,7 +63,7 @@ async function repairSourceSpelling(options: LiteralArgumentRepairOptions,
         'Source spelling repair evidence is invalid; no edit was adopted.'); };
     const call = async (extra: Record<string, unknown>) => {
         options.checkCurrent();
-        const result = await runSpawn(python, ['-I', '-B', pythonToolPath(setup ? 'sourceMockSetupRepair' : binding ? 'sourceTestBindingRepair' : literal ? 'sourceLiteralRepair' : 'sourceMockReceiverRepair')], {
+        const result = await runSpawn(python, ['-I', '-B', pythonToolPath(parameter ? 'sourceParameterMockRepair' : setup ? 'sourceMockSetupRepair' : binding ? 'sourceTestBindingRepair' : literal ? 'sourceLiteralRepair' : 'sourceMockReceiverRepair')], {
             input: JSON.stringify({ ...payload, ...extra }), timeout: 5000
         });
         options.checkCurrent();
@@ -74,7 +80,7 @@ async function repairSourceSpelling(options: LiteralArgumentRepairOptions,
         || binding && (plan.editKind !== 'insert-import' || plan.moduleSourceHash !== options.moduleSourceHash)
         || (receiverModule || setup) && plan.moduleSourceHash !== options.moduleSourceHash
         || setup && (plan.editKind !== 'replace-mock-setup' || plan.failureBasis !== 'static-binding'
-            || !Number.isSafeInteger(plan.changes) || plan.changes < 2 || plan.changes > 33
+            || !Number.isSafeInteger(plan.changes) || plan.changes < 2 || plan.changes > (parameter ? 256 : 33)
             || typeof plan.patchPoint !== 'string' || !plan.patchPoint.startsWith(options.module + '.')
             || typeof plan.member !== 'string' || !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(plan.member))
         || binding && (typeof plan.missingName !== 'string' || !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(plan.missingName))
@@ -99,7 +105,8 @@ async function repairSourceSpelling(options: LiteralArgumentRepairOptions,
             : binding ? { moduleSourceHash: plan.moduleSourceHash, missingName: plan.missingName }
             : literal ? {} : { failureBasis: plan.failureBasis }) });
     const directiveFor = (id: string) => binding ? `INSERT ${slot} FROM ${id}` : `REPLACE ${slot} WITH ${id}`;
-    const system = (setup ? 'Repair only a source-proven immutable clock patch binding and its associated standard Mock member prefixes. '
+    const system = (parameter ? 'Replace an invalid module patch of a function parameter with caller-owned standard MagicMock setup and its source-used member prefixes. '
+        : setup ? 'Repair only a source-proven immutable clock patch binding and its associated standard Mock member prefixes. '
         : binding ? 'Repair only an AST-proven unresolved test name with one explicit method-local import from a supplied binding. '
         : literal ? 'Repair only whitespace in one failed dependency-call argument. '
         : 'Repair only the receiver of one source-bound Mock assertion using source-proven consumption paths from its existing patch. ')
@@ -110,11 +117,12 @@ async function repairSourceSpelling(options: LiteralArgumentRepairOptions,
         + (!literal ? 'Keep the same assertion method, call count and arguments; never weaken an assertion or patch the target. ' : '')
         + (binding ? 'Do not install packages or call source helpers for expected values. Binding names prove no values or types. ' : '')
         + 'Source spellings are not target return-value oracles or execution approval.';
-    const prompt = (setup ? 'SOURCE_MOCK_SETUP_SELECTION_V1' : binding ? 'SOURCE_TEST_BINDING_SELECTION_V1' : literal ? 'SOURCE_LITERAL_SELECTION_V1' : 'SOURCE_MOCK_RECEIVER_SELECTION_V1') + '\nCOMPLETE TARGET SOURCE\n' + source
+    const prompt = (parameter ? 'SOURCE_PARAMETER_MOCK_SELECTION_V1' : setup ? 'SOURCE_MOCK_SETUP_SELECTION_V1' : binding ? 'SOURCE_TEST_BINDING_SELECTION_V1' : literal ? 'SOURCE_LITERAL_SELECTION_V1' : 'SOURCE_MOCK_RECEIVER_SELECTION_V1') + '\nCOMPLETE TARGET SOURCE\n' + source
         + `\nCOMPLETE FAILING METHOD (all but ${slot} are locked)\n` + plan.methodSource
         + '\nSOURCE SPELLING CHOICES\n' + JSON.stringify(plan.choices)
         + (setup ? `\nSOURCE BINDING: ${plan.patchPoint}; SOURCE-CALLED MEMBER: ${plan.member}. `
-            + 'The current checker proved the immutable method patch invalid. The choice is the complete replacement for that patch scope. '
+            + (parameter ? 'The current checker proved this path names a caller parameter, not a module attribute. The choice replaces only that patch context with a fresh standard MagicMock assignment, passes the same alias to the target, and moves existing Mock setup/assertions to its source-used member. Indentation changes preserve literal string contents. '
+                : 'The current checker proved the immutable method patch invalid. The choice is the complete replacement for that patch scope. ')
             + 'Decide ONLY whether this mechanical binding repair follows the source; it does not approve the other test expectations. '
             + 'Other defects stay for later validation. Preserve the same controlled call, fixtures and assertions. No native failure is claimed. '
             : binding ? `\nThe static binding checker reports missing name ${plan.missingName}; only an import may be inserted. `

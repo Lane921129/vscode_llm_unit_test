@@ -4,6 +4,13 @@
 
 ## 2026-10-26
 
+### 參數 Mock 結構修復與小模型窄任務驗收
+
+- 修正 execution Writer 對「把函式參數當模組屬性 patch」只能重寫整份測試的瓶頸。新增來源綁定的封閉結構選項：原 Checker、完整來源 hash、唯一目標／測試、qualified 標準 patch、唯一參數傳入及來源單層成員皆須可核實；AI 選取後，將錯誤 patch 改為新的標準 MagicMock assignment，原 alias 繼續傳入目標，原有設定與斷言對準該成員。不產生測值、expected、次數或新斷言。
+- scope 內只整理必要縮排及成員前綴，多行字串內容、註解、空行和 scope 外位元組保留；Python 重規劃、Node 獨立重組及 source／test／plan／candidate hash 均核對。未知、重綁、escape、動態展開及 fixture hook 不推導；ABSTAIN、期限／計數及 full 原契約保留，套用仍非通過。
+- 必要相關回歸28／28通過，包含新 adapter、原 clock／receiver／import、真實 native frame／完整隔離、錯誤預期值仍失敗及多行 literal 保留。TypeScript、lint及生產建置通過；未執行全量開發回歸。
+- 真實本機 Qwen3B 的結構選取請求估算854輸入 tokens、耗時約5.786秒，修後 `database.py::_add_column_if_missing` 原生驗證通過；相同來源的中文目錄副本另行重取 native／隔離證據後亦通過。完整8檔／215目標由107增為109執行通過、106失敗，8檔來源未改；讀回109份通過證據皆有效。兩個新增成果屬同一來源模式，不能宣稱兩種泛化成功、整車完成、Codellama驗收或完整品質達標。
+
 ### 資源與 Mock 提示衝突及 execution 固定說明精簡
 
 - 移除共用資源規則「declared resources, not mocks」及 execution 的「without host-declared resources」限制，統一為宿主資源準備應用 I/O、測試可控制來源支持的相依及呼叫端參數。明示參數不是模組 patch 位置，Mock 案例不等於真實資源驗證；不改原批准、schema／seed、runtime、Checker、斷言、真目標或隔離 gate。

@@ -26,6 +26,7 @@ export const PYTHON_TOOLS = {
     sourceMockReceiverRepair: 'source_mock_receiver_repair.py',
     sourceTestBindingRepair: 'source_test_binding_repair.py',
     sourceMockSetupRepair: 'source_mock_setup_repair.py',
+    sourceParameterMockRepair: 'source_parameter_mock_repair.py',
     rescue: 'rescue_unittest.py',
     scenarios: 'scenario_inventory.py',
     traceDeduplication: 'deduplicate_trace_tests.py',
