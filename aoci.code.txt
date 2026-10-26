@@ -9,7 +9,7 @@ AGENTS.md[SC7S]: F:規定AOCI會話認知、來源綁定創作、完整交付與
 ARCHITECTURE.md[SG7L]: F:說明AI閉環、共用包裝抽取、局部審查修訂及品質身分 | R:code:src/orchestrator.ts,code:src/validation/generatedTestValidator.ts,code:src/validation/testMerger.ts | A:addition抽取、方法集合、格式恢復 | S:抽取及合併只產生草稿，完整族須新執行與同版審查才量測；矛盾只補正非批准，格式恢復不續期限或借舊速度。
 AUTO_MAINTENANCE.md[SV5T]: F:規範相關回歸、快測、整合與里程碑完整驗證及安全提交推送 | R:code:PROJECT_RULES.md,code:CHANGELOG.zh-TW.md,code:test/verificationRunner.js | A:test:related/fast/integration/full；中文紀錄、雙語commit與push | S:局部/list非全量，unit仍完整；依本次範圍分列未驗項目。分層不放寬產品gate；相容性歷史描述須對照現行引擎契約。
 CHANGELOG.md[SV3T]: F:保存擴充套件早期英文版本的功能、修復與架構變更 | R:code:CHANGELOG.zh-TW.md | A:0.0.1與0.0.2歷史版本紀錄 | S:-
-CHANGELOG.zh-TW.md[SV5L]: F:記錄BMI補測抽取根因、角色修訂與分層驗證界線 | R:code:PROJECT_RULES.md,code:docs/BMI補測抽取根因_2026_10_26.md | A:相關Node69/Python42、快測750/42及Mutatest39/39 | S:本次39/39為固定角色回覆配合真實工具，不是Codellama新驗收；歷史原文缺失不證fence內必有效，完整開發回歸及整車未完成。
+CHANGELOG.zh-TW.md[SV5L]: F:記錄BMI新批次補測進展、模型fetch排序與分層驗證界線 | R:code:docs/BMI結果分析_2026_10_27_0013.md,code:src/ui/SidebarProvider.ts | A:10/27側欄23、快測750/42、真13B四案33/39 | S:本批13B行9/10且缺分支仍未過，前批固定回覆39/39不可混用；多class回完整基線已證，照抄因果未證。完整回歸及整車未完成。
 CODE_OF_CONDUCT.md[SS3T]: F:規範社群協作、隱私保護與私下處理行為申訴 | R:code:SECURITY.md | A:建設性討論與保密回報 | S:-
 CONTRIBUTING.md[SV5T]: F:指引開發設定、局部與分層驗證、回歸及安全提交 | R:code:PROJECT_RULES.md,code:CHANGELOG.zh-TW.md,code:test/verificationRunner.js | A:npm ci、F5、related/fast/integration/full、--list及PR要求 | S:快/整合集合互斥覆蓋完整，unit仍全量、Mocha另驗。selector指測試檔而非產品來源；局部非全過。禁止品牌特化、憑證提交及為接受模型輸出放寬gate。
 LICENSE[SG4T]: F:以MIT授權提供使用、修改與散布權利及免責聲明 | R:- | A:Copyright 2026 Lane；散布保留授權與著作權文字 | S:-
@@ -86,6 +86,7 @@ BMI結果分析_2026_10_25_1502.md[SO5T]: F:診斷BMI外框重複並說明種子
 BMI結果分析_2026_10_26_1157.md[SO5T]: F:對照BMI完整回覆拒絕、預算漏送與格式修訂及驗收限制 | R:code:src/prompts/roleRequestBudget.ts,code:src/pipeline/candidateMethodInventory.ts,code:src/roles/writerPhases.ts | A:三次HTTP200/stop、1405秒修訂及本機3B實測 | S:本批非300秒超時；舊原文缺失不能還原。3B單輪45.8333%未達標，固定回覆非Codellama或Mutatest驗收。
 BMI三批分析與修復_2026_10_26.md[SO5T]: F:對照三種BMI失敗、審查及格式修訂與本機驗證限制 | R:code:src/roles/testReviewer.ts,code:src/llm/outputRecoveryTiming.ts,code:src/orchestrator.ts | A:19:55、20:02、20:23證據及71案例 | S:七案非全過，70%屬保留種子；三批皆未量測Mutatest。新3BReviewer逾時，不借舊分或固定回覆宣稱完整品質；舊原文不可還原。
 BMI補測抽取根因_2026_10_26.md[SO5T]: F:對照BMI三批失敗，重現補測包裝誤拒並交代修正與重測界線 | R:code:src/validation/testMerger.ts,code:src/validation/generatedTestValidator.ts,code:CHANGELOG.zh-TW.md | A:22:21/22:38/22:45事件與中性AST重現 | S:單seed是host切分，補測失敗才剩弱成果；tuple近似比較unknown非已證錯。歷史原文無法還原，固定回覆整合不是新模型驗收。
+BMI結果分析_2026_10_27_0013.md[SO5T]: F:對照BMI新三批的真實補測進展、舊案例重用與生成失敗 | R:code:src/pipeline/qualityTaskEvidence.ts,code:python_scripts/merge_test_snippets.py,code:CHANGELOG.zh-TW.md | A:23:48/23:56/00:13事件、保留候選及build核對 | S:真13B保留四案33/39仍缺行及分支；24邊界反覆用18.49舊輸入已證，多class提示污染因果未證。34B遮蔽原文不足定位具體語法，13B-code仍length。
 
 ===D:/read/專題/vscode_llm_unit_test/examples/bmi/===
 README.md[SE3T]: F:介紹無副作用BMI示例、單位、明確邊界及擴充測試方法 | R:code:examples/bmi/src/bmi.py | A:公斤、公分；Python3.10及標準庫 | S:內附手寫測試不代表LLM生成已成功
@@ -349,7 +350,7 @@ tierFailurePolicy.ts[DW8T]: F:限定生成Tier回退於候選契約耗盡，按�
 
 ===D:/read/專題/vscode_llm_unit_test/src/ui/===
 BatchScopeController.ts[AU7T]: F:以可取消檔案預覽選取並保存工作根對應的批次生成範圍 | R:code:src/pipeline/batchScope.ts,code:src/ui/SidebarProvider.ts,code:src/i18n/core.ts | A:BatchScopeController.preview; invalidate | S:根切換使舊 picker 回覆失效；取消及空選取不啟動批次。狀態保存後仍檢查 revision，避免舊範圍回流
-SidebarProvider.ts[AU8L]: F:橋接可選資格、測試重點、容量與等待設定及側欄執行所有權 | R:code:src/ui/webviewContent.ts,code:src/llm/connectionQualification.ts,code:src/llm/localRuntimeMetadata.ts,code:src/pipeline/executionTimingSettings.ts | A:MutationViewProvider；prepareLocalAnalysisRuntime；setRoleQualificationRequired；testConnection；begin/endAnalysis | S:執行中不改資格或重建；合法快照不因保存失敗停，await後核owner/取消/revision。Local探針用UI等待、逐角色失敗即停及安全診斷；各provider取消含body，固定Python另限30秒。偏好CAS保選擇，PS非上限、metadata非資格；key只SecretStorage。可選探針不省正式驗證。
+SidebarProvider.ts[AU8L]: F:橋接依名稱排序的本機模型清單、角色資格、容量及側欄執行所有權 | R:code:src/ui/webviewContent.ts,code:src/llm/connectionQualification.ts,code:src/llm/localRuntimeMetadata.ts,code:src/pipeline/executionTimingSettings.ts | A:fetchLocalModels大小寫不敏感A→Z；prepareLocalAnalysisRuntime；testConnection；begin/endAnalysis | S:執行中不改資格或重建；合法快照不因保存失敗停，await後核owner/取消/revision。Local探針用UI等待、逐角色失敗即停及安全診斷；各provider取消含body，固定Python另限30秒。偏好CAS保選擇，PS非上限、metadata非資格；key只SecretStorage。可選探針不省正式驗證。
 webviewContent.ts[IU8L]: F:產生本地化資格開關、測試重點、容量與結果卡側欄 | R:code:src/ui/SidebarProvider.ts,code:src/pipeline/testFocus.ts,code:src/i18n/core.ts,code:test/extract_script.js | A:getWebviewContent；require-role-qualification；testConnection含timeoutSeconds；共同執行選項 | S:資格勾選隨run快照傳送且執行中鎖定；未測非通過。手填非上限證明，停止不提早解鎖；live file-key保收合，換專案重設。Custom只存名稱、不存key/URL；晚選單保編輯，非法時間不發送，刪卡不刪報告。
 
 ===D:/read/專題/vscode_llm_unit_test/src/utils/===

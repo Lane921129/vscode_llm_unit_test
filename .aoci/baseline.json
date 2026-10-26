@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-09T17:32:53Z",
-  "updated_at": "2026-10-26T15:24:10Z",
+  "updated_at": "2026-10-26T16:29:41Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -307,9 +307,9 @@
     },
     "CHANGELOG.zh-TW.md": {
       "role": "index",
-      "sha256": "60d86658deee856d24b3a9960ac0ab8839ef810d391f52066e1f6bb49cdc4431",
-      "size": 405740,
-      "normalized_sha256": "60d86658deee856d24b3a9960ac0ab8839ef810d391f52066e1f6bb49cdc4431"
+      "sha256": "f6ce548ca6b41e8bad8542bd44bcc6b75d45f2e4d050e3149e6f5368931a5935",
+      "size": 407251,
+      "normalized_sha256": "f6ce548ca6b41e8bad8542bd44bcc6b75d45f2e4d050e3149e6f5368931a5935"
     },
     "CODE_OF_CONDUCT.md": {
       "role": "index",
@@ -349,9 +349,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "015ffa65e6483e26403a7a2fff02fc56ed22bd57eb7cc3cb3534c0add50bf0b9",
-      "size": 143959,
-      "normalized_sha256": "015ffa65e6483e26403a7a2fff02fc56ed22bd57eb7cc3cb3534c0add50bf0b9"
+      "sha256": "ccea4d0f901d25b3569f8379ea588eec99ae05fc39e750e5c3828cc14e5fa42a",
+      "size": 144441,
+      "normalized_sha256": "ccea4d0f901d25b3569f8379ea588eec99ae05fc39e750e5c3828cc14e5fa42a"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -418,6 +418,12 @@
       "sha256": "ad3de8dce8a4d0a5f2fe2c09fd8294f56f598eff7ba1956300984f2029943612",
       "size": 2740,
       "normalized_sha256": "ad3de8dce8a4d0a5f2fe2c09fd8294f56f598eff7ba1956300984f2029943612"
+    },
+    "docs/BMI結果分析_2026_10_27_0013.md": {
+      "role": "index",
+      "sha256": "7c0e048b87e4266ae56f4566d701e7df69d54a4efdbb4cc1f20ddce1d3e5f6ef",
+      "size": 6507,
+      "normalized_sha256": "7c0e048b87e4266ae56f4566d701e7df69d54a4efdbb4cc1f20ddce1d3e5f6ef"
     },
     "docs/BMI補測抽取根因_2026_10_26.md": {
       "role": "index",
@@ -9487,9 +9493,9 @@
     },
     "out/ui/SidebarProvider.js.map": {
       "role": "observe",
-      "sha256": "6e356274315f97b344dafcaa0c42504318d135192af9cd0ff175f1c89092d257",
-      "size": 47830,
-      "normalized_sha256": "6e356274315f97b344dafcaa0c42504318d135192af9cd0ff175f1c89092d257"
+      "sha256": "e86b52e3cb95f90317e7a276cf4d2b7cbd5984e745b7771835d007290cd283c0",
+      "size": 47957,
+      "normalized_sha256": "e86b52e3cb95f90317e7a276cf4d2b7cbd5984e745b7771835d007290cd283c0"
     },
     "out/ui/webviewContent.js.map": {
       "role": "observe",
@@ -15817,9 +15823,9 @@
     },
     "src/ui/SidebarProvider.ts": {
       "role": "index",
-      "sha256": "b3a411b7c3c3541891c18b656305ddac4b4126ecd2f2a2cf84b3e4ab85dade74",
-      "size": 70470,
-      "normalized_sha256": "1c9687a31464e5503e42fe120858ca64d3a6431db86bbcdefe12799485b12ca8"
+      "sha256": "81976efa44cb6e15d4e25cd68446e703eded441c5ef4d19fe9a0cc9ee800fb4a",
+      "size": 70592,
+      "normalized_sha256": "097ffc37a52a49e503916f380fa1428ff9b7e9c0db0b8d73bd64fa83a464cb45"
     },
     "src/ui/webviewContent.ts": {
       "role": "index",

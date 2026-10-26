@@ -1010,7 +1010,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
             if (response.ok) {
                 const data = payload as any;
                 if (data && data.models) {
-                    return data.models.map((m: any) => m.name);
+                    return data.models.map((m: any) => m.name)
+                        .sort((left: string, right: string) => left.localeCompare(right, 'en', { sensitivity: 'base' }));
                 }
             }
         } catch (e) {
