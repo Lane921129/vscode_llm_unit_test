@@ -42,6 +42,8 @@ function safeLine(text: string): string {
  * Only caller-supplied, static framework instructions may be shown as echoes. */
 export function buildModelOutputPreview(text: string, privacy: {
     knownSecrets?: readonly string[]; excludedTexts?: readonly string[]; publicInstructionTexts?: readonly string[];
+    /** Coordinates belong to this exact text, never an offset guessed from a raw reply. */
+    focusLine?: number | null;
 }): ModelOutputPreview {
     const lines = text.slice(0, 65536).split('\n').slice(0, 2048);
     const unique = new Map<string, { line: number; repetitions: number; characters: number }>();
@@ -60,7 +62,16 @@ export function buildModelOutputPreview(text: string, privacy: {
     const sensitive = containsCredential(text, privacy.knownSecrets) || sensitiveAssignment.test(text);
     let remaining = Math.min(1200, Math.floor(text.length / 2));
     const samples: ModelOutputPreview['samples'] = [];
-    for (const [line, count] of unique) {
+    const ordered = new Map<string, { line: number; repetitions: number; characters: number }>();
+    if (Number.isSafeInteger(privacy.focusLine) && Number(privacy.focusLine) > 0 && Number(privacy.focusLine) <= lines.length) {
+        for (const offset of [0, -1, 1, -2, 2, 3]) {
+            const index = Number(privacy.focusLine) - 1 + offset;
+            const line = lines[index]?.trim(), count = line ? unique.get(line) : undefined;
+            if (line && count && !ordered.has(line)) { ordered.set(line, { ...count, line: index + 1 }); }
+        }
+    }
+    for (const [line, count] of unique) { if (!ordered.has(line)) { ordered.set(line, count); } }
+    for (const [line, count] of ordered) {
         if (samples.length === 6 || remaining <= 0) { break; }
         const normalized = line.replace(/\s+/g, ' ');
         const echo = normalized.length >= 8 && excluded.some(value => normalized.includes(value) || value.includes(normalized));

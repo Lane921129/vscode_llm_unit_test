@@ -41,7 +41,7 @@ export function outputRecoveryAttemptDeadline(stage: OutputRecoveryStage, attemp
 
 export interface OutputRecoveryDecision {
     allowed: boolean;
-    reasonCode: 'measured-output-fits' | 'unmeasured-full-allowance' | 'insufficient-output-retry-time';
+    reasonCode: 'measured-output-fits' | 'unmeasured-full-allowance' | 'unmeasured-remaining-allowance' | 'insufficient-output-retry-time';
     availableMs: number;
     estimatedRetryMs: number | null;
 }
@@ -77,22 +77,27 @@ export function outputRecoveryTokenLimit(stage: OutputRecoveryStage, timing?: Tr
 /** Estimate only from a completed length-stopped transport of the same full prompt.
  * This predicts request time, never a model's quality, GPU state or expected answer. */
 export function planOutputRecoveryRetry(stage: OutputRecoveryStage, nextOutputTokens: number,
-    timing?: TransportAttemptTiming, now = Date.now()): OutputRecoveryDecision {
+    timing?: TransportAttemptTiming, now = Date.now(), policy: 'same-prompt' | 'format-correction' = 'same-prompt'): OutputRecoveryDecision {
     if (!Number.isSafeInteger(nextOutputTokens) || nextOutputTokens <= 0 || !Number.isFinite(now)) {
         throw new TypeError('Output retry requires a positive token cap and finite clock');
     }
     const availableMs = stage.maximumAttempts === 2
         ? Math.max(0, Math.min(stage.timeoutSeconds * 1000, stage.deadlineAt - now)) : 0;
-    const cost = measuredOutputCost(timing);
+    // A changed prompt cannot borrow token speed from the old request. Its
+    // timeout is an upper bound, not a requirement to reserve that entire time
+    // again. Keep a meaningful window (up to 30s), within the original deadline.
+    const cost = policy === 'format-correction' ? undefined : measuredOutputCost(timing);
     let estimatedRetryMs: number | null = null;
     if (cost) {
         const estimated = Math.ceil(cost.fixedMs + cost.msPerToken * nextOutputTokens);
         if (Number.isSafeInteger(estimated)) { estimatedRetryMs = estimated; }
     }
-    // Without measurements, reserve a complete request instead of gambling on
-    // the final few seconds of an explicit caller/target deadline.
-    const requiredMs = estimatedRetryMs ?? stage.timeoutSeconds * 1000;
+    // Same-prompt unmeasured growth still reserves a complete request. Format
+    // correction uses the bounded window above without renewing any deadline.
+    const requiredMs = estimatedRetryMs ?? (policy === 'format-correction'
+        ? Math.min(30000, stage.timeoutSeconds * 1000) : stage.timeoutSeconds * 1000);
     const allowed = availableMs > 0 && requiredMs <= availableMs;
     return { allowed, availableMs, estimatedRetryMs, reasonCode: !allowed ? 'insufficient-output-retry-time'
-        : estimatedRetryMs === null ? 'unmeasured-full-allowance' : 'measured-output-fits' };
+        : estimatedRetryMs === null ? policy === 'format-correction' ? 'unmeasured-remaining-allowance'
+            : 'unmeasured-full-allowance' : 'measured-output-fits' };
 }

@@ -23,7 +23,7 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
     const runner = require('../utils/processRunner'), originalRunSpawn = runner.runSpawn;
     const handlers = new Map<string, (...args: any[]) => any>();
     const requests: any[] = [];
-    let scenario = 'repair', writers = 0;
+    let scenario = 'repair', writers = 0, reviews = 0;
     const good = '```python\nimport unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
         + '    def test_seed(self):\n        self.assertEqual(increment(1), 2)\n```';
     const malformed = 'A completed explanation before the test\n# SOURCE_PRIVATE_SENTINEL\n'
@@ -62,12 +62,31 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
         if (request.roleInstructions.includes('dependency_behaviors')) {
             response = JSON.stringify({ test_strategy: { approach: 'Exercise the supplied observed input and verify its exact result.' } });
         } else if (request.roleInstructions.includes('You are the test Reviewer')) {
-            response = '{"findings":[]}';
+            reviews++;
+            response = scenario === 'reviewer-type' && reviews === 1 ? JSON.stringify({ findings: [{
+                category: 'assertion-quality', test_line: 'L5', reason: 'The expected result is not a valid integer value.',
+                action: 'Change the expected result to a valid integer value.' }] })
+                : scenario === 'review-scope' && reviews === 1 ? JSON.stringify({ findings: [{
+                    category: 'typing-style', test_line: 'L4', reason: 'The test method does not explain its observed input and result.',
+                    action: 'Add a docstring to the existing test method describing its observed input and result.' }] })
+                : '{"findings":[]}';
         } else {
             writers++;
-            assert.match(request.prompt, /WRITER_SEED_V1/);
-            assert.ok(request.prompt.includes(source.trimEnd()));
-            if (writers === 1) { response = scenario === 'tool-failure' ? good : malformed; }
+            if (scenario !== 'review-scope' || writers === 1) { assert.match(request.prompt, /WRITER_SEED_V1/); }
+            assert.ok(request.prompt.includes(source.trimEnd()) || scenario === 'length-recovery'
+                && request.prompt.includes('SOURCE_PRIVATE_SENTINEL'));
+            if (writers === 1) {
+                response = ['tool-failure', 'reviewer-type', 'review-scope'].includes(scenario) ? good
+                    : scenario === 'length-recovery' ? '```python\nimport unittest\nclass Cases(unittest.TestCase):\n    def test_seed(self):\n```\n'.repeat(20)
+                    : malformed;
+            }
+            else if (scenario === 'review-scope') {
+                assert.match(request.prompt, /WRITER_REVIEW_CORRECTION_V1/);
+                response = writers === 2 ? good.replace('\n```', '\n    def test_unrelated(self):\n        self.assertEqual(increment(2), 3)\n```')
+                    : good.replace('def test_seed(self):\n', 'def test_seed(self):\n        """Verify the observed increment input and result."""\n');
+            } else if (scenario === 'length-recovery') {
+                assert.match(request.prompt, /WRITER_OUTPUT_FORMAT_REPAIR_V1/); response = good;
+            }
             else {
                 assert.match(request.prompt, /WRITER_SEED_FORMAT_REPAIR_V1/);
                 assert.doesNotMatch(request.prompt, /WRITER_REVISION_REQUEST_V2|A completed explanation before the test/);
@@ -79,19 +98,22 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                 response = scenario === 'both-invalid' ? malformed : good;
             }
         }
-        return new Response(JSON.stringify({ response, done: true, done_reason: 'stop',
+        return new Response(JSON.stringify({ response, done: true,
+            done_reason: scenario === 'length-recovery' && writers === 1 && !request.roleInstructions.includes('dependency_behaviors') ? 'length' : 'stop',
             privateProviderField: 'PROVIDER_ENVELOPE_MUST_NOT_LEAK' }), { status: 200 });
     };
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
-        for (const mode of ['repair', 'both-invalid', 'tool-failure']) {
+        for (const mode of ['repair', 'both-invalid', 'tool-failure', 'reviewer-type', 'review-scope', 'length-recovery']) {
             await t.test(mode, async () => {
-                scenario = mode; writers = 0; requests.length = 0;
+                scenario = mode; writers = 0; reviews = 0; requests.length = 0;
                 const output = path.join(root, mode);
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-format-proof',
                     filePath: sourceFile, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full',
-                    maxLoops: 1, timeoutSeconds: 45, mutationEngine: 'builtin', mutpyTimeout: 20, outputPath: output });
+                    maxLoops: 1, timeoutSeconds: mode === 'length-recovery' ? 6000 : 45,
+                    targetBudget: mode === 'length-recovery' ? { timeoutMs: 6000000 } : undefined,
+                    mutationEngine: 'builtin', mutpyTimeout: 20, outputPath: output });
                 const files = fs.readdirSync(output, { recursive: true }).map(String);
                 const events = files.filter(name => path.basename(name) === 'role_events.jsonl').flatMap(name =>
                     fs.readFileSync(path.join(output, name), 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)));
@@ -106,6 +128,25 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                     assert.equal(failed.length, 0);
                     assert.ok(events.some(event => event.stage === 'candidate-methods' && event.status === 'tool-unavailable'));
                     assert.match(reports, /inventory tool did not complete/);
+                } else if (['reviewer-type', 'review-scope', 'length-recovery'].includes(mode)) {
+                    assert.equal(writers, mode === 'reviewer-type' ? 1 : mode === 'review-scope' ? 3 : 2,
+                        JSON.stringify(events.filter(event => ['failed', 'error', 'budget-exceeded', 'tool-unavailable', 'invalid-response'].includes(event.status))));
+                    assert.equal(failed.length, 0);
+                    if (mode === 'reviewer-type') {
+                        assert.equal(reviews, 2);
+                        assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
+                            && event.detail.diagnostics.includes('expected-literal-type-contradiction')));
+                    }
+                    if (mode === 'review-scope') {
+                        assert.ok(events.some(event => event.stage === 'writer-review-scope' && event.status === 'rejected'));
+                        assert.equal(events.filter(event => event.stage === 'validation' && event.status === 'passed').length, 2,
+                            'the expanded candidate must not execute');
+                    }
+                    if (mode === 'length-recovery') {
+                        const retry = events.find(event => event.stage === 'model-request' && event.status === 'output-format-retry');
+                        assert.equal(retry?.detail.reasonCode, 'unmeasured-remaining-allowance');
+                        assert.ok(retry.detail.availableMs < 6000000);
+                    }
                 } else {
                     assert.equal(writers, 2, JSON.stringify(events.filter(event =>
                         ['failed', 'error', 'budget-exceeded', 'tool-unavailable'].includes(event.status))));
@@ -115,7 +156,7 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                     assert.match(reports, /A completed explanation before the test/);
                     assert.doesNotMatch(JSON.stringify(failed), /SOURCE_PRIVATE_SENTINEL/);
                 }
-                if (mode === 'repair') {
+                if (['repair', 'reviewer-type', 'review-scope', 'length-recovery'].includes(mode)) {
                     assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'approved'));
                     assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'));
                 } else {

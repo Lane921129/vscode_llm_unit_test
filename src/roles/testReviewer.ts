@@ -250,7 +250,8 @@ export type ReviewRejectionCode = 'invalid-json' | 'invalid-envelope' | 'too-man
     | 'invalid-test-line' | 'target-binding-contradiction' | 'target-implementation-edit' | 'target-self-mock' | 'unrelated-test-line'
     | 'review-facts-identity-mismatch' | 'review-facts-observation-shape' | 'observed-outcome-contradiction' | 'existing-assertion-contradiction'
     | 'expected-exception-contradiction' | 'exception-evidence-missing' | 'scalar-mock-contradiction' | 'assertion-weakening' | 'existing-import-contradiction'
-    | 'existing-definition-contradiction' | 'existing-harness-contradiction' | 'observed-assertion-verification-contradiction';
+    | 'existing-definition-contradiction' | 'existing-harness-contradiction' | 'observed-assertion-verification-contradiction'
+    | 'expected-literal-type-contradiction';
 
 function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRejectionCode) => undefined, requireCurrent: boolean): TestReview | undefined {
     if (!value || typeof value !== 'object' || Array.isArray(value)) { return reject('invalid-envelope'); }
@@ -600,6 +601,20 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
             codes.add('assertion-weakening');
         }
         if (assertion?.targetResult) {
+            // Only a complete mechanical denial of this exact, replayable scalar
+            // type qualifies. Range, precision, new inputs, concrete replacements
+            // and independent requirements remain reviewable.
+            const literalType = assertion.expected?.value.type;
+            const typeName = literalType === 'str' ? '(?:string|str)' : literalType === 'float' ? 'float'
+                : literalType === 'int' ? '(?:integer|int)' : literalType === 'bool' ? '(?:boolean|bool)' : undefined;
+            if (typeName && assertion.expected?.replayable === true && facts?.executionVerified
+                && reviewAssertionObservationStatus(assertion) === 'verified'
+                && method?.calls.find(call => call.line === assertion.targetCallLine)?.observationReturned === true
+                && (issue.category === 'assertion-quality' || issue.category === 'assertion-evidence')
+                && new RegExp(`^The expected result is not a valid ${typeName} value[.!\\s]*$`, 'i').test(issue.reason.trim())
+                && new RegExp(`^Change the expected result to a valid ${typeName} value[.!\\s]*$`, 'i').test(issue.action.trim())) {
+                codes.add('expected-literal-type-contradiction');
+            }
             if (facts?.executionVerified && reviewAssertionObservationStatus(assertion) === 'verified'
                 && (issue.category === 'assertion-quality' || issue.category === 'assertion-evidence')
                 && method?.calls.find(call => call.line === assertion.targetCallLine)?.observationReturned === true

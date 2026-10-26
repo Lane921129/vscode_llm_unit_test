@@ -1,5 +1,11 @@
 # 專案閱讀入口
 
+## 審查修訂與格式恢復邊界（2026-10-26）
+
+`reviewConstraintDiagnostics` 以同候選實跑、同呼叫核實及可重播純量型別反證完整的機械型別否定，只觸發原有一次 Reviewer 契約補正，不能直接批准。`reviewerCorrectionScopes` 將沒有 missing-scenario 的有效審查綁到既有 AST 方法集合；Writer 提示加上局部修正契約，候選方法增刪／改名則在原結構 gate 拒絕，重試仍保留範圍。
+
+`planOutputRecoveryRetry` 的 format-correction 政策分開於同提示增額：不借舊 token 速度，使用原期限內剩餘額度，保留至多30秒的最低窗口。規劃及送出前兩處都沿同政策，deadline、次數與原同提示規則不變。完成回覆診斷暫存只捕捉隱私 context 的 preview factory；盤點後對抽取內容的語法位置重新有界取樣，報告明示行號對應抽取後 Python，不保存原回覆。
+
 ## 完成回覆的格式修復與輸出預算（2026-10-26）
 
 `roleRequestBudget` 對正式 Local 請求的合法保留額度同步產生實際 `requestOutputTokens`；未知候選／工作量保留原額度但仍送為 `num_predict`，不再依賴 provider 的省略預設。既有增額恢復、Context 核算、原 deadline／計數、length 拒絕及 Cloud／Custom 政策保持。

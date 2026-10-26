@@ -152,3 +152,18 @@ test('invalid initial attempt deadlines fail before transport and cannot overrid
     assert.equal(stage.initialAttemptDeadlineAt, 55000);
     assert.equal(outputRecoveryAttemptDeadline(stage, 0, 0), 55000);
 });
+
+test('changed-prompt format recovery uses remaining time rather than demanding another full 6000 seconds', () => {
+    const stage = createOutputRecoveryStage({ timeoutSeconds: 6000, recoveryAllowed: true, targetDeadlineAt: 6000000, now: 0 });
+    const decision = planOutputRecoveryRetry(stage, 4096, lengthTiming(100000), 174588, 'format-correction');
+    assert.equal(decision.allowed, true); assert.equal(decision.availableMs, 5825412);
+    assert.equal(decision.estimatedRetryMs, null, 'changed prompts never inherit measured generation speed');
+    assert.equal(decision.reasonCode, 'unmeasured-remaining-allowance');
+    assert.equal(outputRecoveryAttemptDeadline(stage, 1, 174588), 6000000);
+    assert.equal(planOutputRecoveryRetry(stage, 4096, undefined, 174588).allowed, false, 'same-prompt fallback is unchanged');
+    for (const elapsed of [5970001, 6000000, 6000001]) {
+        assert.equal(planOutputRecoveryRetry(stage, 4096, undefined, elapsed, 'format-correction').allowed, false);
+    }
+    const single = createOutputRecoveryStage({ timeoutSeconds: 6000, recoveryAllowed: false, now: 0 });
+    assert.equal(planOutputRecoveryRetry(single, 4096, undefined, 0, 'format-correction').allowed, false);
+});

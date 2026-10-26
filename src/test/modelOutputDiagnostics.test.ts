@@ -109,7 +109,7 @@ test('formal length errors include a bounded diagnostic excerpt without provider
 
 test('a completed malformed reply shows safe syntax diagnostics without pretending it was length-stopped', () => {
     const raw = 'Explanation rather than Python\n'.repeat(20);
-    const detail = { role: 'writer', reasonCode: 'response-python-syntax', outputTokenLimit: 2458,
+    const detail = { role: 'writer', reasonCode: 'response-python-syntax', outputTokenLimit: 2458, previewScope: 'extracted-python',
         syntax: { kind: 'SyntaxError', line: 1, column: 4 }, responseShape: outputShape(raw),
         responsePreview: buildModelOutputPreview(raw, {}) };
     const language = getLanguage();
@@ -181,4 +181,21 @@ test('failure diagnostics show each attempt, exact timing, recovery and excerpts
             }
         }
     } finally { setLanguage(language); }
+});
+
+test('syntax excerpts prioritize exact extracted coordinates without exposing source, secrets or a complete reply', () => {
+    const prefix = Array.from({ length: 40 }, (_, index) => `# private source ${index}`).join('\n');
+    const text = prefix + '\nnot valid Python here!\n# nearby diagnostic\n';
+    const preview = buildModelOutputPreview(text, { excludedTexts: [prefix], focusLine: 41 });
+    assert.equal(preview.samples[0].line, 41);
+    assert.equal(preview.samples[0].text, 'not valid Python here!');
+    assert.doesNotMatch(JSON.stringify(preview), /private source/);
+    assert.ok(preview.samples.length <= 6 && preview.samples.reduce((n, item) => n + item.text.length, 0) <= 1200);
+    assert.equal(preview.complete, false); assert.equal(preview.executable, false);
+    const secret = 'fixture-' + 'secret-0123456789';
+    const hidden = buildModelOutputPreview(text + secret, { knownSecrets: [secret], focusLine: 41 });
+    assert.doesNotMatch(JSON.stringify(hidden), /not valid Python|secret-0123456789/);
+    const repeated = buildModelOutputPreview('one line\n'.repeat(50), { focusLine: 35 });
+    assert.equal(repeated.samples[0].line, 35);
+    assert.equal(repeated.samples[0].repetitions, 50);
 });

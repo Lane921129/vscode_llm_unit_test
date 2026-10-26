@@ -101,6 +101,15 @@ export function buildWriterSeedFormatRepairPrompt(originalPrompt: string, syntax
         + 'Keep the original target/input/oracle/safety contract; close the fence and stop.';
 }
 
+/** Review corrections are not a request to expand the test suite. */
+export function buildWriterReviewCorrectionPrompt(prompt: string): string {
+    return prompt + '\n\nWRITER_REVIEW_CORRECTION_V1\n'
+        + 'Correct only the cited findings in the existing test methods. Keep their exact class and method names; '
+        + 'do not add, remove or rename test methods or invent new scenarios. Rule cards are context, not a list of tests to generate. '
+        + 'Preserve passing cases, verified assertions, the complete evidence and safety contract. '
+        + 'Return the complete corrected test file in one Python fence. Expansion is a separate task.';
+}
+
 /** A prefix inside a larger unapproved draft is not a complete baseline unit. */
 function completePythonCodeAlreadySupplied(prompt: string, code: string): boolean {
     return [...prompt.matchAll(/^```(?:python|py)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/gm)]

@@ -138,7 +138,7 @@ import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText, outputShape, readOutputShapeDiagnostic } from './llm/ollamaResponse';
 import { buildModelOutputPreview, diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
 import { readCandidateMethodInventory, CandidateSyntaxDiagnostic } from './pipeline/candidateMethodInventory';
-import { buildWriterSeedFormatRepairPrompt } from './roles/writerPhases';
+import { buildWriterSeedFormatRepairPrompt, buildWriterReviewCorrectionPrompt } from './roles/writerPhases';
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
@@ -1708,6 +1708,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let reviewStatus: ReviewStatus = 'incomplete';
     const reviewSession = new ReviewSession();
     const reviewerRevisionWorkloads = new Map<string, { feedbackHash: string; workload: WriterRevisionWorkload }>();
+    const reviewerCorrectionScopes = new Map<string, readonly string[]>();
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
@@ -1777,6 +1778,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const completedOutputDiagnostics = new Map<string, {
         responseShape: ReturnType<typeof outputShape>; responsePreview: ReturnType<typeof buildModelOutputPreview>;
         contextWindow: number; outputTokenLimit?: number;
+        syntaxPreview: (code: string, line: number | null) => ReturnType<typeof buildModelOutputPreview>;
     }>();
     let inventoryExecutedBaseline: ((baseline: string) => Promise<void>) | undefined;
     let activeSeedCaseIds: string[] | undefined;
@@ -2273,7 +2275,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         await ensureMutationSelection(deadline);
         if (outputAttempt > 0 && roleBudget.requestOutputTokens) {
             const recovery = planOutputRecoveryRetry({ ...outputStage, deadlineAt: deadline },
-                roleBudget.requestOutputTokens, recoveryTransport, formalAttemptStartedAt);
+                roleBudget.requestOutputTokens, recoveryTransport, formalAttemptStartedAt,
+                recoveryMode === 'format-correction' ? 'format-correction' : 'same-prompt');
             if (!recovery.allowed) {
                 const detail = { role, ...recovery, requestOutputTokens: roleBudget.requestOutputTokens,
                     deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, targetDeadlinePreserved: true };
@@ -2300,11 +2303,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
             const completed = completionPrefix ? assembleWriterSeedCompletion(completionPrefix, response) : response;
             if (!sourceSelectionScope && ['writer', 'writer-revision'].includes(role)) {
+                // Retain the privacy context, never the raw provider reply. The
+                // extracted Python coordinates become known only after inventory.
+                const privacy = { knownSecrets, excludedTexts: [contractedSystem, prompt, initialSource],
+                    publicInstructionTexts: [buildWriterSeedSystemPrompt('', true), buildWriterSeedSystemPrompt('', false),
+                        buildWriterSeedSystemPrompt(''), writerOutputFormatCorrection(true), writerOutputFormatCorrection(false)] };
                 completedOutputDiagnostics.set(evidenceHash(completed), { responseShape: outputShape(response),
-                    responsePreview: buildModelOutputPreview(response, { knownSecrets,
-                        excludedTexts: [contractedSystem, prompt, initialSource],
-                        publicInstructionTexts: [buildWriterSeedSystemPrompt('', true), buildWriterSeedSystemPrompt('', false),
-                            buildWriterSeedSystemPrompt(''), writerOutputFormatCorrection(true), writerOutputFormatCorrection(false)] }),
+                    responsePreview: buildModelOutputPreview(response, privacy),
+                    syntaxPreview: (code, line) => buildModelOutputPreview(code, { ...privacy, focusLine: line }),
                     contextWindow, outputTokenLimit: roleBudget.requestOutputTokens });
             }
             return completed;
@@ -2333,9 +2339,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
                 if (['writer', 'writer-revision'].includes(role)
                     && ['repetitive-without-tests', 'repetitive-test-shells', 'seed-scope-overrun'].includes(outputDiagnosis)) {
-                    // A changed prompt cannot borrow timing or measured input counts
-                    // from the discarded response. Reserve a complete retry allowance.
-                    const recovery = planOutputRecoveryRetry(outputStage, roleBudget.requestOutputTokens || 1);
+                    // A changed prompt cannot borrow timing/input counts. Use the
+                    // remaining original deadline; the configured timeout is a cap.
+                    const recovery = planOutputRecoveryRetry(outputStage, roleBudget.requestOutputTokens || 1,
+                        undefined, Date.now(), 'format-correction');
                     if (!recovery.allowed) {
                         recordRole('model-request', 'output-recovery-blocked', { role, ...recovery,
                             recoveryMode: 'format-correction', targetDeadlinePreserved: true });
@@ -2701,8 +2708,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         completedOutputDiagnostics.delete(evidenceHash(raw));
         const syntax = candidateSyntaxFailures.get(evidenceHash(code));
         if (syntax) {
+            const { syntaxPreview, ...diagnostic } = completedDiagnostic || {};
             recordRole('model-request', 'format-rejected', { role, reasonCode: 'response-python-syntax',
-                candidateHash: evidenceHash(code), syntax, ...(completedDiagnostic || {}) });
+                candidateHash: evidenceHash(code), syntax, ...diagnostic,
+                ...(syntaxPreview ? { responsePreview: syntaxPreview(code, syntax.line), previewScope: 'extracted-python' } : {}) });
         }
         if (writerAdditionBaseline && additionRejections.has(evidenceHash(code))) { return code; }
         if (!writerAdditionBaseline) {
@@ -3944,6 +3953,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 },
                 review: async (code) => {
                     reviewerRevisionWorkloads.delete(evidenceHash(code));
+                    reviewerCorrectionScopes.delete(evidenceHash(code));
                     if (!mayUseModelAuthoredReview) {
                         recordRole('reviewer', 'unqualified', {});
                         return undefined;
@@ -3993,6 +4003,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             workload: { findingCount: assessment.issues.length,
                                 missingScenarioCount: assessment.issues.filter(issue => issue.category === 'missing-scenario').length }
                         });
+                        if (assessment.issues.every(issue => issue.category && issue.category !== 'missing-scenario')) {
+                            const methods = methodInventories.get(evidenceHash(code));
+                            if (!methods?.length) {
+                                throw new AnalysisStageError('validation', 'candidate-inventory-tool', 'Review correction requires the current method inventory.');
+                            }
+                            reviewerCorrectionScopes.set(evidenceHash(code), methods.map(method => method.id));
+                        }
                     }
                     return assessment;
                 },
@@ -4016,6 +4033,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (role === 'writer' && writerAdditionBaseline) {
                         prompt = buildWriterAdditionRevisionPrompt(prompt, writerAdditionBaseline, code, failure);
                     }
+                    const correctionMethods = role === 'writer' ? reviewerCorrectionScopes.get(evidenceHash(code)) : undefined;
+                    if (correctionMethods) { prompt = buildWriterReviewCorrectionPrompt(prompt); }
                     // requestBudgeted checks the final prompt, including numeric/resource
                     // evidence, and records a stage-owned failure without Tier fallback.
                     const workloadKey = evidenceHash(code);
@@ -4043,7 +4062,23 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         if (merged.normalization) { recordRole('bug-fixer', 'format-normalized', { attempt, ...merged.normalization }); }
                         return merged.code!;
                     }
-                    return prepareWriterCandidate(raw, 'writer-revision', attempt);
+                    const candidate = await prepareWriterCandidate(raw, 'writer-revision', attempt);
+                    if (correctionMethods) {
+                        const methods = methodInventories.get(evidenceHash(candidate));
+                        if (methods && (methods.length !== correctionMethods.length
+                            || methods.some(method => !correctionMethods.includes(method.id)))) {
+                            additionRejections.set(evidenceHash(candidate), { gate: 'revision-scope',
+                                reasonCode: 'review-revision-scope-expanded',
+                                reason: 'Review correction must keep the exact existing test method identities. '
+                                    + 'Correct the cited findings only; do not add, remove or rename tests. Return the complete file.' });
+                            recordRole('writer-review-scope', 'rejected', { reasonCode: 'review-revision-scope-expanded',
+                                previousCodeHash: evidenceHash(code), codeHash: evidenceHash(candidate),
+                                expectedMethodCount: correctionMethods.length, actualMethodCount: methods.length });
+                        } else if (methods) {
+                            reviewerCorrectionScopes.set(evidenceHash(candidate), correctionMethods);
+                        }
+                    }
+                    return candidate;
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
                     const preservePassed = () => checkPreservation(previousCode, candidateCode,

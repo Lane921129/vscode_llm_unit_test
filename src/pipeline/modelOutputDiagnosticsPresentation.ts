@@ -63,6 +63,9 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
             const syntax = d.syntax;
             const kind = ['SyntaxError', 'IndentationError', 'TabError'].includes(syntax?.kind) ? syntax.kind : localize('未知');
             sections.push(localize('抽取後 Python 語法（類型／行／欄）') + `: ${kind} / ${display(syntax?.line)} / ${display(syntax?.column)}`, '');
+            if (d.previewScope === 'extracted-python') {
+                sections.push(localize('以下節錄優先顯示抽取後 Python 的錯行附近；行號不對應原始回覆。'), '');
+            }
         }
         if (!preview) {
             sections.push(localize('此紀錄未保存可核對的輸出節錄；無法由雜湊或統計還原原文。'), '');

@@ -15,6 +15,7 @@ export const englishMessages: Record<string, string> = {
     '#### 輸出失敗事件 {0}：{1}': '#### Output failure event {0}: {1}',
     '回覆傳輸已完成，但抽取後的內容未通過 Python 語法盤點；不是輸出長度截斷。': 'The response transport completed, but the extracted content failed Python syntax inventory; this was not output-length truncation.',
     '抽取後 Python 語法（類型／行／欄）': 'Extracted Python syntax (kind / line / column)',
+    '以下節錄優先顯示抽取後 Python 的錯行附近；行號不對應原始回覆。': 'The excerpts prioritize the extracted Python syntax error and nearby lines; line numbers do not refer to the raw reply.',
     '回覆高度重複，沒有可辨識的測試方法或斷言；提高輸出額度未必能改善。': 'The output is highly repetitive without recognizable test methods or assertions; a larger output cap may not help.',
     '回覆已有可辨識的測試結構，但尚未完整結束，不能採用前綴。': 'Test structure is recognizable, but the response did not finish. Its prefix cannot be accepted.',
     '回覆未顯示可辨識的測試結構；僅憑紀錄無法判定其具體內容。': 'No test structure was recognized; these records alone cannot establish the exact content.',

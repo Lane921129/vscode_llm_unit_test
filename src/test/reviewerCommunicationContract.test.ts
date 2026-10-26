@@ -30,6 +30,60 @@ const response = (overrides: Record<string, unknown> = {}) => JSON.stringify({ f
 const constraints = (current: ReviewFacts): ReviewConstraints => ({ ...identity, module: 'sample', methodKind: 'module',
     identity, facts: current });
 
+test('mechanical scalar type denials contradict only same-call verified literal facts', () => {
+    for (const [type, name, value] of [['float', 'float', '10000.0'], ['str', 'string', 'stable'],
+        ['int', 'integer', '2'], ['bool', 'boolean', true]] as const) {
+        const current = facts();
+        const assertion = current.methods[0].assertions[0];
+        assertion.expectedType = type;
+        assertion.expected = { schema_version: 'trace-value-v1', replayable: true, value: { type, value } } as any;
+        const finding = { reason: `The expected result is not a valid ${name} value.`,
+            action: `Change the expected result to a valid ${name} value.` };
+        const parsed = parseTestReviewDetailed(response(finding), tests, true, constraints(current));
+        assert.equal(parsed.review, undefined);
+        assert.ok(parsed.diagnostics.includes('expected-literal-type-contradiction'));
+        for (const variation of ['unknown', 'no-return', 'not-executed', 'different-type', 'requirement', 'replacement']) {
+            const unknown = structuredClone(current);
+            let changed = { ...finding };
+            if (variation === 'unknown') { unknown.methods[0].assertions[0].observationVerified = false; }
+            if (variation === 'no-return') { delete unknown.methods[0].calls[0].observationReturned; }
+            if (variation === 'not-executed') { unknown.executionVerified = false; }
+            if (variation === 'different-type') { unknown.methods[0].assertions[0].expected = undefined; }
+            if (variation === 'requirement') { changed.reason += ' The documented requirement requires a positive value.'; }
+            if (variation === 'replacement') {
+                changed.reason = 'The documented independent specification requires a different expected value.';
+                changed.action = 'Change the expected result to 3 using the independent specification.';
+            }
+            assert.ok(parseTestReviewDetailed(response(changed), tests, true, constraints(unknown)).review, variation);
+        }
+    }
+});
+
+test('native AST float and string projections reject both observed type denials from one unpacked call', async () => {
+    const code = 'import unittest\nfrom sample import compute_score\nclass Cases(unittest.TestCase):\n'
+        + '    def test_value(self):\n        amount, label = compute_score(2, 4)\n'
+        + '        self.assertEqual(amount, 0.5)\n        self.assertEqual(label, "stable")\n';
+    const ledger = new NumericEvidenceLedger(identity);
+    ledger.add('VERIFIED NUMERIC OBSERVATIONS (evidence only; the AI must revise the test):\n' + JSON.stringify({
+        schemaVersion: 'numeric-observation-handoff-v1', ...identity, testHash: 'b'.repeat(64),
+        corrections: [{ method: 'test_value', line: 6, basis: {
+            call: scalarProbeInput({ args: [2, 4], kwargs: {} }).input,
+            result_snapshot: facts().methods[0].assertions[0].expected
+        } }]
+    }));
+    const current = await buildReviewFacts({ ...identity, code, module: 'sample', executionVerified: true,
+        python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+        env: process.env, numericEvidencePrompt: ledger.prompt(10000) });
+    assert.deepEqual(current.methods[0].assertions.map(value => value.expected?.value.type), ['float', 'str']);
+    assert.ok(current.methods[0].assertions.every(value => value.observationStatus === 'verified'));
+    const raw = JSON.stringify({ findings: ['float', 'string'].map((name, index) => ({ category: 'assertion-quality',
+        test_line: `L${6 + index}`, reason: `The expected result is not a valid ${name} value.`,
+        action: `Change the expected result to a valid ${name} value.` })) });
+    const result = parseTestReviewDetailed(raw, code, true, constraints(current));
+    assert.equal(result.review, undefined);
+    assert.deepEqual(result.diagnostics, ['expected-literal-type-contradiction']);
+});
+
 test('review evidence uses current line identifiers and explains exact-input observation flags', () => {
     const evidence = getReviewEvidence('', '', 'compute_score', ['amount', 'scale'],
         'def compute_score(amount, scale):\n    return amount / scale\n', { args: ['amount', 'scale'] }, 'sample');
