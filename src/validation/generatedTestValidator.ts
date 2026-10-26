@@ -545,18 +545,19 @@ function normalizePythonTransportBlock(code: string): string {
 }
 
 /**
- * Extract the most plausible Python unittest fence from model output.
+ * Extract an unambiguous Python test fence from model output.
  * Models differ on whether they label a fence as python, Python, py, or leave
  * it blank.  The extractor never accepts prose: it returns a fence only when
- * it contains unittest/TestCase evidence, otherwise it leaves the response
- * for the normal structural validator to reject.
+ * it contains unittest/TestCase evidence (or a test method in addition mode),
+ * otherwise it leaves the response for the normal structural validator to reject.
+ * Additions require a single complete fence: never choose between partial drafts.
  */
-export function extractPythonTestCode(response: string): string {
+export function extractPythonTestCode(response: string, shape: 'file' | 'addition' = 'file'): string {
     const raw = unwrapGeneratedCodeEnvelope(response);
     const unwrapped = raw.trim();
     // Legacy model wrappers are transport markup, never Python expressions.
     const wrapper = unwrapped.match(/^\[(python|pytest)\]\s*\r?\n([\s\S]*?)\r?\n\[\/\1\]$/i);
-    if (wrapper) { return extractPythonTestCode(wrapper[2]); }
+    if (wrapper) { return extractPythonTestCode(wrapper[2], shape); }
     const fencedBlocks: Array<{ language: string; code: string }> = [];
     const literalLines = new Set<number>();
     executablePythonText(unwrapped, literalLines);
@@ -580,8 +581,15 @@ export function extractPythonTestCode(response: string): string {
         return normalizePythonTransportBlock(bracket ? bracket[1] : raw);
     }
 
-    const hasUnittestEvidence = (block: { language: string; code: string }) =>
-        /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(block.code);
+    if (shape === 'addition' && (fencedBlocks.length !== 1 || opening)) { return unwrapped; }
+
+    const hasUnittestEvidence = (block: { language: string; code: string }) => {
+        if (shape === 'file') { return /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(block.code); }
+        if (!['', 'python', 'py', 'json'].includes(block.language)) { return false; }
+        const code = executablePythonText(unwrapGeneratedCodeEnvelope(block.code));
+        return /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(code)
+            || /^[ \t]*(?:async[ \t]+)?def[ \t]+test[\p{ID_Continue}]*[ \t]*\(/mu.test(code);
+    };
     const candidates = fencedBlocks.filter(hasUnittestEvidence);
     // Multiple complete candidates are ambiguous: do not silently choose one.
     if (candidates.length !== 1) { return unwrapped; }

@@ -305,6 +305,9 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
                     }
                     response = scenario !== 'modified-baseline' ? fence(activeObservedFamily
                         ? focusedAddition(request.prompt, writers) : sourceObservedAddition(writers)) : fence(seed.replace('19.53', '19.52'));
+                    if (scenario === 'positive') {
+                        response = 'Here is the additional observed case.\n' + response + '\nThe existing tests are retained.';
+                    }
                 }
                 if (scenario === 'positive' && isMicrotask) {
                     microtasks.push({ focusId: bound.focusId, caseId: bound.cases[0].caseId,

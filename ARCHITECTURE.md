@@ -1,5 +1,9 @@
 # 專案閱讀入口
 
+## 初始測試與補測的共用包裝抽取（2026-10-26）
+
+`extractWriterAdditionCode` 委派給 `extractPythonTestCode` 的 addition 模式，沿用同一個詞法 fence 掃描及多行 literal 保真處理。新增測試可為完整 TestCase 或裸方法；唯一完整 fence 可帶前後說明，額外 fence 或未閉合尾段維持原文拒絕。這修正了初始檔案可抽取、補測卻把相同 Markdown 包裝交給 Python AST 的落差。`writer-addition-v1` 保留及綁定檢查、逐案完整族、後續 native／Reviewer／品質 gate 不變；抽取成功本身不授予執行或品質批准。
+
 ## 審查修訂與格式恢復邊界（2026-10-26）
 
 `reviewConstraintDiagnostics` 以同候選實跑、同呼叫核實及可重播純量型別反證完整的機械型別否定，只觸發原有一次 Reviewer 契約補正，不能直接批准。`reviewerCorrectionScopes` 將沒有 missing-scenario 的有效審查綁到既有 AST 方法集合；Writer 提示加上局部修正契約，候選方法增刪／改名則在原結構 gate 拒絕，重試仍保留範圍。

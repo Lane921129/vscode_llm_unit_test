@@ -4,6 +4,13 @@
 
 ## 2026-10-26
 
+### BMI 補測包裝抽取根因與修正
+
+- 22:21／22:38／22:45 三批顯示不同阻擋：34B 的 tuple 近似斷言觀測 unknown 且局部修訂擴寫；13B-code 兩次 length 沒有完整候選；13B 已通過 seed 審查並完成 Mutatest 24／39，卻在第一個補測案例連續三次結構拒絕。只有一個初始 seed 是 host 任務切分，補測失敗才使它成為唯一成果，不能解釋成模型只能寫一案。詳見 `docs/BMI補測抽取根因_2026_10_26.md`。
+- 中性最小重現證實：有效 Python fence 前後附一句說明時，初始抽取可取出程式碼，舊補測抽取卻保留 Markdown，AST 合併回 `invalid-python-structure`。改為共用詞法抽取器及 addition 模式，辨識完整 TestCase／裸方法，保留多行字串原值。多 fence、未閉合尾段及無 fence 說明仍拒絕，原 AST 基線、觀測族、native、同候選 Reviewer 與品質 gate 不變；不增加重試、token 或模型特例。
+- 相關 Node69／69、Python42／42 通過；正式固定回覆整合的補測帶前後說明，完整三案合成並保留 seed，真實 Python／Mutatest 達行10／10、突變39／39、保留8方法。首次整合在 Windows sandbox 暫存路徑受阻，改以原生權限重驗通過。另修正回歸中一項中性說明字串本身可被 Python 解析時的原因碼預期。
+- 快測首次發現三項舊預期未跟上既有 Python51模組及 Local wire cap；只更新回歸斷言，保留原49模組順序雜湊，不改產品清單／預算。重跑 Node750／750、Python42／42，型別、lint、Webview語法及生產建置通過。未執行完整開發回歸、獨立 Mocha 或新 Codellama 實測；固定角色回覆不能當真實小模型驗收。歷史原文未保存，包裝缺陷雖可重現，仍不能宣稱當時每份 fence 內 Python 都有效。
+
 ### BMI 審查矛盾、局部修訂與格式恢復期限
 
 - 三批新結果確認13B已能生成可執行種子，但Reviewer把合法float／字串判為無效；13B-code的重複外框恢復又因剩餘5825秒不足完整6000秒而被擋，34B則兩次完整stop但抽取後語法失敗。新build已載入，三者皆未完成Mutatest量測，詳見 `docs/BMI三批分析與修復_2026_10_26.md`。

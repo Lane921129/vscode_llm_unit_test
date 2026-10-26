@@ -3,7 +3,7 @@ import { runSpawn } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { currentExecution } from '../pipeline/executionContext';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
-import { unwrapGeneratedCodeEnvelope } from './generatedTestValidator';
+import { extractPythonTestCode } from './generatedTestValidator';
 
 export interface MergeResult {
     mergedCode: string;
@@ -64,11 +64,7 @@ export async function projectWriterAdditionContext(options: {
 
 /** Remove only a complete, unambiguous transport wrapper around the addition. */
 export function extractWriterAdditionCode(response: string): string {
-    const raw = unwrapGeneratedCodeEnvelope(response).trim();
-    const fenced = raw.match(/^```(?:python|py|json)?[ \t]*\r?\n([\s\S]*)\r?\n```[ \t]*$/i);
-    if (fenced) { return unwrapGeneratedCodeEnvelope(fenced[1]); }
-    const bracketed = raw.match(/^\[python\][ \t]*\r?\n([\s\S]*)\r?\n\[\/python\]$/i);
-    return bracketed ? bracketed[1] : raw;
+    return extractPythonTestCode(response, 'addition');
 }
 
 /** AST composition only. This result still requires every normal candidate gate. */

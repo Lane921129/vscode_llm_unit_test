@@ -32,13 +32,58 @@ test('a full single method fence is transport markup, not a missing unittest imp
     assert.equal(extractWriterAdditionCode(`[PYTHON]\n${code}\n[/PYTHON]`), code);
 });
 
-test('ambiguous multiple fences and prose are never shortened to an executable prefix', async () => {
+test('a single method or complete file fence with surrounding prose reaches the AST merge', async () => {
+    const method = 'def test_added(self):\n    self.assertEqual(target(2), 3)';
+    const file = 'import unittest\nfrom neutral_source import target\nclass Added(unittest.TestCase):\n'
+        + '    def test_added(self): self.assertEqual(target(2), 3)';
+    for (const code of [method, file]) {
+        for (const response of [`Explanation\n\`\`\`python\n${code}\n\`\`\``,
+            ` \`\`\`py\n${code}\n\`\`\`\nOne observed case.`, `Before\n\`\`\`\n${code}\n\`\`\`\nAfter`,
+            `Before\n\`\`\`json\n${JSON.stringify({ code })}\n\`\`\`\nAfter`]) {
+            assert.equal(extractWriterAdditionCode(response), code);
+            const result = await mergeWriterTestAddition({ baseline, addition: response, python });
+            assert.ok(result.ok);
+            assert.equal(result.addedMethodsCount, 1);
+            const preserved = await validatePassingTestPreservation({ previousCode: baseline,
+                candidateCode: result.mergedCode, protectedMethods: 'all', python });
+            assert.equal(preserved.valid, true, preserved.reason);
+        }
+    }
+});
+
+test('ambiguous or incomplete fences and unfenced prose never become an executable prefix', async () => {
     const code = 'def test_added(self): self.assertEqual(target(2), 3)';
-    for (const addition of [`\`\`\`python\n${code}\n\`\`\`\n\`\`\`python\n${code}\n\`\`\``,
-        `Explanation\n\`\`\`python\n${code}\n\`\`\``]) {
+    for (const [addition, reasonCode] of [
+        [`\`\`\`python\n${code}\n\`\`\`\n\`\`\`python\n${code}\n\`\`\``, 'invalid-python-structure'],
+        [`\`\`\`python\n${code}\n\`\`\`\n\`\`\`python\n${code}`, 'invalid-python-structure'],
+        [`Explanation\n${code}`, 'unsupported-addition-context'], [`\`\`\`python\n${code}`, 'invalid-python-structure']
+    ]) {
+        assert.equal(extractWriterAdditionCode(addition), addition);
         const result = await mergeWriterTestAddition({ baseline, addition, python });
-        assert.deepEqual(result, { ok: false, reasonCode: 'invalid-python-structure' });
+        assert.deepEqual(result, { ok: false, reasonCode });
         assert.equal('mergedCode' in result, false);
+    }
+});
+
+test('literal fence markers and multiline string whitespace survive addition extraction and AST composition', async () => {
+    const code = '    def test_added(self):\n        text = """first\n```python\n  literal indent\n```\nlast"""\n'
+        + '        self.assertEqual(target(2), 3)\n        self.assertIn("literal indent", text)';
+    const response = `Explanation\n\`\`\`python\n${code}\n\`\`\`\nAfter`;
+    const extracted = extractWriterAdditionCode(response);
+    assert.ok(extracted.startsWith('def test_added'));
+    assert.ok(extracted.includes('first\n```python\n  literal indent\n```\nlast'));
+    const result = await mergeWriterTestAddition({ baseline, addition: response, python });
+    assert.ok(result.ok);
+    assert.match(result.mergedCode, /first\\n```python\\n  literal indent\\n```\\nlast/);
+});
+
+test('unwrapping markup cannot repair invalid Python or authorize changes to a passed method', async () => {
+    for (const [code, reasonCode] of [
+        ['def test_added(self): invalid python !', 'invalid-python-structure'],
+        ['def test_passed(self): self.assertEqual(target(self.value), 999)', 'existing-test-method-changed']
+    ]) {
+        const result = await mergeWriterTestAddition({ baseline, addition: `Before\n\`\`\`python\n${code}\n\`\`\`\nAfter`, python });
+        assert.deepEqual(result, { ok: false, reasonCode });
     }
 });
 

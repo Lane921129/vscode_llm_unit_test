@@ -36,13 +36,13 @@ test('low-capacity seeds retain their original thirty-percent output allowance',
     }
 });
 
-test('other roles, revisions, expansion and remote providers keep the existing allowance', () => {
+test('other local roles retain their allowance as a wire cap while remote providers keep their policy', () => {
     const roles: BudgetedModelRole[] = ['writer-revision', 'reviewer', 'bug-fixer', 'analyst-quality'];
-    const cases = [ ...roles.map(role => ({ ...seed, role })), { ...seed, seedPending: false },
-        { ...seed, envType: 'cloud' as const },
-        { ...seed, envType: 'custom' as const } ];
-    for (const input of cases) {
-        assert.deepEqual(roleRequestBudget(input), { inputBudget: 5734, reservedOutputTokens: 2458 });
+    for (const input of [...roles.map(role => ({ ...seed, role })), { ...seed, seedPending: false }]) {
+        assert.deepEqual(roleRequestBudget(input), { inputBudget: 5734, reservedOutputTokens: 2458, requestOutputTokens: 2458 });
+    }
+    for (const envType of ['cloud', 'custom'] as const) {
+        assert.deepEqual(roleRequestBudget({ ...seed, envType }), { inputBudget: 5734, reservedOutputTokens: 2458 });
     }
 });
 
