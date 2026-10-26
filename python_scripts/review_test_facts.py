@@ -548,12 +548,17 @@ def build_review_facts(payload):
                     # Binding the assertion to the target is independent from
                     # understanding its expected expression or having Trace data.
                     fact['targetResult'] = True
+                    # Syntax provenance is independent of whether the value has
+                    # an oracle. Only the bounded literal reader can establish
+                    # a fixed expected value; unknown is never "computed".
+                    fact['expectedOrigin'] = 'unknown'
                     if actual[1] is not None and any(item['line'] == actual[3] and item['call'] == actual[1]
                                                      for item in facts['calls']):
                         fact['targetCallLine'] = actual[3]
                     if not expected or expected[0] != 'literal':
                         return
-                    fact.update({'expectedType': type(expected[1]).__name__, 'expected': snapshot_value(expected[1])})
+                    fact.update({'expectedType': type(expected[1]).__name__, 'expected': snapshot_value(expected[1]),
+                                 'expectedOrigin': 'static-literal'})
                     if not observation_setup_known or not observation_flow_known \
                             or (node.lineno, kind) not in standard_calls:
                         return

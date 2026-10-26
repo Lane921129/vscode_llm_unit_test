@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 通用化首要目標與 expected 事實來源（2026-10-27）
+
+目前工作順序及驗收入口為 `docs/通用化首要目標_2026_10_27.md`。六項依序是事實／判斷契約、局部 AST 合成、fixture／需求入口、能力適配、未見專案重複驗收及公開版本；歷史已實作能力沿用，逐個切片交付。
+
+`review_test_facts.py` 在原本有界 literal reader 上加入可選 `expectedOrigin`：`static-literal` 只證明固定 literal 或可靜態還原的區域 literal alias；計算式、呼叫、屬性及未知綁定為 `unknown`，不執行表達式。Node 在工具交接與 Reviewer 解析時核對標記、型別及可重播快照的一致性；歷史沒有此欄位不推導新來源證明。固定值、觀測一致與獨立需求正確是三件事，fixture／patch 仍不能借用原觀測。
+
+對已實跑、同呼叫觀測核實的固定 expected，完整的「非固定計算值」否定搭配未指定替代值的固定值指令，回原有一次同候選 Reviewer 契約補正；整份矛盾 assessment 不交 Writer，不刪 finding 轉批准。新案例、具體需求、未知來源及未核實值仍可審查。這是目標 1 的第一個切片，尚未取代自然語言規則或完成整體結構化主張契約。
+
 ## 初始測試與補測的共用包裝抽取（2026-10-26）
 
 `extractWriterAdditionCode` 委派給 `extractPythonTestCode` 的 addition 模式，沿用同一個詞法 fence 掃描及多行 literal 保真處理。新增測試可為完整 TestCase 或裸方法；唯一完整 fence 可帶前後說明，額外 fence 或未閉合尾段維持原文拒絕。這修正了初始檔案可抽取、補測卻把相同 Markdown 包裝交給 Python AST 的落差。`writer-addition-v1` 保留及綁定檢查、逐案完整族、後續 native／Reviewer／品質 gate 不變；抽取成功本身不授予執行或品質批准。

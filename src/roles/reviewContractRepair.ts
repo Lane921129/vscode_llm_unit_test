@@ -77,6 +77,7 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
                 + 'A proposal identical to the AST-owned assertion, canonical binding or existing patch changes nothing. '
                 + 'A return-to-exception edit must name the exact input, concrete exception class and evidence; do not invent an exception for a verified same-input returned outcome. '
                 + 'Fact contradictions mean the cited host AST/observation facts already establish that binding, assertion or exact-input outcome. '
+                + 'expectedOrigin=static-literal establishes a fixed literal or bounded local literal alias; it does not establish independent requirements. Do not call it a runtime calculation or request an unspecified fixed replacement. '
                 + 'Do not repeat the contradicted claim: a unittest harness is not the target class; an expected exception is not a failing test; '
                 + 'verified observed values must not be replaced by guessed calculations; exact string equality must not become string ordering or loose membership. '
                 + 'Verified canonical imports are legitimate bindings; dependency mock call assertions must not be replaced solely for checking calls rather than return values. '

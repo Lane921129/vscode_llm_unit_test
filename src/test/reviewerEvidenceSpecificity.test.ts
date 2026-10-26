@@ -82,7 +82,7 @@ test('saved clock claims are checked against complete candidate AST syntax, not 
     const actual = await facts(clock, 'database', '_now_text');
     assert.deepEqual(actual.methods[0].standardAssertions, [{ line: 10, kind: 'assertEqual' }]);
     assert.deepEqual(actual.methods[0].assertions, [{ line: 10, kind: 'assertEqual', observationStatus: 'unknown',
-        targetResult: true, targetCallLine: 10, expectedType: 'str',
+        targetResult: true, targetCallLine: 10, expectedType: 'str', expectedOrigin: 'static-literal',
         expected: { schema_version: 'trace-value-v1', replayable: true,
             value: { type: 'str', value: '2026-10-14 15:42:47' } } }],
     'controlled patch retains the target binding and literal while observations stay unknown');

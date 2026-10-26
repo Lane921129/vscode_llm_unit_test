@@ -14,6 +14,18 @@ export type ReviewObservationStatus = 'verified' | 'contradicted' | 'unknown';
 export interface ReviewAssertionFact {
     line: number; kind: string; targetResult?: boolean; expectedType?: string;
     expected?: TraceValueSnapshot; observationVerified?: boolean; observationStatus?: ReviewObservationStatus; targetCallLine?: number;
+    /** Bounded AST literal/alias provenance; fixed does not mean requirement-correct. */
+    expectedOrigin?: 'static-literal' | 'unknown';
+}
+
+/** Legacy omission stays compatible; never infer new provenance from an old DTO. */
+export function validReviewExpectedOrigin(assertion: ReviewAssertionFact): boolean {
+    if (assertion.expectedOrigin === undefined) { return true; }
+    if (assertion.targetResult !== true) { return false; }
+    if (assertion.expectedOrigin === 'unknown') { return assertion.expected === undefined; }
+    return assertion.expectedOrigin === 'static-literal' && validTraceValueSnapshot(assertion.expected)
+        && assertion.expected.replayable
+        && (assertion.expectedType === 'NoneType' ? 'none' : assertion.expectedType) === assertion.expected.value.type;
 }
 
 /** Missing legacy flags mean unknown, never a contradicted expected value. */
@@ -222,6 +234,10 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
         }
         if (object(method) && Array.isArray(method.assertions) && method.assertions.some((assertion: ReviewAssertionFact) =>
             reviewAssertionObservationStatus(assertion) === undefined)) { invalid('ast-assertion-observation-shape'); }
+        if (object(method) && Array.isArray(method.assertions) && method.assertions.some((assertion: ReviewAssertionFact) =>
+            !validReviewExpectedOrigin(assertion))) {
+            invalid('ast-assertion-expected-origin-shape');
+        }
         if (!object(method) || method.standardAssertions === undefined) { continue; }
         if (!Array.isArray(method.standardAssertions) || method.standardAssertions.length > 12000
             || !Number.isSafeInteger(method.line) || !Number.isSafeInteger(method.endLine)

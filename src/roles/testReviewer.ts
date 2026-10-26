@@ -1,6 +1,6 @@
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { evidenceHash } from '../pipeline/analysisJournal';
-import { ReviewFactIdentity, ReviewFacts, reviewAssertionObservationStatus, reviewFactsForPrompt } from './reviewFacts';
+import { ReviewFactIdentity, ReviewFacts, reviewAssertionObservationStatus, reviewFactsForPrompt, validReviewExpectedOrigin } from './reviewFacts';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { redactCredentialStrings } from '../pipeline/artifactSafety';
 
@@ -110,6 +110,7 @@ Never mock the target. Dependency patches must match complete actual use points;
 Fixed expected values require exact-input assertable observations or explicit same-test dependency mocks. Uncontrolled clocks/randomness, model hypotheses, source formulas and annotations are not independent oracles; annotations do not enforce input types.
 HOST_VERIFIED_REVIEW_FACTS binds supplied test facts. TestCase is harness, not target. Keep observed values and exact strings; never mock scalars. assertRaises checks exceptions, not setup failure.
 With verified execution and verified+same-call observationReturned, literal/tuple assertions need no recalculation. Independent requirements remain reviewable.
+expectedOrigin: static-literal=fixed literal/local literal alias; unknown=unproven provenance, not computed or wrong. Fixed syntax does not prove independent requirements; do not request an unspecified fixed replacement.
 Execution is not full quality; missing cases and stronger assertions remain reviewable. Review cannot certify execution or mutation.${isolatedResourceSystemRule()}`;
 }
 
@@ -251,7 +252,7 @@ export type ReviewRejectionCode = 'invalid-json' | 'invalid-envelope' | 'too-man
     | 'review-facts-identity-mismatch' | 'review-facts-observation-shape' | 'observed-outcome-contradiction' | 'existing-assertion-contradiction'
     | 'expected-exception-contradiction' | 'exception-evidence-missing' | 'scalar-mock-contradiction' | 'assertion-weakening' | 'existing-import-contradiction'
     | 'existing-definition-contradiction' | 'existing-harness-contradiction' | 'observed-assertion-verification-contradiction'
-    | 'expected-literal-type-contradiction';
+    | 'expected-literal-type-contradiction' | 'expected-fixed-value-contradiction' | 'review-facts-expected-origin-shape';
 
 function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRejectionCode) => undefined, requireCurrent: boolean): TestReview | undefined {
     if (!value || typeof value !== 'object' || Array.isArray(value)) { return reject('invalid-envelope'); }
@@ -364,6 +365,9 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
             || facts.target !== identity.target) { reject('review-facts-identity-mismatch'); return { diagnostics }; }
         if (facts.methods.some(method => method.assertions.some(assertion => reviewAssertionObservationStatus(assertion) === undefined))) {
             reject('review-facts-observation-shape'); return { diagnostics };
+        }
+        if (facts.methods.some(method => method.assertions.some(assertion => !validReviewExpectedOrigin(assertion)))) {
+            reject('review-facts-expected-origin-shape'); return { diagnostics };
         }
     }
     const candidates = jsonObjects(raw);
@@ -601,6 +605,17 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
             codes.add('assertion-weakening');
         }
         if (assertion?.targetResult) {
+            // A fixed expected is an AST fact, not a business oracle. Compare
+            // only this complete mechanical denial and nonspecific replacement;
+            // causal requirements, new cases and concrete edits stay reviewable.
+            if (assertion.expectedOrigin === 'static-literal' && assertion.expected?.replayable === true
+                && facts?.executionVerified && reviewAssertionObservationStatus(assertion) === 'verified'
+                && method?.calls.find(call => call.line === assertion.targetCallLine)?.observationReturned === true
+                && (issue.category === 'assertion-quality' || issue.category === 'assertion-evidence')
+                && /^The expected result is not a fixed value, but rather a calculated value based on the input parameters\.(?: This could lead to false positives or false negatives in the test\.)?$/i.test(issue.reason.trim())
+                && /^Replace the expected result with a fixed value that is calculated based on the input parameters[.!\s]*$/i.test(issue.action.trim())) {
+                codes.add('expected-fixed-value-contradiction');
+            }
             // Only a complete mechanical denial of this exact, replayable scalar
             // type qualifies. Range, precision, new inputs, concrete replacements
             // and independent requirements remain reviewable.
