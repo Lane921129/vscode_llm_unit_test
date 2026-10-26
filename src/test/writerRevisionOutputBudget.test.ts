@@ -11,6 +11,7 @@ import { AnalysisStageError } from '../utils/executionFailureCategory';
 const revision = { envType: 'local', mode: 'full', role: 'writer-revision', seedPending: true,
     contextWindow: 8192, inputBudget: 5734, revisionWorkload: { findingCount: 1, missingScenarioCount: 0 } } as const;
 const original = { inputBudget: 5734, reservedOutputTokens: 2458 };
+const localOriginal = { ...original, requestOutputTokens: original.reservedOutputTokens };
 const code = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
     + '    def test_existing(self):\n        self.assertEqual(increment(1), 2)\n';
 
@@ -22,8 +23,8 @@ test('an explicit single-addition scope budgets the actual output rather than th
         assert.deepEqual(budget, { inputBudget: 6656, reservedOutputTokens: WRITER_ADDITION_OUTPUT_TOKEN_LIMIT,
             requestOutputTokens: WRITER_ADDITION_OUTPUT_TOKEN_LIMIT });
         assert.equal(roleRequestBudget({ ...input, minimumOutputTokens: 4000 }).requestOutputTokens, 4000);
-        assert.equal(roleRequestBudget({ ...input, writerOutputScope: undefined }).requestOutputTokens, undefined,
-            'a complete candidate revision or an ordinary Writer must retain its existing policy');
+        assert.equal(roleRequestBudget({ ...input, writerOutputScope: undefined }).requestOutputTokens, 2458,
+            'the existing reserve must be enforced on the wire even for a complete or unknown candidate');
     }
     for (const envType of ['cloud', 'custom'] as const) {
         assert.deepEqual(roleRequestBudget({ ...revision, role: 'writer', seedPending: false, envType,
@@ -31,7 +32,7 @@ test('an explicit single-addition scope budgets the actual output rather than th
     }
     for (const role of ['reviewer', 'bug-fixer', 'analyst-quality'] as const) {
         assert.deepEqual(roleRequestBudget({ ...revision, role, seedPending: false,
-            writerOutputScope: 'single-test-addition' }), original);
+            writerOutputScope: 'single-test-addition' }), localOriginal);
     }
     assert.deepEqual(roleRequestBudget({ ...revision, role: 'writer', mode: 'execution', seedPending: false,
         writerOutputScope: 'single-test-addition' }), { inputBudget: 6656,
@@ -79,8 +80,8 @@ test('larger complete candidates reserve growth instead of using a fixed seed li
         assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: candidate }),
             { inputBudget: 8192 - expected, reservedOutputTokens: expected, requestOutputTokens: expected });
     }
-    assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: '#'.repeat(1762 * 3.5) }), original,
-        'a larger candidate retains the old allowance and has no tighter wire cap');
+    assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: '#'.repeat(1762 * 3.5) }), localOriginal,
+        'a larger candidate retains and enforces the old allowance');
 });
 
 test('multiple concrete findings reserve their revision work without adding prompt text or changing capacity', () => {
@@ -107,7 +108,7 @@ test('unknown or invalid work retains the original reserve and learned floors ne
         { findingCount: 2, missingScenarioCount: -1 }, { findingCount: 1.5, missingScenarioCount: 0 },
         { findingCount: 1, missingScenarioCount: NaN }, { findingCount: Infinity, missingScenarioCount: 0 },
         { findingCount: '5', missingScenarioCount: 0 }]) {
-        assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: code, revisionWorkload: workload as any }), original);
+        assert.deepEqual(roleRequestBudget({ ...revision, revisionCurrentCode: code, revisionWorkload: workload as any }), localOriginal);
     }
     for (const revisionWorkload of [undefined, { findingCount: 1, missingScenarioCount: 0 },
         { findingCount: 5, missingScenarioCount: 2 }]) {
@@ -127,12 +128,12 @@ test('remote, other roles, missing and invalid current candidates retain the pri
         { ...revision }, { ...revision, revisionCurrentCode: '' }, { ...revision, revisionCurrentCode: ' \r\n' },
         ...[null, 7, {}, []].map(value => ({ ...revision, revisionCurrentCode: value as any }))
     ];
-    for (const input of cases) { assert.deepEqual(roleRequestBudget(input), original); }
+    for (const input of cases) { assert.deepEqual(roleRequestBudget(input), input.envType === 'local' ? localOriginal : original); }
 });
 
-test('small contexts and invalid capacity inputs never acquire a revision wire cap', () => {
+test('small valid contexts enforce the reserve while invalid inputs never acquire a revision wire cap', () => {
     assert.deepEqual(roleRequestBudget({ ...revision, contextWindow: 4096, inputBudget: 2867, revisionCurrentCode: code }),
-        { inputBudget: 2867, reservedOutputTokens: 1229 });
+        { inputBudget: 2867, reservedOutputTokens: 1229, requestOutputTokens: 1229 });
     for (const capacity of [NaN, Infinity, 0, -1, 8192.5, Number.MAX_SAFE_INTEGER + 1]) {
         assert.equal(roleRequestBudget({ ...revision, contextWindow: capacity, revisionCurrentCode: code }).requestOutputTokens, undefined);
     }

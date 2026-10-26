@@ -4,6 +4,15 @@
 
 ## 2026-10-26
 
+### BMI 輸出預算、完成回覆診斷與種子格式修訂
+
+- 分析 `bmi_2026_10_26_11_57`：三次請求皆 HTTP200／stop，最終停在 Python 候選盤點，並非本批 API 超時。空候選修訂規劃預留2458輸出 tokens，卻未送出 `num_predict`，實際生成4522 tokens、耗時1405秒；修正所有有效 Local 原預留分支，使規劃與 wire cap 一致。Cloud／Custom 不套用本機 cap；原動態增額、完整證據、期限與計數限制保留。
+- Python 方法盤點新增版本及候選 hash 綁定的診斷介面，區分語法類型／行欄與程序、限額、DTO 或身分失敗；後者 typed 停止，不再交 Writer 修工具。既有陣列 CLI 與情境指紋相容，UTF-8 方法名稱可處理，盤點不執行候選。
+- 完整回覆被語法盤點拒絕時，也在失敗報告保存詞法統計、hash及安全節錄（至多六行／1200字元），排除提示／來源重述與秘密；明示 completed 後拒絕，與 length 截斷分開。不保存完整 provider 回應，也不補造舊批次缺失原文。
+- 初始 seed 格式補正沿用同一案例及完整必要證據，只追加短格式指引，避免無候選時切換成膨脹的全量修訂語境；原有限嘗試、真目標、oracle、隔離、Reviewer及品質 gate 均保留。
+- 必要相關 Node／真 Python 案例42項最終通過，包含正式格式恢復至審查／突變、連續拒絕診斷及工具失敗不補問。原資格整合 fixture 明確指定嚴格政策並補齊固定探針兩案，未改產品可選資格預設；sandbox hardlink 限制以原生權限重驗。TypeScript、lint、生產建置及 Webview 語法通過，未跑全量開發回歸。
+- 本機真實 `qwen2.5-coder:3b-instruct` 在與實驗室完整來源 hash 相同的 BMI 完成生成、原生驗證、Reviewer與 builtin 突變，單輪45.8333%，終態 round-limit，尚未達80%門檻。Codellama13B／34B、指定 Mutatest 及完整車輛仍待實驗室重測；不借單案宣稱完整品質或泛化完成。證據與限制見 `docs/BMI結果分析_2026_10_26_1157.md`。
+
 ### 參數 Mock 結構修復與小模型窄任務驗收
 
 - 修正 execution Writer 對「把函式參數當模組屬性 patch」只能重寫整份測試的瓶頸。新增來源綁定的封閉結構選項：原 Checker、完整來源 hash、唯一目標／測試、qualified 標準 patch、唯一參數傳入及來源單層成員皆須可核實；AI 選取後，將錯誤 patch 改為新的標準 MagicMock assignment，原 alias 繼續傳入目標，原有設定與斷言對準該成員。不產生測值、expected、次數或新斷言。

@@ -8,7 +8,7 @@ const shapeCounts = ['responseCharacters', 'sampledCharacters', 'sampledLines', 
 
 /** Lexical diagnostics only: never candidate validity, Python AST or an oracle.
  * Inspect a bounded sample; keep only counts and a hash, never sampled text. */
-function outputShape(text: string) {
+export function outputShape(text: string) {
     const sample = text.slice(0, 65536).split('\n').slice(0, 2048);
     const nonempty = sample.map(line => line.trim()).filter(Boolean);
     const code = sample.join('\n');

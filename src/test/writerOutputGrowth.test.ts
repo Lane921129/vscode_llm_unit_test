@@ -42,7 +42,8 @@ test('learned Writer output floors never shrink a complete revision or alter rol
     const revision = roleRequestBudget({ ...request, role: 'writer-revision', revisionCurrentCode: code,
         minimumOutputTokens: 2560 });
     assert.ok(revision.requestOutputTokens! > 2560);
-    assert.equal(roleRequestBudget({ ...request, role: 'analyst-quality', minimumOutputTokens: 9000 }).requestOutputTokens, undefined);
+    assert.equal(roleRequestBudget({ ...request, role: 'analyst-quality', minimumOutputTokens: 9000 }).requestOutputTokens, 2458,
+        'another role enforces its own existing reserve without inheriting the Writer floor');
     assert.deepEqual(roleRequestBudget({ ...request, envType: 'cloud', minimumOutputTokens: 9000 }),
         roleRequestBudget({ ...request, envType: 'cloud' }));
 });

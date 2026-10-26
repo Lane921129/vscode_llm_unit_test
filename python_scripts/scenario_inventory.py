@@ -31,5 +31,35 @@ def inventory(code):
     return result
 
 
+def diagnostic_inventory(code):
+    """Structured, source-free errors; never return SyntaxError.text or msg."""
+    code_hash = hashlib.sha256(code.encode('utf-8')).hexdigest()
+    base = {'version': 'candidate-method-inventory-v1', 'codeHash': code_hash}
+    try:
+        methods = inventory(code)
+        if len(methods) > 256:
+            return {**base, 'status': 'unavailable', 'reasonCode': 'inventory-method-limit'}
+        return {**base, 'status': 'parsed', 'methods': methods}
+    except SyntaxError as error:
+        kind = 'TabError' if isinstance(error, TabError) else 'IndentationError' if isinstance(error, IndentationError) else 'SyntaxError'
+        def coordinate(value):
+            return value if type(value) is int and 0 < value <= 2147483647 else None
+        return {**base, 'status': 'syntax-error', 'reasonCode': 'python-syntax-error',
+                'syntax': {'kind': kind, 'line': coordinate(error.lineno), 'column': coordinate(error.offset)}}
+    except (ValueError, RecursionError, MemoryError):
+        return {**base, 'status': 'unavailable', 'reasonCode': 'inventory-parser-limit'}
+
+
 if __name__ == '__main__':
-    print(json.dumps(inventory(sys.stdin.read())))
+    if sys.argv[1:] == ['--diagnostics']:
+        raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            result = {'version': 'candidate-method-inventory-v1', 'status': 'unavailable', 'reasonCode': 'inventory-input-limit'}
+        else:
+            try:
+                result = diagnostic_inventory(raw.decode('utf-8'))
+            except UnicodeDecodeError:
+                result = {'version': 'candidate-method-inventory-v1', 'status': 'unavailable', 'reasonCode': 'inventory-input-encoding'}
+        print(json.dumps(result, ensure_ascii=True))
+    else:
+        print(json.dumps(inventory(sys.stdin.read())))

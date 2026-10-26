@@ -79,7 +79,8 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
         let reason: 'stop' | 'length' = 'stop';
         if (probe === 'writer') {
             response = '```python\nimport unittest\nclass TestProbe(unittest.TestCase):\n'
-                + '    def test_increment(self):\n        self.assertEqual(increment(1), 2)\n```';
+                + '    def test_increment(self):\n        self.assertEqual(increment(1), 2)\n'
+                + '        self.assertEqual(increment(-1), 0)\n```';
         } else if (probe === 'reviewer') {
             assert.deepEqual(wire.format.required, ['findings']);
             response = '{"findings":[]}';
@@ -153,6 +154,7 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                 const output = path.join(directory, scenario);
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-revision-output',
                     filePath: source, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full',
+                    requireRoleQualification: completion === 'length',
                     maxLoops: 1, timeoutSeconds: 45, mutationEngine: 'builtin', mutpyTimeout: 20, outputPath: output });
                 const artifacts = fs.readdirSync(output, { recursive: true }).map(String);
                 const events = artifacts.filter(name => path.basename(name) === 'role_events.jsonl')

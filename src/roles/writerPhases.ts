@@ -88,6 +88,19 @@ export function buildWriterSeedPrompt(evidencePrompt: string, executionOnly = fa
             : 'Pass execution before expansion; existing output contract.');
 }
 
+/** Retry the same seed evidence; a formatting failure is not a request to expand. */
+export function buildWriterSeedFormatRepairPrompt(originalPrompt: string, syntax: {
+    kind: string; line: number | null; column: number | null
+}): string {
+    const position = `${syntax.kind}; line=${syntax.line ?? 'unknown'}; column=${syntax.column ?? 'unknown'}`;
+    return originalPrompt + '\n\nWRITER_SEED_FORMAT_REPAIR_V1\n'
+        + `The completed response did not yield valid Python (${position}). `
+        + 'Use the SAME single seed case and complete evidence above. Return one complete Python unittest file '
+        + 'inside one python fence, with exactly one test method and one real target call. '
+        + 'No explanation, copied instructions, implementation, extra cases or JSON. '
+        + 'Keep the original target/input/oracle/safety contract; close the fence and stop.';
+}
+
 /** A prefix inside a larger unapproved draft is not a complete baseline unit. */
 function completePythonCodeAlreadySupplied(prompt: string, code: string): boolean {
     return [...prompt.matchAll(/^```(?:python|py)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/gm)]

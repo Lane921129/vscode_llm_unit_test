@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## 完成回覆的格式修復與輸出預算（2026-10-26）
+
+`roleRequestBudget` 對正式 Local 請求的合法保留額度同步產生實際 `requestOutputTokens`；未知候選／工作量保留原額度但仍送為 `num_predict`，不再依賴 provider 的省略預設。既有增額恢復、Context 核算、原 deadline／計數、length 拒絕及 Cloud／Custom 政策保持。
+
+`scenario_inventory.py --diagnostics` 提供綁候選 hash 的 `candidate-method-inventory-v1`，分開 parsed、syntax-error 與 unavailable；不回傳原始錯誤行或任意 exception msg。`candidateMethodInventory.ts` 驗證 DTO、身分及限額，工具失敗以 typed stage 停止，只有確實的 Python 語法拒絕才交 Writer。預設 CLI 陣列介面及 fingerprint 保持，盤點不執行候選。
+
+正式 Writer 完整回覆後，宿主暫存有界、去密且排除實際提示／來源重述的診斷 DTO，不保存原回覆。抽取後語法失敗時，以 `model-request/format-rejected` 保存節錄、詞法統計、候選 hash、語法類型及行欄；報告分開 completed 語法拒絕與 length。`buildWriterSeedFormatRepairPrompt` 讓原單一 seed 案例和完整必要證據接續，只追加短格式提醒，不再為包裝問題建立完整修訂語境；仍需全套原執行、Reviewer、coverage／mutation gate。
+
 ## 資源與單元相依的提示分工（2026-10-26）
 
 `isolatedResourceSystemRule` 與完整資源角色規則共用同一分工：資源計畫準備已批准的應用 I/O，參數仍由測試提供，來源支持的相依 Mock 仍可隔離單元。移除「declared resources, not mocks」及 execution 的「without host-declared resources」絕對限制，避免與既有 helper 隔離規則互相矛盾；不改資源計畫、runtime、Checker 或品質 gate。Mock 成功不等於真實資源驗證。

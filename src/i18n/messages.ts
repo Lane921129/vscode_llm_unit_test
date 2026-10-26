@@ -13,6 +13,8 @@ export const englishMessages: Record<string, string> = {
     '[輸出恢復] {0} 回覆高度重複且未形成可辨識測試；改送一次格式修正，保留原期限。': '[Output recovery] {0} repeated output without recognizable tests; sending one format correction within the original deadline.',
     '### 模型輸出失敗診斷': '### Model output failure diagnostics',
     '#### 輸出失敗事件 {0}：{1}': '#### Output failure event {0}: {1}',
+    '回覆傳輸已完成，但抽取後的內容未通過 Python 語法盤點；不是輸出長度截斷。': 'The response transport completed, but the extracted content failed Python syntax inventory; this was not output-length truncation.',
+    '抽取後 Python 語法（類型／行／欄）': 'Extracted Python syntax (kind / line / column)',
     '回覆高度重複，沒有可辨識的測試方法或斷言；提高輸出額度未必能改善。': 'The output is highly repetitive without recognizable test methods or assertions; a larger output cap may not help.',
     '回覆已有可辨識的測試結構，但尚未完整結束，不能採用前綴。': 'Test structure is recognizable, but the response did not finish. Its prefix cannot be accepted.',
     '回覆未顯示可辨識的測試結構；僅憑紀錄無法判定其具體內容。': 'No test structure was recognized; these records alone cannot establish the exact content.',

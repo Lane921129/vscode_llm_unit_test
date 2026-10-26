@@ -17,11 +17,13 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
         const d = event.detail, role: string = d.role;
         if (event.status === 'requested') { transport.delete(role); }
         if (event.status === 'timing' && d.kind === 'transport') { transport.set(role, d); }
-        if (event.status !== 'error' || d.reasonCode !== 'output-token-limit') { continue; }
+        const formatFailure = event.status === 'format-rejected' && d.reasonCode === 'response-python-syntax';
+        if (!formatFailure && (event.status !== 'error' || d.reasonCode !== 'output-token-limit')) { continue; }
         const shape = readOutputShapeDiagnostic(d.responseShape);
         const timing = transport.get(role);
         const diagnosis = diagnoseModelOutput(shape, { singleTestSeed: d.outputScope === 'single-test-seed' });
-        const explanation = diagnosis === 'repetitive-without-tests'
+        const explanation = formatFailure ? localize('回覆傳輸已完成，但抽取後的內容未通過 Python 語法盤點；不是輸出長度截斷。')
+            : diagnosis === 'repetitive-without-tests'
             ? localize('回覆高度重複，沒有可辨識的測試方法或斷言；提高輸出額度未必能改善。')
             : diagnosis === 'repetitive-test-shells'
                 ? localize('回覆高度重複，多次出現測試方法與程式區塊外框，但沒有可辨識的 unittest 斷言；不能將外框數量當成有效生成進度。')
@@ -46,7 +48,7 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
         const preview = readModelOutputPreview(d.responsePreview);
         sections.push(localize('#### 輸出失敗事件 {0}：{1}', display(event.sequence), role), '', explanation, '',
             localize('| 項目 | 本次紀錄 |'), '| --- | --- |',
-            `| ${localize('完成原因')} | length / output-token-limit |`,
+            `| ${localize('完成原因')} | ${formatFailure ? 'completed / response-python-syntax' : 'length / output-token-limit'} |`,
             `| Context | ${display(d.contextWindow)} |`,
             `| ${localize('實測輸入 tokens')} | ${display(timing?.ollama?.promptEvalCount)} |`,
             `| num_predict / ${localize('實際輸出 tokens')} | ${display(d.outputTokenLimit)} / ${display(timing?.ollama?.evalCount)} |`,
@@ -57,6 +59,11 @@ export function renderModelOutputDiagnostics(events: readonly any[]): string {
             `| ${localize('樣本完整／回覆 SHA-256')} | ${shape ? String(shape.sampleComplete) : localize('未知')} / ${shape?.responseHash || localize('未知')} |`,
             `| ${localize('恢復決策')} | ${recovery} |`, '',
             localize('文字統計不是 AST 驗證；以下節錄僅供診斷，不是完整回覆或可執行測試。'), '');
+        if (formatFailure) {
+            const syntax = d.syntax;
+            const kind = ['SyntaxError', 'IndentationError', 'TabError'].includes(syntax?.kind) ? syntax.kind : localize('未知');
+            sections.push(localize('抽取後 Python 語法（類型／行／欄）') + `: ${kind} / ${display(syntax?.line)} / ${display(syntax?.column)}`, '');
+        }
         if (!preview) {
             sections.push(localize('此紀錄未保存可核對的輸出節錄；無法由雜湊或統計還原原文。'), '');
         } else {

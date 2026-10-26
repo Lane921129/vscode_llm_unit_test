@@ -61,7 +61,11 @@ export function roleRequestBudget(input: {
             return { inputBudget: Math.max(0, input.contextWindow - requestOutputTokens),
                 reservedOutputTokens: requestOutputTokens, requestOutputTokens };
         }
-        return { inputBudget: input.inputBudget, reservedOutputTokens: Math.max(0, defaultReserve) };
+        const validLocalReserve = input.envType === 'local' && Number.isSafeInteger(input.contextWindow)
+            && input.contextWindow > 0 && Number.isSafeInteger(input.inputBudget) && input.inputBudget >= 0
+            && Number.isSafeInteger(defaultReserve) && defaultReserve > 0;
+        return { inputBudget: input.inputBudget, reservedOutputTokens: Math.max(0, defaultReserve),
+            ...(validLocalReserve ? { requestOutputTokens: defaultReserve } : {}) };
     }
     if (boundedRevision) {
         // Preserve the complete candidate and modest growth. Unknown work or a
@@ -71,7 +75,7 @@ export function roleRequestBudget(input: {
         const workload = knownRevisionWorkload(input.revisionWorkload) ? input.revisionWorkload : undefined;
         if (!Number.isSafeInteger(candidateReserve) || !learnedMinimum
             && (!workload || candidateReserve >= defaultReserve)) {
-            return { inputBudget: input.inputBudget, reservedOutputTokens: defaultReserve };
+            return { inputBudget: input.inputBudget, reservedOutputTokens: defaultReserve, requestOutputTokens: defaultReserve };
         }
         const workReserve = workload ? candidateReserve + 512
             * Math.max(workload.findingCount - 1, workload.missingScenarioCount) : defaultReserve;

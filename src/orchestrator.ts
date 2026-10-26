@@ -135,8 +135,10 @@ import { unprobedLocalQualification } from './llm/connectionQualification';
 import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification } from './pipeline/batchRuntimeQualification';
 import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
-import { getCompletedOllamaText, readOutputShapeDiagnostic } from './llm/ollamaResponse';
-import { diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
+import { getCompletedOllamaText, outputShape, readOutputShapeDiagnostic } from './llm/ollamaResponse';
+import { buildModelOutputPreview, diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
+import { readCandidateMethodInventory, CandidateSyntaxDiagnostic } from './pipeline/candidateMethodInventory';
+import { buildWriterSeedFormatRepairPrompt } from './roles/writerPhases';
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
@@ -1771,6 +1773,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const analystOutputBudget = new WriterOutputBudget();
     let writerAdditionBaseline: string | undefined;
     const methodInventories = new Map<string, ScenarioIdentity[]>();
+    const candidateSyntaxFailures = new Map<string, CandidateSyntaxDiagnostic>();
+    const completedOutputDiagnostics = new Map<string, {
+        responseShape: ReturnType<typeof outputShape>; responsePreview: ReturnType<typeof buildModelOutputPreview>;
+        contextWindow: number; outputTokenLimit?: number;
+    }>();
     let inventoryExecutedBaseline: ((baseline: string) => Promise<void>) | undefined;
     let activeSeedCaseIds: string[] | undefined;
     let activeSeedCaseFacts = '';
@@ -2291,7 +2298,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
             }
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
-            return completionPrefix ? assembleWriterSeedCompletion(completionPrefix, response) : response;
+            const completed = completionPrefix ? assembleWriterSeedCompletion(completionPrefix, response) : response;
+            if (!sourceSelectionScope && ['writer', 'writer-revision'].includes(role)) {
+                completedOutputDiagnostics.set(evidenceHash(completed), { responseShape: outputShape(response),
+                    responsePreview: buildModelOutputPreview(response, { knownSecrets,
+                        excludedTexts: [contractedSystem, prompt, initialSource],
+                        publicInstructionTexts: [buildWriterSeedSystemPrompt('', true), buildWriterSeedSystemPrompt('', false),
+                            buildWriterSeedSystemPrompt(''), writerOutputFormatCorrection(true), writerOutputFormatCorrection(false)] }),
+                    contextWindow, outputTokenLimit: roleBudget.requestOutputTokens });
+            }
+            return completed;
         } catch (error) {
             const diagnostic = error instanceof AnalysisStageError && error.diagnostic && typeof error.diagnostic === 'object'
                 ? error.diagnostic as { reasonCode?: unknown; outputTokenLimit?: unknown; responseShape?: unknown;
@@ -2520,17 +2536,20 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (!value) { return []; }
             const hash = evidenceHash(value);
             if (methodInventories.has(hash)) { return methodInventories.get(hash); }
-            const result = await runSpawn(pythonExecutable, ['-B', pythonToolPath('scenarios')],
-                { input: value, timeout: 5000, env: testExecutionEnv });
-            if (result.code !== 0) { return undefined; }
-            try {
-                const parsed = JSON.parse(result.stdout);
-                if (!Array.isArray(parsed) || parsed.length > 256 || parsed.some(item =>
-                    !item || typeof item.id !== 'string' || typeof item.fingerprint !== 'string'
-                    || !/^[a-f0-9]{64}$/.test(item.fingerprint))) { return undefined; }
-                methodInventories.set(hash, parsed);
-                return parsed;
-            } catch { return undefined; }
+            if (candidateSyntaxFailures.has(hash)) { return undefined; }
+            const result = await readCandidateMethodInventory({ code: value, python: pythonExecutable, env: testExecutionEnv }).catch(error => {
+                if (error instanceof AnalysisStageError && error.stage === 'candidate-inventory-tool') {
+                    recordRole('candidate-methods', 'tool-unavailable', { codeHash: hash,
+                        category: error.category, reasonCode: (error.diagnostic as { reasonCode?: string })?.reasonCode });
+                }
+                throw error;
+            });
+            if (result.status === 'syntax-error') {
+                candidateSyntaxFailures.set(hash, result.syntax);
+                return undefined;
+            }
+            methodInventories.set(hash, result.methods);
+            return result.methods;
         };
         const methods = await read(code);
         const baselineMethods = baseline ? await read(baseline) : [];
@@ -2538,7 +2557,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             schemaVersion: 'candidate-methods-v1', target: params.funcName || targetFuncName,
             runId: journal.runId, sourceHash: journal.sourceHash, codeHash, phase, role,
             ...(methods?.length ? { methods: methods.map(({ id, fingerprint }) => ({ id, fingerprint })) }
-                : { reasonCode: 'candidate-methods-not-inventoried' }),
+                : { reasonCode: candidateSyntaxFailures.has(codeHash) ? 'python-syntax-error' : 'candidate-methods-not-inventoried',
+                    ...(candidateSyntaxFailures.has(codeHash) ? { syntax: candidateSyntaxFailures.get(codeHash) } : {}) }),
             baselineCodeHash: evidenceHash(baseline), baselineMethods
         });
     };
@@ -2677,6 +2697,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const prepareWriterCandidate = async (raw: string, role: string, attempt: number): Promise<string> => {
         const code = writerAdditionBaseline ? extractWriterAdditionCode(raw) : sanitizeLlmResponse(raw);
         await recordCandidateMethods(code, 'generated', role, writerAdditionBaseline);
+        const completedDiagnostic = completedOutputDiagnostics.get(evidenceHash(raw));
+        completedOutputDiagnostics.delete(evidenceHash(raw));
+        const syntax = candidateSyntaxFailures.get(evidenceHash(code));
+        if (syntax) {
+            recordRole('model-request', 'format-rejected', { role, reasonCode: 'response-python-syntax',
+                candidateHash: evidenceHash(code), syntax, ...(completedDiagnostic || {}) });
+        }
         if (writerAdditionBaseline && additionRejections.has(evidenceHash(code))) { return code; }
         if (!writerAdditionBaseline) {
             const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
@@ -3696,10 +3723,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         const reason = localize('模型回覆未能抽取為可解析的 Python 測試；未推定為缺少 import。');
                         recordRejected(sanitizedCode, llmRetry, 'response-format', 'response-not-extracted-python');
                         if (llmRetry > 0) { throw new CandidateValidationError(reason); }
-                        generationPrompt = buildWriterRevisionRequest({ code: '', findings: reason,
+                        const syntax = candidateSyntaxFailures.get(evidenceHash(sanitizedCode));
+                        generationPrompt = seedPending && syntax ? buildWriterSeedFormatRepairPrompt(userPrompt, syntax)
+                            : buildWriterRevisionRequest({ code: '', findings: reason,
                             moduleName: targetImportModule, functionName: targetFuncName,
                             evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
                                 source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle }) });
+                        recordRole('model-request', 'output-format-retry', { role: 'writer',
+                            reasonCode: syntax ? 'response-python-syntax' : 'response-not-extracted-python',
+                            ...(seedPending && syntax ? { writerPromptMode: 'same-seed-format-repair-v1',
+                                originalPromptHash: evidenceHash(userPrompt), evidencePreserved: true } : {}) });
                         if (writerAdditionBaseline) {
                             generationPrompt = buildWriterAdditionRevisionPrompt(generationPrompt, writerAdditionBaseline, '', reason);
                         }

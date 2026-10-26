@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildModelOutputPreview, readModelOutputPreview, diagnoseModelOutput, writerOutputFormatCorrection } from '../llm/modelOutputDiagnostics';
-import { getCompletedOllamaText } from '../llm/ollamaResponse';
+import { getCompletedOllamaText, outputShape } from '../llm/ollamaResponse';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { renderModelOutputDiagnostics } from '../pipeline/modelOutputDiagnosticsPresentation';
 import { getLanguage, setLanguage } from '../i18n/core';
@@ -105,6 +105,30 @@ test('formal length errors include a bounded diagnostic excerpt without provider
     assert.equal(diagnostic.outputDiagnosis, 'repetitive-without-tests');
     assert.ok(readModelOutputPreview(diagnostic.responsePreview));
     assert.doesNotMatch(JSON.stringify(diagnostic), /ENVELOPE_NOT_SAVED|privateProviderField/);
+});
+
+test('a completed malformed reply shows safe syntax diagnostics without pretending it was length-stopped', () => {
+    const raw = 'Explanation rather than Python\n'.repeat(20);
+    const detail = { role: 'writer', reasonCode: 'response-python-syntax', outputTokenLimit: 2458,
+        syntax: { kind: 'SyntaxError', line: 1, column: 4 }, responseShape: outputShape(raw),
+        responsePreview: buildModelOutputPreview(raw, {}) };
+    const language = getLanguage();
+    try {
+        for (const selected of ['en', 'zh-tw']) {
+            setLanguage(selected);
+            const report = renderModelOutputDiagnostics([
+                { sequence: 1, stage: 'model-request', status: 'timing', detail: { role: 'writer', kind: 'transport',
+                    elapsedMs: 185612, httpStatus: 200, ollama: { evalCount: 733, promptEvalCount: 3176 } } },
+                { sequence: 2, stage: 'model-request', status: 'format-rejected', detail },
+                { sequence: 3, stage: 'model-request', status: 'output-format-retry', detail: { role: 'writer' } }
+            ]);
+            assert.match(report, /completed \/ response-python-syntax/);
+            assert.match(report, /SyntaxError \/ 1 \/ 4/); assert.match(report, /2458 \/ 733/);
+            assert.match(report, /Explanation rather than Python/);
+            assert.doesNotMatch(report, /length \/ output-token-limit/);
+            if (selected === 'en') { assert.doesNotMatch(report, /[\u3400-\u9fff]/); }
+        }
+    } finally { setLanguage(language); }
 });
 
 test('static instruction echoes stay readable while mixed source and credentials remain hidden', () => {
