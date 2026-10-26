@@ -7,6 +7,12 @@
 - 依使用者指示，依序推進工具事實／模型判斷契約、局部修改與 host AST 合成、使用者 fixture／需求契約、能力適配、未見專案重複驗收、可重現公開版本。驗收條件與逐項進度以 `docs/通用化首要目標_2026_10_27.md` 為目前工作入口，優先於歷史待辦順序。
 - 六項均保留現行安全與品質門檻；可獨立驗證的增量完成後才提交推送，回歸通過不得冒充真實模型或跨平台驗收。第一項未完成整體結構化依據驗收前，不能以單一語句攔截宣稱已完成。
 
+## 2026-10-27 Reviewer 結構化依據
+
+- 正式 `review-v8` 每個 finding 必須包含 `basis`，以 kind／ref／field／value 分開主張來源與判斷。工具事實須是同候選明列的 scalar 欄位、相關位置及相同值；缺欄位不推導 false／unknown。evidence-gap 只引用已明列的 unknown；test-code 明示為 unverified 判斷，不冒充工具事實。獨立需求須宿主提供同來源／run／target 的唯一 R-id 與完整原文，不由模型或觀測自創。
+- JSON schema、文字回退及本機 parser 共用此契約。缺失／矛盾依據回原一次同候選契約補正，持續失敗保持未審過，不刪 finding、不授突變批准、不續期限。舊格式只供歷史 reader；資格版本升為 `python-unittest-v9`，不沿用舊角色判定，既有可選事先資格政策不變。
+- 完整規格見 `docs/reviewer-evidence-basis.md`。引用與 scalar 一致只驗證明列前提，不代表任意理由已證明正確；既有有界矛盾防護、真實執行、成功情境保護及品質門檻仍保留。需求封包目前是宿主介面，使用者入口仍屬第三項目標。
+
 ## 2026-10-26 補測包裝抽取一致性
 
 - Writer 初始檔案與新增測試共用詞法 Python fence 掃描及 literal 保真正規化。新增模式辨識完整 TestCase 或裸 test 方法，唯一完整 fence 的前後說明可作傳輸包裝移除；多個 fence、未閉合尾段或無 fence 的說明不得裁成可執行前綴。字串內 marker 不算包裝，不改寫 Python body、測值或 expected。
@@ -162,7 +168,7 @@
 
 - 2026-10-14 起，Local 單測／批次在取得執行所有權後、任何目標開始前，核對同端點／模型的 `/api/show` 與 `/api/ps`，再建立本次容量快照；UI 與正式請求使用同份 metadata。只沿用合法且同身分的舊上限，明示 fresh／cached／unavailable 及安全原因碼；探索不授予角色資格、不修改手動或 captured 偏好。取消不得開始目標或保存新觀測。
 - Writer 的長度恢復分開「同容量增加輸出」與「提高 num_ctx」。上限未知時只能在本次已核對容量內配置完整輸入、輸出與128 tokens餘裕；增容仍要求同模型可信上限與新容量資格。只在相同完整提示的 completed length transport 採數值 prompt_eval_count／耗時，以 max(估量, 實測) 保留輸入；按容量及時間限額選有意義的增量，沒有空間就保存原因停止。首問前固定階段、shared及target期限；探針與正式請求各建一次單次期限，正式重送前再核對探針後餘額，已送出請求不續期，計數不重設，截斷內容不執行。
-- Reviewer 維持 review-v7，純指令回聲與沒有具體問題的泛用核實要求屬無效 assessment；完整重複的 import／assertion／patch 修改提議只依同候選 AST 事實拒收。不同測試方法、字串 literal 差異、patch 配置及附帶未知語意不得借機械事實否定。無效審查只有限重審，不刪 finding 冒充批准；Trace 支持案例一致性，仍不證明獨立業務需求。
+- Reviewer 使用 review-v8，純指令回聲與沒有具體問題的泛用核實要求屬無效 assessment；完整重複的 import／assertion／patch 修改提議只依同候選 AST 事實拒收。不同測試方法、字串 literal 差異、patch 配置及附帶未知語意不得借機械事實否定。無效審查只有限重審，不刪 finding 冒充批准；Trace 支持案例一致性，仍不證明獨立業務需求。
 - Mock fixture 的結果消費形狀只描述來源實際需要的 iterable／常數索引，不生成 expected、資料內容或例外。初次與修訂皆保留已核驗的可操作 setup 指引，raw topology 可整份省略但不能連帶省略必要指引；參數屬性拼字不證明值、具體型別或 patch 權限。重綁、反射、動態索引、filter及未知控制流保持未知。唯一實測 unittest ERROR 的 patch 初始化失敗，須標準 mock 堆疊與本次失敗測試的 patch 使用行一致，才交 Writer；目標內部錯誤及類別 self／cls 不借此當成外部 protocol fixture。
 
 - 依使用者 2026-10-12 要求持續建立跨 Python 專案的 P0／P1 相容能力，不以專案或模型名稱特化。Tier 降級只接受已耗盡的候選／修復契約失敗；環境、AST 工具、來源漂移、模型傳輸、提示預算與 Reviewer 未完成保持其獨立失敗，不用更低 Tier 掩蓋。
@@ -351,7 +357,7 @@
 - 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
 - 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
 - 最小資格 probe 可接受安全的 fixture 結果暫存、固定 expected scalar、`assertEqual` 訊息與 `-> None` 註記；允許集合必須為可靜態驗證的 unittest 語句，不能為了相容性執行任意模型 Python。
-- `python-unittest-v7` 的兩個固定案例須各自將目標結果與固定 expected 連到同一斷言；純常數比較、目標與自身比較、未被斷言使用的呼叫，以及被重綁的結果不能認證。結果來源只在同一測試方法內使用；先前版本資格須重新驗證，不能因 HTTP 或 unittest exit code 成功沿用。
+- `python-unittest-v9` 的兩個固定 Writer 案例須各自將目標結果與固定 expected 連到同一斷言；純常數比較、目標與自身比較、未被斷言使用的呼叫，以及被重綁的結果不能認證。結果來源只在同一測試方法內使用；先前版本資格須重新驗證，不能因 HTTP 或 unittest exit code 成功沿用。
 - 正式 Writer、Tier 2 分治、Tier 3 Scaffold 與修復角色的完整 unittest code request 必須一律要求純 Python code fence，不得把整份測試檔包進 provider JSON／schema；本地 extractor、結構、隔離執行、coverage 與 mutation gate 是驗證依據，Reviewer 另依 findings 契約提供同意決定。初始 Semantic Analyzer 的 JSON 契約失敗會阻擋正式 full，不能以 deterministic AST 規則冒充 AI 分析；後續 mutant triage 失敗仍可保留既有實測缺口供 Writer，但不得把無效分析當成有效角色產物。
 - 尚未完成「測試連線」的 provider／model 視為尚未驗證；正式 full 的 **Auto** 必須在 Writer 與 Reviewer 各自 verified 後才進入 AI 閉環，否則明示資格受阻，不啟用 deterministic Trace fallback。使用者明確選擇 Tier 1–4 時保留其選擇，不因探測缺失強制降階；其模型輸出仍必須通過分析、結構、隔離執行、Reviewer 同意、覆蓋率與突變閘門。測試連線可讀取參數量與 Context，但不能取代角色資格與正式執行驗證。
 - 模型資格的儲存、查詢與套用必須使用同一個 provider／模型身分正規化規則；Google 的 `models/<name>` 與 `<name>` 是同一模型，不得因 resource prefix 讓已通過的 Cloud 探測在 Auto 路由中失效；不同 provider 仍必須嚴格隔離。
@@ -446,7 +452,7 @@
 - 修復回覆拒絕必須在降階／停止前逐次落盤，區分格式／合併、AST 範圍與重複候選。原因碼與回覆結構統計不得保存完整模型回覆、憑證或任意 tool stderr；scope 失敗採工具提供的穩定原因碼。最後錯誤不得覆蓋首次／最近修復診斷；報告須區分原測試未修改與已驗證基線是否存在。新增診斷不得默默放寬驗證或增加模型請求。
 
 - 跨檔相依來源須由預檢實際載入的模組 origin 與函式定義身分解析，且實體位於所選來源樹；不得以批次根目錄拼接猜測。未知、re-export／重綁定、動態來源與範圍外相依只保留診斷，不另行匯入或假造來源。
-- Reviewer 使用 `review-v7` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度。缺少情境、弱 assertion 與型別／風格不是 unittest 執行失敗，但任何有效待處理 finding 都須交 AI 修訂並重審，尚未得到 Reviewer 同意就不進突變。blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Reviewer 使用 `review-v8` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度，每項另有可核對來源的 basis。缺少情境、弱 assertion 與型別／風格不是 unittest 執行失敗，但任何有效待處理 finding 都須交 AI 修訂並重審，尚未得到 Reviewer 同意就不進突變。blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
 - Reviewer 明確違反所選 static／instance 契約、要求修改目標實作或 mock 目標本身時，整份審查保持未完成，不得刪掉錯誤 finding 後偽裝為空問題通過，也不得交 Writer 執行矛盾動作。有限語句檢查不是任意自然語言正確性證明，所有工具 gate 仍須保留。
 - 品質回滾及停滯判斷使用實測未覆蓋行／分支的個別身份與存活突變體；不能因缺口清單縮短而改變顯示文字，就將改善誤判退步。已知覆蓋變未知、新增未覆蓋行／分支、舊突變體重新存活及分數降低仍受保護。
 - 品質分析師 `quality-task-v3` 每輪最多一項任務，引用程式選定的量測證據 ID；模型不可自行發明證據或預期值。格式補正最多一次，與初次請求共用絕對 deadline；取消／傳輸失敗不再啟動格式重試。空任務只代表無建議，不能將剩餘缺口算通過。

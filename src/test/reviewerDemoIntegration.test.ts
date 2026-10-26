@@ -9,6 +9,7 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { BatchJournal } from '../pipeline/batchJournal';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { setLanguage } from '../i18n/core';
+import { testCodeBasis } from './reviewBasisFixture';
 
 /** Fixture diagnostics contain lifecycle codes/counts only, never source/provider text. */
 function safeReviewFlowDiagnostic(scenario: string, knowledge: any, events: any[], requests: object): string {
@@ -44,7 +45,7 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
     const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, language: 'en' };
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
-    let scenario: 'invalid' | 'fixed-value' | 'quality' = 'invalid';
+    let scenario: 'invalid' | 'fixed-value' | 'fact-claim' | 'quality' = 'invalid';
     let writers = 0, revisions = 0, fixes = 0, reviews = 0;
     const logs: string[] = [];
     const outcomes: any[] = [];
@@ -76,15 +77,20 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
             reviews++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             if (scenario === 'invalid') {
-                response = JSON.stringify({ findings: [{ category: 'target-binding', test_line: 'L1',
+                response = JSON.stringify({ findings: [{ category: 'target-binding', test_line: 'L1', basis: testCodeBasis(1),
                     reason: 'The target import is incorrect; use import bmi.', action: 'Replace with import bmi.' }] });
             } else if (scenario === 'fixed-value') {
                 assert.match(request.prompt, /"expectedOrigin":"static-literal"/);
-                response = JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L5',
+                response = JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L5', basis: testCodeBasis(5),
                     reason: 'The expected result is not a fixed value, but rather a calculated value based on the input parameters. This could lead to false positives or false negatives in the test.',
                     action: 'Replace the expected result with a fixed value that is calculated based on the input parameters.' }] });
+            } else if (scenario === 'fact-claim') {
+                assert.match(request.prompt, /"id":"A1.1"/);
+                response = JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L5',
+                    basis: { kind: 'host-fact', ref: 'A1.1', field: 'expectedOrigin', value: 'runtime-computed' },
+                    reason: '這個預期值是在執行期間計算的，未提供固定結果。', action: '把這個預期值改為可核對的固定結果。' }] });
             } else {
-                response = JSON.stringify({ findings: revisions > 0 ? [] : [{ category: 'assertion-quality', test_line: 'L5',
+                response = JSON.stringify({ findings: revisions > 0 ? [] : [{ category: 'assertion-quality', test_line: 'L5', basis: testCodeBasis(5),
                     reason: 'The expected tuple structure should be explicit in this assertion.',
                     action: 'Use assertTupleEqual for the verified tuple results while preserving all current input cases.' }] });
             }
@@ -122,7 +128,7 @@ class Cases(unittest.TestCase):
         // 8572 preserves this review-gate fixture's original 6000-token input budget.
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768,
             effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-num-ctx' });
-        for (const selected of ['invalid', 'fixed-value', 'quality'] as const) {
+        for (const selected of ['invalid', 'fixed-value', 'fact-claim', 'quality'] as const) {
             scenario = selected; candidate = ''; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
             const outputPath = path.join(root, 'results-' + scenario);
             // The builtin-v2 full universe contains 96 candidates here. This
@@ -159,10 +165,11 @@ class Cases(unittest.TestCase):
                 assert.equal(events.some(e => e.stage === 'mutation'), false, 'no mutation process starts before approval');
                 assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'invalid-response'));
                 assert.ok(events.some(e => e.stage === 'reviewer' && e.status === 'unavailable'));
-                if (scenario === 'fixed-value') {
+                if (scenario === 'fixed-value' || scenario === 'fact-claim') {
                     const invalid = events.filter(e => e.stage === 'reviewer' && e.status === 'invalid-response');
                     assert.equal(invalid.length, 2);
-                    assert.ok(invalid.every(e => e.detail.diagnostics.includes('expected-fixed-value-contradiction')));
+                    const code = scenario === 'fact-claim' ? 'evidence-fact-contradiction' : 'expected-fixed-value-contradiction';
+                    assert.ok(invalid.every(e => e.detail.diagnostics.includes(code)));
                 }
                 assert.doesNotMatch(final, /measurements met the thresholds|Fully passed/);
                 assert.match(final, /Reviewer|review/);

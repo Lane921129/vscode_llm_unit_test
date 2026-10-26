@@ -54,6 +54,19 @@ test('report finding cells are bounded, escape Markdown/HTML, and withhold gener
     assert.ok(result.includes('withheld-sensitive-content'));
 });
 
+test('structured basis diagnostics stay visibly unverified and escape or redact their values', () => {
+    const basis = { kind: 'host-fact', ref: 'A1.1', field: 'expectedOrigin', value: '<img>|claimed' };
+    const result = renderReviewerDiagnostics([{ ...rejected, detail: { diagnostics: ['evidence-fact-contradiction'],
+        rejectedFindings: [{ ...claim, basis }] } }]);
+    assert.ok(result.includes('結構化依據') && result.includes('A1.1.expectedOrigin'));
+    assert.ok(result.includes('&#60;img&#62;&#124;claimed'));
+    assert.ok(result.includes('Assessment 未採用'));
+    const secret = 'Bearer ' + 'A'.repeat(32);
+    const hidden = renderReviewerDiagnostics([{ ...rejected, detail: { rejectedFindings: [{ ...claim, basis: { ...basis, value: secret } }] } }]);
+    assert.ok(!hidden.includes('A'.repeat(32)));
+    assert.ok(hidden.includes('withheld-sensitive-content'));
+});
+
 test('organized workflow and round failure reports show findings without leaking another round or claiming mutation approval', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reviewer-diagnostic-report-'));
     try {

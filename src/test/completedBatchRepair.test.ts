@@ -10,6 +10,7 @@ import { canRepairTestMethod, getBugFixerSystemPrompt, mergeBugFixReplacement } 
 import { classifyExecutionFailure } from '../utils/executionFailureCategory';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { generatedUnittestArguments, resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const code = `import unittest
 from sample import add
@@ -20,7 +21,7 @@ class Cases(unittest.TestCase):
         self.assertEqual(add(2, 3), 4)
 `;
 const failure = 'FAIL: test_add (Cases.test_add)\nAssertionError: 5 != 4';
-const finding = { category: 'target-binding', test_line: 'L7', reason: 'The selected target binding is contradicted.',
+const finding = { category: 'target-binding', test_line: 'L7', basis: testCodeBasis(7), reason: 'The selected target binding is contradicted.',
     action: 'Call the real target with the declared inputs.' };
 
 test('review IDs exclude blanks and comments while preserving their position and full context', () => {

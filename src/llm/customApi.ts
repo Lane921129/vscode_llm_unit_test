@@ -1,5 +1,6 @@
 import { REVIEW_CATEGORIES, REVIEW_FINDING_LIMIT } from '../roles/testReviewer';
 import { SEMANTIC_PLAN_RESPONSE_SCHEMA } from '../roles/semanticAnalyzer';
+import { REVIEW_EVIDENCE_BASIS_SCHEMA } from '../roles/reviewEvidenceBasis';
 
 export type CustomOutputFormat = 'text' | 'json' | 'test-code-json' | 'test-method-json' | 'semantic-json' | 'review-json' | 'quality-json' | 'mutant-triage-json';
 
@@ -121,9 +122,10 @@ export function responseSchemaForOutputFormat(outputFormat: CustomOutputFormat):
                 category: { type: 'string', enum: Object.keys(REVIEW_CATEGORIES) },
                 test_line: { type: 'string', pattern: '^L[1-9][0-9]*$' },
                 reason: { type: 'string', minLength: 1, maxLength: 600 },
-                action: { type: 'string', minLength: 1, maxLength: 600 }
+                action: { type: 'string', minLength: 1, maxLength: 600 },
+                basis: REVIEW_EVIDENCE_BASIS_SCHEMA
             },
-            required: ['category', 'test_line', 'reason', 'action']
+            required: ['category', 'test_line', 'reason', 'action', 'basis']
         };
         return {
             type: 'object',

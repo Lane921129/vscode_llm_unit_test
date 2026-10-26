@@ -8,6 +8,7 @@ import { validateTestCandidate } from '../pipeline/testCandidatePipeline';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const original = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
     + '    def setUp(self):\n        self.value = 2\n'
@@ -51,7 +52,7 @@ test('review cannot mistake a source dependency patch or its standard import for
     const code = 'from unittest.mock import patch\n@patch("sample.helper")\ndef test_value(): pass';
     const constraints = { target: 'target', module: 'sample', methodKind: 'module', dependencyUsePoints: ['sample.helper'] };
     const raw = (category: string, test_line: string, reason: string) => JSON.stringify({ findings: [
-        { category, test_line, reason, action: 'Remove the patch decorator.' }
+        { category, test_line, reason, action: 'Remove the patch decorator.', basis: testCodeBasis(test_line) }
     ] });
     const wrong = raw('target-binding', 'L2', 'Patching the target function is not allowed.');
     assert.deepEqual(parseTestReviewDetailed(wrong, code, true, constraints).diagnostics, ['target-binding-contradiction']);

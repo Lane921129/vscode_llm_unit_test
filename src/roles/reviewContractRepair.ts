@@ -73,6 +73,8 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
                 attempt: 1, diagnostics: parsed.diagnostics });
             prompt = `${options.prompt}\n\nREVIEW_CONTRACT_REPAIR_V1\n`
                 + `The previous assessment failed these contract checks: ${parsed.diagnostics.join(', ')}.\n`
+                + 'Every finding needs basis {kind,ref,field,value}. Cite an explicit same-candidate host fact and its exact scalar value; unknown is not a conflict. '
+                + 'Semantic test-code advice uses this same test_line as ref, field="judgment", value="unverified". Independent requirements need a supplied R-id and exact statement; never invent one. '
                 + 'Give a concrete defect and its evidence, not copied instructions, a bare verdict or generic advice to verify expected values. '
                 + 'A proposal identical to the AST-owned assertion, canonical binding or existing patch changes nothing. '
                 + 'A return-to-exception edit must name the exact input, concrete exception class and evidence; do not invent an exception for a verified same-input returned outcome. '

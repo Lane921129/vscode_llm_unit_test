@@ -21,6 +21,7 @@ import { repairFailureKey } from '../validation/repairFeedback';
 import { getBugFixerSystemPrompt } from '../roles/bugFixer';
 import { getTestRuleCards } from '../prompts/testRuleLibrary';
 import { canonicalExistingPath } from '../utils/fileIdentity';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const root = path.resolve(__dirname, '../..');
 const python = resolvePythonExecutable(undefined, root);
@@ -151,12 +152,12 @@ test('repeated Writer candidates retain the latest blocking finding and do not r
     assert.equal(reviews, 1);
 });
 
-test('review-v6 has one shared total limit and derives blocking versus quality from category', () => {
+test('review-v8 has one shared total limit and derives blocking versus quality from category', () => {
     const schema: any = responseSchemaForOutputFormat('review-json');
     assert.deepEqual(schema.required, ['findings']);
     assert.equal(schema.properties.findings.maxItems, REVIEW_FINDING_LIMIT);
     assert.deepEqual(schema.properties.findings.items.properties.category.enum, Object.keys(REVIEW_CATEGORIES));
-    const finding = { category: 'missing-scenario', test_line: 'L4', reason: 'an empty input case is absent', action: 'add an empty input case using verified observations' };
+    const finding = { category: 'missing-scenario', test_line: 'L4', basis: testCodeBasis(4), reason: 'an empty input case is absent', action: 'add an empty input case using verified observations' };
     for (const category of ['missing-scenario', 'typing-style', 'assertion-quality']) {
         const parsed = parseTestReviewDetailed(JSON.stringify({ findings: [{ ...finding, category }] }), code, true);
         assert.equal(parsed.review?.issues[0].severity, 'quality');

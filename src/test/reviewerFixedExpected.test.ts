@@ -7,6 +7,7 @@ import { scalarProbeInput } from '../pipeline/probeInputs';
 import { buildReviewFacts, ReviewFacts, reviewFactsForPrompt } from '../roles/reviewFacts';
 import { reviewWithContractRepair } from '../roles/reviewContractRepair';
 import { parseTestReviewDetailed, ReviewConstraints } from '../roles/testReviewer';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const identity = { runId: 'fixed-expected-review', sourceHash: 'a'.repeat(64), target: 'transform' };
 const python = path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
@@ -27,7 +28,7 @@ const constraints = (value: ReviewFacts): ReviewConstraints => ({ ...identity, m
 const reason = 'The expected result is not a fixed value, but rather a calculated value based on the input parameters. This could lead to false positives or false negatives in the test.';
 const action = 'Replace the expected result with a fixed value that is calculated based on the input parameters.';
 const response = (line = 7, explanation = reason, correction = action, category = 'assertion-quality') => JSON.stringify({
-    findings: [{ category, test_line: `L${line}`, reason: explanation, action: correction }]
+    findings: [{ category, test_line: `L${line}`, reason: explanation, action: correction, basis: testCodeBasis(line) }]
 });
 
 test('AST fixed literals and local aliases remain distinct from observation and requirement correctness', async () => {

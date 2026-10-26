@@ -11,6 +11,7 @@ import { collectNumericRepairEvidence } from '../pipeline/numericTestSkill';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { runSpawn } from '../utils/processRunner';
 import { pythonToolPath } from '../pipeline/pythonTools';
+import { testCodeBasis } from './reviewBasisFixture';
 
 function matrixFixtures(repo: string) {
     const correctException = '    def test_zero_height(self):\n        with self.assertRaises(ZeroDivisionError):\n            calculate_bmi(70, 0)\n';
@@ -80,7 +81,7 @@ test('numeric observations guide a single-input AI seed revision which is review
             // The 2026-10-07 failure: review contradicts an exact numeric result
             // already verified by independent isolated execution.
             const line = corrected.split('\n').findIndex(value => value.includes('self.assertEqual(bmi,')) + 1;
-            response = reviews === 1 ? JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${line}`,
+            response = reviews === 1 ? JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${line}`, basis: testCodeBasis(line),
                 reason: `For this exact asserted input pair, the actual result differs from the expected value ${observedNumeric}.`,
                 action: 'Change the expected value to 23.5 in this assertion.' }] }) : '{"findings":[]}';
             if (reviews === 2) { assert.match(request.prompt, /observed-outcome-contradiction/); }

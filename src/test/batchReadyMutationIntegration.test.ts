@@ -61,7 +61,7 @@ test('real batch preflight lets the loaded subset reach review and mutation whil
         if (request.prompt.startsWith('=== ANALYSIS EVIDENCE V2 ===')) {
             wireRoles.push('analyst');
             response = '{"test_strategy":{"approach":"Exercise the selected neutral target using its verified zero-argument observation, then preserve that exact assertion during quality checks."}}';
-        } else if (request.prompt.startsWith('REVIEW_REQUEST_V7')) {
+        } else if (request.prompt.startsWith('REVIEW_REQUEST_V8')) {
             wireRoles.push('reviewer'); response = '{"findings":[]}';
         } else if (request.prompt.startsWith('QUALITY_TASK_V3')) {
             wireRoles.push('analyst-quality'); response = '{"tasks":[]}';

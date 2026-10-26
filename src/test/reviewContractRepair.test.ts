@@ -4,11 +4,12 @@ import { reviewWithContractRepair, ReviewContractEvent, ReviewContractRepairOpti
 import { ReviewSession } from '../roles/reviewSession';
 import { TargetBudget, runWithTargetBudget } from '../pipeline/targetBudget';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const tests = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
     + '    def test_target(self):\n        self.assertEqual(target(1), 2)\n';
 const valid = JSON.stringify({ findings: [] });
-const badLine = JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: 'L4',
+const badLine = JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: 'L4', basis: testCodeBasis(4),
     reason: 'The expected result has no supporting observation.', action: 'Use the supplied exact observation for the assertion.' }] });
 const events: () => Array<{ status: string; detail: ReviewContractEvent }> = () => [];
 function options(request: ReviewContractRepairOptions['request'], recorded = events()): ReviewContractRepairOptions {
@@ -112,7 +113,7 @@ test('correction requests consume the existing target budget and use its earlier
 });
 
 test('target self-mock proposals remain invalid even after correction', async () => {
-    const response = JSON.stringify({ findings: [{ category: 'mock-isolation', test_line: 'L5',
+    const response = JSON.stringify({ findings: [{ category: 'mock-isolation', test_line: 'L5', basis: testCodeBasis(5),
         reason: 'The selected target should be isolated.', action: 'Mock the target function and assert its result.' }] });
     const recorded = events();
     assert.equal(await reviewWithContractRepair(options(async () => response, recorded)), undefined);

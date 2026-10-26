@@ -37,7 +37,7 @@ test('provides schema contracts for semantic analysis, review, and mutant triage
     assert.deepStrictEqual((repair as { required: string[] }).required, ['method', 'replacement', 'imports']);
     assert.deepStrictEqual(
         ((review as any).properties.findings.items as { required: string[] }).required,
-        ['category', 'test_line', 'reason', 'action']
+        ['category', 'test_line', 'reason', 'action', 'basis']
     );
     assert.deepStrictEqual((triage as { required: string[] }).required, [
         'verdicts', 'has_killable', 'equivalent_count'

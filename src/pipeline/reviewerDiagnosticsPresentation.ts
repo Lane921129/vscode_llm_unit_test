@@ -1,10 +1,20 @@
 import { getLanguage } from '../i18n/core';
 import { redactCredentialStrings } from './artifactSafety';
+import { isReviewEvidenceBasis } from '../roles/reviewEvidenceBasis';
 
 const text = (zh: string, en: string) => getLanguage() === 'en' ? en : zh;
 const cell = (value: unknown): string => String(value ?? '').replace(/[\r\n]+/g, ' ')
     .replace(/[&<>|`\[\]]/g, character => `&#${character.charCodeAt(0)};`);
 const descriptions: Record<string, [string, string]> = {
+    'missing-evidence-basis': ['問題缺少結構化依據', 'The finding lacks a structured evidence basis'],
+    'invalid-evidence-basis': ['依據的欄位、型別或判斷標記不符合契約', 'The evidence fields, types or judgment marker violate the contract'],
+    'evidence-reference-missing': ['引用的工具事實或欄位不存在', 'The cited host fact or field is absent'],
+    'evidence-reference-unrelated': ['引用事實不屬於這個測試行或方法', 'The cited fact is unrelated to this test line or method'],
+    'evidence-fact-contradiction': ['結構化主張與同候選工具事實矛盾', 'The structured premise contradicts the same candidate host facts'],
+    'requirement-evidence-missing': ['沒有相符的宿主需求引用或原文', 'No matching host requirement reference and exact statement were supplied'],
+    'requirement-identity-mismatch': ['需求證據的來源或執行身分不符', 'Requirement evidence has a different source or run identity'],
+    'expected-fixed-value-contradiction': ['把已核實的固定預期值誤稱為執行時計算', 'A verified fixed expected value is incorrectly claimed to be runtime-computed'],
+    'review-facts-expected-origin-shape': ['預期值來源事實與型別快照不一致', 'Expected provenance facts conflict with their typed snapshots'],
     'invalid-json': ['回覆無法解析成 JSON', 'The response could not be parsed as JSON'],
     'invalid-envelope': ['JSON 頂層或多物件包裝不符合契約', 'The JSON envelope or multiple objects violate the contract'],
     'too-many-findings': ['提出超過 5 個問題', 'More than 5 findings were returned'],
@@ -48,7 +58,8 @@ export function renderReviewerDiagnostics(events: readonly any[]): string {
             return { category: bounded(value.category, 80),
                 test_line: bounded(value.test_line, 32) ?? (Number.isSafeInteger(value.testLine) ? `L${value.testLine}` : undefined),
                 reason: bounded(value.reason, 600), action: bounded(value.action, 600),
-                excerpt: bounded(value.excerpt ?? value.evidence, 400) };
+                excerpt: bounded(value.excerpt ?? value.evidence, 400),
+                basis: isReviewEvidenceBasis(value.basis) ? bounded(`${value.basis.kind}: ${value.basis.ref}.${value.basis.field} = ${value.basis.value}`, 850) : undefined };
         }) : [];
         const diagnostics = Array.isArray(detail.diagnostics) ? detail.diagnostics.filter((value: unknown) =>
             typeof value === 'string' && /^[a-z][a-z0-9-]{0,80}$/.test(value)) : [];
@@ -67,9 +78,9 @@ export function renderReviewerDiagnostics(events: readonly any[]): string {
                 + diagnostics.map((code: string) => `${cell(code)}${descriptions[code] ? ' — ' + text(...descriptions[code]) : ''}`).join('; '), '');
         }
         if (findings.length) {
-            sections.push(text('| 類別 | 測試行 | 引用片段 | 模型理由 | 建議動作 |', '| Category | Test line | Cited excerpt | Model reason | Proposed action |'),
-                '| --- | --- | --- | --- | --- |', ...findings.map(finding =>
-                    `| ${cell(finding.category) || text('缺漏', 'Missing')} | ${cell(finding.test_line) || text('缺漏', 'Missing')} | ${cell(finding.excerpt) || text('未保存', 'Not retained')} | ${cell(finding.reason) || text('缺漏', 'Missing')} | ${cell(finding.action) || text('缺漏', 'Missing')} |`), '');
+            sections.push(text('| 類別 | 測試行 | 結構化依據 | 引用片段 | 模型理由 | 建議動作 |', '| Category | Test line | Structured basis | Cited excerpt | Model reason | Proposed action |'),
+                '| --- | --- | --- | --- | --- | --- |', ...findings.map(finding =>
+                    `| ${cell(finding.category) || text('缺漏', 'Missing')} | ${cell(finding.test_line) || text('缺漏', 'Missing')} | ${cell(finding.basis) || text('未保存', 'Not retained')} | ${cell(finding.excerpt) || text('未保存', 'Not retained')} | ${cell(finding.reason) || text('缺漏', 'Missing')} | ${cell(finding.action) || text('缺漏', 'Missing')} |`), '');
         } else if (rejected) {
             sections.push(text('沒有可安全還原的 finding 欄位；僅保留診斷碼與回覆雜湊，不保存完整供應商回覆。',
                 'No finding fields could be safely recovered; only diagnostic codes and the response hash are retained, without the full provider response.'), '');

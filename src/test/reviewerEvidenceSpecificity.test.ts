@@ -6,6 +6,7 @@ import { parseTestReviewDetailed, ReviewConstraints } from '../roles/testReviewe
 import { reviewWithContractRepair } from '../roles/reviewContractRepair';
 import { BehaviorObservations, TraceValueSnapshot } from '../pipeline/evidenceContracts';
 import { typedCallFields } from '../pipeline/probeInputs';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const python = path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
 const identity = { runId: 'saved-review-replay', sourceHash: 'a'.repeat(64) };
@@ -21,7 +22,7 @@ const constraints = (facts: ReviewFacts): ReviewConstraints => ({ target: facts.
     methodKind: 'module', identity: { ...identity, target: facts.target }, facts, dependencyUsePoints: ['database.datetime'] });
 const facts = (code: string, module: string, target: string) => buildReviewFacts({ ...identity, module, target,
     code, executionVerified: true, python, env: process.env });
-const finding = (test_line: string, category: string, reason: string, action: string) => ({ category, test_line, reason, action });
+const finding = (test_line: string, category: string, reason: string, action: string) => ({ category, test_line, reason, action, basis: testCodeBasis(test_line) });
 const envelope = (...findings: object[]) => JSON.stringify({ findings });
 const echoedRule = 'Expected value is not a proven wrong value. Never invent its replacement from model arithmetic, type annotations or a return expression. For a concrete verification gap, name missing evidence and request a controlled observation or explicit contract in action; unknown is not a contradiction.';
 const echoedAction = 'Verify expected value separately. Uncontrolled clocks/randomness, model hypotheses, source formulas and annotations are not independent oracles; annotations do not enforce input types.';

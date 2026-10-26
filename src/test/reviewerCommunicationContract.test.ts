@@ -4,11 +4,11 @@ import * as path from 'node:path';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { scalarProbeInput } from '../pipeline/probeInputs';
 import { NumericEvidenceLedger } from '../pipeline/numericEvidenceLedger';
-import { estimatePromptTokens } from '../prompts/promptBudget';
 import { getReviewEvidence } from '../roles/bugFixer';
 import { buildReviewFacts, buildReviewerEvidenceDiagnostic, ReviewFacts, reviewAssertionObservationStatus, reviewFactsForPrompt } from '../roles/reviewFacts';
 import { reviewWithContractRepair, ReviewContractEvent } from '../roles/reviewContractRepair';
 import { fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReviewDetailed, ReviewConstraints } from '../roles/testReviewer';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const tests = 'import unittest\nfrom sample import compute_score\nclass Cases(unittest.TestCase):\n'
     + "    def test_value(self):\n        self.assertEqual(compute_score(2, 4), (0.5, 'stable'))\n";
@@ -26,7 +26,7 @@ function facts(): ReviewFacts {
 const reason = "The test case asserts the result of compute_score(2, 4) to be (0.5, 'stable') without verifying the actual ratio calculation or the corresponding result label. The assertion should be based on the actual calculation and the expected result label for the given input.";
 const action = 'Modify the test case to verify the actual ratio calculation and the corresponding result label.';
 const response = (overrides: Record<string, unknown> = {}) => JSON.stringify({ findings: [{ category: 'assertion-quality',
-    test_line: 'L5', reason, action, ...overrides }] });
+    test_line: 'L5', reason, action, basis: testCodeBasis(5), ...overrides }] });
 const constraints = (current: ReviewFacts): ReviewConstraints => ({ ...identity, module: 'sample', methodKind: 'module',
     identity, facts: current });
 
@@ -54,7 +54,15 @@ test('mechanical scalar type denials contradict only same-call verified literal 
                 changed.reason = 'The documented independent specification requires a different expected value.';
                 changed.action = 'Change the expected result to 3 using the independent specification.';
             }
-            assert.ok(parseTestReviewDetailed(response(changed), tests, true, constraints(unknown)).review, variation);
+            let context = constraints(unknown);
+            let overrides: Record<string, unknown> = changed;
+            if (variation === 'requirement' || variation === 'replacement') {
+                const statement = variation === 'requirement' ? 'The expected result must be a positive value.' : 'The expected result must be 3.';
+                const requirements = { ...identity, items: [{ id: 'R' + '6'.repeat(16), statement }] };
+                context = { ...context, requirements };
+                overrides = { ...changed, basis: { kind: 'requirement', ref: requirements.items[0].id, field: 'statement', value: statement } };
+            }
+            assert.ok(parseTestReviewDetailed(response(overrides), tests, true, context).review, variation);
         }
     }
 });
@@ -77,7 +85,7 @@ test('native AST float and string projections reject both observed type denials 
     assert.deepEqual(current.methods[0].assertions.map(value => value.expected?.value.type), ['float', 'str']);
     assert.ok(current.methods[0].assertions.every(value => value.observationStatus === 'verified'));
     const raw = JSON.stringify({ findings: ['float', 'string'].map((name, index) => ({ category: 'assertion-quality',
-        test_line: `L${6 + index}`, reason: `The expected result is not a valid ${name} value.`,
+        test_line: `L${6 + index}`, basis: testCodeBasis(6 + index), reason: `The expected result is not a valid ${name} value.`,
         action: `Change the expected result to a valid ${name} value.` })) });
     const result = parseTestReviewDetailed(raw, code, true, constraints(current));
     assert.equal(result.review, undefined);
@@ -91,7 +99,7 @@ test('review evidence uses current line identifiers and explains exact-input obs
     assert.match(evidence, /Do not cite REVIEW_CONTEXT or add test_excerpt/);
     assert.doesNotMatch(evidence, /Every finding must quote TEST_FILE/);
     const system = getTestReviewerSystemPrompt();
-    assert.equal(system.match(/observationStatus/g)?.length, 1);
+    assert.equal(system.match(/^observationStatus:/gm)?.length, 1);
     assert.doesNotMatch(system, /observationVerified/);
     assert.match(system, /verified execution and verified\+same-call observationReturned/);
     assert.match(system, /unknown=unverified\. An unverified expected value is not a proven wrong value/);
@@ -176,7 +184,7 @@ test('reviewer evidence diagnostics contain only safe hashes, counts and per-lin
     current.methods[0].assertions[0].kind = 'PRIVATE_ASSERTION_TEXT';
     const before = structuredClone(current);
     const diagnostic = buildReviewerEvidenceDiagnostic(current);
-    assert.deepEqual(diagnostic, { schemaVersion: 'reviewer-evidence-v1', contractVersion: 'review-v7',
+    assert.deepEqual(diagnostic, { schemaVersion: 'reviewer-evidence-v1', contractVersion: 'review-v8',
         factsVersion: 'review-test-facts-v1', sourceHash: identity.sourceHash, testHash: evidenceHash(tests),
         executionVerified: true, methodCount: 1, assertionCount: 1, targetAssertionCount: 1,
         observationVerifiedCount: 1, observationContradictedCount: 0, observationUnknownCount: 0,
@@ -254,7 +262,7 @@ const containerTests = 'import unittest\nfrom sample import compute_score\nclass
     + '    def test_value(self):\n        result = compute_score(2, 4)\n        expected_value = 0.5\n'
     + "        expected_label = 'stable'\n        self.assertEqual(result, (expected_value, expected_label))\n";
 const unobservedClaim = {
-    category: 'assertion-evidence', test_line: 'L8',
+    category: 'assertion-evidence', test_line: 'L8', basis: testCodeBasis(8),
     reason: 'The assertion `self.assertEqual(result, (expected_value, expected_label))` is based on the expected values `expected_value` and `expected_label` which are not verified observations.',
     action: 'Replace the assertion with a verified observation or a same-test dependency mock.'
 };
@@ -302,26 +310,20 @@ test('actual AST container-name observations cause one Reviewer contract correct
     }
 });
 
-test('complete Reviewer envelope uses one compact tri-state projection without enlarging its earlier explanation', () => {
+test('complete Reviewer v8 envelope retains identified tri-state facts and rejects partial prompt budgets', () => {
     const current = facts();
     const system = getTestReviewerSystemPrompt();
-    const prompt = fitReviewPrompt({ tests, evidence: 'Exact-input observations and complete source.', executionVerified: true, facts: current }, 30000)!;
-    const previousSystem = system.replace(/^observationStatus:.*$/m,
-        'An unverified expected value is not a proven wrong value. Never invent its replacement from model arithmetic, type annotations or a return expression. For a concrete verification gap, name missing evidence and request a controlled observation or explicit contract in action; unknown is not a contradiction.')
-        .replace('verified execution and verified+same-call', 'verified execution and observationVerified+same-call')
-        .replace('HOST_VERIFIED_REVIEW_FACTS binds supplied test facts.', 'HOST_VERIFIED_REVIEW_FACTS binds harness/imports/assertions/observations.')
-        .replace('Inspect tests; never replace code.', 'Inspect tests; never write replacement code.')
-        .replace('line showing the TEST_FILE defect', 'line demonstrating the defect in TEST_FILE')
-        .replace('for that call. New inputs and explicit business requirements stay separate findings; request missing evidence, never invent exceptions.',
-            'for that same call. New inputs and explicit business requirements remain separate findings; request missing evidence instead of inventing an exception.')
-        .replace('Passed imports need no pip install.', 'Passed imports need no pip installation.')
-        .replace('Keep observed values and exact strings', 'Keep observed expected values and exact strings');
-    const legacyProjection = 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...current,
-        methods: current.methods.map(method => ({ ...method,
-            calls: method.calls.map(({ line, observationReturned }) => ({ line, observationReturned })) })) });
-    const previousPrompt = prompt.replace(reviewFactsForPrompt(current), legacyProjection);
-    assert.ok(estimatePromptTokens(system + '\n' + prompt) <= estimatePromptTokens(previousSystem + '\n' + previousPrompt),
-        'all source and execution evidence remains; replacing the redundant boolean does not grow the complete role request');
+    const parts = { tests, evidence: 'Exact-input observations and complete source.', executionVerified: true, facts: current };
+    const prompt = fitReviewPrompt(parts, 30000)!;
+    const projected = JSON.parse(reviewFactsForPrompt(current).split('\n')[1]);
+    assert.equal(projected.methods[0].assertions[0].id, 'A1.1');
+    assert.equal(projected.methods[0].assertions[0].observationStatus, 'verified');
+    assert.equal(Object.hasOwn(projected.methods[0].assertions[0], 'observationVerified'), false);
+    assert.match(system, /category, test_line, reason, action, basis/);
+    assert.match(prompt, /^REVIEW_REQUEST_V8/);
+    assert.ok(prompt.includes(parts.evidence));
+    assert.equal(fitReviewPrompt(parts, prompt.length - 1), undefined,
+        'the larger v8 contract must fit as a whole; no source, case or fact may be clipped');
     assert.equal(prompt.split('<TEST_FILE>').length, 2);
     assert.equal(prompt.split('HOST_VERIFIED_REVIEW_FACTS_V1').length, 2);
 });

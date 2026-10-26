@@ -1,5 +1,13 @@
 # 專案閱讀入口
 
+## Reviewer 結構化依據契約（2026-10-27）
+
+本節定義現行協定；較早章節中的協定版本是當時快照，保留的安全與品質約束仍適用。
+
+`review-v8` 將每個 finding 的 `reason/action` 與 `basis {kind,ref,field,value}` 分開。`reviewFactsForPrompt` 只為既有事實增加候選限定 ID；`reviewEvidenceBasis.ts` 以 scalar allowlist、位置關聯與精確值核對 host-fact／evidence-gap，未知不等於錯誤。test-code 明示未驗證語義，requirement 則須同來源／run／target 的宿主封包及唯一 R-id 原文，不能把來源公式當外部需求。
+
+正式 parser／schema／角色探針同步使用新契約，`python-unittest-v9` 阻止沿用舊資格。歷史 reader 保留，文字回退不降契約；原有一次補正、完整提示預算、同候選執行審查及突變批准順序不改。報告保存有界去密的結構化主張並明示其採用狀態。明列前提核對不證明任意語義，舊有界矛盾防護仍保留；需求檔與 oracle 使用者入口尚待第三項目標。規格見 `docs/reviewer-evidence-basis.md`。
+
 ## 通用化首要目標與 expected 事實來源（2026-10-27）
 
 目前工作順序及驗收入口為 `docs/通用化首要目標_2026_10_27.md`。六項依序是事實／判斷契約、局部 AST 合成、fixture／需求入口、能力適配、未見專案重複驗收及公開版本；歷史已實作能力沿用，逐個切片交付。

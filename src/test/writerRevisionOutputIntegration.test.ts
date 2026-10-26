@@ -1,4 +1,5 @@
 import * as assert from 'node:assert/strict';
+import { testCodeBasis } from './reviewBasisFixture';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -25,8 +26,11 @@ const manyCandidate = candidate + [3, 4, 5, 6].map(value =>
 test('formal full Writer revision preserves an oversized prior-policy envelope and enforces its paired wire cap', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-revision-output-'));
     const source = path.join(directory, 'sample.py');
+    // Keep the v8 Reviewer inside 8192 while the full Writer repair still
+    // exceeds the former 5734 input allowance. The strict bounds below prove
+    // this window; early Reviewer growth would test a different boundary.
     const targetSource = 'def increment(value):\n    # REQUIRED_SOURCE_BEGIN\n    # '
-        + 'complete source context '.repeat(500) + '\n    # REQUIRED_SOURCE_END\n    return value + 1\n';
+        + 'complete source context '.repeat(450) + '\n    # REQUIRED_SOURCE_END\n    return value + 1\n';
     // Caller setup is required Writer evidence; Reviewer does not receive the
     // caller inventory again. Retain complete identical-input sites in a group.
     const completeSource = targetSource + Array.from({ length: 18 }, (_, index) =>
@@ -120,7 +124,7 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                 assert.match(request.prompt, /self\.assertEqual\(increment\(1\), 2\)/);
                 assert.doesNotMatch(request.prompt, /def test_new/);
                 response = JSON.stringify({ findings: (multiFinding ? [2, 3, 4, 5, 6] : [2]).map(value => ({
-                    category: 'missing-scenario', test_line: 'L7',
+                    category: 'missing-scenario', test_line: 'L7', basis: testCodeBasis(7),
                     reason: `This executed case covers increment(1); the separate source-supported increment(${value}) input has no test method.`,
                     action: `Add a separate method asserting self.assertEqual(increment(${value}), ${value + 1}), preserving the executed increment(1) assertion.` })) });
             } else {

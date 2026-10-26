@@ -2,6 +2,7 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fitReviewPrompt, getTestReviewerSystemPrompt, parseTestReviewDetailed } from '../roles/testReviewer';
 import { reviewWithContractRepair } from '../roles/reviewContractRepair';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const code = 'import unittest\nfrom sample import advance\nclass Cases(unittest.TestCase):\n'
     + '    def test_advance(self):\n        self.assertEqual(advance(3), 4)\n'
@@ -18,7 +19,7 @@ test('Reviewer requests a per-case input/expected audit with concrete evidence a
     assert.match(system, /An unverified expected value is not a proven wrong value/);
     assert.match(system, /Never invent its replacement from model arithmetic, type annotations or a return expression/);
     assert.match(system, /request a controlled observation or explicit contract in action/);
-    assert.match(system, /exactly: category, test_line, reason, action/);
+    assert.match(system, /exactly: category, test_line, reason, action, basis/);
 });
 
 test('formal Reviewer receives complete numbered cases and unchanged evidence, with an all-or-nothing prompt budget', async () => {
@@ -45,7 +46,7 @@ test('formal Reviewer receives complete numbered cases and unchanged evidence, w
 });
 
 test('a concrete verification-gap finding retains its reason/evidence and cannot be converted into approval', () => {
-    const reply = JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L7',
+    const reply = JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L7', basis: testCodeBasis(7),
         reason: 'The advance(-1) assertion expects 0, but no supplied exact-input observation supports the negative boundary; correctness remains unverified.',
         action: 'Add a controlled observation for advance(-1) or an explicit boundary contract before changing its expected result.' }] });
     const parsed = parseTestReviewDetailed(reply, code, true, { target: 'advance', module: 'sample', methodKind: 'module' });

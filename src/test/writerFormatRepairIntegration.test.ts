@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import { testCodeBasis } from './reviewBasisFixture';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -64,10 +65,10 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
         } else if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviews++;
             response = scenario === 'reviewer-type' && reviews === 1 ? JSON.stringify({ findings: [{
-                category: 'assertion-quality', test_line: 'L5', reason: 'The expected result is not a valid integer value.',
+                category: 'assertion-quality', test_line: 'L5', basis: testCodeBasis(5), reason: 'The expected result is not a valid integer value.',
                 action: 'Change the expected result to a valid integer value.' }] })
                 : scenario === 'review-scope' && reviews === 1 ? JSON.stringify({ findings: [{
-                    category: 'typing-style', test_line: 'L4', reason: 'The test method does not explain its observed input and result.',
+                    category: 'typing-style', test_line: 'L4', basis: testCodeBasis(4), reason: 'The test method does not explain its observed input and result.',
                     action: 'Add a docstring to the existing test method describing its observed input and result.' }] })
                 : '{"findings":[]}';
         } else {

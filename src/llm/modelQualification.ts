@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { RoleQualificationProfile } from './roleQualification';
 
 /** Bump only when the executable probe contract changes, not for unrelated UI releases. */
-export const QUALIFICATION_VERSION = 'python-unittest-v8';
+export const QUALIFICATION_VERSION = 'python-unittest-v9';
 
 export const LOCAL_RUNTIME_QUALIFICATION_VERSION = 'ollama-context-v1';
 

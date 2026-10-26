@@ -64,7 +64,7 @@ export function readOllamaRoleRequest(wire: any): any & { roleInstructions: stri
         'role instructions must lead the actual transmitted prompt');
     // Known request envelopes start on their own line. Match their first
     // occurrence, before any target/test source can quote another role.
-    const start = /^(?:=== ANALYSIS EVIDENCE V2 ===|REVIEW_REQUEST_V7|QUALITY_TASK_V[34]|BUG_FIX_REQUEST_V5|WRITER_REVISION_REQUEST_V2|EXECUTION_VERIFICATION_V1|compact-writer-v[12] \(metadata, never an import\)|Target function: [^\r\n]+)\r?$/m.exec(decodedPrompt);
+    const start = /^(?:=== ANALYSIS EVIDENCE V2 ===|REVIEW_REQUEST_V[78]|QUALITY_TASK_V[34]|BUG_FIX_REQUEST_V5|WRITER_REVISION_REQUEST_V2|EXECUTION_VERIFICATION_V1|compact-writer-v[12] \(metadata, never an import\)|Target function: [^\r\n]+)\r?$/m.exec(decodedPrompt);
     assert.ok(start && start.index > 0, 'fixture needs an explicit user-request boundary; do not guess from evidence text');
     const roleInstructions = decodedPrompt.slice(0, start.index - 1);
     const prompt = decodedPrompt.slice(start.index);

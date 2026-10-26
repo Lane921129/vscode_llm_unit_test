@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { buildReviewFacts, ReviewFacts } from '../roles/reviewFacts';
 import { parseTestReviewDetailed, ReviewConstraints } from '../roles/testReviewer';
 import { reviewWithContractRepair } from '../roles/reviewContractRepair';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const identity = { runId: 'mechanical-review', sourceHash: 'a'.repeat(64), target: 'connect' };
 const code = 'import unittest\nfrom unittest.mock import patch\nfrom sample import connect\n'
@@ -17,7 +18,7 @@ const python = path.join(process.cwd(), '.venv', process.platform === 'win32' ? 
 const facts = (tests = code) => buildReviewFacts({ ...identity, module: 'sample', code: tests,
     executionVerified: true, python, env: process.env });
 const constraints = (value: ReviewFacts): ReviewConstraints => ({ ...identity, module: 'sample', methodKind: 'module', identity, facts: value });
-const response = (line: number, category: string, reason: string, action: string) => JSON.stringify({ findings: [{ category, test_line: `L${line}`, reason, action }] });
+const response = (line: number, category: string, reason: string, action: string) => JSON.stringify({ findings: [{ category, test_line: `L${line}`, reason, action, basis: testCodeBasis(line) }] });
 const claims = [
     [1, 'setup-error', 'Importing unittest.mock.patch() without a target is not allowed.', 'Add a target to the patch() call, such as patch("sample.channel").', 'unrelated-test-line'],
     [1, 'setup-error', 'Import statement is not a valid unittest module.', "Replace 'unittest' with 'unittest.mock' in line 1.", 'existing-harness-contradiction'],

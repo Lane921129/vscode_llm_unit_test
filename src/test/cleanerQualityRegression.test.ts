@@ -10,6 +10,7 @@ import { responseSchemaForOutputFormat } from '../llm/customApi';
 import { assessReviewerQualification } from '../llm/roleQualification';
 import { formatTargetContract } from '../pipeline/targetContract';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { testCodeBasis } from './reviewBasisFixture';
 
 function coverage(lines: number[], branches: string[] = []): TargetCoverageAssessment {
     return { available: true, coverageText: 'measured', missingLines: '', targetExecuted: true,
@@ -45,7 +46,7 @@ test('stagnation uses individual line and branch identities rather than display 
 });
 
 const tests = 'import unittest\n# a comment\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(Widget.normalize(2), 2)\n';
-const finding = { category: 'missing-scenario', test_line: 'L5', reason: 'A measured branch still has no scenario.',
+const finding = { category: 'missing-scenario', test_line: 'L5', basis: testCodeBasis(5), reason: 'A measured branch still has no scenario.',
     action: 'Add one input that reaches the measured branch, then verify the original result.' };
 const raw = (changes = {}) => JSON.stringify({ findings: [{ ...finding, ...changes }] });
 const constraints = { target: 'Widget.normalize', methodKind: 'static' };

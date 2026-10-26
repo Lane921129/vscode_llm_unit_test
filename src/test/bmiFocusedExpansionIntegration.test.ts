@@ -12,6 +12,7 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { pythonToolPath } from '../pipeline/pythonTools';
 import { extractWriterAdditionCode } from '../validation/testMerger';
 import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const fence = (code: string) => '```python\n' + code + '\n```';
 const seed = `import unittest
@@ -174,7 +175,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
                 const call = lines[assertionLine].match(/calculate_bmi\([^)]*\)/)?.[0];
                 assert.ok(call);
                 reviewFinding = `Add self.assertIsInstance(${call}, tuple) in this same test method to check the observed tuple container while preserving the existing value assertion and inputs.`;
-                response = JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${assertionLine + 1}`,
+                response = JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${assertionLine + 1}`, basis: testCodeBasis(assertionLine + 1),
                     reason: 'The current assertEqual checks value equality, but this exact observed return also needs an explicit tuple container assertion.',
                     action: reviewFinding }] });
                 const replacement = [...lines];
@@ -186,7 +187,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
                     assert.match(request.prompt, /self\.assertIsInstance\(calculate_bmi\(/);
                 }
                 response = scenario === 'positive' && reviews === 1
-                ? JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L5',
+                ? JSON.stringify({ findings: [{ category: 'assertion-quality', test_line: 'L5', basis: testCodeBasis(5),
                     reason: 'calculate_bmi(50, 160) raises TypeError rather than returning a tuple.',
                     action: 'Replace this assertion with with self.assertRaises(TypeError) around calculate_bmi(50, 160).' }] })
                 : '{"findings":[]}';

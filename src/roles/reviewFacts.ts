@@ -8,6 +8,7 @@ import { validTraceValueSnapshot } from '../pipeline/traceValues';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { runSpawn } from '../utils/processRunner';
 import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
+import { reviewFactId } from './reviewEvidenceBasis';
 
 export interface ReviewFactIdentity { runId: string; sourceHash: string; target: string }
 export type ReviewObservationStatus = 'verified' | 'contradicted' | 'unknown';
@@ -271,12 +272,15 @@ export async function buildReviewFacts(options: BuildReviewFactsOptions): Promis
 
 /** Call spellings already appear in TEST_FILE; project their AST presence without duplicating code. */
 export function reviewFactsForPrompt(facts: ReviewFacts): string {
-    return 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...facts,
-        methods: facts.methods.map(({ targetCallSyntax: _syntax, ...method }) => ({ ...method, calls: method.calls.map(({ line, observationReturned }) => ({ line, observationReturned })),
-            assertions: method.assertions.map(({ observationVerified: _legacy, observationStatus: _status, ...assertion }) => {
+    return 'HOST_VERIFIED_REVIEW_FACTS_V1\n' + JSON.stringify({ ...facts, id: 'E1',
+        imports: facts.imports.map((item, index) => ({ ...item, id: reviewFactId('import', index) })),
+        classes: facts.classes.map((item, index) => ({ ...item, id: reviewFactId('class', index) })),
+        methods: facts.methods.map(({ targetCallSyntax: _syntax, ...method }, index) => ({ ...method, id: reviewFactId('method', index),
+            calls: method.calls.map(({ line, observationReturned }, child) => ({ line, observationReturned, id: reviewFactId('call', index, child) })),
+            assertions: method.assertions.map(({ observationVerified: _legacy, observationStatus: _status, ...assertion }, child) => {
                 const observationStatus = reviewAssertionObservationStatus({ ...assertion, observationVerified: _legacy, observationStatus: _status });
                 if (observationStatus === undefined) { invalid('ast-assertion-observation-shape'); }
-                return { ...assertion, observationStatus };
+                return { ...assertion, observationStatus, id: reviewFactId('assertion', index, child) };
             }),
             standardAssertionCalls: method.standardAssertionCalls?.map(({ line, kind }) => ({ line, kind })),
             dependencyPatchSyntax: method.dependencyPatchSyntax?.map(({ line, origin, target, binding }) => ({ line, origin, target, binding })) })) });

@@ -211,7 +211,7 @@ class Cases(unittest.TestCase):
         const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
         assert.equal(manifest.validationMode, 'full', 'omitting mode still requires the complete mutation pipeline');
         assert.equal(manifest.promptVersion, 'role-contracts-v7');
-        assert.equal(manifest.roleContracts.reviewer, 'review-v7');
+        assert.equal(manifest.roleContracts.reviewer, 'review-v8');
         assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');
         assert.equal(manifest.evidenceContracts.semanticPlan, 'semantic-plan-v2');
         assert.equal(manifest.evidenceContracts.ruleSelection, 'rule-selection-v2');

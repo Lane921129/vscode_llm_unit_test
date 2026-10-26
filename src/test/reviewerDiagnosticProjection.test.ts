@@ -3,10 +3,11 @@ import { test } from 'node:test';
 import { projectRejectedReviewFindings, parseTestReviewDetailed } from '../roles/testReviewer';
 import { reviewWithContractRepair, ReviewContractEvent } from '../roles/reviewContractRepair';
 import { WITHHELD_SENSITIVE_CONTENT } from '../pipeline/artifactSafety';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const tests = 'import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
     + '    def test_value(self):\n        self.assertEqual(target(1), 2)\n';
-const finding = { category: 'target-binding', test_line: 'L2',
+const finding = { category: 'target-binding', test_line: 'L2', basis: testCodeBasis(2),
     reason: 'The target function must be a static method.', action: 'Replace this test with a static method case.' };
 
 test('rejected review projection retains bounded exact fields and cited test lines without provider prose or unknown keys', () => {
@@ -66,7 +67,7 @@ test('two contradicted assessments retain safe diagnostic claims, then remain un
 });
 
 test('unknown semantic findings remain usable review suggestions rather than being erased by diagnostic projection', async () => {
-    const semantic = { category: 'missing-scenario', test_line: 'L5',
+    const semantic = { category: 'missing-scenario', test_line: 'L5', basis: testCodeBasis(5),
         reason: 'The specified account cancellation behavior lacks an independent case.',
         action: 'Add an independent cancellation scenario from the supplied requirements.' };
     const result = await reviewWithContractRepair({ tests, prompt: 'requirements and test', deadlineAt: Date.now() + 30000,
@@ -75,4 +76,15 @@ test('unknown semantic findings remain usable review suggestions rather than bei
     assert.equal(result?.issues.length, 1);
     assert.equal(result?.issues[0].reason, semantic.reason);
     assert.equal(result?.issues[0].severity, 'quality');
+});
+
+test('structured rejected bases preserve only the four declared fields and redact the entire sensitive value', () => {
+    const secret = 'fixture-private-requirement-value';
+    const basis = { kind: 'requirement', ref: 'R' + '1'.repeat(16), field: 'statement', value: secret };
+    const projected = projectRejectedReviewFindings(JSON.stringify({ findings: [{ ...finding, basis }] }), tests, [secret]);
+    assert.equal(projected[0].basis?.value, WITHHELD_SENSITIVE_CONTENT);
+    assert.equal(projected[0].basis?.ref, basis.ref);
+    assert.equal(JSON.stringify(projected).includes(secret), false);
+    assert.equal(projectRejectedReviewFindings(JSON.stringify({ findings: [{ ...finding,
+        basis: { ...basis, private_provider_field: 'not-retained' } }] }), tests)[0].basis, undefined);
 });

@@ -6,6 +6,7 @@ import { getTestReviewerSystemPrompt, parseTestReviewDetailed, ReviewConstraints
 import { reviewWithContractRepair } from '../roles/reviewContractRepair';
 import { scalarProbeInput, typedCallFields } from '../pipeline/probeInputs';
 import { BehaviorObservations, TraceValueSnapshot } from '../pipeline/evidenceContracts';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const identity = { runId: 'exception-review-test', sourceHash: 'a'.repeat(64), target: 'score' };
 const code = 'import unittest\nfrom sample import score\nclass Cases(unittest.TestCase):\n'
@@ -23,8 +24,8 @@ let cached: Promise<ReviewFacts> | undefined;
 const facts = () => cached ||= buildReviewFacts({ ...options(), numericEvidencePrompt: ledger() });
 const constraints = (value: ReviewFacts): ReviewConstraints => ({ target: identity.target,
     methodKind: 'module', module: 'sample', identity, facts: value });
-const response = (reason: string, action: string, line = 7) => JSON.stringify({ findings: [{
-    category: 'assertion-quality', test_line: `L${line}`, reason, action }] });
+const response = (reason: string, action: string, line = 7, basis = testCodeBasis(line)) => JSON.stringify({ findings: [{
+    category: 'assertion-quality', test_line: `L${line}`, reason, action, basis }] });
 const actualReason = 'The assertion is not checking the expected exception, but rather the expected return value.';
 const actualAction = 'Change the assertion to check for the expected exception instead of the expected return value.';
 
@@ -54,12 +55,19 @@ test('changed inputs, independent business requirements and evidence requests re
     for (const [reason, action] of [
         ['A different input score(1, 0) has an observed ZeroDivisionError.', 'Add a separate input case using assertRaises(ZeroDivisionError).'],
         ['The observation raises ZeroDivisionError for zero height.', 'Replace the assertion with assertRaises(ZeroDivisionError) for score(1, 0).'],
-        ['The documented business contract requires ValueError for score(1, 1), despite current behavior.', 'Change the assertion to assertRaises(ValueError) for score(1, 1).'],
         ['This separate callback has no verified exception class.', 'Request a controlled observation of that callback before adding its check.'],
         ['The source explicitly raises a custom exception on a new input.', 'Add an additional input case and establish the exact exception class.'],
-        ['The expected exception class custom_failure is stated by the supplied contract.', 'Replace the assertion with self.assertRaises(custom_failure).']
     ]) {
         assert.ok(parseTestReviewDetailed(response(reason, action), code, true, constraints(current)).review, reason);
+    }
+    for (const [reason, action, statement] of [
+        ['The documented business contract requires ValueError for score(1, 1), despite current behavior.', 'Change the assertion to assertRaises(ValueError) for score(1, 1).', 'score(1, 1) must raise ValueError.'],
+        ['The expected exception class custom_failure is stated by the supplied contract.', 'Replace the assertion with self.assertRaises(custom_failure).', 'score(1, 1) must raise custom_failure.']
+    ]) {
+        const requirements = { ...identity, items: [{ id: 'R' + '7'.repeat(16), statement }] };
+        const raw = response(reason, action, 7, { kind: 'requirement', ref: requirements.items[0].id, field: 'statement', value: statement });
+        assert.ok(parseTestReviewDetailed(raw, code, true, { ...constraints(current), requirements }).review, reason);
+        assert.equal(parseTestReviewDetailed(raw, code, true, constraints(current)).review, undefined);
     }
 });
 
@@ -106,7 +114,7 @@ test('literal call identity is per assertion and cannot borrow an observation fr
 test('facts projection keeps exact-return flags without copying literal inputs or source spellings', async () => {
     const prompt = reviewFactsForPrompt(await facts());
     const json = JSON.parse(prompt.split('\n')[1]);
-    assert.deepEqual(json.methods[0].calls, [{ line: 6, observationReturned: true }]);
+    assert.deepEqual(json.methods[0].calls, [{ line: 6, observationReturned: true, id: 'C1.1' }]);
     assert.equal(json.methods[0].assertions[0].targetCallLine, 6);
     assert.equal(json.methods[0].calls[0].call, undefined);
     assert.equal(json.methods[0].calls[0].spellings, undefined);

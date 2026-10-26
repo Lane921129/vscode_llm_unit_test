@@ -5,14 +5,14 @@ import { responseSchemaForOutputFormat } from '../llm/customApi';
 import { parseTestReviewDetailed } from '../roles/testReviewer';
 import { ROLE_QUALIFICATION_TEST_FILE } from '../llm/roleQualification';
 
-test('Reviewer qualification uses the formal review-v7 schema transport and retains compatible legacy reader', async () => {
+test('Reviewer qualification uses the formal review-v8 schema transport and retains compatible legacy reader', async () => {
     const formats: string[] = [];
     const result = await runRoleQualificationProbes({ state: 'verified', reason: 'fixed-public-probe' },
         async (_prompt, format) => { formats.push(format); return format === 'review-json' ? '{"findings":[]}' : ''; });
     assert.deepEqual(formats, ['review-json', 'text']);
     assert.deepEqual(responseSchemaForOutputFormat(formats[0] as 'review-json')?.required, ['findings']);
     assert.equal(result.reviewer.state, 'verified');
-    assert.equal(result.reviewer.diagnostics?.contractVersion, 'review-v7');
+    assert.equal(result.reviewer.diagnostics?.contractVersion, 'review-v8');
     const legacy = '{"blocking":[],"quality":[]}';
     assert.equal(assessReviewerQualification(legacy).state, 'unverified', 'a legacy envelope cannot certify the current role');
     assert.ok(parseTestReviewDetailed(legacy, ROLE_QUALIFICATION_TEST_FILE).review,

@@ -8,6 +8,7 @@ import { assessReviewerQualification, assessBugFixerQualification, REVIEWER_QUAL
 import { mergeBugFixReplacement } from '../roles/bugFixer';
 import { LocalRuntimeRequalificationResult, RuntimeQualificationProbeExecution } from './localRuntimeRequalification';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 
 export type ProbeRole = 'writer' | 'reviewer' | 'bugFixer';
 export const CONNECTION_PROBE_OUTPUT_TOKEN_LIMIT = 1024;
@@ -28,7 +29,7 @@ export function unprobedLocalQualification(numCtx: number): LocalRuntimeRequalif
         testGenerationReady: false, testGenerationMode: 'plain', testGenerationReason: pending().reason,
         roleQualification: { writer: pending(), reviewer: pending(), bugFixer: pending() } };
 }
-const contractVersion = (role: ProbeRole) => role === 'reviewer' ? 'review-v7' as const
+const contractVersion = (role: ProbeRole) => role === 'reviewer' ? ROLE_CONTRACT_VERSIONS.reviewer
     : role === 'writer' ? 'writer-probe-v8' as const : 'bug-fixer-probe-v8' as const;
 function unavailable(reason: ProbeFailure, role: ProbeRole): RoleQualificationStatus {
     return { state: 'not-run', reason: localize('角色探針未完成：{0}；模型能力尚未判定。', reason),

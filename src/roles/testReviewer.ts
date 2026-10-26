@@ -3,6 +3,8 @@ import { evidenceHash } from '../pipeline/analysisJournal';
 import { ReviewFactIdentity, ReviewFacts, reviewAssertionObservationStatus, reviewFactsForPrompt, validReviewExpectedOrigin } from './reviewFacts';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { redactCredentialStrings } from '../pipeline/artifactSafety';
+import { isReviewEvidenceBasis, ReviewBasisRejection, ReviewEvidenceBasis, ReviewRequirements,
+    reviewEvidenceBasisDiagnostic, validReviewRequirements } from './reviewEvidenceBasis';
 
 export const REVIEW_FINDING_LIMIT = 5;
 export const REVIEW_CATEGORIES = {
@@ -23,6 +25,7 @@ export interface ReviewIssue {
     action: string;
     category?: keyof typeof REVIEW_CATEGORIES;
     testLine?: number;
+    basis?: ReviewEvidenceBasis;
 }
 
 export interface TestReview {
@@ -36,6 +39,7 @@ export interface RejectedReviewFinding {
     reason?: string;
     action?: string;
     excerpt?: string;
+    basis?: ReviewEvidenceBasis;
 }
 
 /** Keep only bounded known finding fields; malformed JSON and provider prose stay out. */
@@ -65,7 +69,10 @@ export function projectRejectedReviewFindings(raw: string, tests: string,
                     ?? (reference && Number.isSafeInteger(reference) ? text(testLines[reference - 1], 400) : undefined);
                 const projected = Object.fromEntries(Object.entries({
                     category: text(finding.category, 80), test_line: text(finding.test_line, 32),
-                    reason: text(finding.reason, 600), action: text(finding.action, 600), excerpt
+                    reason: text(finding.reason, 600), action: text(finding.action, 600), excerpt,
+                    ...(isReviewEvidenceBasis(finding.basis) ? { basis: {
+                        kind: finding.basis.kind, ref: text(finding.basis.ref, 80), field: text(finding.basis.field, 80), value: text(finding.basis.value, 600)
+                    } } : {})
                 }).filter(([, field]) => field !== undefined)) as RejectedReviewFinding;
                 result.push(projected);
                 if (result.length >= REVIEW_FINDING_LIMIT) { return result; }
@@ -82,6 +89,7 @@ export interface ReviewConstraints {
     dependencyUsePoints?: string[];
     identity?: ReviewFactIdentity;
     facts?: ReviewFacts;
+    requirements?: ReviewRequirements;
 }
 
 export function numberReviewLines(tests: string): string {
@@ -97,7 +105,8 @@ export function reviewableLineIds(tests: string): string[] {
 export function getTestReviewerSystemPrompt(): string {
     return `You are the test Reviewer. Inspect tests; never replace code.
 Return ONLY {"findings":[]} when no concrete defect is shown, otherwise ONE findings array with at most ${REVIEW_FINDING_LIMIT} items; no quota, echoes or text outside JSON.
-Each finding has exactly: category, test_line, reason, action. Cite a VALID_TEST_LINE_IDS line showing the TEST_FILE defect, never source/context, blanks, comments or unrelated lines.
+Each finding has exactly: category, test_line, reason, action, basis. Cite a VALID_TEST_LINE_IDS line showing the TEST_FILE defect, never source/context, blanks, comments or unrelated lines.
+Every basis has kind, ref, field, value (strings). host-fact: copy a supplied id's present field and exact value (booleans "true"/"false"). Allowed fields: E=executionVerified; I=binding/origin; H=name/kind; M=name; A=kind/targetResult/expectedOrigin/expectedType/observationStatus; C=observationReturned. evidence-gap: assertion observationStatus or expectedOrigin="unknown", never a wrong result. test-code: ref=test_line, field="judgment", value="unverified" means semantic advice. requirement: supplied R-id, field="statement", exact supplied statement as value. Never invent requirements or derive them from source formulas or observations.
 Categories: setup-error, target-binding, assertion-evidence, mock-isolation for existing constraint violations; missing-scenario, assertion-quality, typing-style for missing cases, weak assertions or optional style, not failed execution.
 Reason explains evidence; action specifies a test-only change. No generic advice, source edits or Markdown.
 Audit every test case's actual target call, input and expected return/exception: constructor/setup, argument types and keyword order. The reason must name the asserted input/expected pair and its source-supported contract, exact-input observation or same-test dependency mock; cite the relevant observation/fact ID when supplied.
@@ -245,7 +254,7 @@ function repeatsObservedCalculationVerification(reason: string, action: string, 
         && new RegExp(`\\b${name.trim()}\\b`).test(claim[2]));
 }
 
-export type ReviewRejectionCode = 'invalid-json' | 'invalid-envelope' | 'too-many-findings'
+export type ReviewRejectionCode = ReviewBasisRejection | 'invalid-json' | 'invalid-envelope' | 'too-many-findings'
     | 'invalid-finding' | 'invalid-excerpt' | 'excerpt-not-in-test' | 'non-actionable-reason'
     | 'non-actionable-action' | 'duplicate-reason-action' | 'invalid-legacy-finding' | 'invalid-category'
     | 'invalid-test-line' | 'target-binding-contradiction' | 'target-implementation-edit' | 'target-self-mock' | 'unrelated-test-line'
@@ -275,13 +284,18 @@ function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRej
         if (!actionable(finding.reason)) { reject('non-actionable-reason'); return false; }
         if (!actionable(finding.action)) { reject('non-actionable-action'); return false; }
         if (finding.action.trim() === finding.reason.trim()) { reject('duplicate-reason-action'); return false; }
+        if (requireCurrent && finding.basis === undefined) { reject('missing-evidence-basis'); return false; }
+        if (finding.basis !== undefined && (!isReviewEvidenceBasis(finding.basis) || finding.test_line === undefined)) {
+            reject('invalid-evidence-basis'); return false;
+        }
         issues.push({
             id: `${severity === 'blocking' ? 'B' : 'Q'}${index + 1}`,
             severity,
             evidence: excerpt,
             reason: finding.reason,
             action: finding.action,
-            ...(typeof finding.test_line === 'string' ? { testLine: Number(finding.test_line.slice(1)) } : {})
+            ...(typeof finding.test_line === 'string' ? { testLine: Number(finding.test_line.slice(1)) } : {}),
+            ...(isReviewEvidenceBasis(finding.basis) ? { basis: finding.basis } : {})
         });
         return true;
     };
@@ -295,7 +309,7 @@ function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRej
             if (typeof finding.category !== 'string' || !Object.hasOwn(REVIEW_CATEGORIES, finding.category)) {
                 return reject('invalid-category');
             }
-            if (Object.keys(finding).some(key => !['category', 'test_excerpt', 'test_line', 'reason', 'action'].includes(key))) {
+            if (Object.keys(finding).some(key => !['category', 'test_excerpt', 'test_line', 'reason', 'action', 'basis'].includes(key))) {
                 return reject('invalid-finding');
             }
             const category = finding.category as keyof typeof REVIEW_CATEGORIES;
@@ -358,6 +372,9 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
         if (!diagnostics.includes(code)) { diagnostics.push(code); }
         return undefined;
     };
+    if (constraints?.requirements && !validReviewRequirements(constraints.requirements, constraints.identity)) {
+        reject('requirement-identity-mismatch'); return { diagnostics };
+    }
     if (constraints?.facts) {
         const { facts, identity } = constraints;
         if (!identity || facts.testHash !== evidenceHash(tests) || facts.target !== constraints.target
@@ -376,7 +393,12 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
         try {
             const review = normalizeReview(JSON.parse(candidate), tests, reject, requireCurrent);
             if (review) {
-                const violations = constraints ? reviewConstraintDiagnostics(review, constraints) : [];
+                const violations = constraints ? reviewConstraintDiagnostics(review, constraints) : review.issues.flatMap(issue => {
+                    if (!issue.basis) { return []; }
+                    const diagnostic = issue.testLine === undefined ? 'invalid-evidence-basis'
+                        : reviewEvidenceBasisDiagnostic(issue.basis, issue.testLine, {});
+                    return diagnostic ? [diagnostic] : [];
+                });
                 if (violations.length) { violations.forEach(reject); continue; }
                 return { review, diagnostics: [] };
             }
@@ -389,8 +411,12 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
 }
 
 /** Never truncate a source/test fragment into misleading partial evidence. */
-export function fitReviewPrompt(parts: { tests: string; evidence: string; executionVerified?: boolean; facts?: ReviewFacts }, maxChars: number): string | undefined {
-    const prompt = `REVIEW_REQUEST_V7\nCASE_AUDIT: Check every test input and expected return/exception. Give each finding a specific evidence basis in reason and an actionable test-only correction.\n${parts.executionVerified === true ? 'ISOLATED_EXECUTION_PASSED: this exact TEST_FILE imported and executed successfully.\n' : ''}VALID_TEST_LINE_IDS: ${reviewableLineIds(parts.tests).join(', ')}\n<TEST_FILE>\n${numberReviewLines(parts.tests)}\n</TEST_FILE>\n\n<REVIEW_CONTEXT>\n${parts.evidence}${parts.facts ? '\n' + reviewFactsForPrompt(parts.facts) : ''}\n</REVIEW_CONTEXT>`;
+export function fitReviewPrompt(parts: { tests: string; evidence: string; executionVerified?: boolean; facts?: ReviewFacts; requirements?: ReviewRequirements }, maxChars: number): string | undefined {
+    if (parts.requirements && !validReviewRequirements(parts.requirements, parts.facts)) {
+        throw new TypeError('Review requirements are not bound to this source identity');
+    }
+    const requirements = parts.requirements ? '\nHOST_REVIEW_REQUIREMENTS_V1\n' + JSON.stringify(parts.requirements) : '';
+    const prompt = `REVIEW_REQUEST_V8\nCASE_AUDIT: Check every test input and expected return/exception. Give each finding a structured basis and an actionable test-only correction; test-code judgments remain unverified.\n${parts.executionVerified === true ? 'ISOLATED_EXECUTION_PASSED: this exact TEST_FILE imported and executed successfully.\n' : ''}VALID_TEST_LINE_IDS: ${reviewableLineIds(parts.tests).join(', ')}\n<TEST_FILE>\n${numberReviewLines(parts.tests)}\n</TEST_FILE>\n\n<REVIEW_CONTEXT>\n${parts.evidence}${parts.facts ? '\n' + reviewFactsForPrompt(parts.facts) : ''}${requirements}\n</REVIEW_CONTEXT>`;
     return prompt.length <= maxChars ? prompt : undefined;
 }
 
@@ -436,16 +462,23 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
         const priorCodeCount = codes.size;
         const facts = context.facts;
         const line = issue.testLine;
+        if (issue.basis) {
+            const diagnostic = line === undefined ? 'invalid-evidence-basis' : reviewEvidenceBasisDiagnostic(issue.basis, line, context);
+            if (diagnostic) { codes.add(diagnostic); }
+        }
         const method = line ? facts?.methods.find(item => item.line <= line && line <= item.endLine) : undefined;
         const assertion = method && method.assertions.find(item => item.line === line);
         const text = issue.reason + '\n' + issue.action;
+        // Registered requirements are independent of implementation behavior;
+        // their identity/reference was checked above, without interpreting prose.
+        const requirementBasis = issue.basis?.kind === 'requirement';
         const proposedExceptionCall = method?.calls.find(item => item.line === assertion?.targetCallLine);
         if (assertion?.targetResult && replacesReturnWithException(issue.action)
             && !proposesDifferentExceptionInput(text)
             && !proposesUnmatchedTargetCall(issue.action, leaf, proposedExceptionCall?.spellings)) {
             // A return-to-exception edit must be tied to a specific class and
             // evidence. This never vetoes an additional case or independent rule.
-            const explicitRequirement = independentExceptionRequirement(issue.reason);
+            const explicitRequirement = requirementBasis || !issue.basis && independentExceptionRequirement(issue.reason);
             const call = proposedExceptionCall;
             if (!namedException(issue.reason, issue.action)) { codes.add('exception-evidence-missing'); }
             const hasBasis = /\b(?:trace|observation|observed|HOST_VERIFIED_REVIEW_FACTS|source\s+(?:raises|explicitly\s+raises)|explicit\s+raise)\b|觀測|明確拋出/i.test(issue.reason);
@@ -608,7 +641,7 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
             // A fixed expected is an AST fact, not a business oracle. Compare
             // only this complete mechanical denial and nonspecific replacement;
             // causal requirements, new cases and concrete edits stay reviewable.
-            if (assertion.expectedOrigin === 'static-literal' && assertion.expected?.replayable === true
+            if (!requirementBasis && assertion.expectedOrigin === 'static-literal' && assertion.expected?.replayable === true
                 && facts?.executionVerified && reviewAssertionObservationStatus(assertion) === 'verified'
                 && method?.calls.find(call => call.line === assertion.targetCallLine)?.observationReturned === true
                 && (issue.category === 'assertion-quality' || issue.category === 'assertion-evidence')
@@ -622,7 +655,7 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
             const literalType = assertion.expected?.value.type;
             const typeName = literalType === 'str' ? '(?:string|str)' : literalType === 'float' ? 'float'
                 : literalType === 'int' ? '(?:integer|int)' : literalType === 'bool' ? '(?:boolean|bool)' : undefined;
-            if (typeName && assertion.expected?.replayable === true && facts?.executionVerified
+            if (!requirementBasis && typeName && assertion.expected?.replayable === true && facts?.executionVerified
                 && reviewAssertionObservationStatus(assertion) === 'verified'
                 && method?.calls.find(call => call.line === assertion.targetCallLine)?.observationReturned === true
                 && (issue.category === 'assertion-quality' || issue.category === 'assertion-evidence')
@@ -630,18 +663,18 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
                 && new RegExp(`^Change the expected result to a valid ${typeName} value[.!\\s]*$`, 'i').test(issue.action.trim())) {
                 codes.add('expected-literal-type-contradiction');
             }
-            if (facts?.executionVerified && reviewAssertionObservationStatus(assertion) === 'verified'
+            if (!requirementBasis && facts?.executionVerified && reviewAssertionObservationStatus(assertion) === 'verified'
                 && (issue.category === 'assertion-quality' || issue.category === 'assertion-evidence')
                 && method?.calls.find(call => call.line === assertion.targetCallLine)?.observationReturned === true
                 && repeatsObservedCalculationVerification(issue.reason, issue.action,
                     method.standardAssertionCalls?.find(item => item.line === line)?.spellings)) {
                 codes.add('observed-assertion-verification-contradiction');
             }
-            if (/\b(?:not|never|isn't|is not)\s+(?:directly\s+)?asserted\b|\bno assertion\b|\bmissing (?:an? )?assertion\b/i.test(issue.reason)
+            if (!requirementBasis && /\b(?:not|never|isn't|is not)\s+(?:directly\s+)?asserted\b|\bno assertion\b|\bmissing (?:an? )?assertion\b/i.test(issue.reason)
                 && !/\b(?:range|boundary|branch|additional|other|different|all|every)\b/i.test(issue.reason)) {
                 codes.add('existing-assertion-contradiction');
             }
-            const claimsIndependentRequirement = /\b(?:documented|explicit|provided|specified|business)\s+(?:requirement|specification|contract)|\b(?:requirement|specification|contract)\s+(?:requires|says|states)|需求(?:明確|規定)|規格(?:明確|規定)/i.test(issue.reason);
+            const claimsIndependentRequirement = requirementBasis || !issue.basis && /\b(?:documented|explicit|provided|specified|business)\s+(?:requirement|specification|contract)|\b(?:requirement|specification|contract)\s+(?:requires|says|states)|需求(?:明確|規定)|規格(?:明確|規定)/i.test(issue.reason);
             const changesInputs = /\b(?:add|use|test)\b[^\n]{0,50}\b(?:new|different|additional|other)\b[^\n]{0,30}\b(?:input|case|scenario)\b/i.test(issue.action);
             const changedLiteral = issue.action.match(/\b(?:to|with)\s+(?:['"]([^'"]+)['"]|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?))(?=[.,;\s]|$)/i);
             const expected = assertion.expected?.value;
@@ -664,7 +697,7 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
         }
         if (method) {
             const guard = method.exceptionGuards.find(item => item.line === line || item.callLines.includes(line!) || method.line === line);
-            if (guard && (/assertRaises (?:should|must) be used|(?:does not|doesn't|no|missing).*assertRaises/i.test(issue.reason)
+            if (guard && !requirementBasis && (/assertRaises (?:should|must) be used|(?:does not|doesn't|no|missing).*assertRaises/i.test(issue.reason)
                 || issue.category === 'setup-error' && facts?.executionVerified
                     && (/division by zero|ZeroDivisionError/i.test(issue.reason) && /(?:^|\.)ZeroDivisionError$/.test(guard.exception)
                         || /TypeError/.test(issue.reason) && /(?:^|\.)TypeError$/.test(guard.exception)

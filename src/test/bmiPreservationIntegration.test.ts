@@ -1,5 +1,6 @@
 import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
+import { testCodeBasis } from './reviewBasisFixture';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -82,7 +83,7 @@ class Cases(unittest.TestCase):
             reviews++; reviewPrompts.push(request.prompt);
             assert.doesNotMatch(request.prompt, /self\.assertGreaterEqual\(status/,
                 'the weakened candidate must be rejected before review');
-            response = JSON.stringify({ findings: reviews === 1 ? [{ category: 'missing-scenario', test_line: 'L5',
+            response = JSON.stringify({ findings: reviews === 1 ? [{ category: 'missing-scenario', test_line: 'L5', basis: testCodeBasis(5),
                 reason: 'This case uses the observed positive-height input (70, 170); the separate controlled Trace input (70, 0) raised ZeroDivisionError and is not tested.',
                 action: 'Add a separate test method with assertRaises(ZeroDivisionError) around calculate_bmi(70, 0), preserving this passing normal-input case and its exact assertions.' }] : [] });
         } else if (request.roleInstructions?.includes('dependency_behaviors')) {

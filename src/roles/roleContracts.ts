@@ -5,7 +5,7 @@ import { executionFailureRepairGuidance, missingNameRepairGuidance } from '../pr
 export const ROLE_CONTRACT_VERSIONS = {
     ...EVIDENCE_CONTRACT_VERSIONS,
     semanticPlan: 'semantic-plan-v3',
-    reviewer: 'review-v7',
+    reviewer: 'review-v8',
     qualityAnalyst: 'quality-task-v3',
     qualityAnalystGrounded: 'quality-task-v4',
     writerRevision: 'writer-revision-v2',

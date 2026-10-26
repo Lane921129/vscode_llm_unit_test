@@ -7,6 +7,7 @@ import { reviewWithContractRepair } from '../roles/reviewContractRepair';
 import { NumericEvidenceLedger } from '../pipeline/numericEvidenceLedger';
 import { scalarProbeInput, typedCallFields } from '../pipeline/probeInputs';
 import { BehaviorObservations, TraceValueSnapshot } from '../pipeline/evidenceContracts';
+import { testCodeBasis } from './reviewBasisFixture';
 
 const identity = { runId: 'review-facts-test', sourceHash: 'a'.repeat(64), target: 'score' };
 const code = 'import unittest\nfrom sample import score\nclass Cases(unittest.TestCase):\n'
@@ -26,8 +27,8 @@ const facts = () => cached ||= buildReviewFacts({ ...identity, code, module: 'sa
     python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
     env: process.env, executionVerified: true, numericEvidencePrompt: ledger.prompt(10000) });
 const constraints = (value: ReviewFacts): ReviewConstraints => ({ target: identity.target, methodKind: 'module', module: 'sample', identity, facts: value });
-const response = (line: number, category: string, reason: string, action: string) => JSON.stringify({ findings: [{ category,
-    test_line: `L${line}`, reason, action }] });
+const response = (line: number, category: string, reason: string, action: string, basis = testCodeBasis(line)) => JSON.stringify({ findings: [{ category,
+    test_line: `L${line}`, reason, action, basis }] });
 
 test('AST and exact observation facts reject the actual hallucination shapes without changing code', async () => {
     const current = await facts();
@@ -63,11 +64,15 @@ test('genuine gaps, stronger assertions and unknown result claims remain reviewa
     }
     for (const [line, category, reason, action] of [
         [3, 'target-binding', 'The class fixture imports a different target from the selected one.', 'Use the selected target in this fixture.'],
-        [8, 'assertion-evidence', 'The documented requirement specifies 31 even though current implementation returns 30.86.', 'Change the expected value to 31.'],
         [8, 'missing-scenario', 'The other input path has no test.', 'Add a different input and update its expected value to 12.']
     ] as const) {
         assert.ok(parseTestReviewDetailed(response(line, category, reason, action), code, true, constraints(current)).review, reason);
     }
+    const requirements = { ...identity, items: [{ id: 'R' + '5'.repeat(16), statement: 'score(100, 180) must return a numeric component of 31.' }] };
+    const required = response(8, 'assertion-evidence', 'The documented requirement specifies 31 even though current implementation returns 30.86.',
+        'Change the expected value to 31.', { kind: 'requirement', ref: requirements.items[0].id, field: 'statement', value: requirements.items[0].statement });
+    assert.ok(parseTestReviewDetailed(required, code, true, { ...constraints(current), requirements }).review);
+    assert.equal(parseTestReviewDetailed(required, code, true, constraints(current)).review, undefined);
     const unknown = structuredClone(current);
     unknown.methods[0].assertions[0].observationVerified = undefined;
     assert.ok(parseTestReviewDetailed(response(8, 'assertion-evidence', 'The expected value has no controlled observation.',
@@ -146,9 +151,9 @@ test('an executed AST-resolved harness rejects the actual framework hallucinatio
 test('a harness contradiction rejects the complete assessment and rechecks once under the original deadline', async () => {
     const current = await facts();
     const malformed = JSON.stringify({ findings: [
-        { category: 'setup-error', test_line: 'L1', reason: 'Import unittest is not a valid test harness.',
+        { category: 'setup-error', test_line: 'L1', basis: testCodeBasis(1), reason: 'Import unittest is not a valid test harness.',
             action: 'Replace unittest with a valid test harness, such as unittest.mock or pytest.' },
-        { category: 'missing-scenario', test_line: 'L8', reason: 'The adjacent input boundary still needs a scenario.',
+        { category: 'missing-scenario', test_line: 'L8', basis: testCodeBasis(8), reason: 'The adjacent input boundary still needs a scenario.',
             action: 'Add the adjacent input and verify its observed output.' }
     ] });
     const corrected = response(8, 'missing-scenario', 'The adjacent input boundary still needs a scenario.',
@@ -356,8 +361,8 @@ test('proven dependency call assertions reject replacement-only return judgments
 test('new mechanical contradictions use the existing bounded reassessment and never erase valid findings', async () => {
     const current = await mechanicalFacts();
     const bad = JSON.stringify({ findings: [
-        { category: 'setup-error', test_line: 'L1', reason: 'The test harness is not imported correctly.', action: 'Import unittest correctly.' },
-        { category: 'missing-scenario', test_line: 'L8', reason: 'A measured branch has no scenario.', action: 'Add a case for the measured branch.' }
+        { category: 'setup-error', test_line: 'L1', basis: testCodeBasis(1), reason: 'The test harness is not imported correctly.', action: 'Import unittest correctly.' },
+        { category: 'missing-scenario', test_line: 'L8', basis: testCodeBasis(8), reason: 'A measured branch has no scenario.', action: 'Add a case for the measured branch.' }
     ] });
     let requests = 0;
     const result = await reviewWithContractRepair({ tests: mechanicalCode, prompt: 'complete same-candidate evidence',

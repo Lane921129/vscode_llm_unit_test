@@ -2,6 +2,7 @@ import { localize } from '../i18n/core';
 import { canRepairTestMethod, getBugFixerSystemPrompt, mergeBugFixReplacement } from '../roles/bugFixer';
 import { getTestReviewerSystemPrompt, numberReviewLines, parseTestReviewDetailed, reviewableLineIds } from '../roles/testReviewer';
 import { assessIsolatedProbeCode, runIsolatedProbe } from './modelProbeExecution';
+import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 
 export type RoleQualificationState = 'verified' | 'unverified' | 'not-run';
 
@@ -22,7 +23,7 @@ export interface RoleQualificationResponseShape {
 }
 
 export interface RoleQualificationDiagnostics {
-    contractVersion: 'writer-probe-v8' | 'review-v7' | 'bug-fixer-probe-v8';
+    contractVersion: 'writer-probe-v8' | typeof ROLE_CONTRACT_VERSIONS.reviewer | 'bug-fixer-probe-v8';
     reasonCode: string;
     reasonCodes: string[];
     failureKind: 'none' | 'contract' | 'execution' | 'unavailable';
@@ -82,7 +83,7 @@ class TestRepair(unittest.TestCase):
 
 export const REVIEWER_QUALIFICATION_PROMPT = `${getTestReviewerSystemPrompt()}
 Review this exact TEST_FILE for a concrete demonstrated test problem. It is valid to return an empty findings array.
-Every finding must contain test_line, reason, and action. Target binding: module. Do not write Python or modify the target implementation.
+Every finding must contain category, test_line, reason, action, and basis. No host facts or independent requirement IDs are supplied; semantic advice must use test-code basis. Target binding: module. Do not write Python or modify the target implementation.
 VALID_TEST_LINE_IDS: ${reviewableLineIds(ROLE_QUALIFICATION_TEST_FILE).join(', ')}
 TEST_FILE:
 ${numberReviewLines(ROLE_QUALIFICATION_TEST_FILE)}`;
@@ -105,11 +106,11 @@ export function assessReviewerQualification(response: string | undefined): RoleQ
     const parsed = parseTestReviewDetailed(response ?? '', ROLE_QUALIFICATION_TEST_FILE, true,
         { target: 'increment', methodKind: 'module' });
     const reasonCodes = parsed.review ? ['review-contract-verified'] : parsed.diagnostics;
-    const diagnostics: RoleQualificationDiagnostics = { contractVersion: 'review-v7',
+    const diagnostics: RoleQualificationDiagnostics = { contractVersion: ROLE_CONTRACT_VERSIONS.reviewer,
         reasonCode: reasonCodes[0], reasonCodes, failureKind: parsed.review ? 'none' : 'contract',
         executionState: 'not-run', responseShape: qualificationResponseShape(response) };
     return parsed.review
-        ? status('verified', localize("Reviewer 已通過 review-v7 分類、行號引用與欄位契約。"), diagnostics)
+        ? status('verified', localize("Reviewer 已通過 review-v8 分類、行號引用與結構化依據契約。"), diagnostics)
         : status('unverified', localize("Reviewer 回覆未通過 JSON、原文引述或 reason/action 契約。"), diagnostics);
 }
 

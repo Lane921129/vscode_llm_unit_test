@@ -1,5 +1,6 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    'Reviewer 已通過 review-v8 分類、行號引用與結構化依據契約。': 'Reviewer passed review-v8 categories, line citations and structured evidence basis contracts.',
     '詞法辨識到多個測試方法簽名，超出單一種子工作範圍；增加額度不能解決範圍偏離，這些計數不是有效測試數。': 'Lexical diagnostics found multiple test method signatures outside the single-test seed scope. More output does not correct the scope; these counts are not valid test counts.',
     '[輸出恢復] {0} 超出單一種子範圍；改送一次格式修正，不以增額要求完成整份測試集。': '[Output recovery] {0} exceeded the single-test seed scope; sending one format correction instead of expanding output for a full suite.',
     'Writer：程式碼續寫優先': 'Writer: Code completion first',
