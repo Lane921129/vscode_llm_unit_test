@@ -34,43 +34,43 @@ export async function selectMutationEngine(engine: unknown, workers: unknown,
     const base = { requested, workers: concurrency, executionBackend: 'isolated-unittest-v1' as const };
     if (requested === 'builtin') { return { ...base, actual: 'builtin', operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION }; }
 
+    const readProbe = async (engine: ExternalMutationEngine) => {
+        // Cancellation, deadline and process failures are not evidence that an
+        // adapter is unavailable. Preserve them instead of starting more work.
+        const result = await probe(['-B', pythonToolPath('externalMutation'), '--probe', engine]);
+        let value: any;
+        try { value = JSON.parse(result.stdout); } catch { /* Only fixed diagnostics leave this boundary. */ }
+        if (result.code !== 0 || !value || value.schemaVersion !== 'external-mutation-probe-v1'
+            || value.engine !== engine || typeof value.supported !== 'boolean') {
+            throw new AnalysisStageError('environment', 'mutation-preflight',
+                localize('外部突變引擎預檢失敗，請核對所選 Python、套件版本與平台。'),
+                { requested, reasonCode: 'invalid-probe' });
+        }
+        return value;
+    };
+    // Keep automatic and explicit authorization on the same current adapter
+    // contract. Historical/readable versions and arbitrary mutmut labels do
+    // not establish an implemented, verified execution backend.
+    const supported = (engine: ExternalMutationEngine, value: any) => engine === 'mutatest'
+        && value.supported === true && value.operatorSetVersion === 'mutatest-ast-3.1.0-v2' && value.engineVersion === '3.1.0';
     if (requested === 'auto') {
-        // Priority: mutatest => mutmut => builtin
-        try {
-            const mutatestResult = await probe(['-B', pythonToolPath('externalMutation'), '--probe', 'mutatest']);
-            let val: any;
-            try { val = JSON.parse(mutatestResult.stdout); } catch { /* ignore probe output parse */ }
-            if (mutatestResult.code === 0 && val && val.engine === 'mutatest' && val.supported === true
-                && val.operatorSetVersion === 'mutatest-ast-3.1.0-v2' && val.engineVersion === '3.1.0') {
-                return { ...base, actual: 'mutatest', operatorSetVersion: val.operatorSetVersion, engineVersion: val.engineVersion };
+        for (const engine of ['mutatest', 'mutmut'] as const) {
+            const value = await readProbe(engine);
+            if (supported(engine, value)) {
+                return { ...base, actual: engine, operatorSetVersion: value.operatorSetVersion, engineVersion: value.engineVersion };
             }
-        } catch { /* probe error, continue */ }
-
-        try {
-            const mutmutResult = await probe(['-B', pythonToolPath('externalMutation'), '--probe', 'mutmut']);
-            let val: any;
-            try { val = JSON.parse(mutmutResult.stdout); } catch { /* ignore probe output parse */ }
-            if (mutmutResult.code === 0 && val && val.engine === 'mutmut' && val.supported === true
-                && typeof val.operatorSetVersion === 'string' && val.operatorSetVersion.length > 0) {
-                return { ...base, actual: 'mutmut', operatorSetVersion: val.operatorSetVersion, engineVersion: val.engineVersion };
-            }
-        } catch { /* probe error, continue */ }
-
+        }
         return { ...base, actual: 'builtin', operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION };
     }
-
-    const result = await probe(['-B', pythonToolPath('externalMutation'), '--probe', requested]);
-    let value: any;
-    try { value = JSON.parse(result.stdout); } catch { /* Safe diagnostic below, no arbitrary tool output. */ }
-    if (result.code !== 0 || !value || value.engine !== requested || value.supported !== true) {
+    const value = await readProbe(requested);
+    if (value.supported !== true) {
         const reason = value && typeof value.diagnosticCode === 'string'
             && Object.prototype.hasOwnProperty.call(probeReasons, value.diagnosticCode) ? probeReasons[value.diagnosticCode] : undefined;
         throw new AnalysisStageError('environment', 'mutation-preflight',
             localize(reason || '外部突變引擎預檢失敗，請核對所選 Python、套件版本與平台。'),
             { requested, reasonCode: reason ? value.diagnosticCode : 'invalid-probe' });
     }
-    if (requested !== 'mutatest' || value.operatorSetVersion !== 'mutatest-ast-3.1.0-v2'
-        || value.engineVersion !== '3.1.0') {
+    if (!supported(requested, value)) {
         throw new AnalysisStageError('environment', 'mutation-preflight', localize('外部引擎版本不相容；目前 Mutatest 支援 3.1.0。'));
     }
     return { ...base, actual: requested, operatorSetVersion: value.operatorSetVersion, engineVersion: value.engineVersion };

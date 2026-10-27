@@ -125,7 +125,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
     const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, language: 'en', probeInputFile: 'trace-inputs.json' };
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const originalLanguage = getLanguage();
-    let scenario: 'positive' | 'modified-baseline' | 'review-revision' = 'positive';
+    let scenario: 'positive' | 'modified-baseline' | 'review-revision' | 'review-missing' = 'positive';
     let writers = 0, reviews = 0, qualities = 0;
     let noOpAdditions = 0;
     let ordinaryAdditions = 0;
@@ -164,7 +164,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
         } else if (request.roleInstructions.includes('You are the test Reviewer')) {
             reviews++; wireRoles.push({ role: 'reviewer', prompt: request.prompt });
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
-            if (scenario === 'review-revision' && reviews === 2) {
+            if ((scenario === 'review-revision' || scenario === 'review-missing') && reviews === 2) {
                 const block = request.prompt.match(/<TEST_FILE>\n([\s\S]*?)\n<\/TEST_FILE>/);
                 assert.ok(block);
                 reviewDraft = block[1].split('\n').map((line: string) => line.replace(/^\[L\d+\] /, '')).join('\n');
@@ -175,11 +175,17 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
                 const call = lines[assertionLine].match(/calculate_bmi\([^)]*\)/)?.[0];
                 assert.ok(call);
                 reviewFinding = `Add self.assertIsInstance(${call}, tuple) in this same test method to check the observed tuple container while preserving the existing value assertion and inputs.`;
-                response = JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${assertionLine + 1}`, basis: testCodeBasis(assertionLine + 1),
+                response = JSON.stringify({ findings: [{ category: scenario === 'review-missing' ? 'missing-scenario' : 'assertion-evidence', test_line: `L${assertionLine + 1}`, basis: testCodeBasis(assertionLine + 1),
                     reason: 'The current assertEqual checks value equality, but this exact observed return also needs an explicit tuple container assertion.',
                     action: reviewFinding }] });
                 revisedAddition = 'class Cases:\n' + lines[methodLine] + '\n' + lines[assertionLine]
                     + `\n        self.assertIsInstance(${call}, tuple)\n`;
+                if (scenario === 'review-missing') {
+                    reviewFinding = `Add a separate test checking the observed tuple container for ${call}, preserving every existing family method.`;
+                    response = JSON.stringify({ findings: [{ category: 'missing-scenario', test_line: `L${assertionLine + 1}`, basis: testCodeBasis(assertionLine + 1),
+                        reason: 'This family has no separate container-type scenario for this observed return.', action: reviewFinding }] });
+                    revisedAddition = `class Cases(unittest.TestCase):\n    def test_container(self):\n        self.assertIsInstance(${call}, tuple)\n`;
+                }
                 assert.ok(!revisedAddition.includes('def test_seed('));
             } else {
                 if (scenario === 'review-revision' && reviews === 3) {
@@ -210,7 +216,16 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
         } else {
             assert.doesNotMatch(request.roleInstructions, /Python unittest Bug Fixer/, 'passing baseline and addition need no method repair');
             writers++; wireRoles.push({ role: 'writer', prompt: request.prompt });
-            if (scenario === 'review-revision' && request.prompt.includes('WRITER_METHOD_EDIT_V1')) {
+            if (scenario === 'review-missing' && request.prompt.includes('HOST_REVIEW_FINDINGS_V1')) {
+                reviewRevisionRequests++;
+                assert.ok(request.prompt.includes(reviewDraft));
+                assert.ok(request.prompt.includes(reviewFinding));
+                const feedback = JSON.parse(/HOST_REVIEW_FINDINGS_V1\n([^\n]+)/.exec(request.prompt)![1]);
+                assert.equal(feedback.testHash, evidenceHash(reviewDraft));
+                assert.equal(feedback.methodScope.methodIds.length, 4, 'the reviewed draft includes seed and all three new quality cases');
+                assert.doesNotMatch(request.prompt, /Return the complete corrected unittest file|WRITER_ADDITION_REVISION_V1/);
+                response = fence(revisedAddition);
+            } else if (scenario === 'review-revision' && request.prompt.includes('WRITER_METHOD_EDIT_V1')) {
                 reviewRevisionRequests++;
                 assert.doesNotMatch(request.roleInstructions, /WRITER_CASE_SUBTASK_V1/,
                     'a Reviewer finding repairs its complete unaccepted draft instead of starting a fresh case');
@@ -497,6 +512,29 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
             assert.equal(code, seed.trimEnd());
             assert.notEqual(result.knowledge.terminalStatus, 'passed');
             assert.equal(fs.readFileSync(file, 'utf8'), source);
+        });
+        await t.test('a missing-scenario review adds to the complete current family instead of the older seed', async () => {
+            scenario = 'review-missing'; writers = 0; reviews = 0; qualities = 0; wireRoles.length = 0;
+            microtasks.length = 0; reviewRevisionRequests = 0; reviewDraft = ''; revisedAddition = ''; reviewFinding = '';
+            const outputPath = path.join(root, scenario);
+            await run({ ...params, maxLoops: 2, outputPath });
+            const result = readRun(outputPath);
+            assert.equal(reviewRevisionRequests, 1, JSON.stringify(result.knowledge.lastFailure));
+            assert.equal(reviews, 3);
+            const added = result.events.filter(e => e.stage === 'writer-review-addition' && e.status === 'merged');
+            assert.equal(added.length, 1);
+            assert.equal(added[0].detail.baselineCodeHash, evidenceHash(reviewDraft));
+            assert.notEqual(added[0].detail.baselineCodeHash, evidenceHash(seed.trimEnd()));
+            const code = fs.readFileSync(path.join(result.directory, result.checkpoint.testFile), 'utf8');
+            assert.ok(code.startsWith(reviewDraft), 'every byte of the already executed quality family survives');
+            assert.equal((code.match(/def test_/g) || []).length, 5);
+            assert.match(code, /def test_container/);
+            const approved = result.events.find(e => e.loop === 2 && e.stage === 'reviewer' && e.status === 'approved');
+            const mutation = result.events.find(e => e.loop === 2 && e.stage === 'mutation' && e.status === 'measured');
+            assert.ok(approved && mutation && approved.sequence < mutation.sequence);
+            assert.equal(approved.detail.approvedCodeHash, evidenceHash(code));
+            assert.equal(result.knowledge.mutation.testHash, evidenceHash(code));
+            assert.equal(result.events.filter(e => e.loop === 2 && e.stage === 'scenarios' && e.status === 'observed').length, 2);
         });
         await t.test('a focused family local method edit retains its draft and revalidates exact focus inputs before execution', async () => {
             scenario = 'review-revision'; writers = 0; reviews = 0; qualities = 0; wireRoles.length = 0;

@@ -4,7 +4,7 @@
 
 正式 Reviewer 沒有 missing-scenario，且引用能定位至既有測試方法時，由 `edit_test_methods.py` 建立來源 hash／行號綁定的 AST 計畫。Writer 只回指定方法；Python 核對 header 與方法外 AST，Node 依原 UTF-8 範圍獨立重組位元組。範圍外原文、fixture 與其他方法不重寫，合成不產生 oracle 或授批准。完整原 finding／basis 與基線保留，無效替換沿原額度及計畫補正。
 
-合成後仍走原保留、結構、觀測、native、同候選 Reviewer 與品質 gate；補測家族的精確輸入與物件重放核對也重跑。缺情境／混合 finding、一般結構或 fixture 修訂仍走既有路徑，尚未宣稱第二項全部完成。規格見 `docs/writer-method-edits.md`。
+合成後仍走原保留、結構、觀測、native、同候選 Reviewer 與品質 gate；補測家族的精確輸入與物件重放核對也重跑。純缺情境 finding 使用新增片段合成，完整封包與本次被審候選綁定，拒絕後仍用同一基線補正；多 TestCase 必須明列 fixture owner，不自動選第一個。混合 finding、一般結構或 fixture 修訂仍走既有路徑，尚未宣稱第二項全部完成。規格見 `docs/writer-method-edits.md`。
 
 ## Reviewer 結構化依據契約（2026-10-27）
 

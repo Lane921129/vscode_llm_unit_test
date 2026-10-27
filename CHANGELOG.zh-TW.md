@@ -4,10 +4,21 @@
 
 ## 2026-10-27
 
-### 審查缺情境之局部 AST 增補（目標 2 下半部）
+### Gemini 改進審查與後續修正
+
+- 檢查 `c5753ce`、`e40da17`、`51ce87a`，保留多 TestCase setup 投影、具體輸入差異回饋及 auto 選項。新增回歸先重現4項失敗：auto 吞取消／期限／程序錯誤、無效 probe 被冒當不可用、任意 Mutmut 算子版本獲准，以及多 class 提示預設第一個 owner。
+- auto 與明選共用目前可執行的適配器資格；Mutatest 仍須3.1.0及目前v2算子，Mutmut 尚未完成適配不能憑任意字串授權。正常不支援仍可依序探測／降級，取消、期限、程序或無效 DTO 保持原失敗，明選不默換。修正先前「任何拋錯皆安全回退」的描述。
+- 移除多 TestCase 裸方法自動塞入第一個類別及逐行文字縮排；改要求明列正確 fixture owner 與原 class header，歧義交原有限補正。AST merger 保留 literal 值及原文，不能因包裝而改寫多行字串。
+- 純 missing-scenario 新增綁定本次已執行／被審的完整候選（包含當輪品質新增方法），原完整 findings／basis 跨拒絕重試保留。新增專用輸出範圍去除全檔指令衝突；空新增／改舊方法不進 native，合併工具故障 typed 停止；焦點／重放、成功情境、native、同候選重審及品質門檻不變。
+- 驗證：提示／引擎相關 Node30／30通過；受影響5檔整合初輪44／45，唯一失敗是 BMI 舊攔截階段預期，改核更早 AST 拒絕後單檔1／1及 Python 合成43／43通過。Reviewer 正式流程已涵蓋拒絕後原封包補正，無效片段不進 native；初次新增摘要工具的 import 遺漏已修正並通過後續型別檢查。
+- BMI 品質家族整檔7／7（無略過）通過，新增案例證明純缺情境使用當輪完整4方法候選後新增第5方法，舊品質家族原文不丟失；原方法局部替換、錯焦點攔截與重新審查仍通過。固定回覆搭配真實 Mutatest 量測行10／10、突變39／39、8個保留方法；不代表新的真實 LLM 驗收。
+- 最終原生快測 Node760／760、Python42／42、型別、lint、Webview語法及正式建置通過；Git 差異檢查及追蹤檔／可達歷史密鑰掃描通過。未跑完整274檔 Node／52檔 Python、獨立 Mocha、跨平台或新真實模型驗收；未降低產品 gate。
+- 下列舊增量紀錄為當時快照：局部新增降低輸出工作量，不能保證消除 length／語法失敗，也不能將固定回覆或只進入修復迴圈稱為完整模型驗收。混合 finding、一般 fixture 修訂及其餘通用化目標仍待接續。
+
+### 審查缺情境之局部 AST 增補（目標 2 增量）
 
 - 在 `orchestrator.ts` 擴充 Reviewer 修訂流程：當 Reviewer 回饋僅包含 `missing-scenario` 缺情境時，以當前通過之測試碼為基線（`reviewAdditionBaseline`），將修訂提示切換為極窄的單一 Python 測試方法增補模式（`isAdditionMode`）。
-- 模型僅需產出專注於缺情境的新測試方法，由宿主透過 `mergeWriterTestAddition`（`python_scripts/merge_test_snippets.py`）進行 AST 局部合併與重複過濾，徹底消除以往因 `missing-scenario` 退回全檔重寫而造成的 token 溢出（4096 tokens length）、語法錯誤或破壞既有通過方法之問題。
+- 模型僅需產出專注於缺情境的新測試方法，由宿主透過 `mergeWriterTestAddition`（`python_scripts/merge_test_snippets.py`）進行 AST 局部合併與重複過濾，縮小輸出範圍以降低全檔重寫造成的負擔；未證明所有模型不再截斷或產生語法錯誤。
 - 獨立記錄 `writer-review-addition` 審查增補事件，避免污染品質補測迴圈計數；候選方法庫與清單完整綁定。
 - 整合驗證 `bmiPreservationIntegration.test.js`（涵蓋 weakened 與 dropped 雙場景）通過；全量快測 Node 758/758 及 Python 42/42 通過。
 

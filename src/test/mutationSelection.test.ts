@@ -88,7 +88,7 @@ test('auto selection prioritizes mutatest when probe succeeds', async () => {
     });
 });
 
-test('auto selection probes mutmut when mutatest probe fails and uses it if supported', async () => {
+test('auto selection cannot authorize the unimplemented mutmut adapter from an arbitrary operator version', async () => {
     const probed: string[] = [];
     const selected = await selectMutationEngine('auto', 2, async args => {
         const engine = args[args.indexOf('--probe') + 1];
@@ -104,10 +104,9 @@ test('auto selection probes mutmut when mutatest probe fails and uses it if supp
     assert.deepEqual(probed, ['mutatest', 'mutmut']);
     assert.deepEqual(selected, {
         requested: 'auto',
-        actual: 'mutmut',
+        actual: 'builtin',
         workers: 2,
-        engineVersion: '3.7.0',
-        operatorSetVersion: 'mutmut-ast-v1',
+        operatorSetVersion: 'builtin-ast-v3',
         executionBackend: 'isolated-unittest-v1'
     });
 });
@@ -129,15 +128,25 @@ test('auto selection falls back to builtin when external engines are unsupported
     });
 });
 
-test('auto selection gracefully falls back to builtin when probe throws', async () => {
-    const selected = await selectMutationEngine('auto', 2, async () => {
-        throw new Error('spawn failure');
-    });
-    assert.deepEqual(selected, {
-        requested: 'auto',
-        actual: 'builtin',
-        workers: 2,
-        operatorSetVersion: 'builtin-ast-v3',
-        executionBackend: 'isolated-unittest-v1'
-    });
+test('auto selection preserves cancellation, deadlines and tool failures without launching another probe', async () => {
+    for (const failure of [new Error('spawn failure'), Object.assign(new Error('cancelled'), { name: 'AbortError' }),
+        new AnalysisStageError('timeout', 'mutation-preflight', 'deadline exhausted'),
+        new AnalysisStageError('validation', 'source-changed', 'identity drift')]) {
+        let calls = 0;
+        await assert.rejects(selectMutationEngine('auto', 2, async () => { calls++; throw failure; }), error => error === failure);
+        assert.equal(calls, 1);
+    }
+});
+
+test('auto selection rejects malformed probe output instead of disguising tool corruption as unavailability', async () => {
+    for (const result of [{ code: 1, stdout: JSON.stringify(validProbe) }, { code: 0, stdout: 'private tool text' },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, schemaVersion: 'old' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'other' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, supported: 'false' }) }]) {
+        let calls = 0;
+        await assert.rejects(selectMutationEngine('auto', 2, async () => { calls++; return result; }),
+            (error: unknown) => error instanceof AnalysisStageError && error.stage === 'mutation-preflight'
+                && !error.message.includes('private tool text'));
+        assert.equal(calls, 1);
+    }
 });

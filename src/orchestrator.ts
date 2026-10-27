@@ -22,7 +22,7 @@ import { semanticWithContractRepair } from './roles/semanticContractRepair';
 import { buildReviewFacts, buildReviewerEvidenceDiagnostic } from './roles/reviewFacts';
 import { formatModelRequestTimeout } from './pipeline/modelRequestTimingPresentation';
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
-import { passingTestIds } from './validation/repairFeedback';
+import { passingTestIds, summarizeRepairOutput } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt, buildWriterAdditionRevisionPrompt,
     buildWriterAdditionSystemPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
     selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from './roles/writerPhases';
@@ -1714,7 +1714,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     }>();
     const reviewerCorrectionScopes = new Map<string, readonly string[]>();
     const reviewerMethodEdits = new Map<string, { plan: WriterMethodEditPlan; lineRefs: number[]; feedback: WriterReviewFeedback }>();
-    const methodEditRejections = new Map<string, { reason: string; reasonCode: string }>();
+    const reviewerAdditions = new Map<string, WriterReviewFeedback>();
+    const reviewEditRejections = new Map<string, { reason: string; reasonCode: string }>();
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
@@ -2665,21 +2666,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 return lastCaseAddition;
             },
             merge: async (accumulator, addition) => {
-                let merged = await mergeWriterTestAddition({ baseline: accumulator, addition,
+                const merged = await mergeWriterTestAddition({ baseline: accumulator, addition,
                     python: pythonExecutable, env: testExecutionEnv });
-                if (!merged.ok && merged.reasonCode === 'ambiguous-addition-target') {
-                    const targetClass = baselineContext.ok ? baselineContext.methodIds[0].split('.')[0] : undefined;
-                    if (targetClass) {
-                        const rawCode = extractWriterAdditionCode(addition);
-                        const wrappedAddition = `class ${targetClass}(unittest.TestCase):\n`
-                            + rawCode.split(/\r?\n/).map(line => line.trim() ? `    ${line}` : '').join('\n') + '\n';
-                        const retry = await mergeWriterTestAddition({ baseline: accumulator, addition: wrappedAddition,
-                            python: pythonExecutable, env: testExecutionEnv });
-                        if (retry.ok) {
-                            merged = retry;
-                        }
-                    }
-                }
                 if (!merged.ok && merged.reasonCode === 'merge-tool-error') {
                     throw new AnalysisStageError('validation', 'writer-addition-tool', 'Writer case composition did not complete.');
                 }
@@ -3991,6 +3979,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     reviewerRevisionWorkloads.delete(evidenceHash(code));
                     reviewerCorrectionScopes.delete(evidenceHash(code));
                     reviewerMethodEdits.delete(evidenceHash(code));
+                    reviewerAdditions.delete(evidenceHash(code));
                     if (!mayUseModelAuthoredReview) {
                         recordRole('reviewer', 'unqualified', {});
                         return undefined;
@@ -4079,28 +4068,35 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRole('writer-method-edit', 'planned', { baselineHash: plan.baselineHash,
                             planHash: plan.planHash, methodCount: plan.methods.length });
                     }
-                    const isPureMissingScenario = Boolean(matchedReview?.feedback.findings.length
-                        && matchedReview.feedback.findings.every(f => f.category === 'missing-scenario'));
-                    const reviewAdditionBaseline = isPureMissingScenario ? (writerAdditionBaseline || code) : writerAdditionBaseline;
-                    const isAdditionMode = role === 'writer' && Boolean(reviewAdditionBaseline) && !methodEdit;
+                    if (role === 'writer' && matchedReview?.feedback.findings.every(f => f.category === 'missing-scenario')) {
+                        reviewerAdditions.set(workloadKey, matchedReview.feedback);
+                    }
+                    const reviewAddition = role === 'writer' ? reviewerAdditions.get(workloadKey) : undefined;
+                    // Review belongs to this exact executed candidate, including
+                    // any new quality tests already present. A rejected fragment
+                    // retains this feedback and baseline for the bounded retry.
+                    const isAdditionMode = Boolean(reviewAddition) && !methodEdit;
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : methodEdit ? 'You are the test Writer. Revise the current tests only through WRITER_METHOD_EDIT_V1. Preserve passing inputs and verified assertions. Return one Python fence containing exactly the planned methods in their existing class-name wrappers. Keep signatures, decorators and async status. No module imports, fixtures, new methods or unrelated code; necessary imports may be method-local. Do not invent requirements, mock the target, weaken assertions or perform direct I/O.'
-                        : isAdditionMode ? 'You are the test Writer. Revise the current tests by adding only the focused Python test method(s) for the missing scenario(s). Return one Python code fence containing only the new test method(s). Do not return or rewrite passing tests; the host will merge your addition into the executed baseline.'
+                        : isAdditionMode ? 'You are the test Writer. Revise the current tests by adding only the focused Python test method(s) for the missing scenario(s). Return one Python code fence containing only the addition, using the exact existing class header for its fixture owner. A bare method requires exactly one TestCase. Do not return or rewrite passing tests; the host will merge your addition into the current executed candidate.'
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
                     let prompt = role === 'bug-fixer' ? repairContext(code, failure)
                         : buildWriterRevisionRequest({
                             code,
-                            findings: methodEdit ? JSON.stringify(methodEdit.feedback.findings) : failure,
-                            reviewFeedback: methodEdit?.feedback ?? matchedReview?.feedback,
-                            outputScope: methodEdit ? 'method-replacements' : undefined,
+                            findings: methodEdit ? JSON.stringify(methodEdit.feedback.findings)
+                                : reviewAddition ? JSON.stringify(reviewAddition.findings) : failure,
+                            reviewFeedback: methodEdit?.feedback ?? reviewAddition ?? matchedReview?.feedback,
+                            outputScope: methodEdit ? 'method-replacements' : isAdditionMode ? 'test-additions' : undefined,
                             moduleName: targetImportModule,
                             functionName: targetFuncName,
                             evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
                                 source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
                                 allowedMockTargets: sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`) })
                         });
-                    if (role === 'writer' && reviewAdditionBaseline && !methodEdit) {
-                        prompt = buildWriterAdditionRevisionPrompt(prompt, reviewAdditionBaseline, code, failure);
+                    if (isAdditionMode && !matchedReview) {
+                        prompt += '\nPREVIOUS ADDITION REJECTION:\n' + summarizeRepairOutput(failure, 1500);
+                    } else if (role === 'writer' && writerAdditionBaseline && !methodEdit && !isAdditionMode) {
+                        prompt = buildWriterAdditionRevisionPrompt(prompt, writerAdditionBaseline, code, failure);
                     }
                     if (methodEdit) {
                         prompt = buildWriterMethodEditPrompt(prompt, methodEdit.plan,
@@ -4108,7 +4104,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     } else if (correctionMethods) { prompt = buildWriterReviewCorrectionPrompt(prompt); }
                     // requestBudgeted checks the final prompt, including numeric/resource
                     // evidence, and records a stage-owned failure without Tier fallback.
-                    const revisionWorkload = matchedReview?.workload ?? { findingCount: methodEdit?.feedback.findings.length ?? 1, missingScenarioCount: 0 };
+                    const revisionWorkload = matchedReview?.workload ?? { findingCount: methodEdit?.feedback.findings.length ?? reviewAddition?.findings.length ?? 1,
+                        missingScenarioCount: reviewAddition?.findings.length ?? 0 };
                     reviewerRevisionWorkloads.delete(workloadKey);
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(
@@ -4139,7 +4136,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throwIfExecutionCancelled();
                         completedOutputDiagnostics.delete(evidenceHash(raw));
                         if (!applied.ok) {
-                            methodEditRejections.set(`${workloadKey}:${evidenceHash(replacement)}`, {
+                            reviewEditRejections.set(`${workloadKey}:${evidenceHash(replacement)}`, {
                                 reasonCode: applied.reasonCode,
                                 reason: 'Scoped method replacement rejected: ' + applied.reasonCode
                                     + '. Return exactly the original planned methods; keep every other method and fixture with the host.' });
@@ -4152,26 +4149,30 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             ({ className: method.className, name: method.name })), 'writer-revision');
                         recordRole('writer-method-edit', 'applied', { baselineHash: methodEdit.plan.baselineHash,
                             planHash: methodEdit.plan.planHash, codeHash: evidenceHash(candidate), changedMethodCount: applied.changedMethodIds.length });
-                    } else if (reviewAdditionBaseline && !methodEdit) {
+                    } else if (isAdditionMode) {
                         const addition = extractWriterAdditionCode(raw);
-                        await recordCandidateMethods(addition, 'generated', 'writer-revision', reviewAdditionBaseline);
-                        const merged = await mergeWriterTestAddition({ baseline: reviewAdditionBaseline,
+                        await recordCandidateMethods(addition, 'generated', 'writer-revision', code);
+                        const merged = await mergeWriterTestAddition({ baseline: code,
                             addition, python: pythonExecutable, env: testExecutionEnv });
                         throwIfExecutionCancelled();
                         completedOutputDiagnostics.delete(evidenceHash(raw));
-                        if (!merged.ok) {
-                            additionRejections.set(evidenceHash(addition), {
-                                gate: 'revision-scope', reasonCode: merged.reasonCode,
-                                reason: 'Review addition rejected: ' + merged.reasonCode
+                        if (!merged.ok && merged.reasonCode === 'merge-tool-error') {
+                            throw new AnalysisStageError('validation', 'writer-addition-tool', 'Review addition composition did not complete.');
+                        }
+                        if (!merged.ok || merged.addedMethodsCount === 0) {
+                            const reasonCode = merged.ok ? 'writer-review-addition-empty' : merged.reasonCode;
+                            reviewEditRejections.set(`${workloadKey}:${evidenceHash(addition)}`, {
+                                reasonCode,
+                                reason: 'Review addition rejected: ' + reasonCode
                                     + '. Return only the new test method; keep every existing passing method and fixture with the host.' });
-                            recordRole('writer-review-addition', 'rejected', { reasonCode: merged.reasonCode,
-                                baselineCodeHash: evidenceHash(reviewAdditionBaseline), additionCodeHash: evidenceHash(addition) });
+                            recordRole('writer-review-addition', 'rejected', { reasonCode,
+                                baselineCodeHash: workloadKey, additionCodeHash: evidenceHash(addition) });
                             return addition;
                         }
                         candidate = await prepareWriterCandidate(merged.mergedCode, 'writer-revision', attempt, true);
-                        bindSingleAdditionInventory(addition, candidate, reviewAdditionBaseline, merged.addedMethods, 'writer-revision');
-                        recordRole('writer-review-addition', 'merged', { baselineCodeHash: evidenceHash(reviewAdditionBaseline),
-                            additionCodeHash: evidenceHash(addition), addedMethodsCount: merged.addedMethodsCount });
+                        bindSingleAdditionInventory(addition, candidate, code, merged.addedMethods, 'writer-revision');
+                        recordRole('writer-review-addition', 'merged', { baselineCodeHash: workloadKey,
+                            additionCodeHash: evidenceHash(addition), codeHash: evidenceHash(candidate), addedMethodsCount: merged.addedMethodsCount });
                     } else { candidate = await prepareWriterCandidate(raw, 'writer-revision', attempt); }
                     if (correctionMethods) {
                         const methods = methodInventories.get(evidenceHash(candidate));
@@ -4191,7 +4192,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     return candidate;
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
-                    const rejectedEdit = methodEditRejections.get(`${evidenceHash(previousCode)}:${evidenceHash(candidateCode)}`);
+                    const rejectedEdit = reviewEditRejections.get(`${evidenceHash(previousCode)}:${evidenceHash(candidateCode)}`);
                     if (rejectedEdit) { return rejectedEdit; }
                     const preservePassed = () => checkPreservation(previousCode, candidateCode,
                         passingExecutions.get(evidenceHash(previousCode)) || []);

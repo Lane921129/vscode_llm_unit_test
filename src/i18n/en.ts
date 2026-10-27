@@ -14,7 +14,7 @@ export default {
         mutationMutatest: "Mutatest (external mutation rules)",
         mutationMutmut: "Mutmut (integration not yet available)",
         mutationWorkers: "Parallel mutation workers (1–4)",
-        mutationEngineHint: "Auto-detect prioritizes Mutatest 3.1.0, then Mutmut, then built-in. Mutmut isolated integration is not yet available; preflight stops the run. If an engine is explicitly specified, it is never silently replaced.",
+        mutationEngineHint: "Auto uses verified external adapters when available, otherwise built-in. Mutatest 3.1.0 is supported; the Mutmut adapter is unavailable. An explicit engine is never replaced. Cancellation and failed checks stop the run.",
         testFocus: "Test focus",
         requireRoleQualification: "Require role qualification before starting (optional)",
         roleQualificationHint: "Off by default. You can generate without testing the connection first. Actual execution, Reviewer approval and quality checks still apply.",

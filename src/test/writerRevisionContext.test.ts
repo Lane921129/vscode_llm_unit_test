@@ -56,6 +56,11 @@ test('complete bound Reviewer findings and method scope survive Writer handoff a
     }
     const addition = { ...feedback, findings: feedback.findings.map(item => ({ ...item, category: 'missing-scenario' as const })),
         methodScope: { ...feedback.methodScope, mode: 'allow-additions' as const } };
+    const additionPrompt = buildWriterRevisionRequest({ ...request, reviewFeedback: addition, findings: JSON.stringify(addition.findings),
+        outputScope: 'test-additions' });
+    assert.match(additionPrompt, /Return only new test methods/);
+    assert.doesNotMatch(additionPrompt, /Return the complete corrected unittest file/);
+    assert.throws(() => buildWriterRevisionRequest({ ...request, outputScope: 'test-additions' }), AnalysisStageError);
     assert.match(buildWriterRevisionRequest({ ...request, reviewFeedback: addition, findings: JSON.stringify(addition.findings) }),
         /"mode":"allow-additions"/);
 });

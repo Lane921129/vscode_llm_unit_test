@@ -200,6 +200,13 @@ test('an original baseline prefix in a larger unapproved candidate is supplied a
     assert.match(prompt, /host merges with that original baseline, not with this failed draft/);
 });
 
+test('multiple fixture owners require an explicit class wrapper and never default to the first class', () => {
+    const prompt = buildWriterCaseAdditionPrompt('evidence', 'import unittest\nclass First(unittest.TestCase):\n    pass\nclass Second(unittest.TestCase):\n    pass',
+        'hash', ['First.test_one', 'Second.test_two'], 'case');
+    assert.match(prompt, /explicit class-name wrapper/);
+    assert.doesNotMatch(prompt, /Target First|return the test method directly for the host to attach/);
+});
+
 test('plain source substrings cannot masquerade as complete supplied baseline or draft units', () => {
     const baseline = 'import unittest\nclass Cases(unittest.TestCase):\n    def test_seed(self):\n        self.assertEqual(1, 1)';
     const current = baseline + '\n    def test_new(self):\n        self.assertEqual(2, 2)';

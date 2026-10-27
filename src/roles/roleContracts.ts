@@ -47,7 +47,7 @@ export function buildWriterRevisionRequest(input: {
     functionName: string;
     evidence: string;
     reviewFeedback?: WriterReviewFeedback;
-    outputScope?: 'method-replacements';
+    outputScope?: 'method-replacements' | 'test-additions';
 }): string {
     const feedback = input.reviewFeedback;
     if (feedback && (feedback.version !== 'writer-review-feedback-v1'
@@ -62,6 +62,10 @@ export function buildWriterRevisionRequest(input: {
         || new Set(feedback.methodScope.methodIds).size !== feedback.methodScope.methodIds.length)) {
         throw new AnalysisStageError('validation', 'writer-review-feedback', 'Review feedback does not match this candidate and findings.',
             { reasonCode: 'review-feedback-identity-mismatch' });
+    }
+    if (input.outputScope === 'test-additions' && (!feedback
+        || !feedback.findings.every(item => item.category === 'missing-scenario'))) {
+        throw new AnalysisStageError('validation', 'writer-review-feedback', 'Addition-only scope requires bound missing-scenario findings.');
     }
     // Structured review evidence is indivisible. The final request budget must
     // accommodate the whole packet or reject it; never summarize nested JSON.
@@ -88,5 +92,7 @@ ${referenceRepeatedTestFile(input.evidence, input.code)}
 RESPONSE:
 ${input.outputScope === 'method-replacements'
     ? 'Return only the methods named by WRITER_METHOD_EDIT_V1, inside their existing class-name wrappers in one Python fence. Keep signatures and decorators; no module imports, fixtures, new methods or unrelated code.'
+    : input.outputScope === 'test-additions'
+        ? 'Return only new test methods for the bound missing scenarios in one Python fence. Use an existing class wrapper with its exact header to inherit fixtures; a bare method requires a unique TestCase. Keep every current method, import and fixture unchanged with the host; new imports must not conflict. The composition still requires execution and fresh review.'
     : 'Return the complete corrected unittest file. Preserve passing tests and verified assertions. Address only the supplied findings; do not invent behavior.'}`;
 }

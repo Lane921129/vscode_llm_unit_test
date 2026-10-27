@@ -157,7 +157,7 @@ export function buildWriterCaseAdditionPrompt(evidencePrompt: string, contextCod
     baselineHash: string, methodIds: readonly string[], gap: string): string {
     const classNames = Array.from(new Set(methodIds.map(id => id.split('.')[0])));
     const classHint = classNames.length > 1
-        ? `\nThe baseline contains multiple test classes (${classNames.join(', ')}). Target ${classNames[0]} (e.g. \`class ${classNames[0]}(unittest.TestCase):\`) or return the test method directly for the host to attach.\n`
+        ? `\nThe baseline contains multiple test classes (${classNames.join(', ')}). Choose the appropriate fixture owner and return an explicit class-name wrapper with its exact original base. A bare method is ambiguous; the host will not choose its class.\n`
         : '';
     return `${evidencePrompt}\n\nWRITER_CASE_ADDITION_V1\n`
         + 'BASELINE SETUP CONTEXT (AST projection only; existing test bodies remain unchanged with the host):\n'

@@ -141,8 +141,11 @@ class Cases(unittest.TestCase):
             assert.equal(writers, scenario === 'weakened' ? 1 : 2, diagnostic);
             assert.equal(fixes, scenario === 'weakened' ? 0 : 1, diagnostic);
             const rejected = events.filter(event => event.stage === 'passing-tests' && event.status === 'preservation-rejected');
-            assert.equal(rejected.length, scenario === 'weakened' ? 1 : 0, diagnostic);
-            assert.ok(rejected.every(event => event.detail.reasonCode === 'assertion-weakened'));
+            assert.equal(rejected.length, 0, diagnostic);
+            const scopeRejected = events.filter(event => event.stage === 'writer-review-addition' && event.status === 'rejected');
+            assert.equal(scopeRejected.length, scenario === 'weakened' ? 1 : 0, diagnostic);
+            assert.ok(scopeRejected.every(event => event.detail.reasonCode === 'existing-test-method-changed'),
+                'AST addition scope rejects an edit to the retained assertion before any candidate execution');
             if (scenario === 'dropped') {
                 const merged = events.filter(event => event.stage === 'writer-addition' && event.status === 'merged');
                 assert.equal(merged.length, 1, diagnostic);
