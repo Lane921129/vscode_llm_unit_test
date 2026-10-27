@@ -4,6 +4,13 @@
 
 ## 2026-10-27
 
+### 多 TestCase 最小 Setup 投影與具體輸入差異反饋
+
+- 擴展 `merge_test_snippets.py` 的 `project_addition_context` 與 `testMerger.ts` 的 `projectWriterAdditionContext`，支援至多32個 `unittest.TestCase` 類別骨架與合法 `setUp` 投影；隱藏舊 `test_*` 方法與具體數值，避免多 class 基線回傳 `addition-context-unsupported` 退回整份基線造成跨案例輸入複製污染。有害反射、全域污染、Mock patch 或未授權夾具仍維持保守退回全基線。
+- 在 `qualityTaskEvidence.ts` 新增 `qualityFocusInputMismatchDetail` 與 `formatQualityFocusInputMismatch`，計算並格式化要求呼叫與模型實際寫出呼叫之具體差異；在 `focusedWriterAdditions.ts` 與 `orchestrator.ts` 遇到 `quality-focus-input-mismatch` 時，將「要求呼叫 vs. 實際寫出呼叫」直接注入契約修正提示，阻斷小模型跨案例複製輸入的盲目重試。
+- 在 `orchestrator.ts` 的 `composeFocusedWriterAdditions.merge` 增加多 TestCase 下裸方法（bare test method）自動包裝至基線 target class 之容錯合併，並於 `buildWriterCaseAdditionPrompt` 增補多 class 目標提示。
+- 相關回歸 Node58／58、Python43／43通過；全量快測 Node754／754、Python42／42、Webview 語法、型別檢查與 lint 通過。本機 Ollama 實跑 `qwen2.5-coder:3b-instruct` 驗證，成功走過真實端到端 AST、提示容量、沙箱執行與 Bug-fixer 修訂迴圈。
+
 ### 來源綁定的 Writer 局部方法替換
 
 - 新增只解析 AST 的 edit_test_methods.py 與 Node 交接器，計畫綁 baseline／plan hash、原 finding 行號、方法身份及 UTF-8 範圍；模型只回指定方法，簽名／decorator／async 保持 AST 一致。Python 核方法外 AST，Node 獨立重組位元組；範圍外原文、其他方法與 fixture 保留，不生成測值、expected 或執行批准。

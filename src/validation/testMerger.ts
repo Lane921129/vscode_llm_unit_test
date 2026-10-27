@@ -48,12 +48,22 @@ export async function projectWriterAdditionContext(options: {
                 }
                 const methodId = /^[\p{ID_Start}_][\p{ID_Continue}]*\.test_[\p{ID_Continue}]+$/u;
                 const baselineHash = createHash('sha256').update(options.baseline, 'utf8').digest('hex');
+                const classNames = new Set<string>(Array.isArray(value.methodIds)
+                    ? value.methodIds.filter((id: unknown): id is string => typeof id === 'string').map((id: string) => id.split('.')[0])
+                    : []);
+                const contextClasses = new Set<string>(
+                    typeof value.contextCode === 'string'
+                        ? Array.from((value.contextCode as string).matchAll(/^class\s+([\p{ID_Start}_][\p{ID_Continue}]*)\s*\(/gmu)).map(m => m[1])
+                        : []
+                );
                 if (value.ok === true && typeof value.contextCode === 'string' && value.contextCode.trim()
                     && Buffer.byteLength(value.contextCode, 'utf8') <= 1024 * 1024 && value.baselineHash === baselineHash
                     && Array.isArray(value.methodIds) && value.methodIds.length > 0 && value.methodIds.length <= 256
                     && value.methodIds.every((id: unknown) => typeof id === 'string' && methodId.test(id))
                     && new Set(value.methodIds).size === value.methodIds.length
-                    && new Set(value.methodIds.map((id: string) => id.split('.')[0])).size === 1) {
+                    && classNames.size >= 1 && classNames.size <= 32
+                    && contextClasses.size === classNames.size
+                    && Array.from(classNames).every(name => contextClasses.has(name))) {
                     return { ok: true, contextCode: value.contextCode, methodIds: value.methodIds, baselineHash };
                 }
             }

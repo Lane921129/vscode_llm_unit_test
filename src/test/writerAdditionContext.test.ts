@@ -43,12 +43,13 @@ test('standard unittest aliases and exact optional main guard remain prompt-only
 });
 
 test('fixture, decorator, helper, reflection and ambiguous binding preserve the full-view fallback reason', async () => {
-    const variants = [baseline.replace('    def test_original', '    def setUp(self): self.fixture = 1\n    def test_original'),
+    const variants = [baseline.replace('    def test_original', '    def tearDown(self): pass\n    def test_original'),
+        baseline.replace('    def test_original', '    def setUp(self): getattr(self, "fixture")\n    def test_original'),
         baseline.replace('    def test_original', '    @classmethod\n    def test_original'),
         baseline.replace('    def test_original', '    def helper(self): pass\n    def test_original'),
         baseline.replace('target(987.654, 123.456)', 'getattr(self, "test_例外")()'),
         baseline.replace('target(987.654, 123.456)', 'self.test_例外()'),
-        baseline + '\nclass Other(unittest.TestCase):\n    def test_other(self): pass\n',
+        baseline + '\n' + baseline,
         baseline.replace('test_例外(self)', 'test_original(self)'),
         'import unittest as controlled\nfrom unrelated import controlled\n' + baseline.replace('unittest.TestCase', 'controlled.TestCase'),
         ('import neutral_state as state\n' + baseline).replace('    def test_original(self):',
@@ -61,6 +62,22 @@ test('fixture, decorator, helper, reflection and ambiguous binding preserve the 
         assert.deepEqual(result, { ok: false, reasonCode: 'addition-context-unsupported' });
         assert.equal(code.includes('old-answer-987'), true, 'projection never mutates the caller baseline');
     }
+});
+
+test('multiple TestCase classes and setUp fixtures are preserved with test values hidden', async () => {
+    const multiBaseline = baseline.replace('    def test_original', '    def setUp(self): self.fixture = 1\n    def test_original')
+        + '\nclass Other(unittest.TestCase):\n    def test_other(self): self.assertEqual(target(1, 2), "other")\n';
+    const result = await projectWriterAdditionContext({ baseline: multiBaseline, python });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.deepEqual(result.methodIds, ['Cases.test_original', 'Cases.test_例外', 'Other.test_other']);
+    assert.ok(result.contextCode.includes('class Cases(unittest.TestCase):'));
+    assert.ok(result.contextCode.includes('class Other(unittest.TestCase):'));
+    assert.ok(result.contextCode.includes('def setUp(self):'));
+    assert.ok(result.contextCode.includes('self.fixture = 1'));
+    assert.ok(!result.contextCode.includes('test_original'));
+    assert.ok(!result.contextCode.includes('test_other'));
+    assert.ok(!result.contextCode.includes('old-answer-987'));
+    assert.ok(!result.contextCode.includes('assertEqual'));
 });
 
 test('new method composition retains the original baseline bytes, methods and preservation checks', async () => {

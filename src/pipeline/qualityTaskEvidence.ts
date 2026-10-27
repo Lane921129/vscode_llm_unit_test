@@ -177,6 +177,46 @@ export function qualityFocusInputDiagnostic(facts: ReviewFacts, evidence: Qualit
     return undefined;
 }
 
+export function renderTraceCallForDiagnostic(target: string, call: TraceValueSnapshot, spellings?: string[]): string {
+    const fields = typedCallFields(call);
+    if (fields) {
+        const args = (fields.args.items || []).map(value => traceValuePythonLiteral(value as TraceValue));
+        const entries = (fields.kwargs.items || []) as Array<{ key: TraceValue; value: TraceValue }>;
+        const kwargs = entries.map(({ key, value }) => [key.value, traceValuePythonLiteral(value)] as const);
+        if (!args.some(v => v === undefined) && !kwargs.some(([k, v]) => typeof k !== 'string' || v === undefined)) {
+            const keywordArgs = kwargs.every(([k]) => pythonIdentifier(k))
+                ? kwargs.map(([k, v]) => `${k}=${v}`)
+                : [`**{${kwargs.map(([k, v]) => `${JSON.stringify(k)}: ${v}`).join(', ')}}`];
+            return `${target}(${[...args, ...keywordArgs].join(', ')})`;
+        }
+    }
+    if (spellings && spellings.length > 0 && spellings[0]) {
+        return spellings[0];
+    }
+    return `${target}(...)`;
+}
+
+export interface QualityFocusInputMismatchDetail {
+    expectedCalls: string[];
+    actualCalls: string[];
+}
+
+export function qualityFocusInputMismatchDetail(facts: ReviewFacts, evidence: QualityTaskEvidence,
+    baselineMethodIds: readonly string[]): QualityFocusInputMismatchDetail {
+    const baseline = new Set(baselineMethodIds);
+    const calls = facts.methods.filter(item => !baseline.has(item.name)).flatMap(method => method.calls);
+    const actualCalls = calls.map(c => renderTraceCallForDiagnostic(evidence.target, c.call, c.spellings));
+    const expectedCalls = evidence.cases.map(item => observedTargetCallForPrompt(evidence.target, item.input))
+        .filter((val): val is string => typeof val === 'string');
+    return { expectedCalls, actualCalls };
+}
+
+export function formatQualityFocusInputMismatch(detail: QualityFocusInputMismatchDetail): string {
+    const expected = detail.expectedCalls.length ? detail.expectedCalls.join(', ') : 'unknown';
+    const actual = detail.actualCalls.length ? detail.actualCalls.join(', ') : 'no call found';
+    return `Expected target call: ${expected}, but actual written call was: ${actual}. Do not copy arguments from other test cases or prior baselines; write ONLY the current required call.`;
+}
+
 /** Only exclude inputs already spelled as the same complete literal call in
  * passed tests. Unknown calls remain eligible; survivors are never removed. */
 export function qualityInputAlreadyTested(input: ScalarProbeInput, calls: readonly TraceValueSnapshot[]): boolean {

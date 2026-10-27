@@ -405,13 +405,13 @@ def project_addition_context(baseline):
 
     imports = []
     bindings = {}
-    test_node = None
+    test_nodes = []
     known_modules = set()
     known_cases = set()
     saw_main = False
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            if test_node is not None or saw_main:
+            if test_nodes or saw_main:
                 return reject('addition-context-unsupported')
             try:
                 names = imported_names(node)
@@ -432,37 +432,56 @@ def project_addition_context(baseline):
                 known_cases.update(item.asname or item.name for item in node.names if item.name == 'TestCase')
             continue
         if isinstance(node, ast.ClassDef):
-            if test_node is not None:
-                return reject('addition-context-unsupported')
-            if saw_main or node.name in bindings or node.decorator_list or node.keywords or getattr(node, 'type_params', []):
+            if saw_main or node.name in bindings or node.name in {c.name for c in test_nodes} or node.decorator_list or node.keywords or getattr(node, 'type_params', []):
                 return reject('addition-context-unsupported')
             allowed_bases = known_cases | {name + '.TestCase' for name in known_modules}
             if len(node.bases) != 1 or ast.unparse(node.bases[0]) not in allowed_bases:
                 return reject('addition-context-unsupported')
-            test_node = node
+            if len(test_nodes) >= 32:
+                return reject('addition-context-unsupported')
+            test_nodes.append(node)
             continue
-        if test_node is not None and not saw_main and main_guard(node, known_modules):
+        if test_nodes and not saw_main and main_guard(node, known_modules):
             call = node.body[0].value
             if call.args or call.keywords:
                 return reject('addition-context-unsupported')
             saw_main = True
             continue
         return reject('addition-context-unsupported')
-    if test_node is None or not 1 <= len(test_node.body) <= 256:
+    if not test_nodes:
         return reject('addition-context-unsupported')
 
-    method_names = []
-    for node in test_node.body:
-        if not isinstance(node, ast.FunctionDef) or not node.name.startswith('test_') or len(node.name) <= 5:
+    method_ids = []
+    for test_node in test_nodes:
+        if not 1 <= len(test_node.body) <= 256:
             return reject('addition-context-unsupported')
-        args = node.args
-        if (node.decorator_list or node.returns or getattr(node, 'type_params', []) or args.posonlyargs
-                or len(args.args) != 1 or args.args[0].arg != 'self' or args.args[0].annotation
-                or args.vararg or args.kwarg or args.kwonlyargs or args.defaults or args.kw_defaults):
+        class_method_names = []
+        has_setup = False
+        for node in test_node.body:
+            if not isinstance(node, ast.FunctionDef):
+                return reject('addition-context-unsupported')
+            args = node.args
+            if (node.decorator_list or node.returns or getattr(node, 'type_params', []) or args.posonlyargs
+                    or len(args.args) != 1 or args.args[0].arg != 'self' or args.args[0].annotation
+                    or args.vararg or args.kwarg or args.kwonlyargs or args.defaults or args.kw_defaults):
+                return reject('addition-context-unsupported')
+            if node.name == 'setUp':
+                if has_setup:
+                    return reject('addition-context-unsupported')
+                has_setup = True
+            elif node.name.startswith('test_') and len(node.name) > 5:
+                if node.name in class_method_names:
+                    return reject('addition-context-unsupported')
+                class_method_names.append(node.name)
+                method_ids.append(f"{test_node.name}.{node.name}")
+            else:
+                return reject('addition-context-unsupported')
+        if not class_method_names:
             return reject('addition-context-unsupported')
-        if node.name in method_names:
-            return reject('addition-context-unsupported')
-        method_names.append(node.name)
+
+    if not 1 <= len(method_ids) <= 256:
+        return reject('addition-context-unsupported')
+
     reflective_names = {'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars', 'eval', 'exec',
                         '__import__', 'compile'}
     fixture_names = {'patch', 'Mock', 'MagicMock', 'AsyncMock', 'PropertyMock', 'create_autospec', 'mock_open'}
@@ -472,28 +491,36 @@ def project_addition_context(baseline):
                          if identity[0] == 'from' and identity[1:3] == (0, 'unittest.mock') and identity[3] in fixture_names)
     reflective_attrs = {'__dict__', '__class__', '__getattribute__', '__getattr__', '__setattr__',
                         '__subclasses__', '__bases__', '__mro__', '__code__', '__globals__', '__closure__'}
-    blocked_names = reflective_names | fixture_names | set(method_names) | {test_node.name}
-    blocked_attrs = reflective_attrs | reflective_names | fixture_names | set(method_names)
-    for method in test_node.body:
-        for node in ast.walk(method):
-            if ((isinstance(node, (ast.Global, ast.Nonlocal, ast.ClassDef, ast.AsyncFunctionDef)))
-                    or (isinstance(node, ast.FunctionDef) and node is not method)
-                    or (isinstance(node, ast.Name) and node.id in blocked_names)
-                    or (isinstance(node, ast.Attribute) and node.attr in blocked_attrs)):
-                return reject('addition-context-unsupported')
-            if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
-                owner = node.value
-                while isinstance(owner, (ast.Attribute, ast.Subscript)):
-                    owner = owner.value
-                if isinstance(owner, ast.Name) and owner.id in bindings:
+    all_method_names = {mid.split('.')[1] for mid in method_ids} | {'setUp'}
+    all_class_names = {c.name for c in test_nodes}
+    blocked_names = reflective_names | fixture_names | all_method_names | all_class_names
+    blocked_attrs = reflective_attrs | reflective_names | fixture_names | all_method_names
+    for test_node in test_nodes:
+        for method in test_node.body:
+            for node in ast.walk(method):
+                if ((isinstance(node, (ast.Global, ast.Nonlocal, ast.ClassDef, ast.AsyncFunctionDef)))
+                        or (isinstance(node, ast.FunctionDef) and node is not method)
+                        or (isinstance(node, ast.Name) and node.id in blocked_names)
+                        or (isinstance(node, ast.Attribute) and node.attr in blocked_attrs)):
                     return reject('addition-context-unsupported')
+                if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    owner = node.value
+                    while isinstance(owner, (ast.Attribute, ast.Subscript)):
+                        owner = owner.value
+                    if isinstance(owner, ast.Name) and owner.id in bindings:
+                        return reject('addition-context-unsupported')
 
-    projected_class = copy.deepcopy(test_node)
-    projected_class.body = [ast.Pass()]
-    projected = ast.Module(body=[*copy.deepcopy(imports), projected_class], type_ignores=[])
+    projected_classes = []
+    for test_node in test_nodes:
+        projected_class = copy.deepcopy(test_node)
+        setups = [copy.deepcopy(part) for part in test_node.body if isinstance(part, ast.FunctionDef) and part.name == 'setUp']
+        projected_class.body = setups if setups else [ast.Pass()]
+        projected_classes.append(projected_class)
+
+    projected = ast.Module(body=[*copy.deepcopy(imports), *projected_classes], type_ignores=[])
     ast.fix_missing_locations(projected)
     return {'schemaVersion': schema, 'ok': True, 'contextCode': ast.unparse(projected) + '\n',
-            'methodIds': [test_node.name + '.' + name for name in method_names],
+            'methodIds': method_ids,
             'baselineHash': hashlib.sha256(baseline.encode('utf-8')).hexdigest()}
 
 

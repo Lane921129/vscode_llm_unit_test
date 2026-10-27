@@ -89,6 +89,22 @@ test('contract correction retries the same exact case without admitting a failed
     assert.equal(requests, 2);
 });
 
+test('contract correction incorporates specific mismatch feedback into correction prompt', async () => {
+    const opts = options(evidence(1)); let requests = 0;
+    let receivedCorrection = '';
+    opts.request = async (one, draft, _ordinal, _total, correction) => {
+        if (correction) { receivedCorrection = correction; }
+        return ++requests === 1 ? 'WRONG AI INPUT' : 'CORRECT AI INPUT';
+    };
+    opts.validate = async code => code.includes('WRONG AI INPUT')
+        ? { reasonCode: 'quality-focus-input-mismatch', detail: 'Expected target call: target(1, 2), but actual written call was: target(3, 4).' }
+        : undefined;
+    assert.deepEqual(await composeFocusedWriterAdditions(opts), { ok: true, code: baseline + '\nCORRECT AI INPUT' });
+    assert.equal(requests, 2);
+    assert.match(receivedCorrection, /quality-focus-input-mismatch/);
+    assert.match(receivedCorrection, /Expected target call: target\(1, 2\), but actual written call was: target\(3, 4\)\./);
+});
+
 test('no-op and multi-method additions cannot complete a single-case microtask', async () => {
     for (const [count, reason] of [[0, 'focused-writer-no-new-methods'], [2, 'focused-writer-case-method-count']] as const) {
         const opts = options(evidence(1)); let requests = 0, validations = 0;

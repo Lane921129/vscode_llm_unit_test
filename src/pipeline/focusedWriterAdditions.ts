@@ -16,7 +16,7 @@ export interface FocusedWriterAdditionOptions {
     merge(baseline: string, addition: string): Promise<WriterAdditionMergeResult>;
     /** Accept only one AST-proven literal call for this exact typed case. Unknown
      * or missing calls must return a rejection, never completion of a microtask. */
-    validate(mergedCode: string, caseEvidence: QualityTaskEvidence, previousBaseline: string): Promise<string | undefined>;
+    validate(mergedCode: string, caseEvidence: QualityTaskEvidence, previousBaseline: string): Promise<string | { reasonCode: string; detail?: string } | undefined>;
     onEvent?(status: 'requested' | 'rejected' | 'composed' | 'completed', detail: FocusedWriterAdditionEvent): void;
 }
 export type FocusedWriterAdditionResult = { ok: true; code: string }
@@ -70,6 +70,7 @@ export async function composeFocusedWriterAdditions(options: FocusedWriterAdditi
             event('requested');
             const addition = await options.request(freeze(structuredClone(single)), accumulated, ordinal, total, correction);
             let rejected: string | undefined;
+            let rejectDetail: string | undefined;
             let merged: WriterAdditionMergeResult | undefined;
             if (typeof addition !== 'string') { failTool('writer-addition-result-invalid'); }
             if (!addition.trim()) { rejected = 'focused-writer-empty-addition'; }
@@ -92,7 +93,12 @@ export async function composeFocusedWriterAdditions(options: FocusedWriterAdditi
                     } else {
                         const invalid = await options.validate(merged.mergedCode, freeze(structuredClone(single)), accumulated);
                         if (invalid !== undefined) {
-                            rejected = reasonCode(invalid);
+                            if (typeof invalid === 'string') {
+                                rejected = reasonCode(invalid);
+                            } else {
+                                rejected = reasonCode(invalid.reasonCode);
+                                rejectDetail = invalid.detail;
+                            }
                             if (toolFailure(rejected)) { failTool(rejected); }
                         }
                     }
@@ -101,7 +107,9 @@ export async function composeFocusedWriterAdditions(options: FocusedWriterAdditi
             if (rejected) {
                 event('rejected', { reasonCode: rejected });
                 if (attempt === 2) { return { ok: false, reasonCode: rejected, addition }; }
-                correction = `The previous addition was not accepted (${rejected}). Return a replacement addition for this one exact case. `
+                correction = `The previous addition was not accepted (${rejected}). `
+                    + (rejectDetail ? `${rejectDetail} ` : '')
+                    + 'Return a replacement addition for this one exact case. '
                     + 'Keep every existing method and fixture unchanged. The accumulated draft is not yet executed or reviewed.';
                 continue;
             }

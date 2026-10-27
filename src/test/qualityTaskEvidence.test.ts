@@ -3,7 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
-import { bindQualityTaskObservations, qualityFocusInputDiagnostic, qualityInputAlreadyTested,
+import { bindQualityTaskObservations, qualityFocusInputDiagnostic, qualityFocusInputMismatchDetail,
+    formatQualityFocusInputMismatch, renderTraceCallForDiagnostic, qualityInputAlreadyTested,
     qualityFocusCasesForPrompt, qualityTasksForWriter, QualityTaskEvidence, resolveQualityTaskTraceCaseIds } from '../pipeline/qualityTaskEvidence';
 import { BehaviorObservations } from '../pipeline/evidenceContracts';
 import { mergeBehaviorObservations, parseBehaviorObservations } from '../pipeline/behaviorObservations';
@@ -569,4 +570,19 @@ test('cancellation and transport errors do not become format repairs or successf
         checkCancelled: () => { if (cancelled) { throw new Error('cancelled'); } },
         request: async () => { calls++; cancelled = true; return response(current); } }), /cancelled/);
     assert.equal(calls, 1);
+});
+
+test('quality focus input mismatch provides exact expected vs actual call diff', async () => {
+    const current = await bound();
+    const candidate = await candidateFacts(baseline + '    def test_wrong_input(self):\n'
+        + '        self.assertEqual(categorize(999, 888), (999, "middle"))\n');
+    const failure = qualityFocusInputDiagnostic(candidate, current, ['Cases.test_seed']);
+    assert.equal(failure, 'quality-focus-input-mismatch');
+    const detail = qualityFocusInputMismatchDetail(candidate, current, ['Cases.test_seed']);
+    assert.deepEqual(detail.actualCalls, ['categorize(999, 888)']);
+    assert.ok(detail.expectedCalls.length >= 1);
+    assert.ok(detail.expectedCalls.includes('categorize(7.49, 10)'));
+    const formatted = formatQualityFocusInputMismatch(detail);
+    assert.match(formatted, /Expected target call: .*categorize\(7\.49, 10\)/);
+    assert.match(formatted, /actual written call was: categorize\(999, 888\)/);
 });

@@ -155,11 +155,16 @@ export function buildWriterExpansionPrompt(evidencePrompt: string, baselineCode:
  * only AST-proven imports/class setup, never old test inputs or assertions. */
 export function buildWriterCaseAdditionPrompt(evidencePrompt: string, contextCode: string,
     baselineHash: string, methodIds: readonly string[], gap: string): string {
+    const classNames = Array.from(new Set(methodIds.map(id => id.split('.')[0])));
+    const classHint = classNames.length > 1
+        ? `\nThe baseline contains multiple test classes (${classNames.join(', ')}). Target ${classNames[0]} (e.g. \`class ${classNames[0]}(unittest.TestCase):\`) or return the test method directly for the host to attach.\n`
+        : '';
     return `${evidencePrompt}\n\nWRITER_CASE_ADDITION_V1\n`
         + 'BASELINE SETUP CONTEXT (AST projection only; existing test bodies remain unchanged with the host):\n'
         + `\`\`\`python\n${contextCode}\n\`\`\`\n`
         + JSON.stringify({ baselineHash, existingMethodIds: methodIds }) + '\n'
         + `CURRENT CASE: ${gap}\n`
+        + classHint
         + 'Write only one NEW test method with the required signature and the exact current observed call/result. '
         + 'The setup context is not an executable test candidate: do not copy its pass or create guessed cases. '
         + 'The host merges your addition into the original complete executed baseline, preserves its bytes and then '

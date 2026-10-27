@@ -351,7 +351,7 @@ class Cases(unittest.TestCase):
                 self.rejected(code)
 
     def test_fixtures_helpers_and_global_context_are_not_silently_removed(self):
-        cases = [BASE,
+        cases = [self.SIMPLE.replace('    def test_original', '    def tearDown(self): pass\n    def test_original'),
                  self.SIMPLE.replace('    def test_original', '    def helper(self): pass\n    def test_original'),
                  self.SIMPLE.replace('    def test_original', '    state = 42\n    def test_original'),
                  'shared = 123\n' + self.SIMPLE,
@@ -365,6 +365,28 @@ class Cases(unittest.TestCase):
         for code in cases:
             with self.subTest(code=code):
                 self.rejected(code)
+
+    def test_setup_and_multiple_test_cases_are_preserved_in_minimal_projection(self):
+        result = project_addition_context(BASE)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['methodIds'], ['Cases.test_alpha'])
+        self.assertIn("self.value = 'alpha'", result['contextCode'])
+        self.assertNotIn('assertEqual', result['contextCode'])
+        self.assertNotIn('test_alpha', result['contextCode'])
+
+        multi = BASE + "\nclass OtherCases(unittest.TestCase):\n    def test_beta(self): self.assertEqual(target('beta'), 'beta')\n"
+        multi_result = project_addition_context(multi)
+        self.assertTrue(multi_result['ok'], multi_result)
+        self.assertEqual(multi_result['methodIds'], ['Cases.test_alpha', 'OtherCases.test_beta'])
+        self.assertIn('class Cases(unittest.TestCase):', multi_result['contextCode'])
+        self.assertIn('class OtherCases(unittest.TestCase):', multi_result['contextCode'])
+        self.assertIn("self.value = 'alpha'", multi_result['contextCode'])
+        self.assertNotIn('test_alpha', multi_result['contextCode'])
+        self.assertNotIn('test_beta', multi_result['contextCode'])
+        self.assertNotIn('assertEqual', multi_result['contextCode'])
+
+        harmful_setup = BASE.replace("self.value = 'alpha'", "getattr(self, 'value')")
+        self.rejected(harmful_setup)
 
     def test_reflection_method_dependencies_and_mock_fixtures_fall_back(self):
         bodies = ["getattr(self, 'test_original')()", "self.__dict__.clear()", 'self.test_例外()',

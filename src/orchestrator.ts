@@ -27,7 +27,8 @@ import { buildWriterSeedPrompt, buildWriterExpansionPrompt, buildWriterAdditionR
     buildWriterAdditionSystemPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
     selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from './roles/writerPhases';
 import { bindQualityTaskObservations, QualityTaskEvidence, qualityTasksForWriter,
-    qualityFocusInputDiagnostic, qualityInputAlreadyTested, qualityFocusCasesForPrompt,
+    qualityFocusInputDiagnostic, qualityFocusInputMismatchDetail, formatQualityFocusInputMismatch,
+    qualityInputAlreadyTested, qualityFocusCasesForPrompt,
     resolveQualityTaskTraceCaseIds } from './pipeline/qualityTaskEvidence';
 import { selectWriterSeedCaseIds } from './prompts/compactWriterContext';
 import { seedCaseFactsForPrompt, validateWriterSeedContract } from './pipeline/writerSeedContract';
@@ -2664,8 +2665,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 return lastCaseAddition;
             },
             merge: async (accumulator, addition) => {
-                const merged = await mergeWriterTestAddition({ baseline: accumulator, addition,
+                let merged = await mergeWriterTestAddition({ baseline: accumulator, addition,
                     python: pythonExecutable, env: testExecutionEnv });
+                if (!merged.ok && merged.reasonCode === 'ambiguous-addition-target') {
+                    const targetClass = baselineContext.ok ? baselineContext.methodIds[0].split('.')[0] : undefined;
+                    if (targetClass) {
+                        const rawCode = extractWriterAdditionCode(addition);
+                        const wrappedAddition = `class ${targetClass}(unittest.TestCase):\n`
+                            + rawCode.split(/\r?\n/).map(line => line.trim() ? `    ${line}` : '').join('\n') + '\n';
+                        const retry = await mergeWriterTestAddition({ baseline: accumulator, addition: wrappedAddition,
+                            python: pythonExecutable, env: testExecutionEnv });
+                        if (retry.ok) {
+                            merged = retry;
+                        }
+                    }
+                }
                 if (!merged.ok && merged.reasonCode === 'merge-tool-error') {
                     throw new AnalysisStageError('validation', 'writer-addition-tool', 'Writer case composition did not complete.');
                 }
@@ -2687,7 +2701,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const previousIds = previous.methods.map(method => method.name);
                 const added = facts.methods.filter(method => !previousIds.includes(method.name));
                 if (added.length !== 1 || added[0].calls.length !== 1) { return 'writer-case-call-unproven'; }
-                return qualityFocusInputDiagnostic(facts, caseEvidence, previousIds);
+                const failure = qualityFocusInputDiagnostic(facts, caseEvidence, previousIds);
+                if (failure === 'quality-focus-input-mismatch') {
+                    const detail = qualityFocusInputMismatchDetail(facts, caseEvidence, previousIds);
+                    return { reasonCode: failure, detail: formatQualityFocusInputMismatch(detail) };
+                }
+                return failure;
             },
             onEvent: (status, detail) => {
                 recordRole('writer-case', status, { ...detail, focusId: evidence.focusId });
@@ -2806,15 +2825,19 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
             const facts = await buildReviewFacts({ ...identity, code: merged.mergedCode, module: targetImportModule,
                 python: pythonExecutable, env: testExecutionEnv, executionVerified: false, knownSecrets });
-            const failure = qualityFocusInputDiagnostic(facts, activeQualityTaskEvidence,
-                (methodInventories.get(evidenceHash(writerAdditionBaseline)) || []).map(item => item.id));
+            const previousIds = (methodInventories.get(evidenceHash(writerAdditionBaseline)) || []).map(item => item.id);
+            const failure = qualityFocusInputDiagnostic(facts, activeQualityTaskEvidence, previousIds);
             if (failure) {
-                additionRejections.set(evidenceHash(merged.mergedCode), { reasonCode: failure, gate: 'revision-scope',
-                    reason: failure === 'quality-focus-case-family-incomplete'
-                        ? 'The new method covers only part of the supplied observed case family. Include EVERY exact targetCall from '
-                            + 'WRITER_FOCUS_CASE_FACTS_V1 with its corresponding observed result; do not omit cases or swap arguments.'
-                        : 'The new test uses an input outside the bound focus observations. Use exactly the supplied observed case family; '
-                            + 'do not replace it with unrelated return or exception cases.' });
+                let reason = failure === 'quality-focus-case-family-incomplete'
+                    ? 'The new method covers only part of the supplied observed case family. Include EVERY exact targetCall from '
+                        + 'WRITER_FOCUS_CASE_FACTS_V1 with its corresponding observed result; do not omit cases or swap arguments.'
+                    : 'The new test uses an input outside the bound focus observations. Use exactly the supplied observed case family; '
+                        + 'do not replace it with unrelated return or exception cases.';
+                if (failure === 'quality-focus-input-mismatch') {
+                    const detail = qualityFocusInputMismatchDetail(facts, activeQualityTaskEvidence, previousIds);
+                    reason += ' ' + formatQualityFocusInputMismatch(detail);
+                }
+                additionRejections.set(evidenceHash(merged.mergedCode), { reasonCode: failure, gate: 'revision-scope', reason });
                 recordRole('quality-focus-inputs', 'rejected', { reasonCode: failure,
                     codeHash: evidenceHash(merged.mergedCode), focusId: activeQualityTaskEvidence.focusId });
             }
