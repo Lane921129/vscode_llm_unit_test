@@ -47,6 +47,7 @@ export function buildWriterRevisionRequest(input: {
     functionName: string;
     evidence: string;
     reviewFeedback?: WriterReviewFeedback;
+    outputScope?: 'method-replacements';
 }): string {
     const feedback = input.reviewFeedback;
     if (feedback && (feedback.version !== 'writer-review-feedback-v1'
@@ -85,5 +86,7 @@ ${input.code}
 ${referenceRepeatedTestFile(input.evidence, input.code)}
 
 RESPONSE:
-Return the complete corrected unittest file. Preserve passing tests and verified assertions. Address only the supplied findings; do not invent behavior.`;
+${input.outputScope === 'method-replacements'
+    ? 'Return only the methods named by WRITER_METHOD_EDIT_V1, inside their existing class-name wrappers in one Python fence. Keep signatures and decorators; no module imports, fixtures, new methods or unrelated code.'
+    : 'Return the complete corrected unittest file. Preserve passing tests and verified assertions. Address only the supplied findings; do not invent behavior.'}`;
 }

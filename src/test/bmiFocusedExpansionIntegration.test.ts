@@ -178,9 +178,8 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
                 response = JSON.stringify({ findings: [{ category: 'assertion-evidence', test_line: `L${assertionLine + 1}`, basis: testCodeBasis(assertionLine + 1),
                     reason: 'The current assertEqual checks value equality, but this exact observed return also needs an explicit tuple container assertion.',
                     action: reviewFinding }] });
-                const replacement = [...lines];
-                replacement.splice(assertionLine + 1, 0, `        self.assertIsInstance(${call}, tuple)`);
-                revisedAddition = replacement.join('\n').replace(/    def test_seed\(self\):\n        self\.assertEqual\(calculate_bmi\(50, 160\), \(19\.53, "健康體位"\)\)\n?/, '');
+                revisedAddition = 'class Cases:\n' + lines[methodLine] + '\n' + lines[assertionLine]
+                    + `\n        self.assertIsInstance(${call}, tuple)\n`;
                 assert.ok(!revisedAddition.includes('def test_seed('));
             } else {
                 if (scenario === 'review-revision' && reviews === 3) {
@@ -211,17 +210,25 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
         } else {
             assert.doesNotMatch(request.roleInstructions, /Python unittest Bug Fixer/, 'passing baseline and addition need no method repair');
             writers++; wireRoles.push({ role: 'writer', prompt: request.prompt });
-            if (scenario === 'review-revision' && request.prompt.includes('WRITER_ADDITION_REVISION_V1')) {
+            if (scenario === 'review-revision' && request.prompt.includes('WRITER_METHOD_EDIT_V1')) {
                 reviewRevisionRequests++;
                 assert.doesNotMatch(request.roleInstructions, /WRITER_CASE_SUBTASK_V1/,
                     'a Reviewer finding repairs its complete unaccepted draft instead of starting a fresh case');
                 assert.match(request.prompt, /WRITER_REVISION_REQUEST_V2/);
                 assert.ok(request.prompt.includes(reviewFinding), 'the exact actionable finding reaches the Writer revision');
                 assert.ok(request.prompt.includes(reviewDraft), 'the complete failed draft reaches the Writer revision');
-                assert.ok(request.prompt.includes('```python\n' + seed.trimEnd() + '\n```'),
-                    'the immutable expansion baseline stays the original approved seed, not the executable unapproved family');
-                assert.match(request.prompt, /host merges with that original baseline, not with this failed draft/);
-                response = fence(revisedAddition);
+                assert.ok(request.prompt.includes(seed.trimEnd()), 'the complete current family still includes its immutable approved seed');
+                const editPlan = JSON.parse(request.prompt.match(/WRITER_METHOD_EDIT_V1\n([^\n]+)/)![1]);
+                assert.equal(editPlan.baselineHash, evidenceHash(reviewDraft));
+                assert.equal(editPlan.methodIds.length, 1);
+                assert.match(editPlan.methodIds[0], /^Cases\.test_focus_/);
+                assert.doesNotMatch(editPlan.methodIds[0], /test_seed/);
+                assert.doesNotMatch(request.prompt, /WRITER_ADDITION_REVISION_V1|Return the complete corrected unittest file/);
+                // The first method-only edit preserves every old assertion but
+                // adds an unsupported call. The original focus gate must reject
+                // it before native execution, even though AST scope is valid.
+                response = fence(revisedAddition + (reviewRevisionRequests === 1
+                    ? '        self.assertEqual(calculate_bmi(999, 100), (999.0, "肥胖"))\n' : ''));
             } else if (writers === 1) { assert.match(request.prompt, /WRITER_SEED_V1/); response = fence(seed); }
             else {
                 assert.match(request.roleInstructions, /WRITER_ADDITION_V1 OUTPUT MODE/);
@@ -491,7 +498,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
             assert.notEqual(result.knowledge.terminalStatus, 'passed');
             assert.equal(fs.readFileSync(file, 'utf8'), source);
         });
-        await t.test('a focused family Reviewer finding retains its exact draft and repairs against the original approved seed', async () => {
+        await t.test('a focused family local method edit retains its draft and revalidates exact focus inputs before execution', async () => {
             scenario = 'review-revision'; writers = 0; reviews = 0; qualities = 0; wireRoles.length = 0;
             microtasks.length = 0;
             reviewRevisionRequests = 0; reviewDraft = ''; revisedAddition = ''; reviewFinding = '';
@@ -500,12 +507,16 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
             const result = readRun(outputPath);
             const diagnostic = JSON.stringify({ last: result.knowledge.lastFailure, writers, reviews, reviewRevisionRequests,
                 stages: result.events.slice(-30).map(e => [e.stage, e.status, e.detail?.reasonCode]) });
-            assert.equal(reviewRevisionRequests, 1, diagnostic);
+            assert.equal(reviewRevisionRequests, 2, diagnostic);
             assert.equal(reviews, 3, 'seed approval, concrete family finding and independent repaired-family approval');
-            assert.equal(writers, 5, 'one seed, three distinct cases and one complete addition revision');
+            assert.equal(writers, 6, 'one seed, three distinct cases and two bounded local edit requests');
             const revisions = result.events.filter(e => e.stage === 'model-request' && e.status === 'requested'
                 && e.detail.role === 'writer-revision' && e.detail.phase !== 'context-qualification');
-            assert.equal(revisions.length, 1, diagnostic);
+            assert.equal(revisions.length, 2, diagnostic);
+            assert.equal(result.events.filter(e => e.stage === 'writer-method-edit' && e.status === 'planned').length, 1);
+            assert.equal(result.events.filter(e => e.stage === 'writer-method-edit' && e.status === 'applied').length, 2);
+            assert.ok(result.events.some(e => e.loop === 2 && e.stage === 'quality-focus-inputs' && e.status === 'rejected'),
+                'host composition never bypasses the original exact-input family gate');
             const scopes = result.events.filter(e => e.stage === 'writer-case' && e.status === 'scope-selected');
             assert.equal(scopes.length, 3, 'the finding revision does not discard feedback or request three fresh microtasks');
             assert.ok(scopes.every(e => e.sequence < revisions[0].sequence));
@@ -517,6 +528,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
             assert.ok(code.startsWith(seed.trimEnd()), 'the original passed seed bytes survive every revision');
             assert.equal((code.match(/def test_/g) || []).length, 4);
             assert.match(code, /self\.assertIsInstance\(calculate_bmi\(/);
+            assert.doesNotMatch(code, /calculate_bmi\(999, 100\)/);
             assert.ok(approved[0].sequence > revisions[0].sequence && approved[0].sequence < mutation[0].sequence);
             assert.equal(approved[0].detail.approvedCodeHash, evidenceHash(code));
             assert.equal(result.knowledge.mutation.testHash, evidenceHash(code));

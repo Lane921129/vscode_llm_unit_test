@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, SOURCE_INPUT_SHAPE_GUIDANCE } from '../prompts/dependencyMockContract';
+import { summarizeRepairOutput } from '../validation/repairFeedback';
 
 /** Select packaging only. The model still authors the complete test body. */
 export function selectWriterAdditionMethodName(baselineHash: string, focus: string,
@@ -108,6 +109,20 @@ export function buildWriterReviewCorrectionPrompt(prompt: string): string {
         + 'do not add, remove or rename test methods or invent new scenarios. Rule cards are context, not a list of tests to generate. '
         + 'Preserve passing cases, verified assertions, the complete evidence and safety contract. '
         + 'Return the complete corrected test file in one Python fence. Expansion is a separate task.';
+}
+
+/** The full baseline stays read-only with the host; output contains scoped methods only. */
+export function buildWriterMethodEditPrompt(prompt: string, plan: {
+    baselineHash: string; planHash: string; methods: readonly { id: string }[];
+}, rejection?: string): string {
+    return prompt + '\n\nWRITER_METHOD_EDIT_V1\n' + JSON.stringify({ baselineHash: plan.baselineHash,
+        planHash: plan.planHash, methodIds: plan.methods.map(method => method.id) })
+        + '\nReplace exactly these existing methods. Use class Name: wrappers with only the named methods; '
+        + 'copy each original signature, async status and decorators from CURRENT TEST FILE. '
+        + 'Do not return the full suite, module imports, fixtures or unrelated methods. Necessary imports may be local to a method. '
+        + 'Preserve inputs and verified assertions while addressing the supplied review findings. '
+        + 'The host preserves all other bytes and fixtures; the complete composition still needs execution, fresh review and quality validation.'
+        + (rejection ? '\nPREVIOUS EDIT REJECTION:\n' + summarizeRepairOutput(rejection, 1500) : '');
 }
 
 /** A prefix inside a larger unapproved draft is not a complete baseline unit. */

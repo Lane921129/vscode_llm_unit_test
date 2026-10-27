@@ -11,6 +11,7 @@
 | 候選檢查 | `validate_test_bindings.py`、`validate_target_calls.py` | 匯入、Mock 使用點與呼叫簽名 |
 | Checker（執行校驗） | `generated_test_runner.py` | 執行 unittest，以斷言比對實際結果與測試內預期答案；提供 coverage 與突變子程序的外部操作防護，違規不能算通過或 killed |
 | 修復範圍 | `validate_repair_scope.py` | 限制 Bug Fixer 只修改失敗測試並保留既有測試 |
+| AST 合成 | `merge_test_snippets.py`、`edit_test_methods.py` | 保留基線新增方法，或依來源 hash 與指定行號替換方法；不執行候選、不產生 expected。局部替換由 Node 獨立重組原 UTF-8 範圍，詳見[契約](../docs/writer-method-edits.md) |
 | 斷言證據 | `validate_assertion_evidence.py` | 檢查同一呼叫的 literal 斷言是否與已驗證行為觀測矛盾 |
 | 情境識別 | `scenario_inventory.py` | 為測試 AST 與設定建立指紋，不執行測試 |
 | 品質補測觀測 | `quality_experiment_runner.py`、`parameter_fixture_experiments.py` | 分別觀察實例有序狀態及頂層函式的受控物件參數；只回傳觀測，由 AI 新增測試，再重跑、審查與量測。參見[參數物件受控補測](../docs/參數物件受控補測.md) |

@@ -45,7 +45,7 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
     const settings: Record<string, unknown> = { pythonPath: resolvePythonExecutable(undefined, repo), projectPath: root, language: 'en' };
     const handlers = new Map<string, (...args: any[]) => any>();
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
-    let scenario: 'invalid' | 'fixed-value' | 'fact-claim' | 'quality' = 'invalid';
+    let scenario: 'invalid' | 'fixed-value' | 'fact-claim' | 'quality' | 'scope' = 'invalid';
     let writers = 0, revisions = 0, fixes = 0, reviews = 0;
     const logs: string[] = [];
     const outcomes: any[] = [];
@@ -98,7 +98,7 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
             fixes++; throw Error('passing candidates must not request method repair');
         } else if (request.roleInstructions.includes('Revise the current tests')) {
             revisions++;
-            assert.equal(scenario, 'quality');
+            assert.ok(scenario === 'quality' || scenario === 'scope');
             assert.match(request.prompt, /assertTupleEqual/);
             assert.ok(candidate, 'a real executed seed precedes its review-driven revision');
             const feedback = JSON.parse(/HOST_REVIEW_FINDINGS_V1\n([^\n]+)/.exec(request.prompt)![1]);
@@ -109,7 +109,13 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
             assert.equal(feedback.findings.length, 1);
             assert.deepEqual(feedback.findings[0].basis, testCodeBasis(5));
             assert.deepEqual(feedback.methodScope, { mode: 'preserve-method-set', methodIds: ['Cases.test_value_0'] });
-            response = '```python\n' + candidate.replaceAll('self.assertEqual(', 'self.assertTupleEqual(') + '\n```';
+            const editPlan = JSON.parse(/WRITER_METHOD_EDIT_V1\n([^\n]+)/.exec(request.prompt)![1]);
+            assert.equal(editPlan.baselineHash, feedback.testHash);
+            assert.deepEqual(editPlan.methodIds, ['Cases.test_value_0']);
+            assert.doesNotMatch(request.prompt, /Return the complete corrected unittest file/);
+            const method = candidate.trim().split('\n').slice(3).join('\n').replaceAll('self.assertEqual(', 'self.assertTupleEqual(');
+            response = '```python\nclass Cases:\n' + method
+                + (scenario === 'scope' && revisions === 1 ? '\n    def test_spurious(self):\n        self.assertTrue(True)' : '') + '\n```';
         } else {
             writers++;
             const observed = readObservedSeedCaseForModelFixture(request.prompt, 'calculate_bmi');
@@ -136,7 +142,7 @@ class Cases(unittest.TestCase):
         // 8572 preserves this review-gate fixture's original 6000-token input budget.
         await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'neutral-fixture', paramSize: '13B', contextLength: 32768,
             effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-num-ctx' });
-        for (const selected of ['invalid', 'fixed-value', 'fact-claim', 'quality'] as const) {
+        for (const selected of ['invalid', 'fixed-value', 'fact-claim', 'quality', 'scope'] as const) {
             scenario = selected; candidate = ''; writers = 0; revisions = 0; fixes = 0; reviews = 0; logs.length = 0;
             const outputPath = path.join(root, 'results-' + scenario);
             // The builtin-v2 full universe contains 96 candidates here. This
@@ -159,7 +165,7 @@ class Cases(unittest.TestCase):
             assert.equal(fixes, 0);
             assert.equal(reviews, 2, 'contract correction or review of a revised candidate consumes the second request');
             assert.deepEqual(knowledge.tierHistory.transitions, []);
-            if (scenario !== 'quality') {
+            if (scenario !== 'quality' && scenario !== 'scope') {
                 assert.equal(knowledge.terminalStatus, 'review-blocked', JSON.stringify(knowledge.lastFailure || knowledge.failure));
                 assert.equal(knowledge.failureStage, 'reviewer');
                 assert.equal(knowledge.reviewStatus, 'incomplete');
@@ -188,7 +194,12 @@ class Cases(unittest.TestCase):
                 const summary = JSON.parse(fs.readFileSync(path.join(outputPath, 'batch_manifest.json'), 'utf8'));
                 assert.equal(summary.allTargetsPassed, false);
             } else {
-                assert.equal(revisions, 1);
+                assert.equal(revisions, scenario === 'scope' ? 2 : 1);
+                assert.equal(events.filter(e => e.stage === 'writer-method-edit' && e.status === 'planned').length, 1);
+                assert.equal(events.filter(e => e.stage === 'writer-method-edit' && e.status === 'applied').length, 1);
+                const editRejections = events.filter(e => e.stage === 'writer-method-edit' && e.status === 'rejected');
+                assert.equal(editRejections.length, scenario === 'scope' ? 1 : 0);
+                if (scenario === 'scope') { assert.equal(editRejections[0].detail.reasonCode, 'method-outside-edit-scope'); }
                 assert.equal(knowledge.reviewStatus, 'completed', JSON.stringify(knowledge.failure));
                 const executed = events.map((event, index) => ({ event, index }))
                     .filter(({ event }) => event.stage === 'validation' && event.status === 'passed');
@@ -212,6 +223,7 @@ class Cases(unittest.TestCase):
                 assert.equal(knowledge.mutation.counts.executed, knowledge.mutation.counts.selected);
                 assert.ok(knowledge.mutation.counts.executed > 0, 'the approved path uses the real mutation engine');
                 assert.match(approvedCode, /assertTupleEqual/);
+                assert.doesNotMatch(approvedCode, /test_spurious/);
                 assert.doesNotMatch(approvedCode, /TestVerifiedState|Trace_/);
             }
             assert.equal(fs.readFileSync(file, 'utf8'), source);

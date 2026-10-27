@@ -20,6 +20,7 @@ export const PYTHON_TOOLS = {
     repairScope: 'validate_repair_scope.py',
     passingPreservation: 'passing_test_preservation.py',
     testMerge: 'merge_test_snippets.py',
+    methodEdit: 'edit_test_methods.py',
     reviewFacts: 'review_test_facts.py',
     sourceExpectations: 'repair_source_expectations.py',
     sourceLiteralRepair: 'source_literal_argument_repair.py',

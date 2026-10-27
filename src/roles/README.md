@@ -5,7 +5,7 @@
 | 角色 | 時機與職責 | 正式實作 | 輸出 |
 |---|---|---|---|
 | 語意分析師 | 整合 AST、呼叫點與初始受控行為觀測，提出待測情境；不選規則 | [semanticAnalyzer.ts](semanticAnalyzer.ts) | 情境與證據假設 JSON |
-| Writer | 根據合併證據包與程式選出的測試生成規則寫測試，或依 Reviewer 意見修改 | [unittestWriter.ts](unittestWriter.ts) | 完整 Python unittest |
+| Writer | 根據合併證據包與程式選出的測試生成規則寫測試，或依 Reviewer 意見修改 | [unittestWriter.ts](unittestWriter.ts) | 依明確 scope 回完整 seed、補測片段或指定方法替換；皆為 Python fence，由 host 合成並驗證 |
 | Reviewer | Checker 執行通過後，由 LLM 審查每案輸入、預期值及依據，區分阻擋問題與品質缺口 | [testReviewer.ts](testReviewer.ts) | `review-v8` 單一 findings 陣列，每項含 category、test_line、原因、具體動作及結構化 basis；程式還原原文 |
 | Bug Fixer | 根據可明確定位的實際測試失敗做單一方法修復 | [bugFixer.ts](bugFixer.ts) | `bug-fix-v5` 的單方法 Python fence，由管線合併回完整 unittest；無有效變更時限一次 Writer 接手 |
 | 品質分析師 | 執行通過後，根據覆蓋／突變結果規劃下一輪 | [qualityAnalyst.ts](qualityAnalyst.ts) | 最多一個綁定實測證據 ID 的待驗證任務 |
@@ -24,6 +24,8 @@
 - 改「測試生成規則選什麼」：找 [testRuleDispatcher.ts](../pipeline/testRuleDispatcher.ts)，共用規則在 [testRuleLibrary.ts](../prompts/testRuleLibrary.ts)。
 
 角色交接版本集中在 [roleContracts.ts](roleContracts.ts)。Reviewer 的阻擋問題、結構／證據錯誤、測試檔匯入與 fixture 失敗交給 Writer；可唯一定位的實際方法失敗才交給 Bug Fixer。模組載入失敗沒有測試方法時，禁止猜選第一個方法。Bug Fixer 的輸出在執行前會由 `validate_repair_scope.py` 檢查，避免改動通過或無關的測試。
+
+沒有 missing-scenario 的有效方法內 finding 使用 [局部方法替換](../../docs/writer-method-edits.md)：模型只回來源綁定的指定方法，host 保留範圍外原文及 fixture，合成後重新執行與審查。工具或不支援的 scope 不授整檔修改權；缺情境／混合 finding 與一般結構／fixture 修訂的局部化仍待接續。
 
 三個角色共用 [targetContract.ts](../pipeline/targetContract.ts)，保留 class／static／property／instance 與 async 綁定。修復與審查包含完整目標來源、建構子、imports、globals、相依與真實觀測；預算不足時明示未完成，不截斷來源。Bug Fixer 另附該測試類別的 setup／teardown，仍只能替換失敗方法。
 

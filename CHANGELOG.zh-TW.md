@@ -4,6 +4,14 @@
 
 ## 2026-10-27
 
+### 來源綁定的 Writer 局部方法替換
+
+- 新增只解析 AST 的 edit_test_methods.py 與 Node 交接器，計畫綁 baseline／plan hash、原 finding 行號、方法身份及 UTF-8 範圍；模型只回指定方法，簽名／decorator／async 保持 AST 一致。Python 核方法外 AST，Node 獨立重組位元組；範圍外原文、其他方法與 fixture 保留，不生成測值、expected 或執行批准。
+- 接入無 missing-scenario 的正式方法內審查修訂，完整原 findings／basis 與基線不裁切，拒絕片段沿原計畫及額度補正。補測家族合成後仍重跑精確 focus／參數重放，保留成功情境、native、同候選 Reviewer 與品質順序。缺情境／混合 finding、一般結構／fixture 路徑仍待後續局部化。
+- 工具與提示相關 Node25／25、Python17／17，以及驗證入口 Node16／16通過，涵蓋多 TestCase／同名方法、Unicode／CRLF、header、過期基線、非法整檔及範圍外修改、偽造 DTO、無副作用與完整提示。Python 完整清單追加至52，原49模組的順序雜湊保留，新增兩個 suite 依既有規則列入整合；初次 Python 套件匯入與舊清單預期已修正。
+- 四檔正式整合 Node13／13通過。方法範圍擴張先拒絕再沿原計畫修訂；補測家族的局部 AST 合成雖成功，額外未授權輸入仍由原 focus gate 在 native 前拒絕，修正後重新實跑、審查與突變。固定回覆 BMI 真實 Mutatest 行10／10、突變39／39、保留8方法，不代表新模型驗收。
+- 最終原生快測 Node753／753、Python42／42、型別、lint、Webview與生產建置通過。初輪快測751／753的清單預期失敗已由入口16項及最終同套快測處理；沙箱暫存清理限制以原生重驗處理，未修改產品發布行為。未執行全量、獨立Mocha、跨平台或新實驗室模型驗收；第二項仍有缺情境／混合與一般修訂路徑待接續。
+
 ### Writer 完整審查交接與候選範圍綁定
 
 - 修復 Reviewer issues 雖含 basis，但 Writer 修訂仍被通用3500字元摘要截斷的交接缺口。正式有效 findings 以 writer-review-feedback-v1 完整封包傳送，綁當前測試 hash、全部問題／依據、AST 方法清單與是否允許補充情境；不符時 typed 停止。純結構／執行文字沿原有界摘要，原完整提示容量、期限、成功情境保護與同候選重審不改。

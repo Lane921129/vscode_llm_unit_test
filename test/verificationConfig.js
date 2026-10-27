@@ -91,7 +91,8 @@ const pythonTests = [
     'python_scripts/test_fixture_corpus.py',
     'python_scripts/test_lab_batch_plan.py',
     'python_scripts/test_fixture_scorecard.py',
-    'python_scripts/test_secret_scan.py'
+    'python_scripts/test_secret_scan.py',
+    'python_scripts/test_edit_test_methods.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',

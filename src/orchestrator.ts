@@ -138,7 +138,8 @@ import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText, outputShape, readOutputShapeDiagnostic } from './llm/ollamaResponse';
 import { buildModelOutputPreview, diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
 import { readCandidateMethodInventory, CandidateSyntaxDiagnostic } from './pipeline/candidateMethodInventory';
-import { buildWriterSeedFormatRepairPrompt, buildWriterReviewCorrectionPrompt } from './roles/writerPhases';
+import { buildWriterSeedFormatRepairPrompt, buildWriterReviewCorrectionPrompt, buildWriterMethodEditPrompt } from './roles/writerPhases';
+import { planWriterMethodEdits, applyWriterMethodEdits, WriterMethodEditPlan } from './validation/writerMethodEdits';
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
@@ -1711,6 +1712,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         feedbackHash: string; workload: WriterRevisionWorkload; feedback: WriterReviewFeedback;
     }>();
     const reviewerCorrectionScopes = new Map<string, readonly string[]>();
+    const reviewerMethodEdits = new Map<string, { plan: WriterMethodEditPlan; lineRefs: number[]; feedback: WriterReviewFeedback }>();
+    const methodEditRejections = new Map<string, { reason: string; reasonCode: string }>();
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
     // Keep the qualified selection for reports and output paths, while using
@@ -2703,9 +2706,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         return composed.code;
     };
-    const prepareWriterCandidate = async (raw: string, role: string, attempt: number): Promise<string> => {
-        const code = writerAdditionBaseline ? extractWriterAdditionCode(raw) : sanitizeLlmResponse(raw);
-        await recordCandidateMethods(code, 'generated', role, writerAdditionBaseline);
+    const prepareWriterCandidate = async (raw: string, role: string, attempt: number, hostComposed = false): Promise<string> => {
+        const code = hostComposed ? raw : writerAdditionBaseline ? extractWriterAdditionCode(raw) : sanitizeLlmResponse(raw);
+        await recordCandidateMethods(code, hostComposed ? 'merged' : 'generated', role, writerAdditionBaseline);
         const completedDiagnostic = completedOutputDiagnostics.get(evidenceHash(raw));
         completedOutputDiagnostics.delete(evidenceHash(raw));
         const syntax = candidateSyntaxFailures.get(evidenceHash(code));
@@ -2740,8 +2743,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             }
             return code;
         }
-        const merged = await mergeWriterTestAddition({ baseline: writerAdditionBaseline,
-            addition: raw, python: pythonExecutable, env: testExecutionEnv });
+        // A certified local replacement already contains the complete composition.
+        // Retain the same focus/replay checks used by ordinary additions below.
+        const currentMethods = methodInventories.get(evidenceHash(code)) || [];
+        const baselineMethods = new Set((methodInventories.get(evidenceHash(writerAdditionBaseline)) || []).map(method => method.id));
+        const addedMethods = currentMethods.filter(method => !baselineMethods.has(method.id))
+            .map(method => ({ className: method.id.split('.')[0], name: method.id.split('.')[1] }));
+        const merged = hostComposed ? { ok: true as const, mergedCode: code, totalMethodsCount: currentMethods.length,
+            addedMethods, addedMethodsCount: addedMethods.length }
+            : await mergeWriterTestAddition({ baseline: writerAdditionBaseline,
+                addition: raw, python: pythonExecutable, env: testExecutionEnv });
         throwIfExecutionCancelled();
         if (!merged.ok) {
             recordRejected(code, attempt, 'revision-scope', merged.reasonCode);
@@ -3956,6 +3967,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 review: async (code) => {
                     reviewerRevisionWorkloads.delete(evidenceHash(code));
                     reviewerCorrectionScopes.delete(evidenceHash(code));
+                    reviewerMethodEdits.delete(evidenceHash(code));
                     if (!mayUseModelAuthoredReview) {
                         recordRole('reviewer', 'unqualified', {});
                         return undefined;
@@ -4028,27 +4040,47 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const workloadKey = evidenceHash(code);
                     const reviewedWork = reviewerRevisionWorkloads.get(workloadKey);
                     const matchedReview = reviewedWork?.feedbackHash === evidenceHash(failure) ? reviewedWork : undefined;
+                    const correctionMethods = role === 'writer' ? reviewerCorrectionScopes.get(workloadKey) : undefined;
+                    let methodEdit = role === 'writer' ? reviewerMethodEdits.get(workloadKey) : undefined;
+                    if (!methodEdit && matchedReview && correctionMethods) {
+                        const lineRefs = matchedReview.feedback.findings.map(finding => finding.testLine!);
+                        const plan = await planWriterMethodEdits({ baseline: code, lineRefs,
+                            python: pythonExecutable, env: testExecutionEnv });
+                        throwIfExecutionCancelled();
+                        if (!plan.ok) {
+                            throw new AnalysisStageError('validation', 'writer-method-edit-scope',
+                                'The review finding does not identify a supported test-method replacement.', { reasonCode: plan.reasonCode });
+                        }
+                        methodEdit = { plan, lineRefs, feedback: matchedReview.feedback };
+                        reviewerMethodEdits.set(workloadKey, methodEdit);
+                        recordRole('writer-method-edit', 'planned', { baselineHash: plan.baselineHash,
+                            planHash: plan.planHash, methodCount: plan.methods.length });
+                    }
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
+                        : methodEdit ? 'You are the test Writer. Revise the current tests only through WRITER_METHOD_EDIT_V1. Preserve passing inputs and verified assertions. Return one Python fence containing exactly the planned methods in their existing class-name wrappers. Keep signatures, decorators and async status. No module imports, fixtures, new methods or unrelated code; necessary imports may be method-local. Do not invent requirements, mock the target, weaken assertions or perform direct I/O.'
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
                     let prompt = role === 'bug-fixer' ? repairContext(code, failure)
                         : buildWriterRevisionRequest({
                             code,
-                            findings: failure,
-                            reviewFeedback: matchedReview?.feedback,
+                            findings: methodEdit ? JSON.stringify(methodEdit.feedback.findings) : failure,
+                            reviewFeedback: methodEdit?.feedback ?? matchedReview?.feedback,
+                            outputScope: methodEdit ? 'method-replacements' : undefined,
                             moduleName: targetImportModule,
                             functionName: targetFuncName,
                             evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
                                 source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
                                 allowedMockTargets: sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`) })
                         });
-                    if (role === 'writer' && writerAdditionBaseline) {
+                    if (role === 'writer' && writerAdditionBaseline && !methodEdit) {
                         prompt = buildWriterAdditionRevisionPrompt(prompt, writerAdditionBaseline, code, failure);
                     }
-                    const correctionMethods = role === 'writer' ? reviewerCorrectionScopes.get(evidenceHash(code)) : undefined;
-                    if (correctionMethods) { prompt = buildWriterReviewCorrectionPrompt(prompt); }
+                    if (methodEdit) {
+                        prompt = buildWriterMethodEditPrompt(prompt, methodEdit.plan,
+                            matchedReview ? undefined : failure);
+                    } else if (correctionMethods) { prompt = buildWriterReviewCorrectionPrompt(prompt); }
                     // requestBudgeted checks the final prompt, including numeric/resource
                     // evidence, and records a stage-owned failure without Tier fallback.
-                    const revisionWorkload = matchedReview?.workload ?? { findingCount: 1, missingScenarioCount: 0 };
+                    const revisionWorkload = matchedReview?.workload ?? { findingCount: methodEdit?.feedback.findings.length ?? 1, missingScenarioCount: 0 };
                     reviewerRevisionWorkloads.delete(workloadKey);
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(
@@ -4070,7 +4102,29 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         if (merged.normalization) { recordRole('bug-fixer', 'format-normalized', { attempt, ...merged.normalization }); }
                         return merged.code!;
                     }
-                    const candidate = await prepareWriterCandidate(raw, 'writer-revision', attempt);
+                    let candidate: string;
+                    if (methodEdit) {
+                        const replacement = extractWriterAdditionCode(raw);
+                        await recordCandidateMethods(replacement, 'generated', 'writer-revision', code);
+                        const applied = await applyWriterMethodEdits({ baseline: code, lineRefs: methodEdit.lineRefs,
+                            plan: methodEdit.plan, response: raw, python: pythonExecutable, env: testExecutionEnv });
+                        throwIfExecutionCancelled();
+                        completedOutputDiagnostics.delete(evidenceHash(raw));
+                        if (!applied.ok) {
+                            methodEditRejections.set(`${workloadKey}:${evidenceHash(replacement)}`, {
+                                reasonCode: applied.reasonCode,
+                                reason: 'Scoped method replacement rejected: ' + applied.reasonCode
+                                    + '. Return exactly the original planned methods; keep every other method and fixture with the host.' });
+                            recordRole('writer-method-edit', 'rejected', { baselineHash: methodEdit.plan.baselineHash,
+                                planHash: methodEdit.plan.planHash, reasonCode: applied.reasonCode });
+                            return replacement;
+                        }
+                        candidate = await prepareWriterCandidate(applied.code, 'writer-revision', attempt, true);
+                        bindSingleAdditionInventory(replacement, candidate, code, methodEdit.plan.methods.map(method =>
+                            ({ className: method.className, name: method.name })), 'writer-revision');
+                        recordRole('writer-method-edit', 'applied', { baselineHash: methodEdit.plan.baselineHash,
+                            planHash: methodEdit.plan.planHash, codeHash: evidenceHash(candidate), changedMethodCount: applied.changedMethodIds.length });
+                    } else { candidate = await prepareWriterCandidate(raw, 'writer-revision', attempt); }
                     if (correctionMethods) {
                         const methods = methodInventories.get(evidenceHash(candidate));
                         if (methods && (methods.length !== correctionMethods.length
@@ -4089,6 +4143,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     return candidate;
                 },
                 validateRevision: async (previousCode, candidateCode, failure, role) => {
+                    const rejectedEdit = methodEditRejections.get(`${evidenceHash(previousCode)}:${evidenceHash(candidateCode)}`);
+                    if (rejectedEdit) { return rejectedEdit; }
                     const preservePassed = () => checkPreservation(previousCode, candidateCode,
                         passingExecutions.get(evidenceHash(previousCode)) || []);
                     if (role !== 'bug-fixer') { return preservePassed(); }
