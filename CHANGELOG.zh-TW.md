@@ -4,6 +4,12 @@
 
 ## 2026-10-27
 
+### Writer 完整審查交接與候選範圍綁定
+
+- 修復 Reviewer issues 雖含 basis，但 Writer 修訂仍被通用3500字元摘要截斷的交接缺口。正式有效 findings 以 writer-review-feedback-v1 完整封包傳送，綁當前測試 hash、全部問題／依據、AST 方法清單與是否允許補充情境；不符時 typed 停止。純結構／執行文字沿原有界摘要，原完整提示容量、期限、成功情境保護與同候選重審不改。
+- 超過3500字元的五項完整 finding、候選／回饋／範圍不符及既有輸出預算相關13／13通過。兩檔正式整合首次4／5，Reviewer 新斷言誤用帶尾端換行的模型草稿 hash；改為核對提示中完整正規化候選後，該檔1／1重驗通過。其餘stop／length／多finding及父案例4／4通過，原請求次數與配對額度不變；固定回覆不代表真實模型驗收。
+- 原生快測 Node753／753、Python42／42，型別、lint、Webview與生產建置通過。沙箱快測740／753，其13項皆暫存rename的EPERM，由上述同套原生重驗處理，未更改產品檔案發布行為。初次測試 selector／新測試型別與行號亦已修正。Writer 仍回完整測試檔，局部方法替換與第二項完整驗收尚未完成；未執行全量、獨立Mocha、跨平台或新模型驗收。
+
 ### Reviewer 結構化依據契約與資格遷移
 
 - 正式協定升為 review-v8，每項 finding 加上 kind／ref／field／value 的 basis。候選限定事實 ID、明列 scalar 欄位白名單、位置關聯與精確值由本機核對；host-fact／unknown gap／未驗證語義／宿主獨立需求分開，不以欄位一致冒充任意理由已正確。新增完整規格 `docs/reviewer-evidence-basis.md`，更新首要目標、架構及角色入口。

@@ -2,7 +2,11 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildWriterRevisionContext } from '../prompts/compactWriterContext';
 import { formatDependencyMockContract, formatSourceImport } from '../prompts/dependencyMockContract';
-import { buildWriterRevisionRequest, referenceRepeatedTestFile } from '../roles/roleContracts';
+import { buildWriterRevisionRequest, referenceRepeatedTestFile, WriterReviewFeedback } from '../roles/roleContracts';
+import { parseTestReviewDetailed } from '../roles/testReviewer';
+import { evidenceHash } from '../pipeline/analysisJournal';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { testCodeBasis } from './reviewBasisFixture';
 import { getExecutionWriterPrompt, getUserPrompt } from '../roles/unittestWriter';
 import { getReviewEvidence } from '../roles/bugFixer';
 import { WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
@@ -17,6 +21,44 @@ const evidence: WriterEvidenceBundleV3 = {
 };
 const code = 'import unittest\nfrom sample import _load\nclass Cases(unittest.TestCase):\n    def test_load(self):\n        self.assertEqual(_load(), 1)\n';
 const fence = (value: string) => '```python\n' + value + '\n```';
+
+test('complete bound Reviewer findings and method scope survive Writer handoff above the diagnostic limit', () => {
+    const findings = Array.from({ length: 5 }, (_, index) => ({ category: 'assertion-quality', test_line: 'L5',
+        reason: `The assertion has an unverified semantic concern ${index}: ` + 'precision context '.repeat(25) + `REASON_END_${index}`,
+        action: `Strengthen only the existing assertion ${index}: ` + 'preserve supplied inputs '.repeat(18) + `ACTION_END_${index}`,
+        basis: testCodeBasis(5) }));
+    const parsed = parseTestReviewDetailed(JSON.stringify({ findings }), code, true);
+    assert.ok(parsed.review, JSON.stringify(parsed.diagnostics));
+    const feedback: WriterReviewFeedback = { version: 'writer-review-feedback-v1', testHash: evidenceHash(code),
+        findings: parsed.review.issues, methodScope: { mode: 'preserve-method-set', methodIds: ['Cases.test_load'] } };
+    const serializedFindings = JSON.stringify(feedback.findings);
+    assert.ok(serializedFindings.length > 3500, 'exercise the old truncation boundary');
+    const prompt = buildWriterRevisionRequest({ code, findings: serializedFindings, reviewFeedback: feedback,
+        moduleName: 'sample', functionName: '_load', evidence: 'COMPLETE_SOURCE_AND_OBSERVATIONS' });
+    const packet = JSON.parse(/HOST_REVIEW_FINDINGS_V1\n([^\n]+)/.exec(prompt)![1]);
+    assert.deepEqual(packet, feedback, 'no part of any finding or basis becomes a summary');
+    assert.ok(prompt.includes(code));
+    assert.ok(prompt.includes('COMPLETE_SOURCE_AND_OBSERVATIONS'));
+    assert.equal(promptFits('', prompt, 256), false, 'oversized complete feedback stays subject to the final budget gate');
+    const request = { code, findings: serializedFindings, reviewFeedback: feedback,
+        moduleName: 'sample', functionName: '_load', evidence: '' };
+    for (const stale of [
+        { ...request, code: code + '# changed' },
+        { ...request, findings: JSON.stringify(feedback.findings.slice(0, 4)) },
+        { ...request, reviewFeedback: { ...feedback, version: 'old' } },
+        { ...request, reviewFeedback: { ...feedback, methodScope: { ...feedback.methodScope, mode: 'allow-additions' } } },
+        { ...request, reviewFeedback: { ...feedback, methodScope: { ...feedback.methodScope, methodIds: [] } } },
+        { ...request, reviewFeedback: { ...feedback, methodScope: { ...feedback.methodScope, methodIds: ['Cases.test_load', 'Cases.test_load'] } } }
+    ]) {
+        assert.throws(() => buildWriterRevisionRequest(stale as typeof request), error => error instanceof AnalysisStageError
+            && error.stage === 'writer-review-feedback'
+            && (error.diagnostic as { reasonCode?: string })?.reasonCode === 'review-feedback-identity-mismatch');
+    }
+    const addition = { ...feedback, findings: feedback.findings.map(item => ({ ...item, category: 'missing-scenario' as const })),
+        methodScope: { ...feedback.methodScope, mode: 'allow-additions' as const } };
+    assert.match(buildWriterRevisionRequest({ ...request, reviewFeedback: addition, findings: JSON.stringify(addition.findings) }),
+        /"mode":"allow-additions"/);
+});
 
 test('Writer binding contract preserves aliases and relative imports without guessing mock permissions', () => {
     const context = { calls: ['open_session', 'client.fetch', 'local_method'], file_imports: [

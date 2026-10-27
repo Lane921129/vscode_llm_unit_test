@@ -44,3 +44,9 @@ Current observed-outcome checks grant their independent-requirement exemption on
 Formal parsing and role probes require v8 findings. The historical reader still accepts v7 findings without basis when explicitly used as a compatibility reader; this cannot certify a current role. Qualification identity is `python-unittest-v9`, so earlier cached qualifications cannot be inherited. Optional prior qualification remains optional; actual candidates still require real execution and same-candidate review.
 
 Schema-capable transports receive the same nested basis schema. Text fallback retains the same local parser and acceptance rules. A rejected assessment receives at most the existing single correction under the original deadline. Persistent contradictions block review and mutation; report projections show bounded, escaped, redacted bases without storing complete provider replies.
+
+## Writer handoff
+
+The host passes accepted findings to the Writer as a complete `HOST_REVIEW_FINDINGS_V1` packet with version `writer-review-feedback-v1`, the exact candidate `testHash`, all normalized `findings` including their bases, and the current AST `methodScope`. Its mode is `preserve-method-set` unless a finding identifies a missing scenario; `allow-additions` still preserves the existing baseline and quality gates. Missing AST inventory, a mismatched hash, changed findings or an inconsistent scope blocks the handoff.
+
+This packet bypasses the 3500-character summary used for unstructured execution/structure diagnostics. The final request budget must fit the entire packet, candidate and necessary evidence or reject the request. The packet does not approve a correction, a new scenario, a changed fixture or mutation measurement. The current review revision still returns a complete file; method-only AST replacement is a subsequent generalization increment.

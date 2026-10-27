@@ -1,6 +1,9 @@
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 import { EVIDENCE_CONTRACT_VERSIONS } from '../pipeline/evidenceContracts';
 import { executionFailureRepairGuidance, missingNameRepairGuidance } from '../prompts/dependencyMockContract';
+import { createHash } from 'node:crypto';
+import type { ReviewIssue } from './testReviewer';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 
 export const ROLE_CONTRACT_VERSIONS = {
     ...EVIDENCE_CONTRACT_VERSIONS,
@@ -28,6 +31,14 @@ export function referenceRepeatedTestFile(evidence: string, code: string): strin
                 ? '[The identical complete current test file is supplied in CURRENT TEST FILE below.]' : block);
 }
 
+/** Host-owned findings from the exact executed and reviewed candidate. */
+export interface WriterReviewFeedback {
+    version: 'writer-review-feedback-v1';
+    testHash: string;
+    findings: readonly ReviewIssue[];
+    methodScope: { mode: 'preserve-method-set' | 'allow-additions'; methodIds: readonly string[] };
+}
+
 /** Writer owns review, structure, fixture and multi-method execution failures. */
 export function buildWriterRevisionRequest(input: {
     code: string;
@@ -35,8 +46,27 @@ export function buildWriterRevisionRequest(input: {
     moduleName: string;
     functionName: string;
     evidence: string;
+    reviewFeedback?: WriterReviewFeedback;
 }): string {
-    const repairGuidance = [missingNameRepairGuidance(input.findings), executionFailureRepairGuidance(input.findings)]
+    const feedback = input.reviewFeedback;
+    if (feedback && (feedback.version !== 'writer-review-feedback-v1'
+        || feedback.testHash !== createHash('sha256').update(input.code).digest('hex')
+        || !Array.isArray(feedback.findings) || feedback.findings.length < 1 || feedback.findings.length > 5
+        || JSON.stringify(feedback.findings) !== input.findings
+        || !feedback.methodScope || feedback.methodScope.mode !== (feedback.findings.some(item => item.category === 'missing-scenario')
+            ? 'allow-additions' : 'preserve-method-set')
+        || !Array.isArray(feedback.methodScope.methodIds) || !feedback.methodScope.methodIds.length
+        || feedback.methodScope.methodIds.length > 256
+        || feedback.methodScope.methodIds.some(id => typeof id !== 'string' || !id.trim() || /[\r\n]/.test(id))
+        || new Set(feedback.methodScope.methodIds).size !== feedback.methodScope.methodIds.length)) {
+        throw new AnalysisStageError('validation', 'writer-review-feedback', 'Review feedback does not match this candidate and findings.',
+            { reasonCode: 'review-feedback-identity-mismatch' });
+    }
+    // Structured review evidence is indivisible. The final request budget must
+    // accommodate the whole packet or reject it; never summarize nested JSON.
+    const findings = feedback ? 'HOST_REVIEW_FINDINGS_V1\n' + JSON.stringify(feedback)
+        : summarizeRepairOutput(referenceRepeatedTestFile(input.findings, input.code), 3500);
+    const repairGuidance = feedback ? '' : [missingNameRepairGuidance(input.findings), executionFailureRepairGuidance(input.findings)]
         .filter(Boolean).join('\n');
     return `WRITER_REVISION_REQUEST_V2
 === TARGET ===
@@ -44,7 +74,7 @@ Module: ${input.moduleName}
 Function: ${input.functionName}
 
 === REVIEW OR STRUCTURE FINDINGS ===
-${summarizeRepairOutput(referenceRepeatedTestFile(input.findings, input.code), 3500)}${repairGuidance ? '\n' + repairGuidance : ''}
+${findings}${repairGuidance ? '\n' + repairGuidance : ''}
 
 === CURRENT TEST FILE ===
 \`\`\`python

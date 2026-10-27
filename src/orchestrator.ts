@@ -12,7 +12,7 @@ import {
     fitReviewPrompt, getTestReviewerSystemPrompt,
     buildSemanticAnalyzerSystemPrompt, getSemanticAnalyzerUserPrompt, restrictSemanticInputHintsToTargetParameters, formatSemanticContextForPrompt, SemanticAnalysis,
     getQualityAnalystSystemPrompt, selectQualityFocus, QualityAnalystSession, qualityStrategyHints,
-    buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS
+    buildWriterRevisionRequest, ROLE_CONTRACT_VERSIONS, WriterReviewFeedback
 } from './roles';
 import { CandidatePipelineHooks, CandidateValidationError } from './pipeline/testCandidatePipeline';
 import { validateSeedThenCandidate } from './pipeline/seedCandidatePipeline';
@@ -1707,7 +1707,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let reviewWarnings: string[] = [];
     let reviewStatus: ReviewStatus = 'incomplete';
     const reviewSession = new ReviewSession();
-    const reviewerRevisionWorkloads = new Map<string, { feedbackHash: string; workload: WriterRevisionWorkload }>();
+    const reviewerRevisionWorkloads = new Map<string, {
+        feedbackHash: string; workload: WriterRevisionWorkload; feedback: WriterReviewFeedback;
+    }>();
     const reviewerCorrectionScopes = new Map<string, readonly string[]>();
     let analystTasks = '';
     const qualityProgress = new QualityProgress(3);
@@ -3998,16 +4000,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }, (status, detail) => recordRole('reviewer', status, detail));
                     if (assessment?.issues.length) {
+                        const methods = methodInventories.get(evidenceHash(code));
+                        if (!methods?.length) {
+                            throw new AnalysisStageError('validation', 'candidate-inventory-tool', 'Review revision requires the current method inventory.');
+                        }
+                        const preserveMethodSet = assessment.issues.every(issue => issue.category && issue.category !== 'missing-scenario');
                         reviewerRevisionWorkloads.set(evidenceHash(code), {
                             feedbackHash: evidenceHash(JSON.stringify(assessment.issues)),
+                            feedback: { version: 'writer-review-feedback-v1', testHash: evidenceHash(code),
+                                findings: structuredClone(assessment.issues),
+                                methodScope: { mode: preserveMethodSet ? 'preserve-method-set' : 'allow-additions',
+                                    methodIds: methods.map(method => method.id) } },
                             workload: { findingCount: assessment.issues.length,
                                 missingScenarioCount: assessment.issues.filter(issue => issue.category === 'missing-scenario').length }
                         });
-                        if (assessment.issues.every(issue => issue.category && issue.category !== 'missing-scenario')) {
-                            const methods = methodInventories.get(evidenceHash(code));
-                            if (!methods?.length) {
-                                throw new AnalysisStageError('validation', 'candidate-inventory-tool', 'Review correction requires the current method inventory.');
-                            }
+                        if (preserveMethodSet) {
                             reviewerCorrectionScopes.set(evidenceHash(code), methods.map(method => method.id));
                         }
                     }
@@ -4018,12 +4025,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (role === 'writer' ? !mayUseModelAuthoredTests : !mayUseModelAuthoredRepair) {
                         throw new AnalysisStageError('validation', 'role-qualification', localize("Auto 未驗證 {0} 角色不可呼叫該角色修訂。", role));
                     }
+                    const workloadKey = evidenceHash(code);
+                    const reviewedWork = reviewerRevisionWorkloads.get(workloadKey);
+                    const matchedReview = reviewedWork?.feedbackHash === evidenceHash(failure) ? reviewedWork : undefined;
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
                     let prompt = role === 'bug-fixer' ? repairContext(code, failure)
                         : buildWriterRevisionRequest({
                             code,
                             findings: failure,
+                            reviewFeedback: matchedReview?.feedback,
                             moduleName: targetImportModule,
                             functionName: targetFuncName,
                             evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
@@ -4037,10 +4048,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (correctionMethods) { prompt = buildWriterReviewCorrectionPrompt(prompt); }
                     // requestBudgeted checks the final prompt, including numeric/resource
                     // evidence, and records a stage-owned failure without Tier fallback.
-                    const workloadKey = evidenceHash(code);
-                    const reviewedWork = reviewerRevisionWorkloads.get(workloadKey);
-                    const revisionWorkload = reviewedWork?.feedbackHash === evidenceHash(failure)
-                        ? reviewedWork.workload : { findingCount: 1, missingScenarioCount: 0 };
+                    const revisionWorkload = matchedReview?.workload ?? { findingCount: 1, missingScenarioCount: 0 };
                     reviewerRevisionWorkloads.delete(workloadKey);
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(

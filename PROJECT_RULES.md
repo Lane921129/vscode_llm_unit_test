@@ -12,6 +12,7 @@
 - 正式 `review-v8` 每個 finding 必須包含 `basis`，以 kind／ref／field／value 分開主張來源與判斷。工具事實須是同候選明列的 scalar 欄位、相關位置及相同值；缺欄位不推導 false／unknown。evidence-gap 只引用已明列的 unknown；test-code 明示為 unverified 判斷，不冒充工具事實。獨立需求須宿主提供同來源／run／target 的唯一 R-id 與完整原文，不由模型或觀測自創。
 - JSON schema、文字回退及本機 parser 共用此契約。缺失／矛盾依據回原一次同候選契約補正，持續失敗保持未審過，不刪 finding、不授突變批准、不續期限。舊格式只供歷史 reader；資格版本升為 `python-unittest-v9`，不沿用舊角色判定，既有可選事先資格政策不變。
 - 完整規格見 `docs/reviewer-evidence-basis.md`。引用與 scalar 一致只驗證明列前提，不代表任意理由已證明正確；既有有界矛盾防護、真實執行、成功情境保護及品質門檻仍保留。需求封包目前是宿主介面，使用者入口仍屬第三項目標。
+- Reviewer 到 Writer 的正式有效問題使用完整 `writer-review-feedback-v1` 封包，綁候選 hash、全部 findings／basis 及 AST 方法範圍；不得送入通用文字摘要而截斷 JSON。身分、回饋或範圍不符須停止；容量沿既有完整提示 gate 處理，不裁來源或依據、不續期限。封包不授執行或品質批准；局部方法 AST 替換仍須另行實作驗收。
 
 ## 2026-10-26 補測包裝抽取一致性
 

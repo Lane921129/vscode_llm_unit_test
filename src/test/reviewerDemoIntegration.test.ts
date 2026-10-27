@@ -101,6 +101,14 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
             assert.equal(scenario, 'quality');
             assert.match(request.prompt, /assertTupleEqual/);
             assert.ok(candidate, 'a real executed seed precedes its review-driven revision');
+            const feedback = JSON.parse(/HOST_REVIEW_FINDINGS_V1\n([^\n]+)/.exec(request.prompt)![1]);
+            const currentTests = /=== CURRENT TEST FILE ===\n```python\n([\s\S]*?)\n```/.exec(request.prompt)![1];
+            assert.equal(currentTests, candidate.trim(), 'the candidate is the normalized complete Python artifact');
+            assert.equal(feedback.version, 'writer-review-feedback-v1');
+            assert.equal(feedback.testHash, evidenceHash(currentTests), 'the complete review belongs to the exact supplied artifact');
+            assert.equal(feedback.findings.length, 1);
+            assert.deepEqual(feedback.findings[0].basis, testCodeBasis(5));
+            assert.deepEqual(feedback.methodScope, { mode: 'preserve-method-set', methodIds: ['Cases.test_value_0'] });
             response = '```python\n' + candidate.replaceAll('self.assertEqual(', 'self.assertTupleEqual(') + '\n```';
         } else {
             writers++;
