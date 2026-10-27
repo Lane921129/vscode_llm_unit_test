@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-09T17:32:53Z",
-  "updated_at": "2026-10-27T02:30:25Z",
+  "updated_at": "2026-10-27T03:26:01Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -38,218 +38,6 @@
       "sha256": "9956fe6718c734046d34b8558b2bf9038d062249d391aef032558bed32c701db",
       "size": 122,
       "normalized_sha256": "643b7495474761db97e7529d69e0aaf1068c4bf359e7901b26735ce9466a8158"
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_AMS-Regular.woff2": {
-      "role": "observe",
-      "sha256": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308",
-      "size": 28076
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Caligraphic-Bold.woff2": {
-      "role": "observe",
-      "sha256": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c",
-      "size": 6912
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Caligraphic-Regular.woff2": {
-      "role": "observe",
-      "sha256": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b",
-      "size": 6908
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Fraktur-Bold.woff2": {
-      "role": "observe",
-      "sha256": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f",
-      "size": 11348
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Fraktur-Regular.woff2": {
-      "role": "observe",
-      "sha256": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc",
-      "size": 11316
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-Bold.woff2": {
-      "role": "observe",
-      "sha256": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021",
-      "size": 25324
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-BoldItalic.woff2": {
-      "role": "observe",
-      "sha256": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b",
-      "size": 16780
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-Italic.woff2": {
-      "role": "observe",
-      "sha256": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267",
-      "size": 16988
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-Regular.woff2": {
-      "role": "observe",
-      "sha256": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866",
-      "size": 26272
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Math-BoldItalic.woff2": {
-      "role": "observe",
-      "sha256": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1",
-      "size": 16400
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Math-Italic.woff2": {
-      "role": "observe",
-      "sha256": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264",
-      "size": 16440
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_SansSerif-Bold.woff2": {
-      "role": "observe",
-      "sha256": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62",
-      "size": 12216
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_SansSerif-Italic.woff2": {
-      "role": "observe",
-      "sha256": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a",
-      "size": 12028
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_SansSerif-Regular.woff2": {
-      "role": "observe",
-      "sha256": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342",
-      "size": 10344
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Script-Regular.woff2": {
-      "role": "observe",
-      "sha256": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b",
-      "size": 9644
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size1-Regular.woff2": {
-      "role": "observe",
-      "sha256": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe",
-      "size": 5468
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size2-Regular.woff2": {
-      "role": "observe",
-      "sha256": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd",
-      "size": 5208
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size3-Regular.woff2": {
-      "role": "observe",
-      "sha256": "73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995",
-      "size": 3624
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size4-Regular.woff2": {
-      "role": "observe",
-      "sha256": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0",
-      "size": 4928
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Typewriter-Regular.woff2": {
-      "role": "observe",
-      "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b",
-      "size": 13568
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.128.1/5264f2156c/resources/app/extensions/markdown-math/notebook-out/katex.min.css": {
-      "role": "observe",
-      "sha256": "f787891b550d554c214aa8902f39ac46df2dbd48fdec500a2040a5dce1e8ab58",
-      "size": 23352,
-      "normalized_sha256": "f787891b550d554c214aa8902f39ac46df2dbd48fdec500a2040a5dce1e8ab58"
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_AMS-Regular.woff2": {
-      "role": "observe",
-      "sha256": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308",
-      "size": 28076
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Caligraphic-Bold.woff2": {
-      "role": "observe",
-      "sha256": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c",
-      "size": 6912
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Caligraphic-Regular.woff2": {
-      "role": "observe",
-      "sha256": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b",
-      "size": 6908
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Fraktur-Bold.woff2": {
-      "role": "observe",
-      "sha256": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f",
-      "size": 11348
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Fraktur-Regular.woff2": {
-      "role": "observe",
-      "sha256": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc",
-      "size": 11316
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-Bold.woff2": {
-      "role": "observe",
-      "sha256": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021",
-      "size": 25324
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-BoldItalic.woff2": {
-      "role": "observe",
-      "sha256": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b",
-      "size": 16780
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-Italic.woff2": {
-      "role": "observe",
-      "sha256": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267",
-      "size": 16988
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Main-Regular.woff2": {
-      "role": "observe",
-      "sha256": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866",
-      "size": 26272
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Math-BoldItalic.woff2": {
-      "role": "observe",
-      "sha256": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1",
-      "size": 16400
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Math-Italic.woff2": {
-      "role": "observe",
-      "sha256": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264",
-      "size": 16440
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_SansSerif-Bold.woff2": {
-      "role": "observe",
-      "sha256": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62",
-      "size": 12216
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_SansSerif-Italic.woff2": {
-      "role": "observe",
-      "sha256": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a",
-      "size": 12028
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_SansSerif-Regular.woff2": {
-      "role": "observe",
-      "sha256": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342",
-      "size": 10344
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Script-Regular.woff2": {
-      "role": "observe",
-      "sha256": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b",
-      "size": 9644
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size1-Regular.woff2": {
-      "role": "observe",
-      "sha256": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe",
-      "size": 5468
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size2-Regular.woff2": {
-      "role": "observe",
-      "sha256": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd",
-      "size": 5208
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size3-Regular.woff2": {
-      "role": "observe",
-      "sha256": "73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995",
-      "size": 3624
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Size4-Regular.woff2": {
-      "role": "observe",
-      "sha256": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0",
-      "size": 4928
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/fonts/KaTeX_Typewriter-Regular.woff2": {
-      "role": "observe",
-      "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b",
-      "size": 13568
-    },
-    ".vscode-test/vscode-win32-x64-archive-1.136.1/a44adf7f53/resources/app/extensions/markdown-math/notebook-out/katex.min.css": {
-      "role": "observe",
-      "sha256": "f787891b550d554c214aa8902f39ac46df2dbd48fdec500a2040a5dce1e8ab58",
-      "size": 23352,
-      "normalized_sha256": "f787891b550d554c214aa8902f39ac46df2dbd48fdec500a2040a5dce1e8ab58"
     },
     ".vscode/extensions.json": {
       "role": "index",
@@ -5143,9 +4931,9 @@
     },
     "out/i18n/en.js.map": {
       "role": "observe",
-      "sha256": "f1b3cc26809fed22f52aa8ebe7214e7e373e776703a9f8fd106b0b341b0471b9",
+      "sha256": "d780fa53bb79a7add21105212799dd8f36f73d467fc7a7d71b72a29c4248afb4",
       "size": 3778,
-      "normalized_sha256": "f1b3cc26809fed22f52aa8ebe7214e7e373e776703a9f8fd106b0b341b0471b9"
+      "normalized_sha256": "d780fa53bb79a7add21105212799dd8f36f73d467fc7a7d71b72a29c4248afb4"
     },
     "out/i18n/index.js.map": {
       "role": "observe",
@@ -5161,9 +4949,9 @@
     },
     "out/i18n/zh-tw.js.map": {
       "role": "observe",
-      "sha256": "1773dc181b54db2cfe9976df36ee777ab9707953ffde9ee1bac04ee3cb70d7e4",
+      "sha256": "06b0413347291d59fb9126c8d26af822c7fec38b526b6459fbc44bb5737161bf",
       "size": 3666,
-      "normalized_sha256": "1773dc181b54db2cfe9976df36ee777ab9707953ffde9ee1bac04ee3cb70d7e4"
+      "normalized_sha256": "06b0413347291d59fb9126c8d26af822c7fec38b526b6459fbc44bb5737161bf"
     },
     "out/llm/cloudApi.js.map": {
       "role": "observe",
@@ -5371,9 +5159,9 @@
     },
     "out/mutation/mutationSelection.js.map": {
       "role": "observe",
-      "sha256": "8a47981d2eb0dde9f9f09acec2dde5ad81919fa21ecec2760e2670fd64d68027",
-      "size": 2896,
-      "normalized_sha256": "8a47981d2eb0dde9f9f09acec2dde5ad81919fa21ecec2760e2670fd64d68027"
+      "sha256": "8a9c3859f875698b192e03cf1931761c0778a4ad6b72f3d314fee795ed5d3073",
+      "size": 4348,
+      "normalized_sha256": "8a9c3859f875698b192e03cf1931761c0778a4ad6b72f3d314fee795ed5d3073"
     },
     "out/mutation/targetCoverage.js.map": {
       "role": "observe",
@@ -7381,15 +7169,15 @@
     },
     "out/test/mutationSelection.test.js": {
       "role": "observe",
-      "sha256": "9056a0b7f119abe67c365d289a7258b9aaa9e94c0db64e8cbf0ead435b9d38a1",
-      "size": 6634,
-      "normalized_sha256": "9056a0b7f119abe67c365d289a7258b9aaa9e94c0db64e8cbf0ead435b9d38a1"
+      "sha256": "f6e4227222e86dc81801e27251b5816b48deaf70df6b03349370363330eca49d",
+      "size": 9742,
+      "normalized_sha256": "f6e4227222e86dc81801e27251b5816b48deaf70df6b03349370363330eca49d"
     },
     "out/test/mutationSelection.test.js.map": {
       "role": "observe",
-      "sha256": "ad401a3c782806696b6825a50b7e23c08b1da3fbe4e5df298286e4dccb1bec6d",
-      "size": 5011,
-      "normalized_sha256": "ad401a3c782806696b6825a50b7e23c08b1da3fbe4e5df298286e4dccb1bec6d"
+      "sha256": "3027eba079ac40faa11854f03f880c8281d3aca6627692f98c9f7be94290c9e6",
+      "size": 8009,
+      "normalized_sha256": "3027eba079ac40faa11854f03f880c8281d3aca6627692f98c9f7be94290c9e6"
     },
     "out/test/mutationThresholdIntegration.test.js": {
       "role": "observe",
@@ -9559,15 +9347,15 @@
     },
     "out/ui/SidebarProvider.js.map": {
       "role": "observe",
-      "sha256": "e86b52e3cb95f90317e7a276cf4d2b7cbd5984e745b7771835d007290cd283c0",
-      "size": 47957,
-      "normalized_sha256": "e86b52e3cb95f90317e7a276cf4d2b7cbd5984e745b7771835d007290cd283c0"
+      "sha256": "98071f8723173a64ef53222bc223b9f35153354cdf6205344d09c1617820e786",
+      "size": 47967,
+      "normalized_sha256": "98071f8723173a64ef53222bc223b9f35153354cdf6205344d09c1617820e786"
     },
     "out/ui/webviewContent.js.map": {
       "role": "observe",
-      "sha256": "e5ee1439e1e98b0e61a2722015ad9212c30a917d2db81c0201de375e86b30ad1",
-      "size": 5917,
-      "normalized_sha256": "e5ee1439e1e98b0e61a2722015ad9212c30a917d2db81c0201de375e86b30ad1"
+      "sha256": "9955f8382638c0e051e857f7ab167f6f0a4b62eae36b9ced3125579c201e8c3f",
+      "size": 6016,
+      "normalized_sha256": "9955f8382638c0e051e857f7ab167f6f0a4b62eae36b9ced3125579c201e8c3f"
     },
     "out/unittest_writer_prompt.js.map": {
       "role": "observe",
@@ -14821,9 +14609,9 @@
     },
     "src/test/mutationSelection.test.ts": {
       "role": "observe",
-      "sha256": "a656775fede3ceec08f5129470b5acd9f8807d869bc7a4e39ba5a0fcc52559db",
-      "size": 4808,
-      "normalized_sha256": "a656775fede3ceec08f5129470b5acd9f8807d869bc7a4e39ba5a0fcc52559db"
+      "sha256": "8c33eccac4b1334700fd4422ccb7911b616b6ae1f944fb6c2a61a1ba2d0f6de3",
+      "size": 7918,
+      "normalized_sha256": "23826ba381628f9e705c1a06577f39b7eebbe07119161ddf7e2b119fe3fa2ce6"
     },
     "src/test/mutationThresholdIntegration.test.ts": {
       "role": "observe",

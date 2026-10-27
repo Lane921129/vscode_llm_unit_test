@@ -14,7 +14,7 @@ export default {
         mutationMutatest: "Mutatest（外部變異規則）",
         mutationMutmut: "Mutmut（隔離整合尚未完成）",
         mutationWorkers: "突變並行數（1–4）",
-        mutationEngineHint: "Mutatest 3.1.0 提供變異規則，由共用執行器隔離執行。Mutmut 可選取檢查可用性，但隔離整合尚未完成，會在預檢停止；只安裝套件不代表可用。引擎不會自動更換。",
+        mutationEngineHint: "自動偵測依序探測 Mutatest 3.1.0、Mutmut 與內建引擎。Mutmut 的隔離整合尚未完成，會在預檢停止；手動指定特定引擎時絕不默換降級。",
         testFocus: "測試重點",
         requireRoleQualification: "開始前要求通過角色資格測試（可選）",
         roleQualificationHint: "預設關閉，可直接生成，不必先測試連線。正式測試仍須通過實際執行、Reviewer 審查與品質驗證。",

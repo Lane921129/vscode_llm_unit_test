@@ -4,7 +4,7 @@ import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettin
 
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false) {
     const selectedFocus = resolveTestFocus(currentStrategy);
-    const selectedEngine = ['builtin', 'mutatest', 'mutmut'].includes(mutationEngine) ? mutationEngine : 'builtin';
+    const selectedEngine = ['builtin', 'mutatest', 'mutmut', 'auto'].includes(mutationEngine) ? mutationEngine : 'builtin';
     const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
     return `
 <!DOCTYPE html>
@@ -341,6 +341,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
                 <label for="mutation-engine">${t('ui.mutationEngine')}${t('ui.fullModeSuffix')}</label>
                 <select id="mutation-engine">
+                    <option value="auto" ${selectedEngine === 'auto' ? 'selected' : ''}>${t('ui.mutationAuto')}</option>
                     <option value="builtin" ${selectedEngine === 'builtin' ? 'selected' : ''}>${t('ui.mutationBuiltin')}</option>
                     <option value="mutatest" ${selectedEngine === 'mutatest' ? 'selected' : ''}>${t('ui.mutationMutatest')}</option>
                     <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''}>${t('ui.mutationMutmut')}</option>

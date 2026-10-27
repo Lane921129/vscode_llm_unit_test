@@ -4,6 +4,14 @@
 
 ## 2026-10-27
 
+### 突變引擎 auto 自動探測模式
+
+- 在 `package.json`、設定檔與 UI 側邊欄新增突變引擎 `auto` 選項（優先順序：Mutatest 3.1.0 → Mutmut → 內建 AST 引擎）。
+- 在 `mutationExecution.ts` 與 `mutationSelection.ts` 擴充 `SelectedMutationEngine` 與 `selectMutationEngine`：當 `requested === 'auto'` 時，依序安全探測 `mutatest`（需符合 3.1.0 且通過 AST 算子自我檢查）與 `mutmut`，若皆不可用或拋錯則自動降級為零相依之內建 `builtin` 引擎。
+- 維持既有「明選引擎不默換降級（Engines are never silently switched）」原則：使用者明確指定 `mutatest` 或 `mutmut` 時，若預檢失敗仍嚴格停止並回報明確診斷碼。
+- 更新繁中與英文 i18n 提示，Webview 下拉選單提供 `auto` 選項並在測試報告與日誌中誠實保留 `requested` 與 `actual`。
+- 新增 `mutationSelection.test.ts` 4 個單元測試，涵蓋 auto 探測成功選取 mutatest、mutatest 缺失選取 mutmut、兩者皆不可用回退 builtin、以及探測拋錯安全回退；快測 758/758 及側欄設定測試通過。
+
 ### 多 TestCase 最小 Setup 投影與具體輸入差異反饋
 
 - 擴展 `merge_test_snippets.py` 的 `project_addition_context` 與 `testMerger.ts` 的 `projectWriterAdditionContext`，支援至多32個 `unittest.TestCase` 類別骨架與合法 `setUp` 投影；隱藏舊 `test_*` 方法與具體數值，避免多 class 基線回傳 `addition-context-unsupported` 退回整份基線造成跨案例輸入複製污染。有害反射、全域污染、Mock patch 或未授權夾具仍維持保守退回全基線。

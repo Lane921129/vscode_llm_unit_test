@@ -147,12 +147,13 @@
         },
         "llmUnitTest.mutationEngine": {
           "type": "string",
-          "enum": ["builtin", "mutatest", "mutmut"],
+          "enum": ["builtin", "mutatest", "mutmut", "auto"],
           "default": "builtin",
           "enumDescriptions": [
             "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0%",
             "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1%",
-            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2%"
+            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2%",
+            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.3%"
           ],
           "description": "%contributes.configuration.properties.llmUnitTest.mutationEngine.description%"
         },

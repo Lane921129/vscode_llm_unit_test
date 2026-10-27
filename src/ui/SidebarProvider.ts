@@ -325,7 +325,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'setMutationEngine': {
-                    if (!this.activeAnalysis && ['builtin', 'mutatest', 'mutmut'].includes(message.engine)) {
+                    if (!this.activeAnalysis && ['builtin', 'mutatest', 'mutmut', 'auto'].includes(message.engine)) {
                         await this.rememberRunPreference(config, 'mutationEngine', message.engine);
                     }
                     break;

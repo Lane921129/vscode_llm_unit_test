@@ -16,6 +16,7 @@
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0": "Built-in mutation rules with isolated execution (default).",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1": "Mutatest 3.1.0 mutation rules, executed by the extension's shared isolated runner. Requires installation and version and environment checks.",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2": "Mutmut isolated integration is not yet available. Selecting it checks availability and stops during preflight; installing the package alone does not enable the adapter.",
+  "contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.3": "Auto-detect available mutation engine in current environment (Priority: Mutatest 3.1.0 -> Mutmut -> Builtin).",
   "contributes.configuration.properties.llmUnitTest.mutationEngine.description": "Mutation engine for full quality verification. External engines are checked before use; failures stop the run without silently switching to built-in rules.",
   "contributes.configuration.properties.llmUnitTest.mutationWorkers.description": "Number of isolated mutation workers used in full quality mode (1–4).",
   "contributes.viewsContainers.activitybar.0.title": "Mutation Test Analysis",

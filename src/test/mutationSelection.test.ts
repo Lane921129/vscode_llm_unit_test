@@ -67,3 +67,77 @@ test('malformed wrong-engine and unverified-version probes cannot authorize exec
     await assert.rejects(selectMutationEngine('mutmut', 2, async () => ({ code: 0,
         stdout: JSON.stringify({ ...validProbe, engine: 'mutmut', supported: true }) })), AnalysisStageError);
 });
+test('auto selection prioritizes mutatest when probe succeeds', async () => {
+    const probed: string[] = [];
+    const selected = await selectMutationEngine('auto', 3, async args => {
+        const engine = args[args.indexOf('--probe') + 1];
+        probed.push(engine);
+        if (engine === 'mutatest') {
+            return { code: 0, stdout: JSON.stringify(validProbe) };
+        }
+        return { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'mutmut', supported: false }) };
+    });
+    assert.deepEqual(probed, ['mutatest']);
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'mutatest',
+        workers: 3,
+        engineVersion: '3.1.0',
+        operatorSetVersion: 'mutatest-ast-3.1.0-v2',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});
+
+test('auto selection probes mutmut when mutatest probe fails and uses it if supported', async () => {
+    const probed: string[] = [];
+    const selected = await selectMutationEngine('auto', 2, async args => {
+        const engine = args[args.indexOf('--probe') + 1];
+        probed.push(engine);
+        if (engine === 'mutatest') {
+            return { code: 0, stdout: JSON.stringify({ ...validProbe, supported: false, diagnosticCode: 'package-missing' }) };
+        }
+        if (engine === 'mutmut') {
+            return { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'mutmut', supported: true, operatorSetVersion: 'mutmut-ast-v1', engineVersion: '3.7.0' }) };
+        }
+        return { code: 1, stdout: '' };
+    });
+    assert.deepEqual(probed, ['mutatest', 'mutmut']);
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'mutmut',
+        workers: 2,
+        engineVersion: '3.7.0',
+        operatorSetVersion: 'mutmut-ast-v1',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});
+
+test('auto selection falls back to builtin when external engines are unsupported', async () => {
+    const probed: string[] = [];
+    const selected = await selectMutationEngine('auto', 2, async args => {
+        const engine = args[args.indexOf('--probe') + 1];
+        probed.push(engine);
+        return { code: 0, stdout: JSON.stringify({ ...validProbe, engine, supported: false, diagnosticCode: 'adapter-unavailable' }) };
+    });
+    assert.deepEqual(probed, ['mutatest', 'mutmut']);
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'builtin',
+        workers: 2,
+        operatorSetVersion: 'builtin-ast-v3',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});
+
+test('auto selection gracefully falls back to builtin when probe throws', async () => {
+    const selected = await selectMutationEngine('auto', 2, async () => {
+        throw new Error('spawn failure');
+    });
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'builtin',
+        workers: 2,
+        operatorSetVersion: 'builtin-ast-v3',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});

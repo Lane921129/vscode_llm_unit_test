@@ -1,12 +1,12 @@
 import { localize } from '../i18n/core';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { pythonToolPath } from '../pipeline/pythonTools';
-import { MutationEngineSelection } from './mutationExecution';
+import { MutationEngineSelection, ExternalMutationEngine } from './mutationExecution';
 import { BUILTIN_MUTATION_OPERATOR_SET_VERSION } from './mutationResult';
 
 export interface SelectedMutationEngine {
     requested: MutationEngineSelection;
-    actual: MutationEngineSelection;
+    actual: 'builtin' | ExternalMutationEngine;
     workers: number;
     operatorSetVersion: string;
     engineVersion?: string;
@@ -26,13 +26,39 @@ export async function selectMutationEngine(engine: unknown, workers: unknown,
     probe: (args: string[]) => Promise<{ code: number | null; stdout: string }>): Promise<SelectedMutationEngine> {
     const selected = engine ?? 'builtin';
     const concurrency = workers ?? 2;
-    if (typeof selected !== 'string' || !['builtin', 'mutatest', 'mutmut'].includes(selected)
+    if (typeof selected !== 'string' || !['builtin', 'mutatest', 'mutmut', 'auto'].includes(selected)
         || typeof concurrency !== 'number' || !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) {
         throw new AnalysisStageError('environment', 'mutation-preflight', localize('突變引擎或並行數設定無效；並行數須為 1 至 4。'));
     }
     const requested = selected as MutationEngineSelection;
-    const base = { requested, actual: requested, workers: concurrency, executionBackend: 'isolated-unittest-v1' as const };
-    if (requested === 'builtin') { return { ...base, operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION }; }
+    const base = { requested, workers: concurrency, executionBackend: 'isolated-unittest-v1' as const };
+    if (requested === 'builtin') { return { ...base, actual: 'builtin', operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION }; }
+
+    if (requested === 'auto') {
+        // Priority: mutatest => mutmut => builtin
+        try {
+            const mutatestResult = await probe(['-B', pythonToolPath('externalMutation'), '--probe', 'mutatest']);
+            let val: any;
+            try { val = JSON.parse(mutatestResult.stdout); } catch { /* ignore probe output parse */ }
+            if (mutatestResult.code === 0 && val && val.engine === 'mutatest' && val.supported === true
+                && val.operatorSetVersion === 'mutatest-ast-3.1.0-v2' && val.engineVersion === '3.1.0') {
+                return { ...base, actual: 'mutatest', operatorSetVersion: val.operatorSetVersion, engineVersion: val.engineVersion };
+            }
+        } catch { /* probe error, continue */ }
+
+        try {
+            const mutmutResult = await probe(['-B', pythonToolPath('externalMutation'), '--probe', 'mutmut']);
+            let val: any;
+            try { val = JSON.parse(mutmutResult.stdout); } catch { /* ignore probe output parse */ }
+            if (mutmutResult.code === 0 && val && val.engine === 'mutmut' && val.supported === true
+                && typeof val.operatorSetVersion === 'string' && val.operatorSetVersion.length > 0) {
+                return { ...base, actual: 'mutmut', operatorSetVersion: val.operatorSetVersion, engineVersion: val.engineVersion };
+            }
+        } catch { /* probe error, continue */ }
+
+        return { ...base, actual: 'builtin', operatorSetVersion: BUILTIN_MUTATION_OPERATOR_SET_VERSION };
+    }
+
     const result = await probe(['-B', pythonToolPath('externalMutation'), '--probe', requested]);
     let value: any;
     try { value = JSON.parse(result.stdout); } catch { /* Safe diagnostic below, no arbitrary tool output. */ }
@@ -47,7 +73,7 @@ export async function selectMutationEngine(engine: unknown, workers: unknown,
         || value.engineVersion !== '3.1.0') {
         throw new AnalysisStageError('environment', 'mutation-preflight', localize('外部引擎版本不相容；目前 Mutatest 支援 3.1.0。'));
     }
-    return { ...base, operatorSetVersion: value.operatorSetVersion, engineVersion: value.engineVersion };
+    return { ...base, actual: requested, operatorSetVersion: value.operatorSetVersion, engineVersion: value.engineVersion };
 }
 
 export function mutationArguments(selection: SelectedMutationEngine, source: string, tests: string,
