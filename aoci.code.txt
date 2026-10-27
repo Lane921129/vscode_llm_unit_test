@@ -9,7 +9,7 @@ AGENTS.md[SC7S]: F:規定AOCI會話認知、來源綁定創作、完整交付與
 ARCHITECTURE.md[SG7L]: F:說明AI閉環、結構化審查及來源綁定局部合成與通用化順序 | R:code:docs/writer-method-edits.md,code:docs/reviewer-evidence-basis.md,code:src/orchestrator.ts,code:src/validation/testMerger.ts | A:WRITER_METHOD_EDIT_V1、review-v8、expectedOrigin及品質身分 | S:AST合成非oracle或批准，仍重驗focus/重放及native同版審查；混合/缺情境未全局部化。前提非語義證明，舊版本為歷史，補正不續期。
 AUTO_MAINTENANCE.md[SV5T]: F:規範相關回歸、快測、整合與里程碑完整驗證及安全提交推送 | R:code:PROJECT_RULES.md,code:CHANGELOG.zh-TW.md,code:test/verificationRunner.js | A:test:related/fast/integration/full；中文紀錄、雙語commit與push | S:局部/list非全量，unit仍完整；依本次範圍分列未驗項目。分層不放寬產品gate；相容性歷史描述須對照現行引擎契約。
 CHANGELOG.md[SV3T]: F:保存擴充套件早期英文版本的功能、修復與架構變更 | R:code:CHANGELOG.zh-TW.md | A:0.0.1與0.0.2歷史版本紀錄 | S:-
-CHANGELOG.zh-TW.md[SV5L]: F:記錄多TestCase最小投影與具體輸入差異反饋、來源綁定方法替換與審查交接 | R:code:docs/通用化首要目標_2026_10_27.md,code:src/validation/writerMethodEdits.ts,code:src/roles/testReviewer.ts | A:相關58/43、快測754/42、Qwen實跑及多TestCase setup投影驗證 | S:補測setup保留setUp並隱藏舊方法值，qualityFocusInputMismatch附要求與實際呼叫差異。固定回覆非新模型驗收，Qwen實跑涵蓋管線迴圈；跨平台與後續首要目標按清單推進。
+CHANGELOG.zh-TW.md[SV5L]: F:記錄審查缺情境局部AST增補、突變auto探測、多TestCase投影與來源綁定替換 | R:code:docs/通用化首要目標_2026_10_27.md,code:src/orchestrator.ts,code:src/mutation/mutationSelection.ts | A:相關58/43、快測758/42、bmiPreservation整合通過及auto突變與審查增補驗證 | S:missing-scenario由宿主AST合併避免全檔重寫；auto模式依序探測mutatest/mutmut並安全降級builtin。明選不默換；跨平台與後續首要目標依序推進。
 CODE_OF_CONDUCT.md[SS3T]: F:規範社群協作、隱私保護與私下處理行為申訴 | R:code:SECURITY.md | A:建設性討論與保密回報 | S:-
 CONTRIBUTING.md[SV5T]: F:指引開發設定、局部與分層驗證、回歸及安全提交 | R:code:PROJECT_RULES.md,code:CHANGELOG.zh-TW.md,code:test/verificationRunner.js | A:npm ci、F5、related/fast/integration/full、--list及PR要求 | S:快/整合集合互斥覆蓋完整，unit仍全量、Mocha另驗。selector指測試檔而非產品來源；局部非全過。禁止品牌特化、憑證提交及為接受模型輸出放寬gate。
 LICENSE[SG4T]: F:以MIT授權提供使用、修改與散布權利及免責聲明 | R:- | A:Copyright 2026 Lane；散布保留授權與著作權文字 | S:-
@@ -19,9 +19,9 @@ SECURITY.md[SS5T]: F:說明安全修補範圍、私下弱點回報與憑證外�
 esbuild.js[OV6T]: F:打包orchestrator為Node CommonJS擴充入口並提供監看問題輸出 | R:code:src/orchestrator.ts,code:package.json | A:--production壓縮；--watch監看；dist/extension.js | S:vscode維持external；生產版不含來源映射
 eslint.config.mjs[FC4T]: F:為TypeScript設定解析器及命名、括號、等值與分號警告 | R:code:package.json | A:typescript-eslint；ECMAScript2022與module | S:-
 package-lock.json[FV5L]: F:鎖定Node依賴版本與完整性，供可重現開發安裝 | R:code:package.json | A:lockfileVersion3；resolved、integrity與平台條件 | S:Undici標為dev相依，測試Agent不能當產品runtime依賴。
-package.json[FE8M]: F:宣告擴充入口、可選Writer模式、執行設定與分層驗證命令 | R:code:src/orchestrator.ts,code:esbuild.js,code:package.nls.json,code:test/verification.js | A:writerSeedPromptMode預設instruction及選擇命令；full預設 | S:事先資格可選不降候選gate，Writer續寫偏好不授資格或變更其他角色。num_ctx非宣告上限、Trace非模型Timeout。unit仍全量；局部驗證及固定回覆非實模型驗收。
-package.nls.json[FL5T]: F:提供VS Code Writer模式、資格與隔離引擎設定英文文字 | R:code:package.json,code:package.nls.zh-tw.json | A:Writer模式選擇命令及configuration百分號鍵 | S:續寫只Local初始種子、下次run生效；手填容量非資格。Mutmut安裝不代表適配支援。
-package.nls.zh-tw.json[FL5T]: F:提供VS Code Writer模式、資格及隔離引擎設定繁體中文文字 | R:code:package.json,code:package.nls.json | A:Writer生成方式命令及configuration百分號鍵 | S:模式偏好不省正式實跑審查，文字不授資源批准；手填非容量證明。Mutmut未完成不默換引擎。
+package.json[FE8M]: F:宣告擴充入口、突變引擎auto與外部選項、可選Writer模式與分層驗證命令 | R:code:src/orchestrator.ts,code:src/mutation/mutationSelection.ts,code:package.nls.json,code:test/verification.js | A:llmUnitTest.mutationEngine支援auto、builtin、mutatest、mutmut；writerSeedPromptMode預設instruction | S:auto依序探測降級，明選引擎不默換；事先資格可選不降候選gate，Writer偏好不變更其他角色。unit仍全量；局部驗證非實模型驗收。
+package.nls.json[FL5T]: F:提供VS Code突變引擎auto、Writer模式、資格與隔離設定英文文字 | R:code:package.json,code:package.nls.zh-tw.json | A:mutationEngine支援auto描述；Writer模式選擇命令及configuration百分號鍵 | S:auto說明依序探測與降級；續寫只Local初始種子；手填非資格證明。外部引擎未就緒不授支援。
+package.nls.zh-tw.json[FL5T]: F:提供VS Code突變引擎auto、Writer模式、資格與隔離設定繁體中文文字 | R:code:package.json,code:package.nls.json | A:mutationEngine支援auto繁中描述；Writer生成方式命令及configuration百分號鍵 | S:auto說明優先順序與安全回退；模式偏好不省正式實跑審查；手填非容量證明。外部引擎未就緒不授支援。
 requirements.txt[FC6T]: F:依Python版本及平台固定coverage與突變工具的直接相依 | R:code:python_scripts/external_mutation_runner.py,code:src/environment/pythonEnvironmentSetup.ts | A:pip requirements與版本/平台marker | S:Python<3.12用coverage5.5/Mutatest3.1.0；其餘coverage7.16.0，較新非Windows才裝mutmut3.7.0。安裝不授Mutmut適配支援，無模型Python SDK。
 tsconfig.json[FV7T]: F:定義 src TypeScript 的 Node16 模組、ES2022／DOM 型別及嚴格編譯設定 | R:code:package.json,code:esbuild.js | A:include src/**/*.ts; compilerOptions | S:rootDir 為 src 且 Node／Mocha 型別共用；註解內額外檢查未啟用，不能把 noUnused 或 noImplicitReturns 視為現行 gate
 
@@ -185,10 +185,10 @@ schemaPlanning.ts[AW8M]: F:核對靜態SQLite候選與跨來源證據，合併�
 
 ===D:/read/專題/vscode_llm_unit_test/src/i18n/===
 core.ts[CL7T]: F:提供每次非同步作業固定語言的訊息選取與單次參數插值 | R:code:src/i18n/messages.ts,code:src/i18n/en.ts,code:src/i18n/zh-tw.ts | A:setLanguage; withLanguage; localize; t; format | S:插值只做一次，不再解析證據中的括號；翻譯框架文字而保留原始錯誤與來源證據
-en.ts[FL5S]: F:提供英文測試重點、事先資格開關、引擎及容量側欄字典 | R:code:src/i18n/core.ts,code:src/i18n/zh-tw.ts,code:src/ui/webviewContent.ts | A:ui/log/error/prompt；requireRoleQualification與roleQualificationHint | S:提示明示可直接生成但保正式驗證；鍵與中文同步。請求/宣告/觀測分開，手填不證容量或資格；Mutmut未完成即停不默換。
+en.ts[FL5S]: F:提供英文突變引擎auto、測試重點、事先資格開關與容量側欄字典 | R:code:src/i18n/core.ts,code:src/i18n/zh-tw.ts,code:src/ui/webviewContent.ts | A:ui/mutationAuto；ui/log/error/prompt；requireRoleQualification與mutationEngineHint | S:保留隔離整合未完成提示；auto說明探測與回退；請求/宣告/觀測分開，手填不證容量或資格。
 index.ts[EL5T]: F:依擴充設定與宿主語言初始化國際化並轉出常用訊息介面 | R:code:src/i18n/core.ts | A:initI18n; t; getPromptLanguageName | S:auto 使用宿主語言，非英文宿主回到繁體中文
 messages.ts[FL6L]: F:提供Writer診斷與Reviewer結構化資格等框架訊息的英文映射 | R:code:src/i18n/core.ts,code:src/llm/roleQualification.ts,code:src/pipeline/modelOutputDiagnosticsPresentation.ts | A:englishMessages；review-v8與歷史資格文字 | S:只翻框架保原證據，不插provider原文；節錄座標非原回覆，completed語法拒絕非length，詞法非有效測試。
-zh-tw.ts[FL5S]: F:提供繁體中文測試重點、可選資格開關、引擎及容量側欄字典 | R:code:src/i18n/core.ts,code:src/i18n/en.ts,code:src/ui/webviewContent.ts | A:ui/log/error/prompt；requireRoleQualification與roleQualificationHint | S:可直接生成仍保正式驗證；鍵與英文同步。請求/宣告/觀測分開，手填非資格；Mutmut整合未完成即停不默換。
+zh-tw.ts[FL5S]: F:提供繁體中文突變引擎auto、測試重點、可選資格開關與容量側欄字典 | R:code:src/i18n/core.ts,code:src/i18n/en.ts,code:src/ui/webviewContent.ts | A:ui/mutationAuto；ui/log/error/prompt；requireRoleQualification與mutationEngineHint | S:保留隔離整合尚未完成預檢停止提示；auto說明探測與回退；鍵與英文同步，手填非資格。
 
 ===D:/read/專題/vscode_llm_unit_test/src/llm/===
 cloudApi.ts[IN8M]: F:建立Gemini探索與生成請求，投影schema、擷取答案並處理明確thinking能力回退 | R:code:src/llm/customApi.ts,code:src/llm/connectionTimeout.ts,code:src/llm/cloudCredentials.ts | A:buildGoogleGenerateContentRequest；googleResponseSchema；getGoogleGeneratedText；GoogleThinkingSession | S:key只入標頭，思考片段非答案。僅明確不支援thinking才原期限重送；捨棄body非阻塞，500非能力拒絕。OpenAPI只移schema節點additionalProperties，保同名資料及其他限制，不改共用schema。
@@ -220,14 +220,14 @@ modelOutputDiagnostics.ts[CR8S]: F:分類種子輸出恢復並建立可聚焦錯
 writerSeedCompletion.ts[IN7T]: F:組裝可逆完整證據的種子續寫提示並接合模型內容 | R:code:src/pipeline/targetContract.ts,code:src/orchestrator.ts | A:writerSeedCompletionPrompt；assembleWriterSeedCompletion | S:prefix須caller給canonical無body包裝；逐行註解不丟證據。caller先核完整stop，helper不自驗完成；完整Python fence保原文，其餘原樣串接，不修縮排或生成答案，仍須全部候選gate。
 
 ===D:/read/專題/vscode_llm_unit_test/src/mutation/===
-mutationExecution.ts[IR7T]: F:組裝外部突變工具的隔離執行器參數並核驗子程序生命週期證據 | R:code:python_scripts/external_mutation_runner.py,code:src/mutation/mutationResult.ts | A:buildExternalMutationExecution; externalIsolationVerified | S:完整匹配 runId 的 start 與 completed 事件且至少一次通過才證明隔離；外層無 shell 仍須保護工具內層命令引用
+mutationExecution.ts[IR7T]: F:定義突變引擎選擇型別並組裝外部突變工具隔離執行器參數與生命週期證據 | R:code:python_scripts/external_mutation_runner.py,code:src/mutation/mutationResult.ts | A:MutationEngineSelection支援auto；buildExternalMutationExecution；externalIsolationVerified | S:完整匹配 runId 的 start 與 completed 事件且至少一次通過才證明隔離；外層無 shell 仍須保護工具內層命令引用
 mutationProcessFailure.ts[CR7T]: F:將突變程序失敗轉成有界且可追溯的階段錯誤 | R:code:src/mutation/mutationExecution.ts,code:src/mutation/mutationResult.ts | A:突變程序錯誤辨識與診斷建立 | S:僅採用允許的結構化錯誤碼與有限尾端診斷；工具失敗不自動改用另一引擎
 mutationResult.ts[DQ8L]: F:核驗完整突變集合、計數時限及函式啟用證據後衍生分數 | R:code:contracts/mutation-engines-v1.json,code:src/utils/fileIdentity.ts | A:parseIsolatedMutationRun、readStoredMutationRun、FUNCTION_MUTATION_BACKEND | S:同源不同拼法需實體證明。function-v2只函式scope，baseline與KILLED/SURVIVED皆須同hash啟用；缺證據不可計分。零候選、未知全集、timeout或設施錯誤不能冒認完整分數。
-mutationSelection.ts[IC8T]: F:於模型請求前核對引擎版本並生成隔離與函式啟用參數 | R:code:src/mutation/mutationResult.ts,code:python_scripts/external_mutation_runner.py | A:selectMutationEngine、mutationArguments、SelectedMutationEngine | S:指定引擎不默換；Mutatest只接受3.1.0目前v2自檢。僅builtin非class頂層函式明傳activate-functions，實際資格由runner重驗；Mutmut不授支援，零候選非通過。
+mutationSelection.ts[IC8T]: F:於模型請求前核對引擎版本，支援auto自動探測或明選外部引擎並生成隔離參數 | R:code:src/mutation/mutationResult.ts,code:python_scripts/external_mutation_runner.py | A:selectMutationEngine、mutationArguments、SelectedMutationEngine（requested支援auto，actual限定外部或builtin） | S:auto依mutatest→mutmut→builtin順序探測並安全降級；明選指定引擎不默換降級。Mutatest需3.1.0且自檢通過；Mutmut預檢失敗即停。
 targetCoverage.ts[DQ8M]: F:驗證原生coverage與目標呼叫證據，計算選定函式行及分支缺口 | R:code:python_scripts/coverage_read.py,code:src/pipeline/qualityPolicy.ts | A:assessTargetCoverageEvidence; assessTargetCoverage | S:目前量測核對native來源、測試、runId及集合分割；歷史文字解析相容Windows分隔符，不取代本次目標範圍認證
 
 ===D:/read/專題/vscode_llm_unit_test/src/===
-orchestrator.ts[AE9L]: F:編排AI閉環、審查局部替換、多TestCase裸方法容錯與輸入差異反饋 | R:code:src/pipeline/testCandidatePipeline.ts,code:src/roles/roleContracts.ts,code:src/roles/testReviewer.ts,code:src/roles/writerPhases.ts,code:src/validation/writerMethodEdits.ts,code:src/llm/outputRecoveryTiming.ts | A:runAnalysisSession、requestBudgetedOne、prepareWriterCandidate及reviewerMethodEdits | S:多TestCase補測裸方法容錯包裝至首class；quality-focus-input-mismatch注入要求vs實際呼叫差異。無missing-scenario用局部替換，方法外bytes不改。hostComposed仍核focus/重放，applied非批准。期限與恢復不續，stop才接合，preview去密不存原文。
+orchestrator.ts[AE9L]: F:編排AI閉環、審查缺情境局部AST增補、方法替換與輸入差異反饋 | R:code:src/pipeline/testCandidatePipeline.ts,code:src/roles/roleContracts.ts,code:src/roles/testReviewer.ts,code:src/roles/writerPhases.ts,code:src/validation/writerMethodEdits.ts,code:src/validation/testMerger.ts | A:runAnalysisSession、prepareWriterCandidate、mergeWriterTestAddition、writer-review-addition事件 | S:missing-scenario轉局部增補由宿主AST合併，避免全檔重寫；多TestCase裸方法包裝容錯；input-mismatch附具體呼叫差異。方法替換維持同計畫編輯，合成非批准，期限不續。
 
 ===D:/read/專題/vscode_llm_unit_test/src/pipeline/===
 aiWorkflow.ts[DQ8T]: F:定義 AI 審查迴圈版本並在品質測量前核驗精確候選的審查批准 | R:code:src/orchestrator.ts,code:src/pipeline/batchJournal.ts | A:AI_WORKFLOW_VERSION; ReviewApproval; requireReviewApproval | S:批准必須同時匹配 runId、來源摘要、目標與完整測試摘要；只改一個字也須重新執行及審查
@@ -356,8 +356,8 @@ tierFailurePolicy.ts[DW8T]: F:限定生成Tier回退於候選契約耗盡，按�
 
 ===D:/read/專題/vscode_llm_unit_test/src/ui/===
 BatchScopeController.ts[AU7T]: F:以可取消檔案預覽選取並保存工作根對應的批次生成範圍 | R:code:src/pipeline/batchScope.ts,code:src/ui/SidebarProvider.ts,code:src/i18n/core.ts | A:BatchScopeController.preview; invalidate | S:根切換使舊 picker 回覆失效；取消及空選取不啟動批次。狀態保存後仍檢查 revision，避免舊範圍回流
-SidebarProvider.ts[AU8L]: F:橋接依名稱排序的本機模型清單、角色資格、容量及側欄執行所有權 | R:code:src/ui/webviewContent.ts,code:src/llm/connectionQualification.ts,code:src/llm/localRuntimeMetadata.ts,code:src/pipeline/executionTimingSettings.ts | A:fetchLocalModels大小寫不敏感A→Z；prepareLocalAnalysisRuntime；testConnection；begin/endAnalysis | S:執行中不改資格或重建；合法快照不因保存失敗停，await後核owner/取消/revision。Local探針用UI等待、逐角色失敗即停及安全診斷；各provider取消含body，固定Python另限30秒。偏好CAS保選擇，PS非上限、metadata非資格；key只SecretStorage。可選探針不省正式驗證。
-webviewContent.ts[IU8L]: F:產生本地化資格開關、測試重點、容量與結果卡側欄 | R:code:src/ui/SidebarProvider.ts,code:src/pipeline/testFocus.ts,code:src/i18n/core.ts,code:test/extract_script.js | A:getWebviewContent；require-role-qualification；testConnection含timeoutSeconds；共同執行選項 | S:資格勾選隨run快照傳送且執行中鎖定；未測非通過。手填非上限證明，停止不提早解鎖；live file-key保收合，換專案重設。Custom只存名稱、不存key/URL；晚選單保編輯，非法時間不發送，刪卡不刪報告。
+SidebarProvider.ts[AU8L]: F:橋接突變引擎auto選項、本機模型排序清單、角色資格、容量及側欄執行所有權 | R:code:src/ui/webviewContent.ts,code:src/llm/connectionQualification.ts,code:src/llm/localRuntimeMetadata.ts,code:src/mutation/mutationExecution.ts | A:mutationEngine支援auto設定更新；fetchLocalModels大小寫不敏感A→Z；prepareLocalAnalysisRuntime；testConnection | S:auto選項寫入設定並在Webview同步；執行中不改資格或重建；合法快照不因保存失敗停，await後核owner/取消/revision。Local探針逐角色失敗即停。
+webviewContent.ts[IU8L]: F:產生包含突變引擎auto、本地化資格開關、測試重點與容量結果卡側欄 | R:code:src/ui/SidebarProvider.ts,code:src/pipeline/testFocus.ts,code:src/i18n/core.ts,code:src/mutation/mutationExecution.ts | A:getWebviewContent；mutationEngine下拉選單支援auto；require-role-qualification；共同執行選項 | S:突變引擎選單包含auto且預設或回退符合偏好；資格勾選隨run快照傳送且執行中鎖定；未測非通過，手填非上限證明。
 
 ===D:/read/專題/vscode_llm_unit_test/src/utils/===
 dependencyResolver.ts[KA7T]: F:推導 Python 目標 namespace、解析絕對與相對 import 的直接依賴檔案 | R:code:src/orchestrator.ts,code:src/pipeline/targetContract.ts | A:inferTargetImportModule; resolvePythonDependencyPath; formatPythonImport | S:namespace package 需保留內部 import 的同一模組身份，避免同檔載成兩份使 mock patch 錯物件；相對 import 錨定 import 所在檔，絕對 import 錨定 project root

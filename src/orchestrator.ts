@@ -4079,8 +4079,13 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRole('writer-method-edit', 'planned', { baselineHash: plan.baselineHash,
                             planHash: plan.planHash, methodCount: plan.methods.length });
                     }
+                    const isPureMissingScenario = Boolean(matchedReview?.feedback.findings.length
+                        && matchedReview.feedback.findings.every(f => f.category === 'missing-scenario'));
+                    const reviewAdditionBaseline = isPureMissingScenario ? (writerAdditionBaseline || code) : writerAdditionBaseline;
+                    const isAdditionMode = role === 'writer' && Boolean(reviewAdditionBaseline) && !methodEdit;
                     const sys = role === 'bug-fixer' ? getBugFixerSystemPrompt()
                         : methodEdit ? 'You are the test Writer. Revise the current tests only through WRITER_METHOD_EDIT_V1. Preserve passing inputs and verified assertions. Return one Python fence containing exactly the planned methods in their existing class-name wrappers. Keep signatures, decorators and async status. No module imports, fixtures, new methods or unrelated code; necessary imports may be method-local. Do not invent requirements, mock the target, weaken assertions or perform direct I/O.'
+                        : isAdditionMode ? 'You are the test Writer. Revise the current tests by adding only the focused Python test method(s) for the missing scenario(s). Return one Python code fence containing only the new test method(s). Do not return or rewrite passing tests; the host will merge your addition into the executed baseline.'
                         : 'You are the test Writer. Revise the current tests for the supplied concrete review or structure findings. Preserve passing cases and verified assertions. Do not invent requirements. Output the complete test file in one python code fence.';
                     let prompt = role === 'bug-fixer' ? repairContext(code, failure)
                         : buildWriterRevisionRequest({
@@ -4094,8 +4099,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
                                 allowedMockTargets: sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`) })
                         });
-                    if (role === 'writer' && writerAdditionBaseline && !methodEdit) {
-                        prompt = buildWriterAdditionRevisionPrompt(prompt, writerAdditionBaseline, code, failure);
+                    if (role === 'writer' && reviewAdditionBaseline && !methodEdit) {
+                        prompt = buildWriterAdditionRevisionPrompt(prompt, reviewAdditionBaseline, code, failure);
                     }
                     if (methodEdit) {
                         prompt = buildWriterMethodEditPrompt(prompt, methodEdit.plan,
@@ -4147,6 +4152,26 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             ({ className: method.className, name: method.name })), 'writer-revision');
                         recordRole('writer-method-edit', 'applied', { baselineHash: methodEdit.plan.baselineHash,
                             planHash: methodEdit.plan.planHash, codeHash: evidenceHash(candidate), changedMethodCount: applied.changedMethodIds.length });
+                    } else if (reviewAdditionBaseline && !methodEdit) {
+                        const addition = extractWriterAdditionCode(raw);
+                        await recordCandidateMethods(addition, 'generated', 'writer-revision', reviewAdditionBaseline);
+                        const merged = await mergeWriterTestAddition({ baseline: reviewAdditionBaseline,
+                            addition, python: pythonExecutable, env: testExecutionEnv });
+                        throwIfExecutionCancelled();
+                        completedOutputDiagnostics.delete(evidenceHash(raw));
+                        if (!merged.ok) {
+                            additionRejections.set(evidenceHash(addition), {
+                                gate: 'revision-scope', reasonCode: merged.reasonCode,
+                                reason: 'Review addition rejected: ' + merged.reasonCode
+                                    + '. Return only the new test method; keep every existing passing method and fixture with the host.' });
+                            recordRole('writer-review-addition', 'rejected', { reasonCode: merged.reasonCode,
+                                baselineCodeHash: evidenceHash(reviewAdditionBaseline), additionCodeHash: evidenceHash(addition) });
+                            return addition;
+                        }
+                        candidate = await prepareWriterCandidate(merged.mergedCode, 'writer-revision', attempt, true);
+                        bindSingleAdditionInventory(addition, candidate, reviewAdditionBaseline, merged.addedMethods, 'writer-revision');
+                        recordRole('writer-review-addition', 'merged', { baselineCodeHash: evidenceHash(reviewAdditionBaseline),
+                            additionCodeHash: evidenceHash(addition), addedMethodsCount: merged.addedMethodsCount });
                     } else { candidate = await prepareWriterCandidate(raw, 'writer-revision', attempt); }
                     if (correctionMethods) {
                         const methods = methodInventories.get(evidenceHash(candidate));

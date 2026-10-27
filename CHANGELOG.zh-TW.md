@@ -4,6 +4,13 @@
 
 ## 2026-10-27
 
+### 審查缺情境之局部 AST 增補（目標 2 下半部）
+
+- 在 `orchestrator.ts` 擴充 Reviewer 修訂流程：當 Reviewer 回饋僅包含 `missing-scenario` 缺情境時，以當前通過之測試碼為基線（`reviewAdditionBaseline`），將修訂提示切換為極窄的單一 Python 測試方法增補模式（`isAdditionMode`）。
+- 模型僅需產出專注於缺情境的新測試方法，由宿主透過 `mergeWriterTestAddition`（`python_scripts/merge_test_snippets.py`）進行 AST 局部合併與重複過濾，徹底消除以往因 `missing-scenario` 退回全檔重寫而造成的 token 溢出（4096 tokens length）、語法錯誤或破壞既有通過方法之問題。
+- 獨立記錄 `writer-review-addition` 審查增補事件，避免污染品質補測迴圈計數；候選方法庫與清單完整綁定。
+- 整合驗證 `bmiPreservationIntegration.test.js`（涵蓋 weakened 與 dropped 雙場景）通過；全量快測 Node 758/758 及 Python 42/42 通過。
+
 ### 突變引擎 auto 自動探測模式
 
 - 在 `package.json`、設定檔與 UI 側邊欄新增突變引擎 `auto` 選項（優先順序：Mutatest 3.1.0 → Mutmut → 內建 AST 引擎）。
