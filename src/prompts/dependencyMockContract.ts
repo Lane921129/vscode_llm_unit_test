@@ -148,8 +148,15 @@ export function formatDependencyMockContract(module: string, context?: any, allo
     const optionalGuidance = /\b(?:getattr|hasattr|__file__)\b/u.test(setupSource)
         ? OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE + ' ' : '';
     const clockGuidance = immutableClockSetupGuidance(module, context, imports, context?.dependency_fixture_contract);
+    const hasExistingObjects = context?.referenced_globals?.some((item: any) =>
+        (item.binding_kind || item.kind) === 'existing-object'
+        || (!item.binding_kind && !item.kind && /\b\w+\s*\(/.test(item.code || '')));
     const globalsGuidance = context?.referenced_globals?.length
-        ? 'Source globals are not test globals: explicitly import the canonical target module and read its source-shown bindings. ' : '';
+        ? 'Source globals are not test globals: explicitly import the canonical target module and read its source-shown bindings. '
+            + (hasExistingObjects
+                ? 'Module objects (e.g. instantiated engines, clients, models) are already created at module scope: NEVER copy their initialization code into test methods; access them via the imported module or patch their use points. '
+                : '')
+        : '';
     const conversions = context?.referenced_globals?.length || /\bstr\s*\(/u.test(setupSource)
         ? 'For dependency call assertions, retain source-shown argument conversions and types: str(path) is not the Path object. ' : '';
     const observations = [...context?.traceResult?.examples || [], ...context?.traceResult?.errors || []];

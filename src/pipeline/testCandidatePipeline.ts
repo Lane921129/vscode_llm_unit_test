@@ -176,8 +176,7 @@ export async function validateTestCandidate(
                     if (recoverWithWriter(attempt, 'repeated-candidate')) { continue; }
                     throw new CandidateValidationError(localize("Bug Fixer 未產生有效變更，停止重複修復：{0}", lastFailure));
                 }
-                if (writerRecoveryAttempt) { break; }
-                continue;
+                break;
             }
             if (arithmetic) {
                 // Tool work has its own bounded allowance; retain the model's
@@ -313,7 +312,10 @@ export async function validateTestCandidate(
             || /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)
             ? 'writer' : 'bug-fixer';
     }
-    const reason = localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', lastFailure);
+    const failureDetail = lastFailure.startsWith('NO CHANGE:')
+        ? `${localize("沒有有效修改：測試修訂產生了相同候選，停止重複修復。")}\n${lastFailure}`
+        : lastFailure;
+    const reason = localize("測試候選未通過驗證（修訂上限 {0}{1}）：{2}", maxRevisions, writerRecoveryUsed ? localize("，已使用一次 Writer 接手") : '', failureDetail);
     if (unresolvedReview) {
         throw new AnalysisStageError('validation', 'reviewer', reason, { reasonCode: 'review-revisions-exhausted' });
     }

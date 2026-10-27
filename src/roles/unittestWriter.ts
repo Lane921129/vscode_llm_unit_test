@@ -372,9 +372,41 @@ export function getUserPrompt(
             prompt += `- Available module imports: ${astContext.file_imports.map(formatSourceImport).join('; ')}\n`;
         }
         if (astContext.referenced_globals?.length > 0) {
-            prompt += `- Referenced module constants (use exact values):\n`;
-            for (const item of astContext.referenced_globals) {
-                prompt += `  - ${item.code}\n`;
+            const constants = astContext.referenced_globals.filter((item: any) =>
+                (item.binding_kind || item.kind) === 'literal-constant'
+                || (!item.binding_kind && !item.kind && !/\b\w+\s*\(/.test(item.code || '')));
+            const existingObjects = astContext.referenced_globals.filter((item: any) =>
+                (item.binding_kind || item.kind) === 'existing-object'
+                || (!item.binding_kind && !item.kind && /\b\w+\s*\(/.test(item.code || '')));
+            const references = astContext.referenced_globals.filter((item: any) =>
+                (item.binding_kind || item.kind) === 'object-reference');
+            const unknowns = astContext.referenced_globals.filter((item: any) =>
+                (item.binding_kind || item.kind) === 'unknown');
+
+            if (constants.length > 0) {
+                prompt += `- Referenced module constants (use exact values):\n`;
+                for (const item of constants) {
+                    prompt += `  - ${item.code}\n`;
+                }
+            }
+            if (existingObjects.length > 0) {
+                const targetMod = astContext?.target_import_module || moduleName;
+                prompt += `- Referenced module objects (ALREADY instantiated at module scope; DO NOT copy initialization code into tests; access via ${targetMod}.<name> or patch at use-point):\n`;
+                for (const item of existingObjects) {
+                    prompt += `  - ${item.name} (instantiated as \`${item.code.trim()}\` in module; do not re-initialize in test)\n`;
+                }
+            }
+            if (references.length > 0) {
+                prompt += `- Referenced module aliases (reference to existing object; do not re-initialize):\n`;
+                for (const item of references) {
+                    prompt += `  - ${item.code}\n`;
+                }
+            }
+            if (unknowns.length > 0) {
+                prompt += `- Referenced module globals (dynamic or rebound; verify in source):\n`;
+                for (const item of unknowns) {
+                    prompt += `  - ${item.code}\n`;
+                }
             }
         }
         const rawConditionFacts: Array<string | null> = Array.isArray(astContext.condition_facts)

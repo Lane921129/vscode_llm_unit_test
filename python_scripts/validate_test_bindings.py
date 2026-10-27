@@ -123,7 +123,7 @@ def _definite_test_name_failure(tree, code, ignored):
 
             failure = statements(method.body)
             if failure:
-                return {**failure, 'method': method.name}
+                return {**failure, 'method': method.name, 'line': method.lineno, 'className': cls.name}
     return None
 
 

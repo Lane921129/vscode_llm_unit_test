@@ -63,6 +63,40 @@ def bound_names(node):
     return set()
 
 
+def is_literal_constant(node):
+    if node is None:
+        return False
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return all(is_literal_constant(elt) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(is_literal_constant(k) and is_literal_constant(v) for k, v in zip(node.keys, node.values))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
+        return True
+    return False
+
+
+def classify_module_binding(node, counts, dynamic):
+    """Classify a module-level assignment AST node into its binding kind."""
+    if dynamic:
+        return 'unknown', None
+    val = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
+    if val is None:
+        return 'unknown', None
+    names = assignment_names(node)
+    if any(counts.get(name, 0) > 1 for name in names):
+        return 'unknown', None
+    if is_literal_constant(val):
+        return 'literal-constant', None
+    if isinstance(val, ast.Call):
+        callee = ast.unparse(val.func) if hasattr(ast, 'unparse') else ''
+        return 'existing-object', callee
+    if isinstance(val, (ast.Name, ast.Attribute)):
+        return 'object-reference', None
+    return 'unknown', None
+
+
 def function_scope_bindings(func_node):
     """Names which shadow module bindings throughout this function's scope.
 
@@ -819,6 +853,23 @@ def extract_info(filepath, func_name):
             if isinstance(node, ast.ClassDef)
         }
 
+        counts = {}
+        dynamic = False
+        for node in tree.body:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                for name in assignment_names(node):
+                    counts[name] = counts.get(name, 0) + 1
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and any(alias.name == '*' for alias in node.names):
+                dynamic = True
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ('eval', 'exec', 'globals', 'locals'):
+                dynamic = True
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                declared = {name for stmt in node.body for part in ast.walk(stmt) if isinstance(part, ast.Global) for name in part.names}
+                written = {child.id for stmt in node.body for child in ast.walk(stmt) if isinstance(child, ast.Name) and isinstance(child.ctx, (ast.Store, ast.Del))}
+                for name in declared & written:
+                    counts[name] = counts.get(name, 0) + 1
+
         file_imports, imported_symbols, module_globals = [], {}, {}
         for node in tree.body:
             if isinstance(node, ast.Import):
@@ -844,8 +895,17 @@ def extract_info(filepath, func_name):
                         'level': node.level
                     }
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                kind, callee = classify_module_binding(node, counts, dynamic)
                 for name in assignment_names(node):
-                    module_globals[name] = {'name': name, 'code': source_for(lines, node)}
+                    entry = {
+                        'name': name,
+                        'code': source_for(lines, node),
+                        'kind': kind,
+                        'binding_kind': kind
+                    }
+                    if callee:
+                        entry['initialization_callee'] = callee
+                    module_globals[name] = entry
 
         func_node, class_name, class_node = find_function_in_tree(tree, func_name)
         if func_node is None:

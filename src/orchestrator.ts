@@ -1375,6 +1375,65 @@ function sanitizeLlmResponse(rawCode: string): string {
     return extractPythonTestCode(cleanCode);
 }
 
+function locateMethodLineInCandidate(code: string, methodName: string): number | undefined {
+    const lines = code.split(/\r?\n/);
+    const matches: number[] = [];
+    lines.forEach((line, index) => {
+        if (new RegExp(`^\\s*(?:async\\s+)?def\\s+${methodName}\\s*\\(`).test(line)) {
+            matches.push(index + 1);
+        }
+    });
+    return matches.length === 1 ? matches[0] : undefined;
+}
+
+function buildNameBindingEvidence(
+    missingName: string,
+    methodName: string,
+    targetImportModule: string,
+    astContext?: any
+): string {
+    const lines: string[] = [
+        `NAME BINDING EVIDENCE FOR ${methodName}:`,
+        `The symbol '${missingName}' was referenced in '${methodName}' but is undefined in scope.`
+    ];
+    const globalMatch = (astContext?.referenced_globals || []).find((g: any) => g.name === missingName);
+    if (globalMatch) {
+        const kind = globalMatch.binding_kind || globalMatch.kind;
+        if (kind === 'existing-object' || (!kind && /\b\w+\s*\(/.test(globalMatch.code || ''))) {
+            lines.push(
+                `- '${missingName}' is an ALREADY instantiated module object at '${targetImportModule}.${missingName}'.`,
+                `- DO NOT copy its module-level initialization statement (\`${globalMatch.code.trim()}\`) into test methods.`,
+                `- Access it via '${targetImportModule}.${missingName}' or patch its use point if needed.`
+            );
+        } else if (kind === 'literal-constant') {
+            lines.push(
+                `- '${missingName}' is a module constant defined at '${targetImportModule}.${missingName}' (\`${globalMatch.code.trim()}\`).`,
+                `- Access it as '${targetImportModule}.${missingName}'.`
+            );
+        } else {
+            lines.push(
+                `- '${missingName}' is defined at module scope: \`${globalMatch.code.trim()}\`.`,
+                `- Access it as '${targetImportModule}.${missingName}' or define a test-local fixture.`
+            );
+        }
+    } else {
+        const importMatch = (astContext?.file_imports || []).find((imp: any) =>
+            imp.bound_name === missingName || imp.alias === missingName || imp.name === missingName);
+        if (importMatch) {
+            lines.push(
+                `- '${missingName}' is imported in '${targetImportModule}' from '${importMatch.module}'.`,
+                `- In tests, import it explicitly or use '${targetImportModule}.${missingName}'.`
+            );
+        } else {
+            lines.push(
+                `- '${missingName}' is not a local fixture or imported symbol.`,
+                `- Define '${missingName}' as a controlled fixture within the method, import it explicitly, or remove its unproven use.`
+            );
+        }
+    }
+    return lines.join('\n');
+}
+
 /** Require both a unittest shape and a real Python AST before writing a test file. */
 async function validateGeneratedTestCode(
     code: string,
@@ -2951,6 +3010,71 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             recordRole('writer', 'candidate', { code: bindingCandidate,
                                 repairMode: 'source-test-binding-repair-v1', contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision });
                             return bindingCandidate;
+                        }
+                        const nameMatch = /Writer binding repair: ([_\p{ID_Start}][_\p{ID_Continue}]*) is undefined or read before its local binding in ([_\p{ID_Start}][_\p{ID_Continue}]*)\./u.exec(failure);
+                        if (nameMatch) {
+                            const missingName = nameMatch[1];
+                            const methodName = nameMatch[2];
+                            const methodLine = locateMethodLineInCandidate(code, methodName);
+                            if (methodLine !== undefined) {
+                                const methodPlan = await planWriterMethodEdits({
+                                    baseline: code,
+                                    lineRefs: [methodLine],
+                                    python: pythonExecutable,
+                                    env: testExecutionEnv
+                                });
+                                throwIfExecutionCancelled();
+                                if (methodPlan.ok) {
+                                    recordRole('writer-method-edit', 'planned', {
+                                        baselineHash: methodPlan.baselineHash,
+                                        planHash: methodPlan.planHash,
+                                        methodCount: methodPlan.methods.length,
+                                        trigger: 'name-binding-repair'
+                                    });
+                                    const bindingEvidence = buildNameBindingEvidence(missingName, methodName, targetImportModule, astContext);
+                                    const basePrompt = getExecutionWriterPrompt(evidence, code, failure) + '\n' + bindingEvidence
+                                        + executionHelperRepairGuidance(failure, targetImportModule, params.filePath,
+                                            astContext, sourceMockUsePointNames)
+                                        + sourceLiteralRepairGuidance(failure, targetImportModule, astContext);
+                                    const methodPrompt = buildWriterMethodEditPrompt(basePrompt, methodPlan);
+                                    const raw = await requestBudgeted(params, getExecutionWriterSystemPrompt(), methodPrompt, log,
+                                        'text', 'writer-revision', undefined, 0, code, undefined, undefined,
+                                        { findingCount: 1, missingScenarioCount: 0 }, 'test-binding');
+                                    throwIfExecutionCancelled();
+                                    const applied = await applyWriterMethodEdits({
+                                        baseline: code,
+                                        lineRefs: [methodLine],
+                                        plan: methodPlan,
+                                        response: raw,
+                                        python: pythonExecutable,
+                                        env: testExecutionEnv
+                                    });
+                                    throwIfExecutionCancelled();
+                                    if (applied.ok) {
+                                        recordRole('writer-method-edit', 'candidate', {
+                                            code: applied.code,
+                                            baselineHash: methodPlan.baselineHash,
+                                            planHash: methodPlan.planHash,
+                                            changedMethodIds: applied.changedMethodIds,
+                                            contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision
+                                        });
+                                        return applied.code;
+                                    } else if (applied.reasonCode === 'edit-no-method-change') {
+                                        recordRole('writer-method-edit', 'rejected', {
+                                            baselineHash: methodPlan.baselineHash,
+                                            planHash: methodPlan.planHash,
+                                            reasonCode: applied.reasonCode
+                                        });
+                                        throw new CandidateValidationError(localize("沒有有效修改：測試修訂未變更方法內容，停止重複修復。"));
+                                    } else {
+                                        recordRole('writer-method-edit', 'rejected', {
+                                            baselineHash: methodPlan.baselineHash,
+                                            planHash: methodPlan.planHash,
+                                            reasonCode: applied.reasonCode
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                     if (role === 'writer' && /^Do not patch .+: .+ is a parameter of .+, not a module attribute of .+\./.test(failure)) {

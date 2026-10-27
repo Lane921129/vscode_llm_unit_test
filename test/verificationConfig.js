@@ -15,7 +15,7 @@ const fastNodeTests = new Set([
     'executionContext', 'executionFailureCategory', 'focusedQualityProgress',
     'focusedWriterAdditions', 'generatedTestValidator', 'localRuntimeContext',
     'localRuntimeMetadata', 'modelQualification', 'modelRequestProgress',
-    'modelRequestTimingPresentation', 'mutantTriageParser', 'mutationProcessFailure',
+    'modelRequestTimingPresentation', 'moduleGlobalBindingAndMethodRepair', 'mutantTriageParser', 'mutationProcessFailure',
     'mutationResult', 'mutationSelection', 'noChangeRecovery', 'numericEvidenceLedger',
     'ollamaGenerationResponse', 'ollamaOutputLimitDiagnostics', 'ollamaPrompt',
     'ollamaQualificationStreaming', 'ollamaRuntimeMetadata', 'outputRecoveryTiming',

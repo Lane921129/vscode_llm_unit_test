@@ -150,7 +150,12 @@ class Worker:
         self.assertEqual(data['method_kind'], 'instance')
         self.assertIn('operating_system.path.exists', data['calls'])
         self.assertIn('normalize_value', data['calls'])
-        self.assertEqual(data['referenced_globals'], [{'name': 'MAXIMUM', 'code': 'MAXIMUM = 10'}])
+        self.assertEqual(data['referenced_globals'], [{
+            'name': 'MAXIMUM',
+            'code': 'MAXIMUM = 10',
+            'kind': 'literal-constant',
+            'binding_kind': 'literal-constant'
+        }])
         self.assertEqual(data['class_context']['init']['params'], ['config', 'client'])
         self.assertEqual(data['class_context']['init']['required_params'], ['config'])
         self.assertEqual(data['class_context']['init']['optional_params'], ['client'])
@@ -264,7 +269,12 @@ def enclosing():
             global_data = self.run_script('ast_extractor.py', target, 'update')
             nonlocal_data = self.run_script('ast_extractor.py', target, 'read')
 
-        self.assertEqual(global_data['referenced_globals'], [{'name': 'LIMIT', 'code': 'LIMIT = 10'}])
+        self.assertEqual(global_data['referenced_globals'], [{
+            'name': 'LIMIT',
+            'code': 'LIMIT = 10',
+            'kind': 'unknown',
+            'binding_kind': 'unknown'
+        }])
         self.assertEqual(nonlocal_data['referenced_globals'], [])
 
     def test_extractor_does_not_treat_comprehension_bindings_as_global_or_imported_dependencies(self):

@@ -1052,6 +1052,8 @@ export const englishMessages: Record<string, string> = {
     "品質分析連續兩次格式無效；停止額外請求，使用實測缺口補測指引。": "Quality analysis format invalid twice; stopping extra requests and using measured gaps to guide supplemental tests.",
     "Bug Fixer 已處理過相同失敗，停止重複修復：{0}": "Bug Fixer already handled the same failure; stopping repeated repair: {0}",
     "Bug Fixer 未產生有效變更，停止重複修復：{0}": "Bug Fixer made no effective change; stopping repeated repair: {0}",
+    "沒有有效修改：測試修訂產生了相同候選，停止重複修復。": "No effective modification: test revision produced an identical candidate; stopping repeated repairs.",
+    "沒有有效修改：測試修訂未變更方法內容，停止重複修復。": "No effective modification: test revision did not change method contents; stopping repeated repairs.",
     "Reviewer 審查未完成；工具執行通過不代表模型審查通過。": "Reviewer incomplete; passing tool execution does not mean model review passed.",
     "測試候選未通過驗證（修訂上限 {0}{1}）：{2}": "Test candidate failed validation (revision limit {0}{1}): {2}",
     "，已使用一次 Writer 接手": "; one Writer recovery used",

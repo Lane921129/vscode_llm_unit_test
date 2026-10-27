@@ -2,6 +2,26 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-28
+
+### 模組全域物件與初始化宣告區分、名稱錯誤局部方法修復與重複候選停止
+
+- 針對車輛專案批次暴露之首個目標（模組已具備頂層實例化物件，模型卻將初始化宣告複製至測試方法並引發名稱未綁定，且重複回傳相同無效候選）實作共用改善，不加入 `init_db`、`engine`、車輛專案、SQLAlchemy 或特定模型特例。
+- **區分模組全域物件與初始化宣告**：
+  - 在 `ast_extractor.py` 新增 `is_literal_constant` 與 `classify_module_binding`，以 AST 精準分類模組頂層指派為 `literal-constant`（常數）、`existing-object`（呼叫實例化物件）、`object-reference`（物件別名引用）與 `unknown`。若存在動態執行（`eval`/`exec`/`globals`/`locals`/`*` 匯入）或在函式內以 `global` 重新賦值，保守維持 `unknown`。
+  - 在 `unittestWriter.ts` 與 `dependencyMockContract.ts` 依分類分流：常數維持 exact values 提示；已實例化物件明確標註「已於模組頂層建立，禁止在測試方法中複製初始化程式碼，請透過模組屬性存取或於使用點 patch」，避免模型誤將宣告當作測試 setup 重寫。
+- **將明確名稱錯誤接到局部方法修復**：
+  - 擴充 `validate_test_bindings.py`，在名稱未綁定時回傳失敗方法的精確行號 `line` 與 `className`。
+  - 在 `orchestrator.ts` 串接：當檢查器能唯一定位測試方法且非單純來源相依修復時，以當前被拒候選為基線建立 `WRITER_METHOD_EDIT_V1` 局部方法修復計畫。
+  - 注入由 AST 事實構建之 `NAME BINDING EVIDENCE`（明確指出符號為既有模組物件、常數、匯入或未定義），要求模型僅回傳修正後的測試方法，由宿主 AST 局部替換，保留其餘方法、fixture 與簽名。
+  - 若模型回傳未變更內容（`edit-no-method-change`），明確拋出 `沒有有效修改：測試修訂未變更方法內容，停止重複修復。`。
+- **改善相同無效候選之修訂停止處理**：
+  - 在 `testCandidatePipeline.ts` 中，當 Writer 修訂產出已嘗試過之完全相同候選（`!feedback.consider`）時，不再進入無效重試迴圈，立即 `break` 退出修訂。
+  - 在修訂失敗原因中明示 `沒有有效修改：測試修訂產生了相同候選，停止重複修復。`，同時完整保留既有診斷細節與 `已使用一次 Writer 接手` 標記，沿原額度停止，不重設期限、不增加嘗試次數、不重跑已知無效測試。
+- **驗證**：
+  - 新增 `moduleGlobalBindingAndMethodRepair.test.ts` 4 個單元測試，全數通過。
+  - 全量快測 Node 764/764 通過（97 檔案，0 失敗、0 略過），Python 快測 42/42、`test_ast_pipeline` 87/87、`test_writer_retrieval` 6/6 通過。
+
 ## 2026-10-27
 
 ### 套件匯入探測與副作用函式的共用修正
