@@ -7,6 +7,11 @@
 - 依使用者指示，依序推進工具事實／模型判斷契約、局部修改與 host AST 合成、使用者 fixture／需求契約、能力適配、未見專案重複驗收、可重現公開版本。驗收條件與逐項進度以 `docs/通用化首要目標_2026_10_27.md` 為目前工作入口，優先於歷史待辦順序。
 - 六項均保留現行安全與品質門檻；可獨立驗證的增量完成後才提交推送，回歸通過不得冒充真實模型或跨平台驗收。第一項未完成整體結構化依據驗收前，不能以單一語句攔截宣稱已完成。
 
+## 2026-10-27 匯入能力探測與回傳流程
+
+- 共用執行防護只可對已安裝 Python 原始碼套件正在匯入自身模組的精確 loopback／port 0 bind 提供固定 OSError，讓套件走無網路能力分支；必須核實安裝根、真實 loader／spec／模組 globals 及磁碟編譯 code 身分。此路徑不得執行 native bind，不按套件、專案或模型名稱授權；應用、匯入後呼叫、偽造 filename、其他地址／port、connect／DNS／sendto 及 raw bind 仍鎖存違規。
+- 來源 setup 契約可附 target body 的 returnFlow 與結果丟棄站點；獨立 scope 不混入，async／generator／decorator 保持 unknown。普通無值 return 函式只在正常完成時回 None，不把相依 Mock.return_value 傳給外層。Writer 與 Fixer 共用來源事實，測試須核實來源副作用；None-only 不足以驗證副作用。來源行為非獨立需求 oracle，不依失敗輸出自動改 expected，不省 native、同候選審查或品質 gate。
+
 ## 2026-10-27 Reviewer 結構化依據
 
 - 正式 `review-v8` 每個 finding 必須包含 `basis`，以 kind／ref／field／value 分開主張來源與判斷。工具事實須是同候選明列的 scalar 欄位、相關位置及相同值；缺欄位不推導 false／unknown。evidence-gap 只引用已明列的 unknown；test-code 明示為 unverified 判斷，不冒充工具事實。獨立需求須宿主提供同來源／run／target 的唯一 R-id 與完整原文，不由模型或觀測自創。

@@ -4,6 +4,15 @@
 
 ## 2026-10-27
 
+### 套件匯入探測與副作用函式的共用修正
+
+- 針對 BMI `21_21` 與車輛 `21_29` 分析後的兩項問題修正共用流程，不修改受測專案及歷史結果。BMI 原實驗室三輪保留7方法、目標行10／10與 Mutatest39／39；車輛269目標中3項共用受阻模組，首個實際測試把內層 Mock 回傳當外層回傳而失敗，其餘265待處理，不借 BMI 成績宣稱整批成功。
+- 安裝根內的 Python source 套件在自身匯入時做精確 loopback／port 0 bind，核實 loader、spec、globals、實際匯入 frame 及磁碟編譯 code 後，於 native bind 前回固定 OSError，讓套件選擇隔離環境無網路能力；沒有開埠或發送請求。不按套件／專案／模型名稱豁免；應用、匯入後呼叫、偽造 filename、其他地址／port、connect／DNS／sendto／raw bind 仍鎖存違規，吞例外也不算通過。
+- `source_setup_call_contract` 增加可選 returnFlow，分開普通函式正常完成的 None、含值 return 與 unknown，另列直接丟棄呼叫結果的站點；排除內層 scope，async／generator／decorator 保留 unknown。來源 hash、目標、欄位形狀及界線核驗後交給 Writer 與 Fixer；不把依賴 Mock.return_value 當成外層結果，不依失敗輸出自動改 expected，None-only 不足以驗證副作用。
+- 相關 Node35／35、Python46／46通過；中性模組依賴與參數依賴兩種來源形狀均先重現錯誤，再以固定修復回覆通過真實執行與同候選重新審查，刪除副作用呼叫會使修正測試失敗。額外 runner／可靠性整合45／45通過；初輪單獨選取的既有測試缺少自身匯入路徑，已修正並重跑同兩檔。新增整合初次缺必要 event 介面，已補齊並通過後續編譯及整合；初次探測測試的 stderr 編碼也已統一 UTF-8。
+- 已安裝 requests2.34.2／urllib3 2.3.0 於 Python3.13.2 的實際匯入、正式預檢、Trace 與 native runner 通過，全程未發送網路請求；使用者 site-packages 與 interpreter 安裝根皆納入來源證明。此驗證不安裝套件，不證明真實通知或外部網路整合。
+- 原生快測 Node760／760、Python42／42、型別、lint、Webview 語法、正式建置及追蹤檔／可達歷史密鑰掃描通過。未跑完整274檔 Node／52檔 Python、獨立 Mocha、跨平台或新的真實 LLM 車輛整批；固定回覆不代表模型已能自行修正。六項通用化目標仍依原驗收條件接續，隔離、保留情境、native、同候選 Reviewer 與品質 gate 保持。
+
 ### Gemini 改進審查與後續修正
 
 - 檢查 `c5753ce`、`e40da17`、`51ce87a`，保留多 TestCase setup 投影、具體輸入差異回饋及 auto 選項。新增回歸先重現4項失敗：auto 吞取消／期限／程序錯誤、無效 probe 被冒當不可用、任意 Mutmut 算子版本獲准，以及多 class 提示預設第一個 owner。

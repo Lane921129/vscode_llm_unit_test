@@ -201,6 +201,7 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
     const source = typeof context?.code === 'string' ? context.code.replace(/\r\n?/g, '\n') : '';
     const parameterMembers = facts?.parameterMembers ?? [];
     const literalCallArguments = facts?.literalCallArguments ?? [];
+    const returnFlow = facts?.returnFlow;
     if (!facts || facts.schemaVersion !== 'source-setup-call-contract-v1' || facts.status !== 'complete'
         || facts.sourceHashKind !== 'normalized-target-source' || facts.authority !== 'source-spelling-only'
         || facts.assertionOracle !== false || facts.patchAuthorization !== false || !source
@@ -218,6 +219,11 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
     const declaredParameters: unknown[] = Array.isArray(context?.signature)
         ? context.signature.map((parameter: any) => parameter?.name) : Array.isArray(context?.args) ? context.args : [];
     const instanceReceiver = context?.class_name && context?.method_kind !== 'static' ? declaredParameters[0] : undefined;
+    if (returnFlow !== undefined && (!returnFlow
+        || !['normal-completion-none', 'contains-value-return', 'unknown'].includes(returnFlow.kind)
+        || !Array.isArray(returnFlow.discardedCalls) || returnFlow.discardedCalls.length > 64
+        || returnFlow.discardedCalls.some((item: any) => !item || !spelling(item.callee)
+            || !Number.isSafeInteger(item.line) || item.line <= 0))) { return ''; }
     if (facts.optionalLookups.some((item: any) => !item || !identifier(item.owner) || !identifier(item.attribute)
             || item.ownerScope !== 'module-global' || !spelling(item.defaultSource) || !spelling(item.source)
             || !Number.isSafeInteger(item.line) || item.line <= 0)
@@ -235,8 +241,20 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
             || !Array.isArray(item.members) || !item.members.length || item.members.length > 8 || !item.members.every(identifier)
             || !['read', 'write', 'call'].includes(item.usage) || !Number.isSafeInteger(item.line) || item.line <= 0)) { return ''; }
     if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length
-        && !parameterMembers.length && !literalCallArguments.length) { return ''; }
+        && !parameterMembers.length && !literalCallArguments.length && !returnFlow) { return ''; }
     const lines = ['SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts)];
+    if (returnFlow?.kind === 'normal-completion-none') {
+        lines.push('SOURCE_RETURN_FLOW_V1: This ordinary undecorated function has no return expression other than None (or bare return/fall-through). '
+            + 'If its body completes normally, Python returns None; a dependency Mock.return_value is not automatically the target return. '
+            + 'Verify the real target and the source-shown side effects using controlled dependencies and exact source args/keywords. '
+            + 'An assertIsNone alone does not verify those effects. Do not copy an inner dependency return into an outer return assertion, '
+            + 'or infer expected values from failure output. These are current-source semantics, not an independent requirement or execution approval.');
+    }
+    if (returnFlow?.discardedCalls.length) {
+        lines.push('The recorded discardedCalls are expression statements: their immediate results are discarded at those sites. '
+            + 'They do not prove runtime call counts or that later statements cannot return a different value. '
+            + 'Check the complete source, fixture history and the target return flow before configuring or asserting mocks.');
+    }
     const literalHighlights = sourceLiteralHighlights(facts).map(item => item.text);
     // Optional navigation repeats whole spellings; the complete facts above are never cut.
     if (literalHighlights.length > 0 && literalHighlights.length <= 6

@@ -8,12 +8,16 @@ extensions. Generated tests still use mocks instead of direct filesystem I/O.
 from contextlib import contextmanager, ExitStack
 import ast
 import builtins
+import errno
 import importlib._bootstrap_external
 import importlib.metadata
+import importlib.machinery
 import linecache
 import io
 import os
 import ntpath
+import socket
+import site
 import sqlite3
 import sys
 import threading
@@ -54,6 +58,10 @@ _AST_PARSE_CODE = ast.parse.__code__
 _METADATA_READ_CODE = importlib.metadata.PathDistribution.read_text.__code__
 _METADATA_ZIP_CODE = importlib.metadata.FastPath.zip_children.__code__
 _METADATA_FILES = None
+_PACKAGE_ROOTS = tuple(os.path.normcase(os.path.realpath(directory)) for directory in
+                       {sysconfig.get_path('purelib'), sysconfig.get_path('platlib'),
+                        site.getusersitepackages() if site.ENABLE_USER_SITE else None} if directory)
+_SOURCE_LOADER = importlib._bootstrap_external.SourceFileLoader
 _STDLIB_ARCHIVES = {os.path.normcase(os.path.realpath(str(base / f'python{sys.version_info.major}{sys.version_info.minor}.zip')))
                     for base in (Path(sys.base_prefix), Path(sysconfig.get_path('stdlib')).parent)}
 
@@ -280,6 +288,72 @@ def _asyncio_socketpair():
     return False
 
 
+def _installed_import_probe(frame):
+    """Prove installed source is probing while its own module is being imported.
+
+    This only authorizes a synthetic *failure*, never an OS bind. Filename,
+    module name and an import somewhere on the stack alone are not evidence.
+    """
+    if _active is None or not frame or type(frame.f_code.co_filename) is not str:
+        return False
+    filename = frame.f_code.co_filename
+    if is_unc_or_device(filename) or not os.path.isabs(filename):
+        return False
+    filename = os.path.normcase(os.path.realpath(filename))
+    if not any(filename.startswith(root + os.sep) for root in _PACKAGE_ROOTS):
+        return False
+    namespace = frame.f_globals
+    spec = namespace.get('__spec__')
+    if type(spec) is not importlib.machinery.ModuleSpec or not getattr(spec, '_initializing', False):
+        return False
+    if type(spec.loader) is not _SOURCE_LOADER or type(spec.origin) is not str:
+        return False
+    if os.path.normcase(os.path.realpath(spec.origin)) != filename:
+        return False
+    module = sys.modules.get(spec.name)
+    if type(module) is not types.ModuleType or module.__dict__ is not namespace:
+        return False
+    module_frame = frame
+    for _ in range(64):
+        if module_frame is None:
+            return False
+        if module_frame.f_globals is namespace and module_frame.f_code.co_name == '<module>':
+            break
+        module_frame = module_frame.f_back
+    else:
+        return False
+    # Read through the pinned loader API already permitted by the audit policy;
+    # compiling does not import/evaluate the source or grant application I/O.
+    try:
+        source = _SOURCE_LOADER(spec.name, filename).get_data(filename)
+        if len(source) > 1024 * 1024:
+            return False
+        compiled = compile(source, frame.f_code.co_filename, 'exec', dont_inherit=True)
+    except (OSError, SyntaxError, ValueError):
+        return False
+    if compiled != module_frame.f_code:
+        return False
+    pending = [compiled]
+    while pending:
+        code = pending.pop()
+        if code == frame.f_code:
+            return True
+        pending.extend(value for value in code.co_consts if type(value) is types.CodeType)
+    return False
+
+
+def _probe_bind(sock, address):
+    # Exact literals avoid DNS, wildcard listeners and user-defined conversions.
+    if (type(address) is tuple and len(address) == 2 and type(address[0]) is str
+            and address[0] in ('127.0.0.1', '::1') and type(address[1]) is int and address[1] == 0
+            and _installed_import_probe(sys._getframe(1))):
+        raise OSError(errno.EAFNOSUPPORT, 'Network capability unavailable in isolated execution')
+    return _SOCKET_BIND(sock, address)
+
+
+_SOCKET_BIND = socket.socket.bind
+
+
 def _audit(event, args):
     if _active is None:
         return
@@ -473,6 +547,7 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
                         stack.enter_context(patch.object(threading, name, block_profile_replacement))
             stack.enter_context(fixtures)
             stack.enter_context(_guard_unc_metadata(resources))
+            stack.enter_context(patch.object(socket.socket, 'bind', _probe_bind))
             if resources:
                 stack.enter_context(resources.guarding(block_operation))
             try:

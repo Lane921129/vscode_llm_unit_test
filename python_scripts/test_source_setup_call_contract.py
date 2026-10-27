@@ -14,6 +14,24 @@ from source_setup_call_contract import build_source_setup_call_contract
 
 
 class SourceSetupCallContractTests(unittest.TestCase):
+    def test_return_flow_distinguishes_discarded_effects_from_forwarded_values(self):
+        for body in ('storage.create(bind=engine)', 'storage.create(bind=engine)\n    return None',
+                     'storage.create(bind=engine)\n    return'):
+            result = self.contract('import storage\nengine = None\ndef target():\n    ' + body + '\n')
+            self.assertEqual(result['returnFlow'], {'kind': 'normal-completion-none',
+                'discardedCalls': [{'callee': 'storage.create', 'line': 4}]})
+        forwarded = self.contract('import storage\ndef target():\n    return storage.create()\n')
+        self.assertEqual(forwarded['returnFlow'], {'kind': 'contains-value-return', 'discardedCalls': []})
+
+    def test_return_flow_excludes_nested_scope_and_preserves_uncertainty(self):
+        result = self.contract('def target():\n    def inner():\n        yield 1\n        return "inner"\n    pass\n')
+        self.assertEqual(result['returnFlow']['kind'], 'normal-completion-none')
+        for source in ('def target():\n    yield None\n', 'async def target():\n    pass\n',
+                       '@decorator\ndef target():\n    pass\n'):
+            self.assertEqual(self.contract(source)['returnFlow']['kind'], 'unknown')
+        result = self.contract('def target(flag):\n    if flag:\n        return 7\n')
+        self.assertEqual(result['returnFlow']['kind'], 'contains-value-return')
+
     def contract(self, source, name='target'):
         tree = ast.parse(source)
         selected = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name][0]

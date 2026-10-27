@@ -111,6 +111,7 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
     def unsupported(reason):
         contract.update(status='unsupported', optionalLookups=[], calls=[], sourceLocations=[], parameterMembers=[],
                         literalCallArguments=[], reason=reason)
+        contract.pop('returnFlow', None)
         return contract
 
     if not isinstance(module_tree, ast.Module):
@@ -147,6 +148,21 @@ def build_source_setup_call_contract(func_node, target_source, target_name, modu
     parameters = {arg.arg for arg in [*func_node.args.posonlyargs, *func_node.args.args, *func_node.args.kwonlyargs,
                                      *(arg for arg in (func_node.args.vararg, func_node.args.kwarg) if arg)]}
     nodes = [node for statement in func_node.body for node in _scope_nodes(statement)]
+    # Target body only: inner functions/generators cannot determine its return.
+    # These source semantics are conditional on normal completion, not a claim
+    # that the source implements an independent requirement correctly.
+    value_returns = [node for node in nodes if isinstance(node, ast.Return) and node.value is not None
+                     and not (isinstance(node.value, ast.Constant) and node.value.value is None)]
+    unknown_return = (not isinstance(func_node, ast.FunctionDef) or bool(func_node.decorator_list)
+                      or any(isinstance(node, (ast.Yield, ast.YieldFrom)) for node in nodes))
+    discarded_calls = [{'callee': ast.unparse(node.value.func), 'line': node.lineno} for node in nodes
+                       if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                       and isinstance(node.value.func, (ast.Name, ast.Attribute))]
+    contract['returnFlow'] = {'kind': 'unknown' if unknown_return else
+                            'contains-value-return' if value_returns else 'normal-completion-none',
+                            'discardedCalls': discarded_calls}
+    if len(discarded_calls) > MAX_FACTS:
+        return unsupported('contract-limit-exceeded')
     locals_ = parameters | set().union(*(_bound_names(statement) for statement in func_node.body))
     declarations = {name for node in nodes if isinstance(node, (ast.Global, ast.Nonlocal)) for name in node.names}
     module_names, changed_members = _stable_module_names(module_tree)

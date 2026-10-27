@@ -12,6 +12,66 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class RuntimePolicyIntegrationTests(unittest.TestCase):
+    def probe_process(self, operation, *, installed=True, after_import=False, spoof=False, swallow=False):
+        with tempfile.TemporaryDirectory(prefix='neutral-import-probe-') as directory:
+            root = Path(directory)
+            source = ('import socket\ndef capability():\n'
+                      '    try:\n        ' + operation + '\n'
+                      f'    except {"Exception" if swallow else "OSError"}:\n        return False\n    return True\n')
+            if not after_import:
+                source += 'available = capability()\n'
+            if spoof:
+                source += 'try:\n    exec(compile(\'socket.socket().bind(("127.0.0.1", 0))\', __file__, "exec"))\nexcept Exception:\n    pass\n'
+            (root / 'neutral_probe.py').write_text(source, encoding='utf-8')
+            script = f'''
+import importlib, sys
+sys.path.insert(0, {str(TOOLS)!r})
+sys.path.insert(0, {directory!r})
+import runtime_policy as policy
+policy._PACKAGE_ROOTS = ({str(root.resolve())!r},) if {installed!r} else ()
+policy._PACKAGE_ROOTS = tuple(policy.os.path.normcase(p) for p in policy._PACKAGE_ROOTS)
+original = policy.socket.socket.bind
+with policy.guarded_runtime():
+    module = importlib.import_module('neutral_probe')
+    if {after_import!r}:
+        module.available = module.capability()
+    assert module.available is False
+assert policy.socket.socket.bind is original
+print('isolated-probe-denied')
+'''
+            return subprocess.run([sys.executable, '-B', '-c', script], capture_output=True, text=True,
+                                  encoding='utf-8', env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}, timeout=25)
+
+    def test_installed_import_loopback_probe_gets_oserror_without_native_bind(self):
+        for host in ('::1', '127.0.0.1'):
+            run = self.probe_process(f'socket.socket(socket.AF_INET6 if {host!r} == "::1" else socket.AF_INET).bind(({host!r}, 0))')
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn('isolated-probe-denied', run.stdout)
+            # Any call reaching the native bind audit event would latch a
+            # violation and make the guard fail, even if OSError was caught.
+
+    def test_import_probe_denial_does_not_exempt_other_network_operations(self):
+        for operation in (
+                'socket.socket().bind(("127.0.0.1", 9123))',
+                'socket.socket().bind(("0.0.0.0", 0))',
+                'socket.socket().bind(("192.0.2.1", 0))',
+                'socket.socket().connect(("127.0.0.1", 9))',
+                'socket.getaddrinfo("localhost", 0)',
+                'socket.socket(type=socket.SOCK_DGRAM).sendto(b"x", ("127.0.0.1", 9))',
+                '__import__("_socket").socket.bind(socket.socket(), ("127.0.0.1", 0))'):
+            with self.subTest(operation=operation):
+                run = self.probe_process(operation, swallow=True)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn('TEST_ISOLATION_BLOCKED', run.stderr)
+
+    def test_probe_requires_real_installed_source_during_its_own_import(self):
+        operation = 'socket.socket().bind(("127.0.0.1", 0))'
+        for options in ({'installed': False}, {'after_import': True}, {'spoof': True}):
+            with self.subTest(options=options):
+                run = self.probe_process(operation, swallow=True, **options)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertIn('TEST_ISOLATION_BLOCKED', run.stderr)
+
     def invoke(self, tool, args=(), payload=None, cwd=None, timeout=25):
         result = subprocess.run([sys.executable, '-B', str(TOOLS / tool), *map(str, args)],
                                 input=None if payload is None else json.dumps(payload),

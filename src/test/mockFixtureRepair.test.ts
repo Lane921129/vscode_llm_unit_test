@@ -73,6 +73,62 @@ test('real extractor identifies fetchall iterable and row indexes, never execute
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('side-effect return facts reach Writer and Fixer; repaired tests verify effects in two neutral source shapes', async () => {
+    for (const parameter of [false, true]) {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'effect-return-'));
+        const targetSource = parameter ? 'def target(store):\n    store.create(bind=store)\n'
+            : 'from types import SimpleNamespace\nengine = object()\nstorage = SimpleNamespace(create=lambda **kwargs: None)\n'
+                + 'def target():\n    storage.create(bind=engine)\n';
+        const setup = parameter ? '        dependency = MagicMock()\n'
+            : '        self.enterContext(patch("sample.storage.create"))\n        dependency = sample.storage\n';
+        const call = parameter ? 'target(dependency)' : 'target()';
+        const expectedBinding = parameter ? 'dependency' : 'sample.engine';
+        const candidate = 'import unittest\nfrom unittest.mock import MagicMock, patch\nimport sample\nfrom sample import target\n'
+            + 'class Cases(unittest.TestCase):\n    def test_effect(self):\n' + setup
+            + '        dependency.create.return_value = "dependency-value"\n'
+            + `        result = ${call}\n        self.assertEqual(result, "dependency-value")\n`;
+        const correct = candidate.replace('self.assertEqual(result, "dependency-value")',
+            `self.assertIsNone(result)\n        dependency.create.assert_called_once_with(bind=${expectedBinding})`);
+        try {
+            const context = extract(directory, targetSource);
+            assert.equal(context.source_setup_call_contract.returnFlow.kind, 'normal-completion-none');
+            const input = { module: 'sample', name: 'target', source: context.code, context, evidence: evidence(context.code) };
+            for (const prompt of [buildCompactWriterContext({ ...input, budgetTokens: 6000 }), buildWriterRevisionContext(input)]) {
+                assert.match(prompt, /SOURCE_RETURN_FLOW_V1/);
+                assert.match(prompt, /Mock\.return_value is not automatically the target return/);
+                assert.match(prompt, /assertIsNone alone does not verify those effects/);
+            }
+            const failed = execute(directory, candidate);
+            assert.notEqual(failed.status, 0);
+            assert.equal(canRepairTestMethod(candidate, failed.stderr), true);
+            const repairPrompt = getBugFixerUserPrompt(candidate, failed.stderr, 'target', context.args, context.code, context, 'sample');
+            assert.match(repairPrompt, /SOURCE_RETURN_FLOW_V1/);
+            let reviewed = '';
+            const result = await validateTestCandidate(candidate, {
+                validate: async () => undefined,
+                execute: async code => { const run = execute(directory, code);
+                    return { ok: run.status === 0, out: run.stderr, qualityGaps: [], testModule: 'generated' }; },
+                revise: async () => correct,
+                review: async code => { reviewed = code; return { issues: [] }; },
+                event: () => {},
+                checkCancelled: () => {}
+            }, 1);
+            assert.equal(result.execution.ok, true);
+            assert.equal(reviewed, correct);
+            assert.equal(result.approvedCodeHash, createHash('sha256').update(correct).digest('hex'));
+            // A None-only assertion could survive a removed side effect. The
+            // concrete repair must detect that mutation as well as the return.
+            extract(directory, targetSource.replace(parameter ? 'store.create(bind=store)' : 'storage.create(bind=engine)', 'pass'));
+            assert.notEqual(execute(directory, correct).status, 0);
+            extract(directory, targetSource);
+            for (const changed of [{ targetSourceHash: '0'.repeat(64) }, { returnFlow: { kind: 'normal-completion-none', discardedCalls: 'invalid' } }]) {
+                assert.equal(sourceSetupCallGuidance('sample', { ...context,
+                    source_setup_call_contract: { ...context.source_setup_call_contract, ...changed } }), '');
+            }
+        } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    }
+});
+
 test('shape guidance refuses stale source identities, oracle flags and unproven conditional item requirements', () => {
     const context: any = { name: 'target', code: source, dependency_fixture_contract: {
         schemaVersion: 'dependency-fixture-contract-v1', target: 'target', sourceHashKind: 'normalized-target-source',

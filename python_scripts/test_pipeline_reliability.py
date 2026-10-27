@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import textwrap
 from unittest.mock import patch
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from validate_test_bindings import validate_bindings
 import module_preflight
 
