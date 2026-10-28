@@ -661,7 +661,7 @@ export const englishMessages: Record<string, string> = {
     "- 文件註解: `{0}`\n": "- Docstring: `{0}`\n",
     "- 跨檔案依賴: {0}\n": "- Cross-file dependencies: {0}\n",
     "- 模組 Imports: {0}\n": "- Module imports: {0}\n",
-    "- 引用模組常數: {0}\n": "- Referenced module constants: {0}\n",
+    "- 引用模組全域綁定: {0}\n": "- Referenced module globals: {0}\n",
     "；繼承建構子：`{0}({1})`": "; inherited constructor: `{0}({1})`",
     "- 類別語境: `{0}`，__init__ 參數：`{1}`，初始化屬性：`{2}`{3}\n": "- Class context: `{0}`; __init__ parameters: `{1}`; initialized attributes: `{2}`{3}\n",
     "- 呼叫站語境 ({0} 個):\n": "- Call-site context ({0}):\n",

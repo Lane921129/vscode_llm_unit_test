@@ -120,9 +120,19 @@ export function buildWriterMethodEditPrompt(prompt: string, plan: {
         + '\nReplace exactly these existing methods. Use class Name: wrappers with only the named methods; '
         + 'copy each original signature, async status and decorators from CURRENT TEST FILE. '
         + 'Do not return the full suite, module imports, fixtures or unrelated methods. Necessary imports may be local to a method. '
-        + 'Preserve inputs and verified assertions while addressing the supplied review findings. '
+        + 'Preserve inputs and verified assertions while addressing the supplied findings. '
         + 'The host preserves all other bytes and fixtures; the complete composition still needs execution, fresh review and quality validation.'
         + (rejection ? '\nPREVIOUS EDIT REJECTION:\n' + summarizeRepairOutput(rejection, 1500) : '');
+}
+
+/** This revision has no complete-file or seed packaging instruction. */
+export function getWriterMethodEditSystemPrompt(): string {
+    return 'You are a Python unittest Writer performing WRITER_METHOD_EDIT_V1. '
+        + 'Return one Python fence containing only the exact planned existing methods in class Name: wrappers. '
+        + 'Keep signatures, decorators and async status. Use method-local imports if necessary. '
+        + 'The host owns all other methods, module imports and fixtures; never return a complete test file. '
+        + 'Keep the real target callable; do not invent requirements or expected values from failures. '
+        + isolatedResourceSystemRule();
 }
 
 /** A prefix inside a larger unapproved draft is not a complete baseline unit. */

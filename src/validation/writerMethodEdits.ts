@@ -70,6 +70,26 @@ export async function planWriterMethodEdits(options: {
     return validPlan(value, options.baseline, options.lineRefs) ? value : invalid();
 }
 
+/** Only a fresh Checker DTO can select a binding repair; prose never selects its owner. */
+export async function planWriterNameBindingEdits(options: {
+    baseline: string; validation: { reasonCode?: string; name?: string; method?: string; className?: string; line?: number };
+    python: string; env?: NodeJS.ProcessEnv;
+}): Promise<WriterMethodEditPlan | RejectedEdit> {
+    const finding = options.validation;
+    if (finding.reasonCode !== 'writer-undefined-name' || typeof finding.name !== 'string'
+        || !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(finding.name) || !finding.method || !finding.className
+        || !Number.isSafeInteger(finding.line) || finding.line! < 1) {
+        return { ok: false, reasonCode: 'binding-edit-location-unresolved' };
+    }
+    const plan = await planWriterMethodEdits({ ...options, lineRefs: [finding.line!] });
+    if (!plan.ok) { return plan; }
+    if (plan.methods.length !== 1 || plan.methods[0].className !== finding.className
+        || plan.methods[0].name !== finding.method) {
+        return { ok: false, reasonCode: 'binding-edit-owner-mismatch' };
+    }
+    return plan;
+}
+
 /** Node independently recomposes the exact UTF-8 spans certified by the AST plan. */
 export async function applyWriterMethodEdits(options: {
     baseline: string; lineRefs: readonly number[]; plan: WriterMethodEditPlan; response: string;

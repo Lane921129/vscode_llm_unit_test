@@ -373,31 +373,29 @@ export function getUserPrompt(
         }
         if (astContext.referenced_globals?.length > 0) {
             const constants = astContext.referenced_globals.filter((item: any) =>
-                (item.binding_kind || item.kind) === 'literal-constant'
-                || (!item.binding_kind && !item.kind && !/\b\w+\s*\(/.test(item.code || '')));
+                (item.binding_kind || item.kind) === 'literal-constant');
             const existingObjects = astContext.referenced_globals.filter((item: any) =>
-                (item.binding_kind || item.kind) === 'existing-object'
-                || (!item.binding_kind && !item.kind && /\b\w+\s*\(/.test(item.code || '')));
+                (item.binding_kind || item.kind) === 'existing-object');
             const references = astContext.referenced_globals.filter((item: any) =>
                 (item.binding_kind || item.kind) === 'object-reference');
             const unknowns = astContext.referenced_globals.filter((item: any) =>
-                (item.binding_kind || item.kind) === 'unknown');
+                !['literal-constant', 'existing-object', 'object-reference'].includes(item.binding_kind || item.kind));
 
             if (constants.length > 0) {
-                prompt += `- Referenced module constants (use exact values):\n`;
+                prompt += `- Referenced immutable literal initializers (source syntax only; read the canonical module binding, not an independent expected-value oracle):\n`;
                 for (const item of constants) {
                     prompt += `  - ${item.code}\n`;
                 }
             }
             if (existingObjects.length > 0) {
                 const targetMod = astContext?.target_import_module || moduleName;
-                prompt += `- Referenced module objects (ALREADY instantiated at module scope; DO NOT copy initialization code into tests; access via ${targetMod}.<name> or patch at use-point):\n`;
+                prompt += `- Referenced module call-result bindings (initialized at module scope; DO NOT copy initialization code into tests; access via ${targetMod}.<name> or patch at use-point; runtime type/value is unknown):\n`;
                 for (const item of existingObjects) {
-                    prompt += `  - ${item.name} (instantiated as \`${item.code.trim()}\` in module; do not re-initialize in test)\n`;
+                    prompt += `  - ${item.name} (initialized as \`${item.code.trim()}\` in module; do not re-initialize in test)\n`;
                 }
             }
             if (references.length > 0) {
-                prompt += `- Referenced module aliases (reference to existing object; do not re-initialize):\n`;
+                prompt += `- Referenced module aliases (source lookup only; runtime type/value is unknown; do not re-initialize):\n`;
                 for (const item of references) {
                     prompt += `  - ${item.code}\n`;
                 }

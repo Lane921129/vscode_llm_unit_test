@@ -2136,5 +2136,48 @@ def target(value: Literal[7] = 7) -> Literal[8]:
         self.assertFalse(result['scoreAvailable'])
 
 
+class ModuleBindingClassificationTests(unittest.TestCase):
+    def classify(self, source):
+        import ast
+        from ast_extractor import classify_module_binding
+        from source_setup_call_contract import _stable_module_names
+        tree = ast.parse(source)
+        names, _ = _stable_module_names(tree)
+        return classify_module_binding(tree.body[0], names)[0]
+
+    def test_rebindings_and_mutable_initializers_are_not_constants(self):
+        for suffix in ['VALUE += 1', 'if True:\n    VALUE = 2',
+                       'try:\n    VALUE = 2\nexcept Exception:\n    pass',
+                       'for VALUE in [2]:\n    pass', 'del VALUE',
+                       'from somewhere import VALUE', 'def VALUE():\n    pass', 'class VALUE:\n    pass',
+                       'def change():\n    global VALUE\n    VALUE = 2',
+                       'vars()["VALUE"] = 2', 'from somewhere import *']:
+            with self.subTest(suffix=suffix):
+                self.assertEqual(self.classify('VALUE = 1\n' + suffix + '\n'), 'unknown')
+        for expression in ['[1]', '{"a": 1}', '{1}', '([1],)', 'not 1', '~1']:
+            with self.subTest(expression=expression):
+                self.assertEqual(self.classify('VALUE = ' + expression), 'unknown')
+        self.assertEqual(self.classify('VALUE = [1]\nALIAS = VALUE\nALIAS.append(2)'), 'unknown')
+
+    def test_immutable_literals_and_call_initializers_remain_syntax_facts(self):
+        for expression in ['1', '-1.5', '"text"', '(1, (None, b"a"))']:
+            with self.subTest(expression=expression):
+                self.assertEqual(self.classify('VALUE = ' + expression), 'literal-constant')
+        self.assertEqual(self.classify('VALUE = make_value()'), 'existing-object')
+        self.assertEqual(self.classify('VALUE = other.attribute'), 'object-reference')
+        self.assertEqual(self.classify('VALUE = 1\ndef other():\n    VALUE = 2'), 'literal-constant')
+
+    def test_extractor_keeps_walrus_and_class_global_bindings_unknown(self):
+        for mutation in ['[(VALUE := 2) for _ in [0]]',
+                         'def other(argument=(VALUE := 2)):\n    pass',
+                         'class Other:\n    global VALUE\n    VALUE = 2']:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as folder:
+                source = pathlib.Path(folder) / 'sample.py'
+                source.write_text('VALUE = 1\n' + mutation + '\ndef target():\n    return VALUE\n', encoding='utf-8')
+                result = subprocess.run([sys.executable, '-B', str(SCRIPTS_DIR / 'ast_extractor.py'), str(source), 'target'],
+                                        check=True, capture_output=True, encoding='utf-8')
+                self.assertEqual(json.loads(result.stdout)['referenced_globals'][0]['binding_kind'], 'unknown')
+
+
 if __name__ == '__main__':
     unittest.main()

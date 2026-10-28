@@ -149,12 +149,11 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         ? OPTIONAL_ATTRIBUTE_MOCK_GUIDANCE + ' ' : '';
     const clockGuidance = immutableClockSetupGuidance(module, context, imports, context?.dependency_fixture_contract);
     const hasExistingObjects = context?.referenced_globals?.some((item: any) =>
-        (item.binding_kind || item.kind) === 'existing-object'
-        || (!item.binding_kind && !item.kind && /\b\w+\s*\(/.test(item.code || '')));
+        (item.binding_kind || item.kind) === 'existing-object');
     const globalsGuidance = context?.referenced_globals?.length
         ? 'Source globals are not test globals: explicitly import the canonical target module and read its source-shown bindings. '
             + (hasExistingObjects
-                ? 'Module objects (e.g. instantiated engines, clients, models) are already created at module scope: NEVER copy their initialization code into test methods; access them via the imported module or patch their use points. '
+                ? 'Source call-result bindings are initialized at module scope; their runtime types/values are not established by this syntax. NEVER copy their initialization code into test methods; access them via the imported module or patch source-supported use points. '
                 : '')
         : '';
     const conversions = context?.referenced_globals?.length || /\bstr\s*\(/u.test(setupSource)

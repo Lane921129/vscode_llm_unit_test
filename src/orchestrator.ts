@@ -139,8 +139,8 @@ import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
 import { getCompletedOllamaText, outputShape, readOutputShapeDiagnostic } from './llm/ollamaResponse';
 import { buildModelOutputPreview, diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
 import { readCandidateMethodInventory, CandidateSyntaxDiagnostic } from './pipeline/candidateMethodInventory';
-import { buildWriterSeedFormatRepairPrompt, buildWriterReviewCorrectionPrompt, buildWriterMethodEditPrompt } from './roles/writerPhases';
-import { planWriterMethodEdits, applyWriterMethodEdits, WriterMethodEditPlan } from './validation/writerMethodEdits';
+import { buildWriterSeedFormatRepairPrompt, buildWriterReviewCorrectionPrompt, buildWriterMethodEditPrompt, getWriterMethodEditSystemPrompt } from './roles/writerPhases';
+import { planWriterMethodEdits, planWriterNameBindingEdits, applyWriterMethodEdits, WriterMethodEditPlan } from './validation/writerMethodEdits';
 import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
@@ -1375,17 +1375,6 @@ function sanitizeLlmResponse(rawCode: string): string {
     return extractPythonTestCode(cleanCode);
 }
 
-function locateMethodLineInCandidate(code: string, methodName: string): number | undefined {
-    const lines = code.split(/\r?\n/);
-    const matches: number[] = [];
-    lines.forEach((line, index) => {
-        if (new RegExp(`^\\s*(?:async\\s+)?def\\s+${methodName}\\s*\\(`).test(line)) {
-            matches.push(index + 1);
-        }
-    });
-    return matches.length === 1 ? matches[0] : undefined;
-}
-
 function buildNameBindingEvidence(
     missingName: string,
     methodName: string,
@@ -1399,39 +1388,35 @@ function buildNameBindingEvidence(
     const globalMatch = (astContext?.referenced_globals || []).find((g: any) => g.name === missingName);
     if (globalMatch) {
         const kind = globalMatch.binding_kind || globalMatch.kind;
-        if (kind === 'existing-object' || (!kind && /\b\w+\s*\(/.test(globalMatch.code || ''))) {
+        if (kind === 'existing-object') {
             lines.push(
-                `- '${missingName}' is an ALREADY instantiated module object at '${targetImportModule}.${missingName}'.`,
+                `- Source assigns a call result to '${targetImportModule}.${missingName}'; its runtime type/value is not established here.`,
                 `- DO NOT copy its module-level initialization statement (\`${globalMatch.code.trim()}\`) into test methods.`,
                 `- Access it via '${targetImportModule}.${missingName}' or patch its use point if needed.`
             );
         } else if (kind === 'literal-constant') {
             lines.push(
-                `- '${missingName}' is a module constant defined at '${targetImportModule}.${missingName}' (\`${globalMatch.code.trim()}\`).`,
+                `- Source has an immutable literal initializer for '${targetImportModule}.${missingName}' (\`${globalMatch.code.trim()}\`); this is not an independent output oracle.`,
                 `- Access it as '${targetImportModule}.${missingName}'.`
             );
         } else {
             lines.push(
-                `- '${missingName}' is defined at module scope: \`${globalMatch.code.trim()}\`.`,
-                `- Access it as '${targetImportModule}.${missingName}' or define a test-local fixture.`
+                `- Source contains this module assignment: \`${globalMatch.code.trim()}\`. Its current value/binding may be unknown or rebound.`,
+                `- Consult the source lookup at '${targetImportModule}.${missingName}'; do not copy the initializer or assume its runtime value.`
             );
         }
     } else {
-        const importMatch = (astContext?.file_imports || []).find((imp: any) =>
-            imp.bound_name === missingName || imp.alias === missingName || imp.name === missingName);
-        if (importMatch) {
-            lines.push(
-                `- '${missingName}' is imported in '${targetImportModule}' from '${importMatch.module}'.`,
-                `- In tests, import it explicitly or use '${targetImportModule}.${missingName}'.`
-            );
-        } else {
-            lines.push(
-                `- '${missingName}' is not a local fixture or imported symbol.`,
-                `- Define '${missingName}' as a controlled fixture within the method, import it explicitly, or remove its unproven use.`
-            );
-        }
+        lines.push(
+            `- These facts do not establish an owner or current binding for '${missingName}'.`,
+            '- Use only source-supported imports or a controlled test-local fixture; do not guess a package or expected value.'
+        );
     }
     return lines.join('\n');
+}
+
+interface TestCodeValidation {
+    valid: boolean; reason?: string; reasonCode?: string; repairRole?: 'writer';
+    name?: string; method?: string; className?: string; line?: number;
 }
 
 /** Require both a unittest shape and a real Python AST before writing a test file. */
@@ -1445,7 +1430,7 @@ async function validateGeneratedTestCode(
     targetClassName?: string | null,
     pythonExecutable: string = 'python',
     bindingContext?: { module: string; target: string; className?: string | null; source?: string; moduleSource?: string; dependencies: Record<string, string> }
-): Promise<{ valid: boolean; reason?: string; reasonCode?: string; repairRole?: 'writer' }> {
+): Promise<TestCodeValidation> {
     const structure = validateUnittestStructure(
         code, targetCallable, targetModule, targetUsage, allowedExceptionNames, targetClassName, Boolean(bindingContext)
     );
@@ -1471,7 +1456,7 @@ async function validateGeneratedTestCode(
                 { reasonCode: 'bindings-tool-failed' });
         }
         if (bindingContext) {
-            const bindings = JSON.parse(parsed.stdout) as { valid: boolean; reason?: string; reasonCode?: string; repairRole?: 'writer' };
+            const bindings = JSON.parse(parsed.stdout) as TestCodeValidation;
             if (!bindings || typeof bindings.valid !== 'boolean') {
                 throw new AnalysisStageError('validation', 'static-analysis', 'Invalid binding validator contract.', { reasonCode: 'bindings-contract-invalid' });
             }
@@ -1586,7 +1571,7 @@ function buildAstMarkdownReport(astContext: AstContext): string {
         astReport += localize("- 模組 Imports: {0}\n", astContext.file_imports.map(item => item.kind === 'from' ? `\`from ${'.'.repeat(item.level || 0)}${item.module} import ${item.name}\`` : `\`import ${item.module}\``).join(', '));
     }
     if (astContext.referenced_globals && astContext.referenced_globals.length > 0) {
-        astReport += localize("- 引用模組常數: {0}\n", astContext.referenced_globals.map(item => `\`${item.name}\``).join(', '));
+        astReport += localize("- 引用模組全域綁定: {0}\n", astContext.referenced_globals.map(item => `\`${item.name}\``).join(', '));
     }
     if (astContext.class_context) {
         const init = astContext.class_context.init;
@@ -2085,8 +2070,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         role: 'writer' | 'writer-revision' | 'reviewer' | 'bug-fixer' | 'analyst-planning' | 'analyst-quality' = 'writer',
         sharedDeadlineAt?: number, reservedInputTokens = 0, revisionCurrentCode?: string,
         writerCaseMode?: { evidence: QualityTaskEvidence; methodName: string }, initialAttemptDeadlineAt?: number,
-        revisionWorkload?: WriterRevisionWorkload, sourceSelectionScope?: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-receiver-binding' | 'mock-setup' | 'parameter-mock'
+        revisionWorkload?: WriterRevisionWorkload, sourceSelectionScope?: 'literal-argument' | 'mock-receiver' | 'test-binding' | 'mock-receiver-binding' | 'mock-setup' | 'parameter-mock',
+        methodEditRequest = false
     ): Promise<string> => {
+        if (methodEditRequest && (role !== 'writer-revision' || format !== 'text' || revisionCurrentCode === undefined || sourceSelectionScope)) {
+            throw new AnalysisStageError('validation', 'writer-method-edit-scope', 'A method edit requires its current Writer revision baseline.');
+        }
         if (sourceSelectionScope && (mode !== 'execution' || format !== 'text'
             || (['test-binding', 'mock-receiver-binding', 'mock-setup', 'parameter-mock'].includes(sourceSelectionScope) ? role !== 'writer-revision' : role !== 'bug-fixer'))) {
             throw new AnalysisStageError('validation', 'source-selection-scope', 'Source selection requires its execution-only Writer or Bug Fixer task.');
@@ -2097,7 +2086,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 prompt = buildWriterExpansionPrompt(prompt, checkpoints.executable?.code || bestCode || '', analystTasks);
             }
         }
-        if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
+        if (!methodEditRequest && mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
             system = buildWriterAdditionSystemPrompt(system);
             format = 'text';
         }
@@ -2110,7 +2099,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 + 'then execute and review the whole candidate before mutation. The accumulator is unexecuted and unapproved.';
         }
         if (mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
-            system = buildWriterSeedSystemPrompt(system, seedTargetIsAsync);
+            if (!methodEditRequest) { system = buildWriterSeedSystemPrompt(system, seedTargetIsAsync); }
             if (activeSeedCaseFacts && !prompt.includes(activeSeedCaseFacts)) { prompt += '\n\n' + activeSeedCaseFacts; }
         }
         if (!writerCaseMode && !sourceSelectionScope) { prompt = appendQualityEvidence(prompt); }
@@ -2125,12 +2114,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             prompt += '\n\nSOURCE MOCK SETUP (non-executable TODO guidance, not output evidence):\n' + focusedMockSetup;
         }
         if (!sourceSelectionScope) { prompt += importResourcePrompt(); }
-        if (mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
+        if (!methodEditRequest && mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
             // Finish both generation and correction with the same small task.
             // Wider focus/resource context must not become a request to expand.
             prompt = buildWriterSeedPrompt(prompt);
         }
-        if (mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
+        if (!methodEditRequest && mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
             if (activeParameterFixtureEvidence) { prompt += parameterFixtureReplayInstruction(activeParameterFixtureEvidence); }
             const focusCases = qualityFocusCasesForPrompt(writerCaseMode?.evidence || activeQualityTaskEvidence);
             if (focusCases && !prompt.includes(focusCases)) { prompt += '\n\n' + focusCases; }
@@ -2144,12 +2133,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     methodBodyAuthor: 'model', scenarioDeduplicationPreserved: true });
             }
         }
-        const writerOutputScope = mode === 'full' && !seedPending && writerAdditionBaseline
+        const writerOutputScope = !methodEditRequest && mode === 'full' && !seedPending && writerAdditionBaseline
             && ['writer', 'writer-revision'].includes(role) ? 'single-test-addition' as const : undefined;
         let contractedSystem = addOutputContract(system, format);
         let completionPrefix = '';
         const instructionSystem = contractedSystem, instructionPrompt = prompt;
-        const singleTestSeedOutput = !sourceSelectionScope && (mode === 'full' && seedPending
+        const singleTestSeedOutput = !methodEditRequest && !sourceSelectionScope && (mode === 'full' && seedPending
             && ['writer', 'writer-revision'].includes(role)
             || mode === 'execution' && role === 'writer' && requestParams.requestSeedCompletion === true);
         const preferredCompletion = requestParams.envType === 'local' && role === 'writer'
@@ -2162,7 +2151,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             recordRole('writer-seed', 'completion-selected', { version: 'seed-code-completion-v1', selection: 'configured-preference',
                 packagingPrefixHash: evidenceHash(completionPrefix), methodBodyAuthor: 'model', evidencePreserved: true });
         }
-        const recoveryAllowed = !sourceSelectionScope && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
+        const recoveryAllowed = !methodEditRequest && !sourceSelectionScope && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
             && localRuntime?.ok === true;
         const outputStage = createOutputRecoveryStage({ timeoutSeconds: requestParams.timeoutSeconds, recoveryAllowed,
             sharedDeadlineAt, initialAttemptDeadlineAt, targetDeadlineAt: currentTargetBudget()?.deadlineAt });
@@ -2654,7 +2643,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     };
     const requestBudgeted: typeof requestBudgetedOne = async (requestParams, system, prompt, requestLog,
         format = 'text', role = 'writer', sharedDeadlineAt, reservedInputTokens = 0, revisionCurrentCode,
-        writerCaseMode, initialAttemptDeadlineAt, revisionWorkload, sourceSelectionScope) => {
+        writerCaseMode, initialAttemptDeadlineAt, revisionWorkload, sourceSelectionScope, methodEditRequest) => {
         const evidence = activeQualityTaskEvidence;
         const baseline = checkpoints.executable?.code || bestCode;
         // Candidate revisions must retain their exact execution/Reviewer finding
@@ -2664,7 +2653,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             || !baseline || !evidence || evidence.cases.length < 2
             || astContext?.class_name !== null || astContext.is_async !== false || astContext.method_kind !== 'module') {
             return requestBudgetedOne(requestParams, system, prompt, requestLog, format, role,
-                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt, revisionWorkload, sourceSelectionScope);
+                sharedDeadlineAt, reservedInputTokens, revisionCurrentCode, writerCaseMode, initialAttemptDeadlineAt, revisionWorkload, sourceSelectionScope, methodEditRequest);
         }
         writerAdditionBaseline = baseline;
         // Every case and its bounded correction shares this family's original
@@ -2891,6 +2880,56 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         return merged.mergedCode;
     };
+    const bindingValidations = new Map<string, TestCodeValidation>();
+    const checkBindingRepairCurrent = () => {
+        throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
+        if (!runtimeQualifications.current() || evidenceHash(fs.readFileSync(params.filePath, 'utf8')) !== journal.sourceHash) {
+            throw new AnalysisStageError('validation', 'source-changed', 'Source scope changed during binding repair.');
+        }
+    };
+    const planBindingRevision = async (code: string, validation: TestCodeValidation, evidence: string) => {
+        if (validation.reasonCode !== 'writer-undefined-name') { return undefined; }
+        checkBindingRepairCurrent();
+        const plan = await planWriterNameBindingEdits({ baseline: code, validation, python: pythonExecutable, env: testExecutionEnv });
+        checkBindingRepairCurrent();
+        if (!plan.ok) {
+            recordRole('writer-method-edit', 'rejected', { baselineHash: evidenceHash(code), reasonCode: plan.reasonCode,
+                trigger: 'name-binding-repair', validationMode: mode });
+            throw new AnalysisStageError('validation', 'writer-method-edit-scope',
+                'Name binding repair has no proven method scope; no whole-file rewrite was requested.', { reasonCode: plan.reasonCode });
+        }
+        recordRole('writer-method-edit', 'planned', { baselineHash: plan.baselineHash, planHash: plan.planHash,
+            methodCount: plan.methods.length, trigger: 'name-binding-repair', validationMode: mode });
+        const prompt = buildWriterMethodEditPrompt('WRITER_REVISION_REQUEST_V2\nEVIDENCE:\n' + evidence
+            + '\nCURRENT TEST FILE (read-only baseline):\n```python\n' + code + '\n```\nCHECKER FAILURE:\n'
+            + validation.reason + '\n' + buildNameBindingEvidence(validation.name!, validation.method!, targetImportModule, astContext), plan);
+        return { baseline: code, plan, lineRefs: [validation.line!], prompt };
+    };
+    const applyBindingRevision = async (edit: NonNullable<Awaited<ReturnType<typeof planBindingRevision>>>, raw: string, attempt: number) => {
+        checkBindingRepairCurrent();
+        const applied = await applyWriterMethodEdits({ ...edit, response: raw, python: pythonExecutable, env: testExecutionEnv });
+        checkBindingRepairCurrent();
+        completedOutputDiagnostics.delete(evidenceHash(raw));
+        if (!applied.ok) {
+            recordRejected(extractWriterAdditionCode(raw), attempt, 'revision-scope', applied.reasonCode);
+            recordRole('writer-method-edit', 'rejected', { baselineHash: edit.plan.baselineHash, planHash: edit.plan.planHash,
+                reasonCode: applied.reasonCode, trigger: 'name-binding-repair', validationMode: mode });
+            // This typed stop cannot reopen a wider Writer/Tier repair path.
+            throw new AnalysisStageError('validation', 'writer-method-edit-scope',
+                applied.reasonCode === 'edit-no-method-change'
+                    ? localize('沒有有效修改：測試修訂未變更方法內容，停止重複修復。')
+                    : 'Scoped name binding repair rejected: ' + applied.reasonCode,
+                { reasonCode: applied.reasonCode });
+        }
+        recordRole('writer-method-edit', 'applied', { baselineHash: edit.plan.baselineHash, planHash: edit.plan.planHash,
+            codeHash: evidenceHash(applied.code), changedMethodIds: applied.changedMethodIds,
+            trigger: 'name-binding-repair', validationMode: mode });
+        return applied.code;
+    };
+    const requestBindingRevision = (edit: NonNullable<Awaited<ReturnType<typeof planBindingRevision>>>) =>
+        requestBudgeted(params, getWriterMethodEditSystemPrompt(), edit.prompt, log, 'text', 'writer-revision',
+            undefined, 0, edit.baseline, undefined, undefined, { findingCount: 1, missingScenarioCount: 0 }, undefined, true);
+
     if (mode === 'full' && !isStubFunction(astContext)) {
         mutationPreflightRequired = true;
         journal.knowledge({ workflowVersion: AI_WORKFLOW_VERSION, testAuthor: 'llm',
@@ -2983,6 +3022,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const result = await validateGeneratedTestCode(code, targetFuncName, targetImportModule,
                         astContext.method_kind === 'property' ? 'property' : 'call', astContext.signature,
                         exceptionNamesFromEvidence(astContext), astContext.class_name, pythonExecutable, testBindingContext);
+                    bindingValidations.set(evidenceHash(code), result);
                     return result.valid ? undefined : result.reason || 'Structure validation failed';
                 },
                 repairRole: (code, failure) => canRepairTestMethod(code, failure) ? 'bug-fixer' : 'writer',
@@ -2993,16 +3033,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (role === 'bug-fixer' && !mayUseModelAuthoredRepair) {
                         throw new AnalysisStageError('validation', 'fixer-qualification', localize("Auto 的 Bug Fixer 尚未通過資格探測；已保存失敗測試。"));
                     }
-                    if (role === 'writer' && /Writer binding repair: [_\p{ID_Start}][_\p{ID_Continue}]* is undefined or read before its local binding in [_\p{ID_Start}][_\p{ID_Continue}]*\./u.test(failure)) {
+                    const bindingValidation = bindingValidations.get(evidenceHash(code));
+                    if (role === 'writer' && bindingValidation?.reasonCode === 'writer-undefined-name') {
+                        // Preserve the narrower, proven helper-import selection.
+                        // Only an inapplicable selection proceeds to a method plan.
                         const bindingCandidate = await repairSourceTestBinding({ source: astContext.code,
                             code, failure, target: params.funcName || targetFuncName, python: pythonExecutable,
                             module: targetImportModule, moduleSource: fs.readFileSync(params.filePath, 'utf8'), moduleSourceHash: journal.sourceHash,
-                            checkCurrent: () => {
-                                throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
-                                if (!runtimeQualifications.current()) {
-                                    throw new AnalysisStageError('validation', 'source-changed', 'Source scope changed during binding repair.');
-                                }
-                            },
+                            checkCurrent: checkBindingRepairCurrent,
                             request: (system, prompt) => requestBudgeted(params, system, prompt, log,
                                 'text', 'writer-revision', undefined, 0, undefined, undefined, undefined, undefined, 'test-binding'),
                             event: (status, detail) => recordRole('writer', status, detail) });
@@ -3011,71 +3049,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 repairMode: 'source-test-binding-repair-v1', contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision });
                             return bindingCandidate;
                         }
-                        const nameMatch = /Writer binding repair: ([_\p{ID_Start}][_\p{ID_Continue}]*) is undefined or read before its local binding in ([_\p{ID_Start}][_\p{ID_Continue}]*)\./u.exec(failure);
-                        if (nameMatch) {
-                            const missingName = nameMatch[1];
-                            const methodName = nameMatch[2];
-                            const methodLine = locateMethodLineInCandidate(code, methodName);
-                            if (methodLine !== undefined) {
-                                const methodPlan = await planWriterMethodEdits({
-                                    baseline: code,
-                                    lineRefs: [methodLine],
-                                    python: pythonExecutable,
-                                    env: testExecutionEnv
-                                });
-                                throwIfExecutionCancelled();
-                                if (methodPlan.ok) {
-                                    recordRole('writer-method-edit', 'planned', {
-                                        baselineHash: methodPlan.baselineHash,
-                                        planHash: methodPlan.planHash,
-                                        methodCount: methodPlan.methods.length,
-                                        trigger: 'name-binding-repair'
-                                    });
-                                    const bindingEvidence = buildNameBindingEvidence(missingName, methodName, targetImportModule, astContext);
-                                    const basePrompt = getExecutionWriterPrompt(evidence, code, failure) + '\n' + bindingEvidence
-                                        + executionHelperRepairGuidance(failure, targetImportModule, params.filePath,
-                                            astContext, sourceMockUsePointNames)
-                                        + sourceLiteralRepairGuidance(failure, targetImportModule, astContext);
-                                    const methodPrompt = buildWriterMethodEditPrompt(basePrompt, methodPlan);
-                                    const raw = await requestBudgeted(params, getExecutionWriterSystemPrompt(), methodPrompt, log,
-                                        'text', 'writer-revision', undefined, 0, code, undefined, undefined,
-                                        { findingCount: 1, missingScenarioCount: 0 }, 'test-binding');
-                                    throwIfExecutionCancelled();
-                                    const applied = await applyWriterMethodEdits({
-                                        baseline: code,
-                                        lineRefs: [methodLine],
-                                        plan: methodPlan,
-                                        response: raw,
-                                        python: pythonExecutable,
-                                        env: testExecutionEnv
-                                    });
-                                    throwIfExecutionCancelled();
-                                    if (applied.ok) {
-                                        recordRole('writer-method-edit', 'candidate', {
-                                            code: applied.code,
-                                            baselineHash: methodPlan.baselineHash,
-                                            planHash: methodPlan.planHash,
-                                            changedMethodIds: applied.changedMethodIds,
-                                            contractVersion: ROLE_CONTRACT_VERSIONS.writerRevision
-                                        });
-                                        return applied.code;
-                                    } else if (applied.reasonCode === 'edit-no-method-change') {
-                                        recordRole('writer-method-edit', 'rejected', {
-                                            baselineHash: methodPlan.baselineHash,
-                                            planHash: methodPlan.planHash,
-                                            reasonCode: applied.reasonCode
-                                        });
-                                        throw new CandidateValidationError(localize("沒有有效修改：測試修訂未變更方法內容，停止重複修復。"));
-                                    } else {
-                                        recordRole('writer-method-edit', 'rejected', {
-                                            baselineHash: methodPlan.baselineHash,
-                                            planHash: methodPlan.planHash,
-                                            reasonCode: applied.reasonCode
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                        const edit = await planBindingRevision(code, bindingValidation, evidence);
+                        return applyBindingRevision(edit!, await requestBindingRevision(edit!), attempt);
                     }
                     if (role === 'writer' && /^Do not patch .+: .+ is a parameter of .+, not a module attribute of .+\./.test(failure)) {
                         const parameterCandidate = await repairSourceParameterMock({ source: astContext.code,
@@ -3844,12 +3819,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             if (!sanitizedCode) {
                 let generationPrompt = userPrompt;
                 let generationRevisionCode: string | undefined;
+                let generationBindingEdit: Awaited<ReturnType<typeof planBindingRevision>>;
                 for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
                     if (llmRetry === 0) {log(localize("[LLM] 正在呼叫模型推論中... (模型: {0})", params.modelName));}
                     try {
                         // Expansion repairs retain the full checkpoint as well as this
                         // candidate, so only a pending seed can size a bounded output.
-                        rawCode = await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat,
+                        rawCode = generationBindingEdit ? await requestBindingRevision(generationBindingEdit)
+                            : await requestBudgeted(params, systemPrompt, generationPrompt, log, testGenerationResponseFormat,
                             generationRevisionCode === undefined ? 'writer' : 'writer-revision', undefined, 0,
                             seedPending ? generationRevisionCode : undefined, undefined, undefined,
                             generationRevisionCode === undefined ? undefined : { findingCount: 1, missingScenarioCount: 0 });
@@ -3863,8 +3840,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }
 
-                    sanitizedCode = await prepareWriterCandidate(rawCode,
-                        generationRevisionCode === undefined ? 'writer' : 'writer-revision', llmRetry);
+                    const composedBindingCode = generationBindingEdit
+                        ? await applyBindingRevision(generationBindingEdit, rawCode, llmRetry) : undefined;
+                    sanitizedCode = await prepareWriterCandidate(composedBindingCode ?? rawCode,
+                        generationRevisionCode === undefined ? 'writer' : 'writer-revision', llmRetry, Boolean(generationBindingEdit));
 
                     if (!sanitizedCode) {
                         recordRejected('', llmRetry, 'response-format', 'no-python-candidate');
@@ -3956,6 +3935,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             candidateValidation.valid ? 'trace-evidence-rejected' : candidateValidation.reasonCode || 'candidate-structure-rejected');
                         if (llmRetry === 0) {
                             log(localize("[警告] 模型輸出未通過證據／Python unittest 驗證：{0}；將以嚴格格式要求重試。", validationReason));
+                            if (seedPending && candidateValidation.reasonCode === 'writer-undefined-name') {
+                                generationBindingEdit = await planBindingRevision(sanitizedCode, candidateValidation,
+                                    writerEvidenceBundle ? buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
+                                        source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle }) : userPrompt);
+                                generationRevisionCode = sanitizedCode;
+                                sanitizedCode = '';
+                                continue;
+                            }
                             generationPrompt = buildWriterRevisionRequest({
                                 code: sanitizedCode, findings: validationReason || localize("不明驗證錯誤"),
                                 moduleName: targetImportModule, functionName: targetFuncName,
@@ -3973,6 +3960,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             generationRevisionCode = sanitizedCode;
                             sanitizedCode = '';
                             continue;
+                        }
+                        if (generationBindingEdit) {
+                            throw new AnalysisStageError('validation', 'writer-method-edit-scope',
+                                validationReason || 'Scoped name binding repair did not pass validation.',
+                                { reasonCode: candidateValidation.reasonCode || 'binding-edit-validation-rejected' });
                         }
                         throw new CandidateValidationError(localize("模型連續兩次未通過證據／Python unittest 驗證：{0}", validationReason));
                     }
@@ -4089,6 +4081,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
                         exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
+                    bindingValidations.set(evidenceHash(code), structural);
                     if (!structural.valid) {
                         recordRole('structure', 'rejected', { reasonCode: structural.reasonCode || 'candidate-structure-rejected',
                             repairRole: 'writer' });
@@ -4172,6 +4165,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 revise: async (code, failure, role, attempt) => {
                     if (role === 'writer' ? !mayUseModelAuthoredTests : !mayUseModelAuthoredRepair) {
                         throw new AnalysisStageError('validation', 'role-qualification', localize("Auto 未驗證 {0} 角色不可呼叫該角色修訂。", role));
+                    }
+                    const bindingValidation = bindingValidations.get(evidenceHash(code));
+                    if (role === 'writer' && bindingValidation?.reasonCode === 'writer-undefined-name') {
+                        const edit = await planBindingRevision(code, bindingValidation, roleEvidence);
+                        const candidate = await applyBindingRevision(edit!, await requestBindingRevision(edit!), attempt);
+                        return prepareWriterCandidate(candidate, 'writer-revision', attempt, true);
                     }
                     const workloadKey = evidenceHash(code);
                     const reviewedWork = reviewerRevisionWorkloads.get(workloadKey);

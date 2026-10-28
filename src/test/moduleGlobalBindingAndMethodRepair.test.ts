@@ -23,7 +23,7 @@ test('AST extractor distinguishes literal-constant from existing-object, object-
             'REBOUND_VAR = "first"',
             'REBOUND_VAR = "second"',
             'def target():',
-            '    return DATABASE_CONN.ping(CONFIG_PORT)'
+            '    return DATABASE_CONN.ping(CONFIG_PORT), CONN_ALIAS, REBOUND_VAR'
         ].join('\n');
         fs.writeFileSync(file, source, 'utf8');
 
@@ -45,19 +45,26 @@ test('AST extractor distinguishes literal-constant from existing-object, object-
         assert.ok(conn, 'DATABASE_CONN should be referenced');
         assert.equal(conn.binding_kind, 'existing-object');
         assert.equal(conn.initialization_callee, 'create_connection');
+        assert.equal(globals.find(g => g.name === 'CONN_ALIAS')?.binding_kind, 'object-reference');
+        assert.equal(globals.find(g => g.name === 'REBOUND_VAR')?.binding_kind, 'unknown');
 
         const prompt = getUserPrompt('sample.py', 'target', context.code, 'small', context, undefined, 2000, '');
 
         // Existing objects must have explicit guidance and not be categorized as plain constants
-        assert.match(prompt, /- Referenced module objects \(ALREADY instantiated at module scope/);
-        assert.match(prompt, /DATABASE_CONN \(instantiated as `DATABASE_CONN = create_connection\("db:\/\/localhost"\)` in module; do not re-initialize in test\)/);
+        assert.match(prompt, /- Referenced module call-result bindings \(initialized at module scope/);
+        assert.match(prompt, /DATABASE_CONN \(initialized as `DATABASE_CONN = create_connection\("db:\/\/localhost"\)` in module; do not re-initialize in test\)/);
 
         // Constant must be categorized under constants
-        assert.match(prompt, /- Referenced module constants \(use exact values\):\s+- CONFIG_PORT = 8080/);
+        assert.match(prompt, /- Referenced immutable literal initializers[^\n]+\n\s+- CONFIG_PORT = 8080/);
 
         // DATABASE_CONN must not be under constants
-        const constantsSection = prompt.split('- Referenced module constants (use exact values):')[1]?.split('- Referenced module objects')[0] || '';
+        const constantsSection = prompt.split('- Referenced immutable literal initializers')[1]?.split('- Referenced module call-result bindings')[0] || '';
         assert.doesNotMatch(constantsSection, /DATABASE_CONN/);
+
+        const legacyPrompt = getUserPrompt('sample.py', 'target', context.code, 'small', { ...context,
+            referenced_globals: [{ name: 'LEGACY', code: 'LEGACY = make_value()' }] }, undefined, 2000, '');
+        assert.match(legacyPrompt, /Referenced module globals \(dynamic or rebound; verify in source\)/);
+        assert.doesNotMatch(legacyPrompt, /Referenced immutable literal initializers|Referenced module call-result bindings/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

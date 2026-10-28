@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as path from 'node:path';
-import { applyWriterMethodEdits, planWriterMethodEdits } from '../validation/writerMethodEdits';
+import { applyWriterMethodEdits, planWriterMethodEdits, planWriterNameBindingEdits } from '../validation/writerMethodEdits';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { validatePassingTestPreservation } from '../pipeline/passingTestPreservation';
@@ -29,6 +29,17 @@ const lineRefs = [15];
 const response = '```python\nclass Second:\n    def test_same(self):\n        self.assertTupleEqual(choose(1), (1, "值"))\n```';
 const toolFailure = (error: unknown) => error instanceof AnalysisStageError && error.stage === 'writer-method-edit-tool'
     && !error.message.includes('PRIVATE_SOURCE');
+
+test('Checker class and AST line disambiguate same-named methods; missing or mismatched locations cannot widen scope', async () => {
+    const validation = { reasonCode: 'writer-undefined-name', name: 'missing', method: 'test_same', className: 'Second', line: 15 };
+    const plan = await planWriterNameBindingEdits({ baseline, validation, python });
+    assert.ok(plan.ok);
+    assert.equal(plan.methods[0].id, 'Second.test_same');
+    for (const finding of [{ ...validation, line: undefined }, { ...validation, className: 'First' },
+        { ...validation, reasonCode: 'unknown' }, { ...validation, line: 1 }]) {
+        assert.equal((await planWriterNameBindingEdits({ baseline, validation: finding, python })).ok, false);
+    }
+});
 
 test('host binds an AST method plan to exact UTF-8 bytes and independently composes a bounded model edit', async () => {
     const plan = await planWriterMethodEdits({ baseline, lineRefs, python });
