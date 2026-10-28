@@ -4,6 +4,7 @@ import { pythonToolPath } from '../pipeline/pythonTools';
 import { extractPythonTestCode } from './generatedTestValidator';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { currentExecution } from '../pipeline/executionContext';
+import { CandidateSyntaxDiagnostic, readCandidateMethodInventory } from '../pipeline/candidateMethodInventory';
 
 const PLAN = 'writer-method-edit-plan-v1';
 const RESULT = 'writer-method-edit-result-v1';
@@ -16,7 +17,7 @@ export interface WriterMethodEdit {
 export interface WriterMethodEditPlan {
     schemaVersion: typeof PLAN; ok: true; baselineHash: string; planHash: string; methods: WriterMethodEdit[];
 }
-type RejectedEdit = { ok: false; reasonCode: string };
+type RejectedEdit = { ok: false; reasonCode: string; syntax?: CandidateSyntaxDiagnostic; candidateHash?: string };
 const invalid = (): never => { throw new AnalysisStageError('validation', 'writer-method-edit-tool',
     'The source-bound method edit tool could not complete.', { reasonCode: 'method-edit-tool-invalid' }); };
 
@@ -100,7 +101,16 @@ export async function applyWriterMethodEdits(options: {
     if (Buffer.byteLength(replacement, 'utf8') > LIMIT) { return { ok: false, reasonCode: 'edit-input-limit' }; }
     const value = await invoke(options.python, options.env, { mode: 'apply', baseline: options.baseline, lineRefs: options.lineRefs,
         baselineHash: options.plan.baselineHash, planHash: options.plan.planHash, replacement }, RESULT);
-    if (value.ok === false) { return { ok: false, reasonCode: value.reasonCode }; }
+    if (value.ok === false) {
+        if (value.reasonCode === 'invalid-edit-python') {
+            // The compositor also reports internal parser failures with this legacy code.
+            // Independently diagnose this exact extracted input before blaming the reply.
+            const inventory = await readCandidateMethodInventory({ code: replacement, python: options.python, env: options.env });
+            if (inventory.status !== 'syntax-error') { return invalid(); }
+            return { ok: false, reasonCode: value.reasonCode, syntax: inventory.syntax, candidateHash: hash(replacement) };
+        }
+        return { ok: false, reasonCode: value.reasonCode };
+    }
     if (value.baselineHash !== options.plan.baselineHash || value.planHash !== options.plan.planHash
         || typeof value.mergedCode !== 'string' || Buffer.byteLength(value.mergedCode, 'utf8') > LIMIT
         || value.mergedHash !== hash(value.mergedCode) || !Array.isArray(value.edits)

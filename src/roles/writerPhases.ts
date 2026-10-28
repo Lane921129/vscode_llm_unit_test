@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
-import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, SOURCE_INPUT_SHAPE_GUIDANCE } from '../prompts/dependencyMockContract';
+import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, MODULE_GLOBAL_LOOKUP_GUIDANCE, SOURCE_INPUT_SHAPE_GUIDANCE } from '../prompts/dependencyMockContract';
 import { summarizeRepairOutput } from '../validation/repairFeedback';
 
 /** Select packaging only. The model still authors the complete test body. */
@@ -115,12 +115,16 @@ export function buildWriterReviewCorrectionPrompt(prompt: string): string {
 export function buildWriterMethodEditPrompt(prompt: string, plan: {
     baselineHash: string; planHash: string; methods: readonly { id: string }[];
 }, rejection?: string): string {
+    const owners = [...new Set(plan.methods.map(method => method.id.slice(0, method.id.lastIndexOf('.'))))];
     return prompt + '\n\nWRITER_METHOD_EDIT_V1\n' + JSON.stringify({ baselineHash: plan.baselineHash,
         planHash: plan.planHash, methodIds: plan.methods.map(method => method.id) })
-        + '\nReplace exactly these existing methods. Use class Name: wrappers with only the named methods; '
+        + '\nOUTPUT_CLASS_HEADERS_V1 (copy these exact headers; include only the planned methods beneath each):\n'
+        + owners.map(owner => `class ${owner}:`).join('\n')
+        + '\nReplace exactly these existing methods under their listed original class names; never invent a class name. '
         + 'copy each original signature, async status and decorators from CURRENT TEST FILE. '
         + 'Do not return the full suite, module imports, fixtures or unrelated methods. Necessary imports may be local to a method. '
-        + 'Preserve inputs and verified assertions while addressing the supplied findings. '
+        + 'Preserve source-supported case inputs and verified assertions while addressing the supplied findings. '
+        + 'Copied module initializers in a rejected draft are not required fixtures: correct unsupported setup using the supplied source lookups. '
         + 'The host preserves all other bytes and fixtures; the complete composition still needs execution, fresh review and quality validation.'
         + (rejection ? '\nPREVIOUS EDIT REJECTION:\n' + summarizeRepairOutput(rejection, 1500) : '');
 }
@@ -128,10 +132,11 @@ export function buildWriterMethodEditPrompt(prompt: string, plan: {
 /** This revision has no complete-file or seed packaging instruction. */
 export function getWriterMethodEditSystemPrompt(): string {
     return 'You are a Python unittest Writer performing WRITER_METHOD_EDIT_V1. '
-        + 'Return one Python fence containing only the exact planned existing methods in class Name: wrappers. '
+        + 'Return one Python fence containing only the exact planned existing methods under the exact OUTPUT_CLASS_HEADERS_V1 headers. '
         + 'Keep signatures, decorators and async status. Use method-local imports if necessary. '
         + 'The host owns all other methods, module imports and fixtures; never return a complete test file. '
         + 'Keep the real target callable; do not invent requirements or expected values from failures. '
+        + MODULE_GLOBAL_LOOKUP_GUIDANCE
         + isolatedResourceSystemRule();
 }
 

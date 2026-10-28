@@ -68,6 +68,18 @@ test('AST dependency arguments retain the actual global binding after its source
     }
 });
 
+test('module-initialized objects stay at the target lookup rather than a same-named test local', () => {
+    const context = extracted('from provider import Sink, build_resource\nRESOURCE = build_resource()\nSINK = Sink()\n'
+        + 'def target():\n    SINK.publish(resource=RESOURCE)\n');
+    for (const prompt of prompts(context)) {
+        assert.match(prompt, /A test-local assignment does not rebind a module global used by the real target/);
+        assert.match(prompt, /Do not replay a module initializer to construct a second object/);
+        assert.match(prompt, /Call setup SINK\.publish: resource: sample\.RESOURCE/);
+        assert.match(prompt, /An assertIsNone alone does not verify those effects/);
+        assert.match(prompt, /not authorize patching the target or inventing fixture values, runtime call counts or expected outputs/);
+    }
+});
+
 test('stale, malformed and unsupported setup facts never render a partial concrete contract', () => {
     const context = extracted('import runtime\ndef target():\n    return getattr(runtime, "enabled", False)\n');
     const original = context.source_setup_call_contract;
@@ -89,11 +101,12 @@ test('stale, malformed and unsupported setup facts never render a partial concre
     }
 });
 
-test('pure functions and shadowed optional owners add no concrete setup instructions or always-on budget', () => {
+test('return-flow metadata does not grant concrete global setup for pure functions or shadowed owners', () => {
     const pure = extracted('def target(value):\n    return value + 1\n');
-    assert.equal(formatDependencyMockContract('sample', pure),
-        formatDependencyMockContract('sample', { ...pure, source_setup_call_contract: undefined }));
+    const pureContract = formatDependencyMockContract('sample', pure);
+    assert.match(pureContract, /"returnFlow":\{"kind":"contains-value-return","discardedCalls":\[\]\}/);
+    assert.doesNotMatch(pureContract, /Optional source lookup|Call setup |A test-local assignment|patch\.object\(sample/);
     const shadowed = extracted('import runtime\ndef target(runtime):\n    return getattr(runtime, "enabled", False)\n');
     assert.equal(shadowed.source_setup_call_contract.optionalLookups.length, 0);
-    assert.doesNotMatch(formatDependencyMockContract('sample', shadowed), /SOURCE CALL SETUP|patch\.object\(sample\.runtime/);
+    assert.doesNotMatch(formatDependencyMockContract('sample', shadowed), /Optional source lookup|Call setup |A test-local assignment|patch\.object\(sample\.runtime/);
 });

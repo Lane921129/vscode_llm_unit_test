@@ -2909,11 +2909,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         checkBindingRepairCurrent();
         const applied = await applyWriterMethodEdits({ ...edit, response: raw, python: pythonExecutable, env: testExecutionEnv });
         checkBindingRepairCurrent();
+        const completedDiagnostic = completedOutputDiagnostics.get(evidenceHash(raw));
         completedOutputDiagnostics.delete(evidenceHash(raw));
         if (!applied.ok) {
+            if (applied.syntax) {
+                const code = extractWriterAdditionCode(raw);
+                const { syntaxPreview, ...diagnostic } = completedDiagnostic || {};
+                recordRole('model-request', 'format-rejected', { role: 'writer-revision', reasonCode: 'response-python-syntax',
+                    ...diagnostic, candidateHash: applied.candidateHash, syntax: applied.syntax,
+                    baselineHash: edit.plan.baselineHash, planHash: edit.plan.planHash, outputScope: 'method-edit',
+                    ...(syntaxPreview ? { responsePreview: syntaxPreview(code, applied.syntax.line), previewScope: 'extracted-python' } : {}) });
+            }
             recordRejected(extractWriterAdditionCode(raw), attempt, 'revision-scope', applied.reasonCode);
             recordRole('writer-method-edit', 'rejected', { baselineHash: edit.plan.baselineHash, planHash: edit.plan.planHash,
-                reasonCode: applied.reasonCode, trigger: 'name-binding-repair', validationMode: mode });
+                reasonCode: applied.reasonCode, trigger: 'name-binding-repair', validationMode: mode,
+                ...(applied.syntax ? { syntax: applied.syntax, candidateHash: applied.candidateHash } : {}) });
             // This typed stop cannot reopen a wider Writer/Tier repair path.
             throw new AnalysisStageError('validation', 'writer-method-edit-scope',
                 applied.reasonCode === 'edit-no-method-change'

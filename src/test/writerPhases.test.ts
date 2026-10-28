@@ -2,9 +2,23 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildWriterAdditionRevisionPrompt, buildWriterAdditionSystemPrompt, buildWriterExpansionPrompt,
     buildWriterSeedPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
-    selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from '../roles/writerPhases';
+    selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction, buildWriterMethodEditPrompt,
+    getWriterMethodEditSystemPrompt } from '../roles/writerPhases';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { getExecutionWriterSystemPrompt } from '../roles/unittestWriter';
+
+test('method revisions supply exact AST owner headers without placeholder class names', () => {
+    const prompt = buildWriterMethodEditPrompt('complete read-only baseline and evidence', { baselineHash: 'base', planHash: 'plan',
+        methods: [{ id: 'First.test_one' }, { id: 'Second.test_same' }, { id: 'First.test_other' }] });
+    assert.match(prompt, /OUTPUT_CLASS_HEADERS_V1[^\n]*\nclass First:\nclass Second:/);
+    assert.equal((prompt.match(/class First:/g) || []).length, 1);
+    assert.ok(prompt.includes('"methodIds":["First.test_one","Second.test_same","First.test_other"]'));
+    assert.match(prompt, /never invent a class name/);
+    assert.match(prompt, /Preserve source-supported case inputs and verified assertions/);
+    assert.match(prompt, /Copied module initializers in a rejected draft are not required fixtures/);
+    assert.match(getWriterMethodEditSystemPrompt(), /exact OUTPUT_CLASS_HEADERS_V1 headers/);
+    assert.doesNotMatch(prompt + getWriterMethodEditSystemPrompt(), /class Name:|in class .* wrappers/);
+});
 
 test('execution-only seed and revision isolate helper behavior while full evidence policy stays unchanged', () => {
     for (const prompt of [buildWriterSeedSystemPrompt('', false, true), getExecutionWriterSystemPrompt()]) {

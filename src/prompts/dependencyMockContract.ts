@@ -5,6 +5,12 @@ export const SOURCE_INPUT_SHAPE_GUIDANCE = 'Source parameter.member needs an att
     + 'Follow mixed accesses one level at a time: obj.member["key"] needs a mapping-valued member; obj.member.key needs attribute-bearing values. '
     + 'Do not turn all nested values into namespaces.';
 
+export const MODULE_GLOBAL_LOOKUP_GUIDANCE = 'A test-local assignment does not rebind a module global used by the real target. '
+    + 'Do not replay a module initializer to construct a second object or call a dependency before the target merely to prepare its expected call history. '
+    + 'Read the current source-module binding; when control is needed, scope a source-supported dependency replacement at that lookup and restore it. '
+    + 'Call the real target, then verify the consumed dependency and the exact source-shown arguments with that same binding. '
+    + 'This does not authorize patching the target or inventing fixture values, runtime call counts or expected outputs. ';
+
 /** Source consumption is setup guidance, never a dependency or target oracle. */
 export const DEPENDENCY_MOCK_SHAPE_GUIDANCE = 'Mock only source-shown receivers: factory(...).finish() needs factory_mock.return_value.finish.return_value; keep its return object. '
     + 'A direct factory(...) uses factory_mock.return_value. Never add layers or infer expected values from this pattern. '
@@ -152,6 +158,7 @@ export function formatDependencyMockContract(module: string, context?: any, allo
         (item.binding_kind || item.kind) === 'existing-object');
     const globalsGuidance = context?.referenced_globals?.length
         ? 'Source globals are not test globals: explicitly import the canonical target module and read its source-shown bindings. '
+            + MODULE_GLOBAL_LOOKUP_GUIDANCE
             + (hasExistingObjects
                 ? 'Source call-result bindings are initialized at module scope; their runtime types/values are not established by this syntax. NEVER copy their initialization code into test methods; access them via the imported module or patch source-supported use points. '
                 : '')

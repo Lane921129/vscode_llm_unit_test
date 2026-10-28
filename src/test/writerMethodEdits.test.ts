@@ -78,6 +78,34 @@ test('complete suite replies, new methods and fixture edits are rejected rather 
     }
 });
 
+test('malformed method replies retain only hash-bound syntax coordinates, without source or parser messages', async () => {
+    const plan = await planWriterMethodEdits({ baseline, lineRefs, python });
+    assert.ok(plan.ok);
+    const malformed = 'class Second:\n    def test_same(self):\n        PRIVATE_SOURCE = (\n';
+    const result = await applyWriterMethodEdits({ baseline, lineRefs, plan, response: '```python\n' + malformed + '```', python });
+    assert.equal(result.ok, false);
+    if (result.ok) { return; }
+    assert.equal(result.reasonCode, 'invalid-edit-python');
+    assert.equal(result.syntax?.kind, 'SyntaxError');
+    assert.equal(result.syntax?.line, 3);
+    assert.equal(typeof result.syntax?.column, 'number');
+    assert.equal(result.candidateHash, require('node:crypto').createHash('sha256').update(malformed.trimEnd()).digest('hex'));
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SOURCE|was never closed|text|filename/);
+});
+
+test('a composition failure with valid replacement syntax remains a tool failure', async () => {
+    const plan = await planWriterMethodEdits({ baseline, lineRefs, python });
+    assert.ok(plan.ok);
+    const runner = require('../utils/processRunner') as typeof import('../utils/processRunner');
+    const original = runner.runSpawn;
+    try {
+        (runner as any).runSpawn = async (...args: Parameters<typeof original>) => args[1].some(value => value.endsWith('edit_test_methods.py'))
+            ? { code: 0, stdout: JSON.stringify({ schemaVersion: 'writer-method-edit-result-v1', ok: false, reasonCode: 'invalid-edit-python' }) }
+            : original(...args);
+        await assert.rejects(applyWriterMethodEdits({ baseline, lineRefs, plan, response, python }), toolFailure);
+    } finally { (runner as any).runSpawn = original; }
+});
+
 test('source drift, plan drift and malformed AST tool results stop as tool failures', async () => {
     const plan = await planWriterMethodEdits({ baseline, lineRefs, python });
     assert.ok(plan.ok);
