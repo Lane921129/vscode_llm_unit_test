@@ -2,6 +2,18 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-10-29
+
+### 集中式 skill 目錄、來源依賴導航與小模型驗證
+
+- 將26項規則卡移至 `skills/`，每項一個 `.txt`，由 `catalog.json` 管理ID、版本及用途；23張文字指引保留，更新共用依賴／資料庫／HTTP三項。選取邏輯仍由Dispatcher執行，事件記錄skill版本；不掃描任意工作區或自動執行Python檔。正式Python工具保留受控入口，說明見 `skills/README.md`。
+- AST新增 `dependency-skill-facts-v1`：僅追蹤唯一目標實際讀取之穩定模組import／factory／alias來源語法，綁目標與hash；作為參數使用的資料庫物件及模組HTTP client也可選卡。重綁、參數／區域遮蔽、動態namespace、變動成員、相對來源及過深／循環鏈不猜測，不提供runtime型別、expected或patch授權。
+- 依有效來源呼叫契約先交付 `DEPENDENCY_FIXTURE_PLAN_V1`，明列實際模組lookup及來源參數，再由模型依原scope撰寫；未新增模型角色、請求或重試。完整來源／契約、局部AST、隔離native、同候選Reviewer及品質門檻維持。方法修訂尾端明示必須交付程式，英文步驟說明仍拒絕。
+- 修正URL字串斜線誤觸除法規則，以及已證明HTTP client的open/read被誤當檔案I/O；獨立檔案呼叫與未知receiver保留既有指引。新增版本化資產、來源漂移／錯誤權威、未使用匯入及遮蔽防護，並經正式入口驗證HTTP模組client局部修訂、真正目標執行及精確request參數。沒有業務或模型品牌分支。
+- 新增 `test/skill_ab_summary.py` 彙整兩組批次manifest宣告，保留pending／failed差異及模型、範圍、模式可比事實；不重驗品質、不補造缺失分數，未完成實驗室A/B。
+- 驗證：相關Node60/60、Python24/24；相容性Node53/53、Python115/115。最後精確lookup增量再經相關Node40/40、Python24/24。快速Node765/765、Python42/42、Webview、型別、lint與production build通過；原49項Python順序仍保留，完整盤點追加至54檔。歷史密鑰掃描與差異檢查通過。初輪沙箱暫存身分與舊測試清單預期問題均已以原生重驗及清單相容性更新處理。
+- 本機既有 `qwen2.5-coder:3b-instruct` 中性HTTP正式execution首輪未控制網路而被隔離；加入精確lookup導航後另一次獨立實測在原Writer修訂額度內通過，保留hash `5070558f7fb7e5f811cde12bbbe5fc7c05db3690c334ed5abe8b9db5a5b234d8`，實際patch `sample.CLIENT.open`並比對受控bytes。這不是受控A/B、full品質或13B／資料庫／整批驗收；全量Node／Python、跨平台及獨立VS Code Mocha本次未重跑，六項首要目標仍未全部完成。
+
 ## 2026-10-28
 
 ### 局部名稱修訂診斷與模組綁定／副作用提示

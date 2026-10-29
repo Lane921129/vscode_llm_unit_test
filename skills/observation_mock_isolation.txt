@@ -1,0 +1,4 @@
+EXECUTED OBSERVATION / MOCK ISOLATION:
+  - Executed-observation assertions belong to a separate TestCase without the model test class setUp, decorators, or mock state.
+  - Prefer a per-test patch context and explicit return_value or side_effect. Never apply a module-wide patch to executed-observation tests.
+  - Do not copy or change runner-owned TestVerifiedTrace_* classes; the runner restores them after repair.

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sameRecordedFile } from '../utils/fileIdentity';
+import { dependencySkillBindings } from '../skills/dependencyFacts';
 
 export const SOURCE_INPUT_SHAPE_GUIDANCE = 'Source parameter.member needs an attribute-bearing fixture (for example types.SimpleNamespace), not a dict of same-named keys. '
     + 'Follow mixed accesses one level at a time: obj.member["key"] needs a mapping-valued member; obj.member.key needs attribute-bearing values. '
@@ -255,7 +256,24 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
             || !['read', 'write', 'call'].includes(item.usage) || !Number.isSafeInteger(item.line) || item.line <= 0)) { return ''; }
     if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length
         && !parameterMembers.length && !literalCallArguments.length && !returnFlow) { return ''; }
-    const lines = ['SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts)];
+    const lines: string[] = [];
+    const origins = dependencySkillBindings(context);
+    // A compact arrangement task precedes the original full evidence. It is
+    // setup navigation, never a generated fixture or an executable candidate.
+    if (origins.length && facts.calls.length && facts.calls.length <= 8) {
+        lines.push('DEPENDENCY_FIXTURE_PLAN_V1 (source-bound setup navigation; not code, runtime types, expected outputs or patch authorization):',
+            JSON.stringify({ sourceHash: facts.targetSourceHash, target: facts.target,
+                bindings: origins, calls: facts.calls.map((call: any) => ({ callee: call.callee,
+                    ...(call.callee.split('.').every(identifier) && origins.some(binding => binding.name === call.callee.split('.')[0])
+                        ? { lookupExpression: `${module}.${call.callee}` } : {}),
+                    args: call.args.map((arg: any) => ({ ...arg, ...(arg.scope === 'module-global' ? { lookupModule: module } : {}) })),
+                    keywords: call.keywords.map((arg: any) => ({ ...arg, ...(arg.scope === 'module-global' ? { lookupModule: module } : {}) })) })) }),
+            'Arrange only source-supported inputs and consumed dependency members; keep unknown values unknown. '
+            + 'Use each lookupExpression in the actual target module; keep an existing client/resource instead of rebuilding or patching its factory. '
+            + 'Then write the requested Python test method: call the real target and assert its observable result/effect under those controls. '
+            + 'Do not return this plan or explain these instructions.');
+    }
+    lines.push('SOURCE CALL SETUP (AST-normalized spellings; read the complete source above; no output oracle or patch permission):', JSON.stringify(facts));
     if (returnFlow?.kind === 'normal-completion-none') {
         lines.push('SOURCE_RETURN_FLOW_V1: This ordinary undecorated function has no return expression other than None (or bare return/fall-through). '
             + 'If its body completes normally, Python returns None; a dependency Mock.return_value is not automatically the target return. '

@@ -537,6 +537,7 @@ interface AstContext {
     name: string;
     probeInputFixture?: ProbeFixtureIdentity;
     source_setup_call_contract?: unknown;
+    dependency_skill_facts?: unknown;
     source_location?: unknown;
     /** Python AST uses null for module-level functions without an owning class. */
     class_name?: string | null;

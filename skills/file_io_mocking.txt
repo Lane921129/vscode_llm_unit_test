@@ -1,0 +1,5 @@
+FILE I/O MOCKING:
+  - For undeclared file boundaries use unittest.mock.mock_open and patch the name at the point where the target uses it.
+  - For host-declared isolated files, call the real target; only application code may access them. A declared file is setup input, not a verified expected result.
+  - Exercise read and write paths without creating or changing real files.
+  - Assert the expected path, mode, and written content when the source code makes them observable.

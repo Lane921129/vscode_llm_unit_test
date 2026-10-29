@@ -126,7 +126,9 @@ export function buildWriterMethodEditPrompt(prompt: string, plan: {
         + 'Preserve source-supported case inputs and verified assertions while addressing the supplied findings. '
         + 'Copied module initializers in a rejected draft are not required fixtures: correct unsupported setup using the supplied source lookups. '
         + 'The host preserves all other bytes and fixtures; the complete composition still needs execution, fresh review and quality validation.'
-        + (rejection ? '\nPREVIOUS EDIT REJECTION:\n' + summarizeRepairOutput(rejection, 1500) : '');
+        + (rejection ? '\nPREVIOUS EDIT REJECTION:\n' + summarizeRepairOutput(rejection, 1500) : '')
+        + '\nOUTPUT_ARTIFACT: Return the implemented planned methods in one python fence now. '
+        + 'An explanation, numbered plan or summary of the instructions is not a test method.';
 }
 
 /** This revision has no complete-file or seed packaging instruction. */

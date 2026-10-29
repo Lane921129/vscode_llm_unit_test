@@ -91,6 +91,7 @@ export interface BehaviorObservations {
 }
 
 export interface SelectedTestRule {
+    skillVersion?: number;
     ruleId: string;
     title: string;
     triggerFacts: string[];

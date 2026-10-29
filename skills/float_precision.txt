@@ -1,0 +1,4 @@
+FLOAT PRECISION:
+  - Use assertAlmostEqual(result, expected, places=N) for floats from math operations.
+  - Or use assertEqual only when the function explicitly calls round(x, N) — then the result is exact.
+  - Avoid comparing raw float arithmetic results with == (e.g. 0.1+0.2 != 0.3).

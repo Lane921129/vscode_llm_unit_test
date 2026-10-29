@@ -1,0 +1,5 @@
+assertRaises SYNTAX — CRITICAL:
+  - CORRECT:   with self.assertRaises(ValueError): followed by the call
+  - WRONG:     self.assertRaises(ValueError, "message") — TypeError!
+  - WRONG:     result = func(...) then assertRaises — exception already propagated!
+  - Only use assertRaises for an explicit source raise, an exact verified behavior observation, or a configured mock side_effect that propagates out of the target.

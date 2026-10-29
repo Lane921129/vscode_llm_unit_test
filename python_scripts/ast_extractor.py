@@ -4,6 +4,7 @@ import json
 import sys
 from dependency_fixture_contract import build_dependency_fixture_contract
 from source_setup_call_contract import build_source_setup_call_contract, _stable_module_names
+from dependency_skill_facts import build_dependency_skill_facts
 
 from static_type_shape import TYPE_SHAPE_VERSION, resolve_parameter_shapes, unknown
 
@@ -955,6 +956,7 @@ def extract_info(filepath, func_name):
             'condition_facts': branch_condition_facts(func_node, set(args)),
             'dependency_fixture_contract': build_dependency_fixture_contract(func_node, target_source, func_name, module_bindings),
             'source_setup_call_contract': build_source_setup_call_contract(func_node, target_source, func_name, tree),
+            'dependency_skill_facts': build_dependency_skill_facts(func_node, target_source, func_name, tree),
             'code': target_source,
             'source_location': {'version': 'python-source-location-v1', 'startLine': func_node.lineno,
                                 'endLine': func_node.end_lineno,

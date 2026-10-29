@@ -1,0 +1,5 @@
+PYTHON SLICING SEMANTICS:
+  - `x[:5]`  takes the FIRST 5 chars. e.g. "ABCDEFGH"[:5] == "ABCDE"
+  - `x[-5:]` takes the LAST  5 chars. e.g. "ABCDEFGH"[-5:] == "DEFGH"
+  - `x[2:5]` takes chars at index 2,3,4. e.g. "ABCDEFGH"[2:5] == "CDE"
+  - Always compute expected slice values from the EXACT input string you pass in the test.

@@ -1,0 +1,4 @@
+NONE / EMPTY INPUT:
+  - If the function raises for None input, use `with self.assertRaises(...):`.
+  - If it returns a default/error value for None, use assertEqual.
+  - Always determine None behavior from the SOURCE CODE, not by guessing.

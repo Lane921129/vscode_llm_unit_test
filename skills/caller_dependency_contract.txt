@@ -1,0 +1,5 @@
+CALLER / DEPENDENCY CONTRACT:
+  - Bind the actual positional and keyword arguments at the target call site before selecting dependency observations.
+  - A dependency observation under different fixed arguments is not an observation of this target call.
+  - If a target branch requires a controlled dependency result, patch its use point and execute the target under that exact mock before trusting the assertion.
+  - For and/or conditions, explore mixed truth values as well as all-true/all-false when inputs or mocks can reach them. Short-circuiting and accessed keys still apply.

@@ -1,0 +1,7 @@
+MOCK EXTERNAL DEPENDENCIES:
+Use source-proven dependency use points and preserve import aliases; never replace the real target or its owner class.
+Arrange only the members consumed by the source: factory return, nested member, cursor, iterator or context manager. A scalar cannot replace a connection/response object.
+Use a per-test patch context and explicit controlled behavior. Do not replay module initializers or call dependencies to manufacture expected values or call history.
+Read module-global arguments from the actual target module; a same-named test-local assignment does not rebind them.
+Run the real target, then check its result or the actual consumed dependency with the source-shown argument types and bindings. Source call sites alone do not prove runtime call counts.
+Host-declared resources prepare only their declared boundaries. A mocked dependency checks controlled unit behavior, not real external integration.

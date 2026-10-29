@@ -1,0 +1,5 @@
+IMPORT MODULE NAME:
+  - Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.
+  - Correct: from module_name import target_function
+  - WRONG:   from target_function import target_function
+  - WRONG:   from c:\path\to\file import ... — never use filesystem paths.

@@ -22,6 +22,15 @@ const effectSeed = seed.slice(0, seed.indexOf('    def test_seed')) + '    def t
 const effectFixed = 'class Cases:\n    def test_seed(self):\n        import sample\n        from unittest.mock import patch\n'
     + '        with patch.object(sample.SINK, "publish") as publish:\n'
     + '            self.assertIsNone(target())\n            publish.assert_called_once_with(resource=sample.RESOURCE)\n';
+const httpSource = 'import urllib.request as transport\nCLIENT = transport.build_opener()\n'
+    + 'def target():\n    return CLIENT.open("https://unit.invalid/item").read()\n';
+const httpSeed = seed.slice(0, seed.indexOf('    def test_seed')) + '    def test_seed(self):\n'
+    + '        client = build_opener()\n        self.assertIsNotNone(client)\n        self.assertEqual(target(), b"payload")\n';
+const httpFixed = 'class Cases:\n    def test_seed(self):\n        import sample\n        from unittest.mock import patch\n'
+    + '        with patch.object(sample.CLIENT, "open") as request:\n'
+    + '            request.return_value.read.return_value = b"payload"\n'
+    + '            self.assertEqual(target(), b"payload")\n'
+    + '            request.assert_called_once_with("https://unit.invalid/item")\n';
 
 test('full and execution repair the current Checker candidate locally; rejected edits never trigger a whole-file request', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'binding-flow-'));
@@ -80,11 +89,18 @@ test('full and execution repair the current Checker candidate locally; rejected 
                 assert.match(request.prompt, /Call setup SINK\.publish: resource: sample\.RESOURCE/);
                 assert.match(request.prompt, /An assertIsNone alone does not verify those effects/);
             }
+            if (scenario === 'http-client') {
+                assert.match(request.prompt, /DEPENDENCY_FIXTURE_PLAN_V1/);
+                assert.match(request.prompt, /HTTP CLIENT MOCKING/);
+                assert.match(request.prompt, /urllib.request.build_opener/);
+                assert.match(request.prompt, /"lookupExpression":"sample.CLIENT.open"/);
+            }
             response = '```python\n' + (scenario === 'scope' ? seed.replace('token = make_token()', 'token = None')
                 : scenario === 'unchanged' ? 'class Cases:\n' + seed.slice(seed.indexOf('    def test_seed')) : fixed) + '\n```';
             if (scenario === 'syntax') { response = '```python\nclass Cases:\n    def test_seed(self):\n        token = (\n```'; }
             if (scenario === 'ambiguous') { response += '\nAnother option:\n```python\n' + fixed + '\n```'; }
             if (scenario === 'side-effect') { response = '```python\n' + effectFixed + '\n```'; }
+            if (scenario === 'http-client') { response = '```python\n' + httpFixed + '\n```'; }
         } else {
             writers++;
             assert.equal(writers, 1, 'scoped rejection cannot fall back to a complete-file Writer');
@@ -96,28 +112,30 @@ test('full and execution repair the current Checker candidate locally; rejected 
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         for (const mode of ['full', 'execution']) {
-            for (const variant of ['success', 'scope', 'unchanged', 'syntax', 'ambiguous', ...(mode === 'execution' ? ['side-effect'] : [])]) {
+            for (const variant of ['success', 'scope', 'unchanged', 'syntax', 'ambiguous', ...(mode === 'execution' ? ['side-effect', 'http-client'] : [])]) {
                 await t.test(`${mode}/${variant}`, async () => {
                     scenario = variant; writers = 0; edits = 0; reviews = 0; reviewCode = ''; messages.length = 0;
-                    activeSeed = variant === 'side-effect' ? effectSeed : seed;
-                    const activeSource = variant === 'side-effect' ? effectSource : source;
+                    activeSeed = variant === 'side-effect' ? effectSeed : variant === 'http-client' ? httpSeed : seed;
+                    const activeSource = variant === 'side-effect' ? effectSource : variant === 'http-client' ? httpSource : source;
                     fs.writeFileSync(file, activeSource);
                     const output = path.join(root, `${mode}-${variant}`);
                     await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture',
                         maxLoops: 1, timeoutSeconds: 60, targetTimeoutSeconds: 300, promptStrategy: 'tier1',
                         requireRoleQualification: false, validationMode: mode, mutationEngine: 'builtin',
                         filePath: file, funcName: 'target', outputPath: output });
+                    assert.ok(fs.existsSync(output), JSON.stringify(messages));
                     const files = fs.readdirSync(output, { recursive: true }).map(String);
                     const knowledgePath = files.find(name => path.basename(name) === 'function_knowledge.json');
                     assert.ok(knowledgePath, JSON.stringify(messages));
                     const directory = path.dirname(path.join(output, knowledgePath));
                     const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
                     const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-                    assert.equal(writers, 1, JSON.stringify(knowledge.lastFailure));
+                    assert.equal(writers, 1, JSON.stringify({ failure: knowledge.lastFailure,
+                        stages: events.filter(event => event.stage !== 'model-request').map(event => [event.stage, event.status, event.detail]) }));
                     assert.equal(edits, 1, JSON.stringify(knowledge.lastFailure));
                     const planned = events.find(event => event.stage === 'writer-method-edit' && event.status === 'planned');
                     assert.ok(planned, JSON.stringify(events.slice(-4)));
-                    if (variant === 'success' || variant === 'side-effect') {
+                    if (variant === 'success' || variant === 'side-effect' || variant === 'http-client') {
                         assert.ok(events.some(event => event.stage === 'writer-method-edit' && event.status === 'applied'));
                         const baseline = JSON.parse(fs.readFileSync(path.join(directory,
                             mode === 'full' ? 'executable_baseline.json' : 'execution_baseline.json'), 'utf8'));
@@ -125,7 +143,8 @@ test('full and execution repair the current Checker candidate locally; rejected 
                         assert.equal(testFiles.length, 1);
                         const code = fs.readFileSync(path.join(output, testFiles[0]), 'utf8');
                         assert.equal(code.slice(0, code.indexOf('    def test_seed')), activeSeed.slice(0, activeSeed.indexOf('    def test_seed')));
-                        assert.match(code, variant === 'side-effect' ? /publish.assert_called_once_with\(resource=sample.RESOURCE\)/ : /self.assertTrue\(target\(\)\)/);
+                        assert.match(code, variant === 'side-effect' ? /publish.assert_called_once_with\(resource=sample.RESOURCE\)/
+                            : variant === 'http-client' ? /request.assert_called_once_with/ : /self.assertTrue\(target\(\)\)/);
                         assert.equal(hash(code), baseline.codeHash || baseline.testHash);
                         if (mode === 'full') {
                             assert.equal(reviews, 1, JSON.stringify(knowledge.lastFailure));

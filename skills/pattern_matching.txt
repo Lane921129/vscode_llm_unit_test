@@ -1,0 +1,4 @@
+PATTERN MATCHING:
+  - Add one test for each literal case value shown in the source, including each value in an OR pattern.
+  - If the source has case _, add one value that does not equal any literal case to verify the default path.
+  - Do not invent patterns or domain values that are absent from the source.

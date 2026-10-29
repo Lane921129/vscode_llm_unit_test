@@ -1,0 +1,4 @@
+BOOLEAN TRUTHINESS BRANCH COVERAGE:
+  - Cover both True and False for the annotated boolean parameter when the AST branch fact identifies it directly.
+  - A truthiness condition identifies inputs to explore, not the expected result or exception; derive assertions from source paths or exact verified behavior observation evidence.
+  - Do not apply this card to a complex condition or to an untyped parameter merely because it appears in an if statement.

@@ -1,0 +1,8 @@
+DATABASE STATE ISOLATION:
+Never connect to the application default, configured, or shared database from a generated test.
+When the host declares an isolated database, call the real target using that resource. The host prepares its approved schema and seed before import; the test must not create connections, tables or files.
+Otherwise use scoped source-use-point mocks with the exact consumed protocol. Keep connection, cursor/session, returned rows and transaction members separate; configure only members actually used by the source.
+An existing module engine/session is a module binding, not an instruction to copy its initializer. Use the same source binding in dependency-call argument checks.
+For side-effect-only targets, assert the actual target's observable interaction or state; assertIsNone alone does not prove the effect occurred. Do not pre-call the dependency to make an assertion pass.
+Resources are fresh per process, not per test method. Arrange and clean up through supported public application APIs so tests are independent.
+Schema and seed describe setup, not expected outputs. Do not infer exceptions from parameter names or invent database behavior absent from the source.

@@ -1,0 +1,4 @@
+ASYNC COROUTINE TESTING:
+  - Use unittest.IsolatedAsyncioTestCase and await the target coroutine in an async test method.
+  - Patch coroutine dependencies with AsyncMock when they must not perform real work.
+  - Assert returned values and raised exceptions after awaiting the coroutine.

@@ -6,6 +6,7 @@ import {
     currentClockCalls
 } from '../prompts/testRuleLibrary';
 import { RuleSelectionV2 } from './evidenceContracts';
+import { dependencyLibraryBindings } from '../skills/dependencyFacts';
 
 /** Selection is deterministic and runs after the Analyst has planned scenarios. */
 type TestRuleContext = Omit<NonNullable<Parameters<typeof inferTestRuleIdsFromCode>[1]>, 'class_name'> & {
@@ -81,7 +82,10 @@ function triggerFactsForRule(
         case 'async_context_manager_testing': fact = firstSourceFact(/^\s*async\s+with\s+.+:/); break;
         case 'http_client_mocking': fact = `http-binding: ${imports.filter(name => /requests|httpx|aiohttp|urllib/i.test(name)).join(', ') || (context?.calls || []).join(', ')}`; break;
     }
-    return [fact || `deterministic-selector: ${ruleId}`];
+    const bindings = ruleId === 'database_state_isolation' ? dependencyLibraryBindings('database', context)
+        : ruleId === 'http_client_mocking' ? dependencyLibraryBindings('http', context) : [];
+    return [...bindings.map(binding => `source-binding: ${binding.name} <- ${binding.origin} (${binding.kind}; initializer syntax, not runtime type)`),
+        fact || `deterministic-selector: ${ruleId}`];
 }
 
 function relatedAnalystHintsForRule(
@@ -116,7 +120,8 @@ export function dispatchTestRules(
             title: card.title,
             triggerFacts: triggerFactsForRule(card.id, source, context),
             relatedAnalystHints: relatedAnalystHintsForRule(card.id, semanticPlan),
-            guidance: [...card.rules]
+            guidance: [...card.rules],
+            ...(card.version ? { skillVersion: card.version } : {})
         })),
         ids,
         guidance: formatTestRuleCardsForPrompt(cards),
