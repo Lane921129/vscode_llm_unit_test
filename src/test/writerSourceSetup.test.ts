@@ -4,6 +4,8 @@ import { buildCompactWriterContext, buildWriterRevisionContext, partitionWriterO
 import { estimatePromptTokens, promptFits } from '../prompts/promptBudget';
 import { BehaviorObservations, dependencyContextsForPrompt, observationsForPrompt, WriterEvidenceBundleV3 } from '../pipeline/evidenceContracts';
 import { getSemanticAnalyzerUserPrompt } from '../roles/semanticAnalyzer';
+import { buildWriterRevisionRequest } from '../roles/roleContracts';
+import { createHash } from 'node:crypto';
 
 const evidence: WriterEvidenceBundleV3 = { schemaVersion: 'writer-evidence-v3', sourceHash: 'a'.repeat(64), semanticGuidance: '',
     ruleSelection: { schemaVersion: 'rule-selection-v2', sourceHash: 'a'.repeat(64), ids: [], selectedRules: [], guidance: '',
@@ -35,6 +37,57 @@ test('module global declarations remain distinct original source rather than eva
     assert.ok(facts.globals.every((item: any) => Object.hasOwn(item.code, 'same_complete_source_as')));
     assert.match(prompt, /canonical target module/); assert.match(prompt, /do not rename or evaluate/);
     assert.doesNotMatch(prompt, /evaluatedValue|resolvedValue|"expected"/); assert.equal(JSON.stringify(context), before);
+});
+
+test('module object initializers stay complete read-only declarations with canonical lookup and unknown metadata', () => {
+    const declaration = 'HANDLE = make_handle(\n    OPTIONS,\n    mode="neutral",\n)\n';
+    const globals = [{ name: 'HANDLE', binding_kind: 'existing-object', code: declaration,
+        unknown_metadata: { resolution: 'not-evaluated' } },
+    { name: 'ALIAS', kind: 'object-reference', code: 'ALIAS = HANDLE\n' },
+    { name: 'OPAQUE', binding_kind: 'unknown', code: 'OPAQUE = unknown_factory()\n' }];
+    const context = { referenced_globals: globals, dependencyContexts: [{ name: 'helper', code: 'def helper(): return HANDLE\n',
+        referenced_globals: [{ ...globals[0], name: 'FOREIGN_HANDLE' }] }] };
+    const before = JSON.stringify(context);
+    for (const seed of [false, true]) {
+        const prompt = render({ ...context, ...(seed ? { writerGenerationPhase: 'seed' } : {}) });
+        const facts = seed ? section(prompt, 'SOURCE SETUP') : setup(prompt);
+        assert.equal(prompt.split(declaration).length - 1, 1, 'identical declarations share only their complete bytes');
+        assert.ok(prompt.includes('```text\n' + declaration + '\n```'));
+        assert.ok(!prompt.includes('```python\n' + declaration));
+        assert.match(prompt, /READ-ONLY MODULE BINDING DECLARATION, not test setup/);
+        assert.match(prompt, /do not replay or copy its initializer/);
+        assert.match(prompt, /not a runtime type, fixture recipe or expected value/);
+        assert.equal(facts.globals[0].lookupExpression, 'sample.HANDLE');
+        assert.equal(facts.globals[1].lookupExpression, 'sample.ALIAS');
+        assert.deepEqual(facts.globals[0].unknown_metadata, globals[0].unknown_metadata);
+        assert.equal(facts.globals[0].sourceRole, 'read-only-module-binding-declaration');
+        assert.equal(facts.globals[2].binding_kind, 'unknown');
+        assert.equal(facts.globals[2].sourceRole, undefined, 'unknown classification is never upgraded');
+        assert.doesNotMatch(prompt, /sample\.FOREIGN_HANDLE/, 'retrieved helper globals cannot borrow the target module');
+    }
+    assert.equal(JSON.stringify(context), before);
+});
+
+test('revision evidence remains scope-neutral under complete-file, method and bound-addition tasks', () => {
+    const context = { args: [], referenced_globals: [{ name: 'HANDLE', binding_kind: 'existing-object', code: 'HANDLE = make_handle()\n' }],
+        traceResult: trace() };
+    const revision = buildWriterRevisionContext({ module: 'sample', name: 'load', source, context, evidence });
+    assert.ok(revision.includes(source)); assert.match(revision, /sample\.HANDLE/);
+    assert.match(revision, /READ-ONLY REVISION EVIDENCE/);
+    assert.doesNotMatch(revision, /Revise the complete|Write one complete|Return the complete/);
+    const code = 'import unittest\nclass Cases(unittest.TestCase):\n    def test_one(self):\n        self.assertEqual(1, 1)\n';
+    const input = { code, findings: 'Checker evidence', moduleName: 'sample', functionName: 'load', evidence: revision };
+    const complete = buildWriterRevisionRequest(input);
+    const method = buildWriterRevisionRequest({ ...input, outputScope: 'method-replacements' });
+    const findings: any[] = [{ category: 'missing-scenario', description: 'Exercise the missing source-supported path.' }];
+    const additions = buildWriterRevisionRequest({ ...input, outputScope: 'test-additions', findings: JSON.stringify(findings),
+        reviewFeedback: { version: 'writer-review-feedback-v1', testHash: createHash('sha256').update(code).digest('hex'),
+            findings, methodScope: { mode: 'allow-additions', methodIds: ['Cases.test_one'] } } });
+    assert.match(complete, /Return the complete corrected unittest file/);
+    assert.match(method, /Return only the methods named by WRITER_METHOD_EDIT_V1/);
+    assert.match(additions, /Return only new test methods for the bound missing scenarios/);
+    for (const prompt of [method, additions]) { assert.doesNotMatch(prompt, /Return the complete|Revise the complete|Write one complete/); }
+    for (const prompt of [complete, method, additions]) { assert.ok(prompt.includes(revision)); }
 });
 
 test('source setup preserves module, relative from-import and aliases exactly once without inventing patch permission', () => {

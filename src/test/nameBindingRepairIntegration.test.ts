@@ -84,7 +84,13 @@ test('full and execution repair the current Checker candidate locally; rejected 
             assert.equal(plan.baselineHash, hash(activeSeed.trim()));
             assert.deepEqual(plan.methodIds, ['Cases.test_seed']);
             assert.doesNotMatch(request.roleInstructions, /complete unittest|WRITER_SEED_V1|Import unittest/);
+            assert.doesNotMatch(request.prompt, /Revise the complete current unittest file|Write one complete unittest file/);
             assert.match(request.roleInstructions, /A test-local assignment does not rebind a module global/);
+            if (request.prompt.includes('writer-revision-context-v2')) {
+                assert.match(request.prompt, /READ-ONLY REVISION EVIDENCE/);
+                assert.match(request.prompt, /READ-ONLY MODULE BINDING DECLARATION, not test setup/);
+                assert.match(request.prompt, /"lookupExpression":"sample\.(?:TOKEN|RESOURCE|CLIENT)"/);
+            }
             if (scenario === 'side-effect') {
                 assert.match(request.prompt, /Call setup SINK\.publish: resource: sample\.RESOURCE/);
                 assert.match(request.prompt, /An assertIsNone alone does not verify those effects/);

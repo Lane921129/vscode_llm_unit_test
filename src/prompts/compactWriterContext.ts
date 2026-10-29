@@ -57,7 +57,7 @@ interface WriterContextInput {
     scenarioCaseIds?: readonly string[];
 }
 
-/** Revision keeps all required facts, without generation examples or analyst proposals. */
+/** Scope-neutral evidence; the outer task alone owns file/method/addition output. */
 export function buildWriterRevisionContext(input: Omit<WriterContextInput, 'focus' | 'budgetTokens'>): string {
     return buildWriterContext({ ...input, scenarioCaseIds: undefined, budgetTokens: 0 }, true);
 }
@@ -75,14 +75,21 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
     const callerNote = callers.some(caller => Array.isArray(caller.call_sites))
         ? '; call_sites share identical projected setup, not execution results' : '';
     const sourceReferences = new Map<string, string>([[input.source, 'TARGET SOURCE']]);
+    const declarationReferences = new Map<string, string>();
     const fragments: string[] = [];
-    const sourceCode = (code: unknown, location: string): unknown => {
+    const sourceCode = (code: unknown, location: string, declaration = false): unknown => {
         if (typeof code !== 'string' || !code.trim()) { return code; }
-        const previous = sourceReferences.get(code);
+        const references = declaration ? declarationReferences : sourceReferences;
+        const previous = references.get(code);
         if (previous) { return { same_complete_source_as: previous }; }
         const label = `SOURCE FRAGMENT ${fragments.length + 1}`;
-        sourceReferences.set(code, label);
-        fragments.push(`${label} (${location}; complete supplied source snippet, scope unchanged):\n\`\`\`python\n${code}\n\`\`\``);
+        references.set(code, label);
+        fragments.push(declaration
+            ? `${label} (${location}; READ-ONLY MODULE BINDING DECLARATION, not test setup; complete source unchanged):\n`
+                + 'The application module owns this binding. Use its lookupExpression; do not replay or copy its initializer into a test. '
+                + 'This is initializer syntax, not a runtime type, fixture recipe or expected value.\n'
+                + `\`\`\`text\n${code}\n\`\`\``
+            : `${label} (${location}; complete supplied source snippet, scope unchanged):\n\`\`\`python\n${code}\n\`\`\``);
         return { same_complete_source_as: label };
     };
     const setup = references.setup(projectSourceSetup({
@@ -90,7 +97,7 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
             ...(formatSourceImport(item) ? { sourceSpelling: formatSourceImport(item) } : {}) })),
         constructor: context.class_context || null, property: context.property_context || null,
         globals: context.referenced_globals || [], callers, conditions: context.condition_facts || []
-    }, 'SOURCE SETUP', sourceCode), 'SOURCE SETUP');
+    }, 'SOURCE SETUP', sourceCode, input.module), 'SOURCE SETUP');
     const dependencyBlocks = dependencies.map((dep, index) => {
         const location = `RETRIEVED DEPENDENCY ${dep.name} [${index + 1}]`;
         const facts = references.setup(projectSourceSetup(dependencySetupFacts(dep), location, sourceCode), location);
@@ -166,7 +173,8 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
         'SELECTED RULES (construction constraints, not output facts):\n'
             + formatUniqueRules(input.evidence),
         ...(input.focus ? ['CURRENT TESTS AND NEXT TASK (preserve passing methods; proposed tasks are hypotheses):\n' + input.focus] : []),
-        (revision ? 'Revise the complete current unittest file for the supplied findings; preserve passing methods and verified assertions. '
+        (revision ? 'READ-ONLY REVISION EVIDENCE: preserve passing methods and verified assertions. '
+            + 'The outer host task specifies the output scope; this evidence block does not request a file, replacement method or addition. '
             : 'Write one complete unittest file in one Python fence for the requested case. ')
             + 'Source, annotations, retrieved helpers and examples alone do not prove outputs. '
             + 'No direct network, file I/O, shell, dynamic execution or shared SQLite; use explicit boundary mocks or host-declared resources. '
@@ -246,7 +254,7 @@ function dependencySetupFacts(dep: any): Record<string, unknown> {
 
 /** Move only extractor-owned source fields out of JSON escaping; all metadata and unknown fields remain. */
 function projectSourceSetup(fields: Record<string, unknown>, location: string,
-    sourceCode: (code: unknown, location: string) => unknown): Record<string, unknown> {
+    sourceCode: (code: unknown, location: string, declaration?: boolean) => unknown, module?: string): Record<string, unknown> {
     const record = (value: unknown, label: string): unknown => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
         const item = value as Record<string, unknown>;
@@ -254,6 +262,18 @@ function projectSourceSetup(fields: Record<string, unknown>, location: string,
     };
     const records = (value: unknown, label: string): unknown => Array.isArray(value)
         ? value.map((item, index) => record(item, `${label}[${index}]`)) : value;
+    const globals = (value: unknown, label: string): unknown => Array.isArray(value) ? value.map((value, index) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
+        const item = value as Record<string, unknown>;
+        const kind = item.binding_kind || item.kind;
+        const declaration = kind === 'existing-object' || kind === 'object-reference';
+        const identifier = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
+        const lookup = module && module.split('.').every(part => identifier.test(part))
+            && typeof item.name === 'string' && identifier.test(item.name) ? `${module}.${item.name}` : undefined;
+        return { ...item, ...(lookup ? { lookupExpression: lookup } : {}),
+            ...(declaration ? { sourceRole: 'read-only-module-binding-declaration' } : {}),
+            ...(Object.hasOwn(item, 'code') ? { code: sourceCode(item.code, `${label}[${index}].code`, declaration) } : {}) };
+    }) : value;
     const init = (value: unknown, label: string): unknown => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) { return value; }
         const item = record(value, label) as Record<string, unknown>;
@@ -275,7 +295,7 @@ function projectSourceSetup(fields: Record<string, unknown>, location: string,
             ['getter', 'setter', 'deleter'].includes(key) ? record(item, `${label}.${key}`) : item]));
     };
     return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key,
-        ['globals', 'referenced_globals'].includes(key) ? records(value, `${location}.${key}`)
+        ['globals', 'referenced_globals'].includes(key) ? globals(value, `${location}.${key}`)
             : ['constructor', 'class_context'].includes(key) ? constructor(value, `${location}.${key}`)
                 : ['property', 'property_context'].includes(key) ? property(value, `${location}.${key}`) : value]));
 }

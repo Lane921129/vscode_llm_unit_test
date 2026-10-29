@@ -150,6 +150,45 @@ test('static instruction echoes stay readable while mixed source and credentials
     assert.doesNotMatch(JSON.stringify(hidden), /previous response|secret-fixture/);
 });
 
+test('short symbol overlaps redact private words locally without hiding the entire diagnostic', () => {
+    for (const symbol of ['refresh_state()', '套件.更新狀態()']) {
+        const source = `${symbol}\ndef private_helper(db):\n    return PRIVATE_SLOT + 17\n`;
+        const response = `The response discusses ${symbol} but contains prose instead of a replacement method. `
+            + 'It mentions private_helper and PRIVATE_SLOT with db and 17 as unsupported setup. '
+            + 'Additional neutral explanation. '.repeat(20);
+        const preview = buildModelOutputPreview(response, { excludedTexts: [source] });
+        assert.match(preview.samples[0].text, /prose instead of a replacement method/);
+        assert.match(preview.samples[0].text, /withheld-prompt-content/);
+        assert.doesNotMatch(JSON.stringify(preview), /refresh_state|更新狀態|private_helper|PRIVATE_SLOT|\bdb\b|\b17\b/);
+        assert.ok(readModelOutputPreview(preview));
+        assert.equal(preview.executable, false); assert.equal(preview.complete, false);
+        assert.ok(preview.samples[0].text.length <= 240 && preview.samples[0].text.length < response.length);
+        assert.equal(buildModelOutputPreview((symbol + '\n').repeat(20), { excludedTexts: [source] }).samples[0].text,
+            '[withheld-prompt-content]', 'an exact source line still requires whole-line redaction');
+    }
+});
+
+test('local echo projection hides locations and complete private tokens before display truncation', () => {
+    const privateName = 'confidential_identifier_which_crosses_the_display_boundary';
+    const prefix = 'Diagnostic refresh_state() ' + 'other '.repeat(30);
+    assert.ok(prefix.length < 240 && prefix.length + privateName.length > 240);
+    const source = `refresh_state()\n${privateName}\nhttps\nC\n`;
+    const preview = buildModelOutputPreview(prefix + privateName + ' more neutral prose. '.repeat(40), { excludedTexts: [source] });
+    assert.match(preview.samples[0].text, /Diagnostic/);
+    assert.doesNotMatch(preview.samples[0].text, /confidential/);
+    const locations = buildModelOutputPreview('Diagnostic refresh_state() https://private.invalid/item C:\\private\\secret.py '
+        + 'more neutral prose. '.repeat(40), { excludedTexts: [source] });
+    assert.match(locations.samples[0].text, /withheld-location/);
+    assert.doesNotMatch(JSON.stringify(locations), /private\.invalid|secret\.py/);
+    const secret = 'fixture-' + 'secret-0123456789';
+    const hidden = buildModelOutputPreview(prefix + 'neutral '.repeat(100) + secret, {
+        excludedTexts: [source], knownSecrets: [secret]
+    });
+    assert.doesNotMatch(JSON.stringify(hidden), /Diagnostic|neutral|secret-0123456789/);
+    const assignment = buildModelOutputPreview(prefix + 'neutral '.repeat(100) + 'password = hidden', { excludedTexts: [source] });
+    assert.doesNotMatch(JSON.stringify(assignment), /Diagnostic|neutral/);
+});
+
 test('failure diagnostics show each attempt, exact timing, recovery and excerpts in both languages', () => {
     const diagnostic = failure('Repeated diagnostic phrase\n'.repeat(40), {});
     const events = [

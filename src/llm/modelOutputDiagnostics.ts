@@ -59,6 +59,32 @@ export function buildModelOutputPreview(text: string, privacy: {
         .flatMap(value => [normalize(value), normalize('# ' + value)]));
     const excluded = (privacy.excludedTexts || []).flatMap(value => value.split('\n'))
         .map(normalize).filter(value => value.length >= 8 && !publicLines.has(value));
+    const words = /[_\p{L}\p{N}]+/gu;
+    let privateWords: Set<string> | undefined;
+    const redactEcho = (line: string): string => {
+        const normalized = normalize(line);
+        const matches = excluded.filter(value => normalized.includes(value) || value.includes(normalized));
+        if (!matches.length) { return safeLine(line); }
+        // Full/partial source lines remain hidden. Only a long diagnostic that
+        // overlaps short identifier/call spellings can use a local projection.
+        const symbol = /^[_\p{ID_Start}][_\p{ID_Continue}]*(?:\.[_\p{ID_Start}][_\p{ID_Continue}]*)*(?:\(\))?$/u;
+        if (matches.some(value => value.includes(normalized) || value.length > 64 || !symbol.test(value))) {
+            return '[withheld-prompt-content]';
+        }
+        if (!privateWords) {
+            const publicWords = new Set((privacy.publicInstructionTexts || []).flatMap(value => value.match(words) || []));
+            // Include short private identifiers/literals too, even when they did
+            // not cause the original eight-character echo match. Public words
+            // are permitted only from caller-owned static framework text.
+            privateWords = new Set((privacy.excludedTexts || []).flatMap(value => value.match(words) || [])
+                .filter(word => !publicWords.has(word)));
+        }
+        // Redact complete tokens before display truncation; otherwise a private
+        // identifier crossing the cutoff could escape as an unmatched prefix.
+        // Hide locations first too: token projection must not break their syntax.
+        return safeLine(normalized).replace(words, word =>
+            privateWords!.has(word) ? '[withheld-prompt-content]' : word);
+    };
     const sensitive = containsCredential(text, privacy.knownSecrets) || sensitiveAssignment.test(text);
     let remaining = Math.min(1200, Math.floor(text.length / 2));
     const samples: ModelOutputPreview['samples'] = [];
@@ -73,10 +99,8 @@ export function buildModelOutputPreview(text: string, privacy: {
     for (const [line, count] of unique) { if (!ordered.has(line)) { ordered.set(line, count); } }
     for (const [line, count] of ordered) {
         if (samples.length === 6 || remaining <= 0) { break; }
-        const normalized = line.replace(/\s+/g, ' ');
-        const echo = normalized.length >= 8 && excluded.some(value => normalized.includes(value) || value.includes(normalized));
-        const safe = sensitive ? WITHHELD_SENSITIVE_CONTENT : echo ? '[withheld-prompt-content]' : safeLine(line);
         const limit = Math.min(240, remaining);
+        const safe = sensitive ? WITHHELD_SENSITIVE_CONTENT : redactEcho(line);
         const excerpt = safe.length > limit ? safe.slice(0, Math.max(0, limit - 1)) + '…' : safe;
         remaining -= excerpt.length;
         samples.push({ ...count, text: excerpt });
