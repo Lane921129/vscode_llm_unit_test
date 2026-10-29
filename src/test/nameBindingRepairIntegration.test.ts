@@ -14,6 +14,11 @@ const seed = 'import unittest\nfrom sample import target\n# fixture bytes remain
     + '        token = make_token()\n        self.assertIsNotNone(token)\n        self.assertTrue(target())\n';
 const fixed = 'class Cases:\n    def test_seed(self):\n        import sample\n'
     + '        self.assertIsNotNone(sample.TOKEN)\n        self.assertTrue(target())\n';
+const unusedSeed = seed.slice(0, seed.indexOf('    def test_seed')).replace('import unittest\n', 'import unittest\nimport types\n')
+    + '    def test_seed(self):\n        token = types.SimpleNamespace()\n        spare = make_token()\n'
+    + '        self.assertIsNotNone(token)\n        self.assertTrue(target())\n';
+const unusedKnownSeed = seed.slice(0, seed.indexOf('    def test_seed'))
+    + '    def test_seed(self):\n        spare = object()\n        self.assertTrue(target())\n';
 const effectSource = 'class Sink:\n    def publish(self, *, resource):\n        return resource\n'
     + 'def build_resource():\n    return object()\nRESOURCE = build_resource()\nSINK = Sink()\n'
     + 'def target():\n    SINK.publish(resource=RESOURCE)\n';
@@ -42,7 +47,7 @@ test('full and execution repair the current Checker candidate locally; rejected 
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
     const messages: any[] = [];
-    let scenario = 'success', writers = 0, edits = 0, reviews = 0;
+    let scenario = 'success', writers = 0, edits = 0, reviews = 0, wholeRevisions = 0;
     let activeSeed = seed;
     let reviewCode = '';
     const vscode = {
@@ -101,15 +106,30 @@ test('full and execution repair the current Checker candidate locally; rejected 
                 assert.match(request.prompt, /urllib.request.build_opener/);
                 assert.match(request.prompt, /"lookupExpression":"sample.CLIENT.open"/);
             }
+            if (scenario === 'unused-setup') {
+                assert.match(request.prompt, /SOURCE_UNUSED_SETUP_GUIDANCE_V1/);
+                assert.match(request.prompt, /unused dependency result assigned to 'spare'/);
+                assert.match(request.prompt, /adding an import alone does not make this local value used/);
+                assert.match(request.prompt, /TOKEN = make_token\(\)/, 'complete initializer evidence is preserved');
+            }
             response = '```python\n' + (scenario === 'scope' ? seed.replace('token = make_token()', 'token = None')
                 : scenario === 'unchanged' ? 'class Cases:\n' + seed.slice(seed.indexOf('    def test_seed')) : fixed) + '\n```';
             if (scenario === 'syntax') { response = '```python\nclass Cases:\n    def test_seed(self):\n        token = (\n```'; }
             if (scenario === 'ambiguous') { response += '\nAnother option:\n```python\n' + fixed + '\n```'; }
             if (scenario === 'side-effect') { response = '```python\n' + effectFixed + '\n```'; }
             if (scenario === 'http-client') { response = '```python\n' + httpFixed + '\n```'; }
+        } else if (scenario === 'unused-known-names'
+            && /WRITER_REVISION_REQUEST_V2|ACTUAL VALIDATION FAILURE/.test(request.prompt)) {
+            wholeRevisions++;
+            assert.equal(wholeRevisions, 1, 'the original bounded retry is retained');
+            assert.match(request.prompt, /SOURCE_UNUSED_SETUP_GUIDANCE_V1/);
+            assert.match(request.prompt, /unused dependency result assigned to 'spare'/);
+            response = '```python\n' + activeSeed + '\n```';
         } else {
             writers++;
             assert.equal(writers, 1, 'scoped rejection cannot fall back to a complete-file Writer');
+            assert.match(request.roleInstructions, /module target has no input parameters/);
+            assert.doesNotMatch(request.roleInstructions, /SimpleNamespace|parameter.member/);
             response = '```python\n' + activeSeed + '\n```';
         }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
@@ -118,10 +138,11 @@ test('full and execution repair the current Checker candidate locally; rejected 
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         for (const mode of ['full', 'execution']) {
-            for (const variant of ['success', 'scope', 'unchanged', 'syntax', 'ambiguous', ...(mode === 'execution' ? ['side-effect', 'http-client'] : [])]) {
+            for (const variant of ['success', 'unused-setup', 'unused-known-names', 'scope', 'unchanged', 'syntax', 'ambiguous', ...(mode === 'execution' ? ['side-effect', 'http-client'] : [])]) {
                 await t.test(`${mode}/${variant}`, async () => {
-                    scenario = variant; writers = 0; edits = 0; reviews = 0; reviewCode = ''; messages.length = 0;
-                    activeSeed = variant === 'side-effect' ? effectSeed : variant === 'http-client' ? httpSeed : seed;
+                    scenario = variant; writers = 0; edits = 0; reviews = 0; wholeRevisions = 0; reviewCode = ''; messages.length = 0;
+                    activeSeed = variant === 'side-effect' ? effectSeed : variant === 'http-client' ? httpSeed
+                        : variant === 'unused-setup' ? unusedSeed : variant === 'unused-known-names' ? unusedKnownSeed : seed;
                     const activeSource = variant === 'side-effect' ? effectSource : variant === 'http-client' ? httpSource : source;
                     fs.writeFileSync(file, activeSource);
                     const output = path.join(root, `${mode}-${variant}`);
@@ -138,10 +159,27 @@ test('full and execution repair the current Checker candidate locally; rejected 
                     const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                     assert.equal(writers, 1, JSON.stringify({ failure: knowledge.lastFailure,
                         stages: events.filter(event => event.stage !== 'model-request').map(event => [event.stage, event.status, event.detail]) }));
-                    assert.equal(edits, 1, JSON.stringify(knowledge.lastFailure));
                     const planned = events.find(event => event.stage === 'writer-method-edit' && event.status === 'planned');
+                    if (variant === 'unused-known-names') {
+                        assert.equal(edits, 0);
+                        assert.equal(planned, undefined);
+                        assert.equal(wholeRevisions, 1);
+                        assert.equal(reviews, 0);
+                        assert.equal(knowledge.terminalStatus, 'failed');
+                        assert.equal(fs.existsSync(path.join(directory, 'executable_baseline.json')), false);
+                        assert.equal(fs.existsSync(path.join(directory, 'execution_baseline.json')), false);
+                        assert.ok(events.some(event => event.detail?.reasonCode === 'writer-unused-dependency-setup'
+                            || event.stage === 'structure' && event.status === 'rejected'
+                                && event.detail?.reason?.includes('SOURCE_UNUSED_SETUP_GUIDANCE_V1')), JSON.stringify(events.slice(-8)));
+                        assert.equal(fs.readFileSync(file, 'utf8'), activeSource);
+                        return;
+                    }
+                    assert.equal(edits, 1, JSON.stringify(knowledge.lastFailure));
                     assert.ok(planned, JSON.stringify(events.slice(-4)));
-                    if (variant === 'success' || variant === 'side-effect' || variant === 'http-client') {
+                    if (variant === 'unused-setup') {
+                        assert.equal(planned.detail.precedingStructureReasonCode, 'writer-unused-dependency-setup');
+                    }
+                    if (variant === 'success' || variant === 'unused-setup' || variant === 'side-effect' || variant === 'http-client') {
                         assert.ok(events.some(event => event.stage === 'writer-method-edit' && event.status === 'applied'));
                         const baseline = JSON.parse(fs.readFileSync(path.join(directory,
                             mode === 'full' ? 'executable_baseline.json' : 'execution_baseline.json'), 'utf8'));

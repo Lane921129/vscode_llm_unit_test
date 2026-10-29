@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, MODULE_GLOBAL_LOOKUP_GUIDANCE, SOURCE_INPUT_SHAPE_GUIDANCE } from '../prompts/dependencyMockContract';
 import { summarizeRepairOutput } from '../validation/repairFeedback';
+import { isKnownParameterlessFunction } from '../pipeline/targetContract';
 
 /** Select packaging only. The model still authors the complete test body. */
 export function selectWriterAdditionMethodName(baselineHash: string, focus: string,
@@ -25,7 +26,7 @@ export function buildWriterAdditionMethodInstruction(methodName: string): string
 /** A seed has its own small contract. Do not first ask for a comprehensive
  * suite and then ask a small model to override that instruction. The complete
  * target, setup and evidence are supplied separately, unchanged. */
-export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: boolean, executionOnly = false): string {
+export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: boolean, executionOnly = false, sourceContext?: any): string {
     void systemPrompt; // Retain the existing call signature, not wider suite instructions.
     const invocation = isAsync === true
         ? 'The selected target is async: use unittest.IsolatedAsyncioTestCase, async def test_ and await its call. '
@@ -47,7 +48,9 @@ export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: bool
         + 'Use with self.assertRaises(ExactType) for an evidenced exception, no message second argument. '
         + 'Pure calculations need no mocks; control external/ambient boundaries only at their source use points with fresh per-test state. '
         + (executionOnly ? EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE + ' ' : '')
-        + SOURCE_INPUT_SHAPE_GUIDANCE + ' '
+        + (isKnownParameterlessFunction(sourceContext)
+            ? 'The module target has no input parameters. Do not build parameter fixtures or local stand-ins for its globals; use the supplied source-module lookups. '
+            : SOURCE_INPUT_SHAPE_GUIDANCE + ' ')
         + 'Give callable members explicit unittest.mock.Mock behavior; preserve the source receiver shape. '
         + 'Never patch immutable built-in class members; replace the owning module binding. '
         + 'No direct test network, file I/O, shell, dynamic execution or shared SQLite; no skip, swallowed errors or tautologies. '

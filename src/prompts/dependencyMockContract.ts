@@ -4,7 +4,19 @@ import { dependencySkillBindings } from '../skills/dependencyFacts';
 
 export const SOURCE_INPUT_SHAPE_GUIDANCE = 'Source parameter.member needs an attribute-bearing fixture (for example types.SimpleNamespace), not a dict of same-named keys. '
     + 'Follow mixed accesses one level at a time: obj.member["key"] needs a mapping-valued member; obj.member.key needs attribute-bearing values. '
-    + 'Do not turn all nested values into namespaces.';
+    + 'Do not turn all nested values into namespaces. This applies to inputs actually passed to the target, not local stand-ins for module globals.';
+
+/** The structure finding is a repair task, not patch authority or an output oracle. */
+export function unusedSetupRepairGuidance(finding: { reasonCode?: string; unusedSetupName?: string }): string {
+    if (finding.reasonCode !== 'writer-unused-dependency-setup' || typeof finding.unusedSetupName !== 'string'
+        || !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(finding.unusedSetupName)) { return ''; }
+    return 'SOURCE_UNUSED_SETUP_GUIDANCE_V1\n'
+        + `The structure check reports an unused dependency result assigned to '${finding.unusedSetupName}'. `
+        + 'Remove the dead setup call; adding an import alone does not make this local value used by the target. '
+        + 'A local assignment does not replace a module global. Read the supplied source-module lookup; '
+        + 'if control is needed, use a scoped source-supported dependency patch and verify behavior after the real target call. '
+        + 'Preserve supported inputs and meaningful assertions. This finding supplies no fixture value, expected output or call count.';
+}
 
 export const MODULE_GLOBAL_LOOKUP_GUIDANCE = 'A test-local assignment does not rebind a module global used by the real target. '
     + 'Do not replay a module initializer to construct a second object or call a dependency before the target merely to prepare its expected call history. '

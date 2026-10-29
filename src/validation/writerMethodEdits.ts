@@ -73,7 +73,8 @@ export async function planWriterMethodEdits(options: {
 
 /** Only a fresh Checker DTO can select a binding repair; prose never selects its owner. */
 export async function planWriterNameBindingEdits(options: {
-    baseline: string; validation: { reasonCode?: string; name?: string; method?: string; className?: string; line?: number };
+    baseline: string; validation: { reasonCode?: string; name?: string; method?: string; className?: string; line?: number;
+        structureFailure?: { reasonCode?: string } };
     python: string; env?: NodeJS.ProcessEnv;
 }): Promise<WriterMethodEditPlan | RejectedEdit> {
     const finding = options.validation;
@@ -87,6 +88,15 @@ export async function planWriterNameBindingEdits(options: {
     if (plan.methods.length !== 1 || plan.methods[0].className !== finding.className
         || plan.methods[0].name !== finding.method) {
         return { ok: false, reasonCode: 'binding-edit-owner-mismatch' };
+    }
+    if (finding.structureFailure) {
+        // A lexical structure finding does not locate its owner. Refine only a
+        // sole AST-inventoried test method, so two failures cannot select different methods.
+        const inventory = await readCandidateMethodInventory({ code: options.baseline, python: options.python, env: options.env });
+        if (finding.structureFailure.reasonCode !== 'writer-unused-dependency-setup' || inventory.status !== 'parsed'
+            || inventory.methods.length !== 1 || inventory.methods[0].id !== plan.methods[0].id) {
+            return { ok: false, reasonCode: 'binding-edit-structure-scope-unresolved' };
+        }
     }
     return plan;
 }

@@ -2,6 +2,8 @@ import { localize } from '../i18n/core';
 export interface GeneratedTestValidation {
     valid: boolean;
     reason?: string;
+    reasonCode?: string;
+    unusedSetupName?: string;
     requiresMockBehaviorEvidence?: boolean;
     requiresTargetBehaviorEvidence?: boolean;
 }
@@ -711,6 +713,7 @@ export function validateUnittestStructure(
                 if (unusedSetup) {
                     return {
                         valid: false,
+                        reasonCode: 'writer-unused-dependency-setup', unusedSetupName: unusedSetup,
                         reason: localize("測試直接呼叫相依函式後將 {0} 存入未使用變數；請移除無效 setup，或在被測模組使用點以 mock.patch 注入相依行為。", unusedSetup)
                     };
                 }

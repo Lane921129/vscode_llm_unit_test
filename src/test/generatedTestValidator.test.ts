@@ -415,6 +415,8 @@ test('rejects a direct dependency call assigned to an unused value while allowin
 
     const result = validateUnittestStructure(unusedDependencySetup, 'checkout', 'order_service');
     assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.reasonCode, 'writer-unused-dependency-setup');
+    assert.strictEqual(result.unusedSetupName, 'token_info');
     assert.match(result.reason || '', /未使用變數/);
     assert.strictEqual(validateUnittestStructure(usedAsInput, 'checkout', 'order_service').valid, true);
 });

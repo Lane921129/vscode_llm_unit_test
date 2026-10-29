@@ -22,6 +22,15 @@ export function formatTargetContract(module: string, name: string, args: string[
     ].join('\n');
 }
 
+/** Suppress optional input-fixture hints only for an unambiguous module function.
+ * Missing, conflicting or class-bound signatures retain conservative guidance. */
+export function isKnownParameterlessFunction(context?: any): boolean {
+    if (!context || context.class_name || context.class_context?.name
+        || context.method_kind && context.method_kind !== 'module') { return false; }
+    const declarations = [context.signature, context.args].filter(value => value !== undefined);
+    return declarations.length > 0 && declarations.every(value => Array.isArray(value) && value.length === 0);
+}
+
 /** Packaging only: no input, call, fixture value, expected value or assertion is
  * authored here. An incomplete prefix must never become an executable candidate. */
 export function formatWriterSeedPackaging(module: string, name: string, context?: any): string {
@@ -43,7 +52,7 @@ export function writerSeedCodePrefix(module: string, name: string, context?: any
     if (!module.split('.').every(identifier) || !identifier(imported) || imported === 'unittest'
         || typeof context?.is_async !== 'boolean') { return ''; }
     const harness = imported === 'GeneratedSeedTests' ? 'GeneratedSeedCases' : 'GeneratedSeedTests';
-    return 'import unittest\n' + (imported === 'types' ? '' : 'import types\n')
+    return 'import unittest\n' + (imported === 'types' || !owner && isKnownParameterlessFunction(context) ? '' : 'import types\n')
         + `from ${module} import ${imported}\n\n`
         + `class ${harness}(unittest.${context.is_async ? 'IsolatedAsyncioTestCase' : 'TestCase'}):\n`
         + `    ${context.is_async ? 'async def' : 'def'} test_seed(self):\n`;

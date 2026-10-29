@@ -41,6 +41,22 @@ test('Checker class and AST line disambiguate same-named methods; missing or mis
     }
 });
 
+test('an accompanying unused-setup failure only permits a sole AST-inventoried test method', async () => {
+    const structureFailure = { reasonCode: 'writer-unused-dependency-setup' };
+    const validation = { reasonCode: 'writer-undefined-name', name: 'missing', method: 'test_same', className: 'Second', line: 15, structureFailure };
+    const ambiguous = await planWriterNameBindingEdits({ baseline, validation, python });
+    assert.deepEqual(ambiguous, { ok: false, reasonCode: 'binding-edit-structure-scope-unresolved' });
+    const single = 'import unittest\nfrom sample import choose\nclass Second(unittest.TestCase):\n'
+        + '    def test_same(self):\n        unused = missing()\n        self.assertEqual(choose(1), (1, "值"))\n';
+    const located = { ...validation, line: 5 };
+    const plan = await planWriterNameBindingEdits({ baseline: single, validation: located, python });
+    assert.ok(plan.ok);
+    assert.equal(plan.methods[0].id, 'Second.test_same');
+    const otherFailure = await planWriterNameBindingEdits({ baseline: single, python,
+        validation: { ...located, structureFailure: { reasonCode: 'other-structure-failure' } } });
+    assert.deepEqual(otherFailure, { ok: false, reasonCode: 'binding-edit-structure-scope-unresolved' });
+});
+
 test('host binds an AST method plan to exact UTF-8 bytes and independently composes a bounded model edit', async () => {
     const plan = await planWriterMethodEdits({ baseline, lineRefs, python });
     assert.ok(plan.ok);
