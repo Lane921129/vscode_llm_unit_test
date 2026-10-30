@@ -2,6 +2,7 @@ import { functionReportDirectory, resultArtifactPath, roundDirectory } from './r
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { localize } from '../i18n/core';
+import { measuredOutputRateMilli, summarizeModelCapability } from '../llm/modelCapabilitySummary';
 import { evidenceHash } from './analysisJournal';
 import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
 import { presentOutcome, presentSummaryOutcome, withOutcomeHeader } from './resultPresentation';
@@ -258,7 +259,7 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
         if (events.some(event => event.runId !== runId || event.sourceHash !== sourceHash)) { throw Error('identity'); }
     } catch { return localize('事件紀錄缺少或身分不符；流程證據不完整。\n'); }
     if (loop !== undefined) { events = events.filter(event => event.loop === loop); }
-    return [localize('### 完整流程（依事件順序）'), '', localize('| 序號 | 時間 | 輪次 | 階段 | 狀態 | 摘要 |'),
+    return [renderModelCapabilitySummary(events), localize('### 完整流程（依事件順序）'), '', localize('| 序號 | 時間 | 輪次 | 階段 | 狀態 | 摘要 |'),
         '| --- | --- | --- | --- | --- | --- |', ...events.map(event => {
             const detail = event.detail || {};
             const summary = ['role', 'category', 'reason', 'reasonCode', 'gate', 'phase', 'tier', 'withheldReason', 'action', 'elapsedMs', 'attempt', 'attemptAllowanceMs', 'remainingStageMs', 'score', 'testFile', 'reviewStatus', 'codeHash', 'requested', 'actual', 'engine', 'operatorSetVersion', 'workers']
@@ -269,6 +270,27 @@ function eventTimeline(directory: string, runId: string, sourceHash: string, loo
                     ? '; ' + (formatModelRequestTiming(detail) || localize('未知')) : '');
             return `| ${event.sequence} | ${reportCell(event.time)} | ${event.loop} | ${reportCell(event.stage)} | ${reportCell(event.status)} | ${reportCell(summary)}${rejectedCandidateLink(directory, detail, runId, sourceHash, loop)} |`;
         }), '', renderModelOutputDiagnostics(events), renderReviewerDiagnostics(events), `[role_events.jsonl](${loop === undefined ? '' : '../_run/'}role_events.jsonl)`, ''].join('\n');
+}
+
+/**
+ * This is an observation for comparing repeated runs, not a quality score,
+ * capacity claim, or authorization to route work to a model.  Only the
+ * allowlisted numeric transport DTO fields enter the report.
+ */
+export function renderModelCapabilitySummary(events: readonly unknown[]): string {
+    const summary = summarizeModelCapability(events.map(event => {
+        if (!event || typeof event !== 'object') { return event; }
+        const record = event as { stage?: unknown; status?: unknown; detail?: unknown };
+        return record.stage === 'model-request' && record.status === 'timing' ? record.detail : undefined;
+    }));
+    if (!summary.completedTransports && !summary.timedOutTransports && !summary.lengthStoppedTransports) { return ''; }
+    const rate = measuredOutputRateMilli(summary);
+    return [localize('### 模型能力觀測（本次執行）'), '',
+        localize('- 完成傳輸：{0}；逾時：{1}；因輸出長度停止：{2}。', summary.completedTransports,
+            summary.timedOutTransports, summary.lengthStoppedTransports),
+        localize('- 已回報輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。', summary.outputTokens,
+            summary.outputEvalMs, rate === null ? localize('未知') : (rate / 1000).toFixed(3)),
+        localize('- 這些是匿名化傳輸觀測，不代表測試品質、模型資格或後續請求保證。'), ''].join('\n');
 }
 
 export function writeTargetReports(directory: string, identity: ReportIdentity, sourceHash: string,
