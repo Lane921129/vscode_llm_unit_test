@@ -72,14 +72,20 @@ export function mergeInitializationProposal(rules: ImportFixtureRule[], proposal
     let existing = rules.find(rule => sourceIdentity(rule.file.replace(/\\/g, '/')) === sourceIdentity(proposal.file));
     const lines = existing?.entryPointLines?.[proposal.operation];
     const resource = { path: proposal.resourcePath || '', ...(proposal.resourceScope ? { scope: proposal.resourceScope } : {}) };
-    const needed = proposal.kind === 'mkdir' ? !!proposal.resourcePath && !existing?.resources?.some(item =>
-        item.kind === 'directory' && (resourceSpecKey(item) === resourceSpecKey(resource)
+    const needed = ['mkdir', 'read-file'].includes(proposal.kind) ? !!proposal.resourcePath && !existing?.resources?.some(item =>
+        item.kind === (proposal.kind === 'mkdir' ? 'directory' : 'text') && (resourceSpecKey(item) === resourceSpecKey(resource)
             || resourceSpecKey(resource).startsWith(resourceSpecKey(item) + '/')))
         : !existing?.entryPoints?.includes(proposal.operation) || !!lines && !lines.includes(proposal.line);
     if (!needed) { return false; }
     if (!existing) { existing = { file: proposal.file }; rules.push(existing); }
     if (proposal.kind === 'mkdir') {
         existing.resources = [...(existing.resources || []), { ...resource, kind: 'directory' }];
+        existing.resourceSourceHash = proposal.sourceHash;
+    } else if (proposal.kind === 'read-file') {
+        // Never copy a real file into a fixture.  This deliberately empty,
+        // source-bound declaration is editable in the resource preview before
+        // it is applied, and only redirects the future read to a fresh lease.
+        existing.resources = [...(existing.resources || []), { ...resource, kind: 'text', text: '' }];
         existing.resourceSourceHash = proposal.sourceHash;
     } else {
         existing.entryPoints = [...new Set([...(existing.entryPoints || []), proposal.operation])];

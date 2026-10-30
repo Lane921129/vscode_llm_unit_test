@@ -6,8 +6,8 @@ import { validateResourceLocation, validateTestResources } from '../pipeline/iso
 
 export interface ImportInitializationCandidate {
     schemaVersion: 'import-initialization-candidate-v1';
-    kind: 'mkdir' | 'entry-point'; file: string; line: number; sourceHash: string; operation: string;
-    evidence: 'blocked-direct-module-call' | 'static-direct-module-call'; returnValue: 'discarded';
+    kind: 'mkdir' | 'entry-point' | 'read-file'; file: string; line: number; sourceHash: string; operation: string;
+    evidence: 'blocked-direct-module-call' | 'static-direct-module-call'; returnValue: 'discarded' | 'used';
     resourcePath?: string;
     resourceScope?: 'project-parent' | 'external-exact' | 'unc-virtual';
 }
@@ -26,8 +26,8 @@ export function readPlannedInitializationCandidate(root: string, value: unknown)
 function readCandidate(root: string, value: any, evidence: ImportInitializationCandidate['evidence']): ImportInitializationCandidate | undefined {
     if (!value || typeof value !== 'object'
         || value.schemaVersion !== 'import-initialization-candidate-v1'
-        || !['mkdir', 'entry-point'].includes(value.kind)
-        || value.evidence !== evidence || value.returnValue !== 'discarded'
+        || !['mkdir', 'entry-point', 'read-file'].includes(value.kind)
+        || value.evidence !== evidence || !['discarded', 'used'].includes(value.returnValue)
         || typeof value.file !== 'string' || !value.file.endsWith('.py') || value.file.length > 1000
         || /[:\u0000-\u001f\u007f]/.test(value.file) || path.isAbsolute(value.file)
         || value.file.split(/[\\/]/).some((part: string) => !part || part === '.' || part === '..')
@@ -35,7 +35,10 @@ function readCandidate(root: string, value: any, evidence: ImportInitializationC
         || typeof value.sourceHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.sourceHash)
         || typeof value.operation !== 'string' || value.operation.length > 240
         || value.operation.trim() !== value.operation || !/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(value.operation)
-        || value.kind === 'mkdir' && value.operation !== 'pathlib.Path.mkdir') { return undefined; }
+        || value.kind === 'mkdir' && value.operation !== 'pathlib.Path.mkdir'
+        || value.kind === 'read-file' && !['builtins.open', 'pathlib.Path.read_text'].includes(value.operation)
+        || value.kind === 'read-file' && value.returnValue !== 'used'
+        || value.kind !== 'read-file' && value.returnValue !== 'discarded') { return undefined; }
     try {
         root = existingRealPath(root);
         const file = existingRealPath(path.join(root, value.file));
@@ -46,8 +49,9 @@ function readCandidate(root: string, value: any, evidence: ImportInitializationC
             || value.resourcePath === undefined)) { return undefined; }
         let resourcePath: string | undefined;
         if (value.resourcePath !== undefined) {
-            if (value.kind !== 'mkdir') { return undefined; }
-            const resource = validateTestResources([{ path: value.resourcePath, kind: 'directory',
+            if (!['mkdir', 'read-file'].includes(value.kind)) { return undefined; }
+            const resource = validateTestResources([{ path: value.resourcePath, kind: value.kind === 'mkdir' ? 'directory' : 'text',
+                ...(value.kind === 'read-file' ? { text: '' } : {}),
                 ...(value.resourceScope ? { scope: value.resourceScope } : {}) }])[0];
             validateResourceLocation(root, resource);
             resourcePath = resource.path;

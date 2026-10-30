@@ -1284,8 +1284,21 @@ async function requestLlmApiUnlocked(
         requestPhase = 'response-read';
         if (attemptTiming) { attemptTiming.responseReadStartedAt = Date.now(); }
         let firstTextAt: number | undefined;
-        const resJson = params.envType === 'local'
-            ? await readOllamaGenerationResponse(response, progress => {
+        // A fetch abort normally interrupts its body reader, but that is not a
+        // transport contract we can rely on for every local provider or test
+        // double.  Race the complete body decode with the same controller that
+        // owns this request's deadline, so a response that has sent headers
+        // cannot keep a target alive past its bounded allowance.
+        let rejectResponseReadAbort!: () => void;
+        const responseReadAborted = new Promise<never>((_resolve, reject) => {
+            rejectResponseReadAbort = () => {
+                try { void response.body?.cancel().catch(() => {}); } catch { /* Preserve the deadline failure. */ }
+                reject(new Error('model-response-read-aborted'));
+            };
+            controller.signal.addEventListener('abort', rejectResponseReadAbort, { once: true });
+        });
+        const readResponse = params.envType === 'local'
+            ? readOllamaGenerationResponse(response, progress => {
                 if (progress.phase === 'first-text') { firstTextAt = Date.now(); }
                 onTiming?.({ ...createRequestProgress(progress.phase === 'completed' ? 'response-completed' : progress.phase,
                     attemptTiming?.startedAt ?? Date.now(), { transportAttempt: attemptTiming?.transportAttempt,
@@ -1293,7 +1306,10 @@ async function requestLlmApiUnlocked(
                         receivedBytes: progress.receivedBytes, responseCharacters: progress.responseCharacters,
                         firstTextMs: firstTextAt === undefined ? null
                             : Math.max(0, firstTextAt - (attemptTiming?.startedAt ?? firstTextAt)) }), format: outputFormat });
-            }) : await response.json() as Record<string, unknown>;
+            }) : response.json() as Promise<Record<string, unknown>>;
+        let resJson: Record<string, unknown>;
+        try { resJson = await Promise.race([readResponse, responseReadAborted]); }
+        finally { controller.signal.removeEventListener('abort', rejectResponseReadAbort); }
         if (attemptTiming) { attemptTiming.responseReadFinishedAt = Date.now(); }
         throwIfExecutionCancelled();
         if (deadlineExpired || remainingDeadlineMs(deadlineAt) <= 0) { throw new Error('Model request deadline expired'); }

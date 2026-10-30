@@ -398,6 +398,26 @@ class _Planner:
                 resource = _resource(self.root, receiver.value)
                 if resource:
                     result = {'kind': 'mkdir', 'operation': 'pathlib.Path.mkdir', **resource}
+        elif isinstance(call.func, ast.Attribute) and call.func.attr == 'read_text':
+            receiver = self.value(call.func.value, env, file)
+            # A declared text fixture may stand in for a literal source-owned
+            # import read, but it never imports the original bytes.  Keep this
+            # narrow: dynamic receivers and non-text reads remain blocked.
+            if (receiver and receiver.kind == 'path' and not call.args
+                    and all(item.arg == 'encoding' and isinstance(item.value, ast.Constant)
+                            and type(item.value.value) is str for item in call.keywords)):
+                resource = _resource(self.root, receiver.value)
+                if resource:
+                    result = {'kind': 'read-file', 'operation': 'pathlib.Path.read_text',
+                              'returnValue': 'used', **resource}
+        elif isinstance(call.func, ast.Name) and call.func.id == 'open' and 'open' not in env:
+            if (len(call.args) == 1 and not call.keywords
+                    and (path_value := self.value(call.args[0], env, file))
+                    and path_value.kind in ('literal', 'path') and type(path_value.value) is str):
+                resource = _resource(self.root, path_value.value)
+                if resource:
+                    result = {'kind': 'read-file', 'operation': 'builtins.open',
+                              'returnValue': 'used', **resource}
         else:
             parts = _parts(call.func)
             binding = env.get(parts[0]) if parts else None
@@ -419,7 +439,7 @@ class _Planner:
             self.result['candidates'].append({
                 'schemaVersion': 'import-initialization-candidate-v1', **result,
                 'file': self.relative(file), 'line': call.lineno, 'sourceHash': digest,
-                'evidence': 'static-direct-module-call', 'returnValue': 'discarded',
+                'evidence': 'static-direct-module-call', 'returnValue': result.get('returnValue', 'discarded'),
             })
             return True
         return False
@@ -447,6 +467,8 @@ class _Planner:
                     else:
                         env[name] = _Value('path-constructor', None) if module == 'pathlib' and item.name == 'Path' else _Value('external', module + '.' + item.name)
             elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                if isinstance(statement.value, ast.Call):
+                    self.candidate(statement.value, env, file, digest)
                 value = self.value(statement.value, env, file) if statement.value else None
                 self.invalidate(statement, env)
                 targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]

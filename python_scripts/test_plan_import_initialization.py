@@ -121,6 +121,25 @@ class StaticInitializationPlanTests(unittest.TestCase):
         self.assertTrue(result['complete'], result)
         self.assertEqual({item['file'] for item in result['sources']}, {'config.py', 'package/__init__.py', 'package/selected.py'})
 
+    def test_literal_text_reads_propose_an_empty_source_bound_fixture_without_reading_it(self):
+        selected = self.write('sample.py',
+                              'from pathlib import Path\n'
+                              'SETTINGS = Path(__file__).parent / "settings.json"\n'
+                              'CONFIG = SETTINGS.read_text(encoding="utf-8")\n')
+        result = planner.plan({'root': str(self.root), 'files': [str(selected)]})
+        self.assertTrue(result['complete'], result)
+        self.assertEqual(result['candidates'], [{
+            'schemaVersion': 'import-initialization-candidate-v1', 'kind': 'read-file',
+            'operation': 'pathlib.Path.read_text', 'resourcePath': 'settings.json',
+            'file': 'sample.py', 'line': 3, 'sourceHash': result['sources'][0]['sourceHash'],
+            'evidence': 'static-direct-module-call', 'returnValue': 'used'}])
+
+    def test_dynamic_or_writing_open_calls_do_not_propose_a_text_fixture(self):
+        selected = self.write('sample.py', 'name = input\nA = open(name)\nB = open("state.json", "w")\n')
+        result = planner.plan({'root': str(self.root), 'files': [str(selected)]})
+        self.assertTrue(result['complete'], result)
+        self.assertEqual(result['candidates'], [])
+
     def test_preflight_ancestor_import_paths_are_scanned_only_inside_source_root(self):
         self.write('first/second/near_config.py', 'VALUE = 1\n')
         self.write('first/far_config.py', 'from pathlib import Path\nPath("owned_data").mkdir(exist_ok=True)\n')

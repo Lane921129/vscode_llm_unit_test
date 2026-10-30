@@ -69,7 +69,10 @@ export async function inspectProjectImports(root: string, python: string, target
             ...(row.issue?.origin ? [localize("    位置：{0}:{1}", row.issue.origin.file, row.issue.origin.line)] : []),
             ...(row.suggestion ? [localize("    可預覽替身：{0}（{1}:{2}）", row.suggestion.operation, row.suggestion.file, row.suggestion.line),
                 localize("    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。"),
-                row.suggestion.resourcePath
+                row.suggestion.kind === 'read-file' && row.suggestion.resourcePath
+                    ? localize('    影響：建立不含正式資料的空白文字 fixture {0}；請在資源設定預覽中填入測試所需內容後再套用。',
+                        resourceLogicalPath({ path: row.suggestion.resourcePath, scope: row.suggestion.resourceScope }))
+                : row.suggestion.resourcePath
                     ? row.suggestion.resourceScope === 'unc-virtual'
                         ? localize('    影響：網路樣式路徑 {0} 只在本機暫存區建立測試資源，不連線、不讀寫原共享位置；此設定不授予網路存取權限，每次執行後清理。', row.suggestion.resourcePath)
                         : row.suggestion.resourceScope === 'external-exact'
@@ -131,14 +134,17 @@ export async function inspectProjectImports(root: string, python: string, target
                     const lines = existing?.entryPointLines?.[proposal.operation];
                     const proposedResource = { path: proposal.resourcePath || '',
                         ...(proposal.resourceScope ? { scope: proposal.resourceScope } : {}) };
-                    const needed = proposal.kind === 'mkdir' ? !!proposal.resourcePath && !existing?.resources?.some(resource =>
-                        resource.kind === 'directory' && (resourceSpecKey(resource) === resourceSpecKey(proposedResource)
+                    const needed = ['mkdir', 'read-file'].includes(proposal.kind) ? !!proposal.resourcePath && !existing?.resources?.some(resource =>
+                        resource.kind === (proposal.kind === 'mkdir' ? 'directory' : 'text') && (resourceSpecKey(resource) === resourceSpecKey(proposedResource)
                             || resourceSpecKey(proposedResource).startsWith(resourceSpecKey(resource) + '/')))
                         : !existing?.entryPoints?.includes(proposal.operation) || !!lines && !lines.includes(proposal.line);
                     if (needed) {
                         if (!existing) { existing = { file: proposal.file }; result.proposedRules.push(existing); }
                         if (proposal.kind === 'mkdir') {
                             existing.resources = [...(existing.resources || []), { ...proposedResource, kind: 'directory' }];
+                            existing.resourceSourceHash = proposal.sourceHash;
+                        } else if (proposal.kind === 'read-file') {
+                            existing.resources = [...(existing.resources || []), { ...proposedResource, kind: 'text', text: '' }];
                             existing.resourceSourceHash = proposal.sourceHash;
                         }
                         else {
