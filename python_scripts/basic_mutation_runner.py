@@ -558,21 +558,24 @@ def trial_environment(temp_root, source_file, test_file):
             if not parent.is_relative_to(temp_root):
                 break
             copied_import_paths.append(str(parent))
-    python_path = os.pathsep.join(dict.fromkeys([
+    import_paths = list(dict.fromkeys([
         str(temp_root),
         *copied_import_paths,
-        str(source_file.parent),
-        str(source_file.parent.parent),
-        os.environ.get('PYTHONPATH', ''),
     ]))
-    return mutation_environment({
+    from python_import_paths import tool_environment
+    child_environment = {
         **os.environ,
-        'PYTHONPATH': python_path,
         'PYTHONIOENCODING': 'utf-8',
         # A mutation trial must execute its .py source, never bytecode left by
         # the baseline or another mutant.
         'PYTHONDONTWRITEBYTECODE': '1',
-    }, temp_root, source_file, layout['bindings'])
+    }
+    # Never retain a parent path which can resolve the original target. A
+    # mutation trial either uses its copied module tree or fails visibly.
+    child_environment.pop('PYTHONPATH', None)
+    child_environment.pop('LLM_UNIT_TEST_IMPORT_PATHS', None)
+    return mutation_environment(tool_environment(child_environment, paths=import_paths),
+                                temp_root, source_file, layout['bindings'])
 
 
 def read_trial_result(path, expected_fixture_id=None, expected_activation=None):

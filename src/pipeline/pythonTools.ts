@@ -44,3 +44,19 @@ export function pythonToolPath(tool: keyof typeof PYTHON_TOOLS): string {
     const root = path.basename(__dirname) === 'pipeline' ? path.resolve(__dirname, '../..') : path.resolve(__dirname, '..');
     return path.join(root, 'python_scripts', PYTHON_TOOLS[tool]);
 }
+
+/** Only extension-owned scripts receive this bootstrap policy; arbitrary subprocesses do not. */
+export function preparePythonToolProcess(args: string[], environment: NodeJS.ProcessEnv): { args: string[]; env: NodeJS.ProcessEnv } {
+    const owned = Object.keys(PYTHON_TOOLS).some(tool => args.includes(pythonToolPath(tool as keyof typeof PYTHON_TOOLS)));
+    if (!owned) { return { args, env: environment }; }
+    const env = { ...environment };
+    if (env.PYTHONPATH !== undefined) {
+        env.LLM_UNIT_TEST_IMPORT_PATHS = JSON.stringify([...new Set(env.PYTHONPATH.split(path.delimiter).filter(Boolean))]);
+    }
+    delete env.PYTHONPATH;
+    delete env.PYTHONHOME;
+    delete env.PYTHONINSPECT;
+    // -E ignores interpreter configuration from the parent environment; the
+    // explicit UTF-8 flag keeps stdout/stdin portable even on Windows.
+    return { args: ['-E', '-X', 'utf8', ...args], env };
+}

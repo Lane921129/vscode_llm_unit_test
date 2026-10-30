@@ -502,11 +502,16 @@ def _drain_background_threads(initial_threads):
 
 
 @contextmanager
-def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
+def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, import_paths=None):
     global _active
     if _active is not None:
         raise RuntimeError('Nested execution policy guards are unsupported')
     _prepare_metadata_reads()
+    from python_import_paths import configured_import_paths
+    # Search roots are application data.  They are deliberately installed only
+    # after the policy and its standard-library dependencies have loaded.
+    application_paths = configured_import_paths() if import_paths is None else list(import_paths)
+    original_import_paths = sys.path[:]
     fixtures = ImportFixtures()
     resources = isolated_resources_for_plan(fixtures.plan)
     fixtures.resources = resources
@@ -551,6 +556,11 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
             if resources:
                 stack.enter_context(resources.guarding(block_operation))
             try:
+                # Preserve the declared precedence even when a root is already
+                # present as the current working directory.  Skipping it would
+                # let a later package interior outrank a copied flat module.
+                priority = list(dict.fromkeys(application_paths))
+                sys.path[:] = [*priority, *[item for item in original_import_paths if item not in priority]]
                 yield violations
             finally:
                 if threading.excepthook is not observe_background_exception:
@@ -568,6 +578,7 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False):
         raise
     finally:
         _active = None
+        sys.path[:] = original_import_paths
     if violations:
         raise state['first_error'] or error_type(violations[0])
     if background_failures:

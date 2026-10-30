@@ -126,16 +126,8 @@ def package_module_context(file_path: str):
     ``package/submodule.py`` must therefore be loaded as
     ``package.submodule`` rather than merely ``submodule``.
     """
-    target = Path(file_path).resolve()
-    package_parts = []
-    current = target.parent
-    while (current / '__init__.py').is_file():
-        package_parts.append(current.name)
-        current = current.parent
-    package_parts.reverse()
-    module_parts = package_parts if package_parts and target.stem == '__init__' else package_parts + [target.stem]
-    module_name = '.'.join(module_parts)
-    return module_name, str(current), package_parts[0] if package_parts else None
+    from python_import_paths import package_context
+    return package_context(file_path)
 
 
 def load_module_from_file(file_path: str):
@@ -146,14 +138,8 @@ def load_module_from_file(file_path: str):
         return None
     module = importlib.util.module_from_spec(spec)
     # 讓模組能找到同目錄以及上一層目錄（專案根目錄）的其他模組
-    target_dir = os.path.dirname(file_path)
-    parent_dir = os.path.dirname(target_dir)
-    if target_dir not in sys.path:
-        sys.path.insert(0, target_dir)
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-    if package_root not in sys.path:
-        sys.path.insert(0, package_root)
+    from python_import_paths import source_import_paths
+    sys.path[:0] = [item for item in source_import_paths(file_path, module_name, [package_root]) if item not in sys.path]
     # A tracer process can inspect several temporary projects. Do not reuse a
     # same-named package left by an earlier trace, or relative imports could
     # silently resolve to that other project's source tree.

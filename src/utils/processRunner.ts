@@ -4,6 +4,7 @@ import { currentExecution } from '../pipeline/executionContext';
 import { currentTargetBudget } from '../pipeline/targetBudget';
 import { currentImportFixtures, importFixtureEnvironment } from '../pipeline/importFixtures';
 import { closeResourceLease, createResourceLease, resourceLeaseEnvironment, ResourceLifecycle } from '../pipeline/isolatedResources';
+import { preparePythonToolProcess } from '../pipeline/pythonTools';
 
 /** A runner-owned timeout, distinguishable without parsing localized error text. */
 export class ProcessTimeoutError extends Error {
@@ -54,8 +55,9 @@ export async function runSpawn(
             const requestedTimeout = options.timeout && options.timeout > 0 ? options.timeout : Infinity;
             const timeout = Math.min(requestedTimeout, remaining);
             const limitedByTarget = Boolean(budget) && remaining <= requestedTimeout;
-            const proc = spawn(command, args, {
-                cwd: options.cwd, env: resourceLeaseEnvironment(importFixtureEnvironment(options.env ?? process.env), lease),
+            const prepared = preparePythonToolProcess(args, resourceLeaseEnvironment(importFixtureEnvironment(options.env ?? process.env), lease));
+            const proc = spawn(command, prepared.args, {
+                cwd: options.cwd, env: prepared.env,
                 detached: process.platform !== 'win32', shell: false, windowsHide: true
             });
             let stdout = '';

@@ -849,8 +849,17 @@ export function activate(context: vscode.ExtensionContext) {
                     batch.preflightEvidence({ phase: 'decision', status: partition.status, fixtureId: finalFixtureId,
                         blockedModules: finalRows.filter(row => row.status !== 'loaded').length, report: finalPreflightReport });
                     log(localize('[系統] 批次有 {0} 個可執行目標、{1} 個環境受阻目標；受阻者不計為測試通過。', partition.runnableIds.length, partition.blocked.length));
-                    await runSequentially(partition.runnableIds.map(id => tasks[id]), log);
-                    outcome = 'completed';
+                    // A setup request can temporarily mark the batch as
+                    // environment-blocked. Once there are real, rechecked
+                    // targets to run, that provisional state must not leak
+                    // into the final batch status.
+                    if (partition.runnableIds.length) {
+                        outcome = 'failed';
+                        await runSequentially(partition.runnableIds.map(id => tasks[id]), log);
+                        outcome = 'completed';
+                    } else if (!partition.blocked.length) {
+                        outcome = 'completed';
+                    }
                 } finally {
                     batch.finish(isExecutionCancelled() ? 'cancelled' : outcome);
                     log(localize("[批次結果] {0}", batch.summary()));

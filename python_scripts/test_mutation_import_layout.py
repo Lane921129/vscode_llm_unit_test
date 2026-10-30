@@ -303,7 +303,8 @@ class MutationImportLayoutTests(unittest.TestCase):
                     trial_env = trial_environment(trial, source, copied_test)
                 canonical = trial / 'outer' / 'middle' / 'pkg' / 'app.py'
                 self.assertFalse((trial / 'app.py').exists())
-                self.assertEqual(trial_env['PYTHONPATH'].split(os.pathsep)[:4], [str(trial.resolve()),
+                self.assertNotIn('PYTHONPATH', trial_env)
+                self.assertEqual(json.loads(trial_env['LLM_UNIT_TEST_IMPORT_PATHS'])[:4], [str(trial.resolve()),
                     str(canonical.parent.resolve()), str(canonical.parent.parent.resolve()), str(canonical.parent.parent.parent.resolve())])
                 self.tool('generated_test_runner.py', [copied_test.stem], cwd=trial, environment=trial_env)
                 canonical.write_text(source_text.replace('value + 1', 'value - 1'), encoding='utf-8')

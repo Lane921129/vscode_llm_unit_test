@@ -13,6 +13,7 @@ from dynamic_tracer import TraceSafetyError, import_diagnostic, package_module_c
 from runtime_policy import POLICY_VERSION, guarded_runtime
 from import_fixtures import evidence as import_fixture_evidence
 from import_setup_advisor import advise_blocked_initialization
+from python_import_paths import source_import_paths
 
 
 RESOURCE_SCOPE_VERSION = 'loaded-resource-scope-v1'
@@ -174,11 +175,11 @@ def preflight(payload):
         return {'ok': False, 'category': 'environment', 'stage': 'module-resolution',
                 'reason': f'Invalid Python module path: {module_name}'}
     _, package_root, _ = package_module_context(target)
-    roots = list(dict.fromkeys([*payload.get('importPaths', []), package_root]))
-    sys.path[:0] = roots
+    roots = source_import_paths(target, module_name, [*payload.get('importPaths', []), package_root])
     sys.dont_write_bytecode = True
     try:
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), guarded_runtime(error_type=TraceSafetyError):
+        with (redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()),
+              guarded_runtime(error_type=TraceSafetyError, import_paths=roots)):
             module = importlib.import_module(module_name)
         actual = getattr(module, '__file__', None)
         if not actual or os.path.normcase(os.path.realpath(actual)) != os.path.normcase(target):

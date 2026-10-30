@@ -127,11 +127,28 @@ export async function inspectPreparedProjectImports(root: string, python: string
         return { file: item.file, reason: item.reason, ...(item.line ? { line: item.line } : {}) };
     });
     verifyInitializationSources(root, sources);
-    if (!value.complete || files.some(file => !seen.has(sourceIdentity(file)))) {
+    const selectedSourcesObserved = files.every(file => seen.has(sourceIdentity(file)));
+    const onlyUnresolvedLocalImports = !value.complete && diagnostics.length > 0
+        && diagnostics.every((item: { reason: string }) => item.reason === 'unresolved-local-import');
+    if ((!value.complete && !onlyUnresolvedLocalImports) || !selectedSourcesObserved) {
         fs.writeFileSync(path.join(directory, 'initialization_plan.json'), JSON.stringify({
             schemaVersion: value.schemaVersion, complete: false, sources, proposals: [], diagnostics
         }, null, 2));
         throw invalidPlan();
+    }
+    if (!value.complete) {
+        // A partial closure never authorizes a static setup proposal.  Some
+        // projects deliberately defer optional or function-local imports;
+        // preserve that diagnostic and run the existing guarded preflight so
+        // only an actual import can decide whether the selected modules load.
+        fs.writeFileSync(path.join(directory, 'initialization_plan.json'), JSON.stringify({
+            schemaVersion: value.schemaVersion, complete: false, sources, proposals: [], diagnostics,
+            note: 'Unresolved local imports received no static approval; guarded preflight decides selected modules.'
+        }, null, 2));
+        const check = await inspectProjectImports(root, python, targets, directory, rules, log, boundRoot);
+        verifyInitializationSources(root, sources);
+        check.initializationSources = sources;
+        return check;
     }
     // Unresolved paths cannot be guessed. One ordinary guarded observation may
     // supply an exact receiver; it uses ONLY the already approved fixture plan.
