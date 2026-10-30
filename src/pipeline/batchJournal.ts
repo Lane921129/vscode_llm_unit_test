@@ -105,6 +105,8 @@ export class BatchJournal {
     private readonly files: string[] = [];
     private readonly reportSummaries = new Map<number, TargetReportSummary>();
     private scope?: BatchScopeSelection;
+    /** Stable batch-level stage when work stops before an individual target owns a report. */
+    private terminalFailureStage?: string;
     constructor(readonly directory: string, private readonly sourceRoot: string,
         private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode }) {
         this.save();
@@ -143,6 +145,12 @@ export class BatchJournal {
     preflightEvidence(event: Omit<(typeof this.preflightEvents)[number], 'at'>): void {
         const report = event.report && path.relative(this.directory, event.report).replace(/\\/g, '/');
         this.preflightEvents.push({ ...event, ...(report ? { report } : {}), at: new Date().toISOString() });
+        this.save();
+    }
+    fail(stage: string): void {
+        // A batch report is an audit surface. Preserve a stable host-owned
+        // stage, never arbitrary exception or provider text.
+        this.terminalFailureStage = /^[a-z][a-z0-9-]{0,79}$/.test(stage) ? stage : 'batch-error';
         this.save();
     }
     /** A source rejected before generation has a known terminal outcome, not a missing report or test pass. */
@@ -268,9 +276,13 @@ export class BatchJournal {
         for (const target of this.targets) {
             if (['passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
         }
-        this.status = status === 'completed' && (this.discoveryFailures.length || this.targets.some(target => target.state !== 'finished'))
-            ? 'incomplete' : status === 'completed' && this.targets.some(target => target.terminalStatus === 'environment-blocked')
-                ? this.targets.every(target => target.terminalStatus === 'environment-blocked') ? 'environment-blocked' : 'partial' : status;
+        const unfinished = this.discoveryFailures.length || this.targets.some(target => target.state !== 'finished');
+        const targetFailures = this.targets.some(target => target.category !== 'environment'
+            && ['failed', 'retained-after-failure', 'source-changed'].includes(target.terminalStatus || ''));
+        this.status = status === 'completed' && unfinished ? 'incomplete'
+            : status === 'completed' && targetFailures ? 'failed'
+                : status === 'completed' && this.targets.some(target => target.terminalStatus === 'environment-blocked')
+                    ? this.targets.every(target => target.terminalStatus === 'environment-blocked') ? 'environment-blocked' : 'partial' : status;
         this.finishedAt = new Date().toISOString(); this.save();
     }
     summary(): string {
@@ -311,6 +323,7 @@ export class BatchJournal {
             preflightEvents: this.preflightEvents,
             model: this.identity.model, buildTimestamp: this.identity.buildTimestamp,
             pythonExecutable: this.identity.python, roleContracts: ROLE_CONTRACT_VERSIONS,
+            ...(this.terminalFailureStage ? { terminalFailureStage: this.terminalFailureStage } : {}),
             ...(this.scope ? { scope: this.scope } : {}),
             discoveredFiles: this.files, discoveryFailures: this.discoveryFailures,
             expectedTargets: this.targets.length, finishedTargets: this.targets.filter(t => t.state === 'finished').length,
@@ -325,6 +338,7 @@ export class BatchJournal {
             : manifest.allTargetsExecutionVerified ? localize("全部執行驗證通過；完整品質尚未驗證") : localize("未全部通過")}`, '', this.summary(), '',
             localize("- 驗證目標：{0}", mode === 'execution' ? localize("執行驗證；Trace、覆蓋率、突變與品質審查未執行") : localize("完整品質驗證")),
             localize("- 狀態：{0}（執行完成不代表測試通過）", this.status),
+            ...(this.terminalFailureStage ? [localize("- 批次終止階段：{0}", safe(this.terminalFailureStage))] : []),
             ...(this.scope ? [t('ui.batchScopeSummary', this.scope.selectedFiles.length, this.scope.knownFiles.length, this.scope.excludedFiles.length)] : []),
             ...(this.blockedModules ? [localize("- 前置預檢有 {0} 個模組受阻：[原因與處理方式]({1})。受影響目標不計為測試通過。", this.blockedModules,
                 reportLink(this.targets.find(target => target.preflightReport)?.preflightReport || 'preflight/import_check.md'))] : []),

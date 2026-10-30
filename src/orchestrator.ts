@@ -208,9 +208,11 @@ async function runSequentially<T>(
             if (!isExecutionCancelled()) {
                 onError(localize("[順序執行] 任務 {0} 執行失敗: {1}", index + 1, err?.message ?? err));
             }
-            // A target has exhausted its own bounded repair loop. Do not
-            // schedule another target after a terminal execution failure.
-            throw err;
+            // Each target owns an independent bounded repair budget.  A
+            // terminal failure is evidence about that target, not a reason to
+            // abandon unrelated source files in the same batch.  Cancellation
+            // is still observed at the next iteration above.
+            results.push(undefined);
         }
     }
     return results;
@@ -860,6 +862,11 @@ export function activate(context: vscode.ExtensionContext) {
                     } else if (!partition.blocked.length) {
                         outcome = 'completed';
                     }
+                } catch (error) {
+                    if (!isExecutionCancelled()) {
+                        batch.fail(error instanceof AnalysisStageError ? error.stage : 'batch-error');
+                    }
+                    throw error;
                 } finally {
                     batch.finish(isExecutionCancelled() ? 'cancelled' : outcome);
                     log(localize("[批次結果] {0}", batch.summary()));

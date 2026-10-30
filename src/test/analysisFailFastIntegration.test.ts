@@ -7,7 +7,7 @@ import { QUALIFICATION_VERSION, LOCAL_RUNTIME_QUALIFICATION_VERSION, qualificati
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
 
-test('public analysis commands reject unqualified Auto before setup and stop scheduling after the first terminal failure', async () => {
+test('public analysis commands reject unqualified Auto before setup and isolate terminal failures per batch target', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'analysis-fail-fast-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const file = path.join(root, 'sample.py');
@@ -107,7 +107,7 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
         assert.equal(passed.reviewStatus, 'deferred');
 
         // A malformed Writer candidate exhausts its bounded repair policy.
-        // The next target must remain pending, with the first failure saved.
+        // The next target is independent and must still get its own attempt.
         savedProfiles = []; activate();
         responseCode = 'import unittest\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertTrue(True)\n';
         const failedOutput = path.join(root, 'batch-failure');
@@ -120,11 +120,11 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
         assert.equal(manifest.expectedTargets, 2, JSON.stringify({ manifest,
             logs: messages.filter(item => item.command === 'appendLog').slice(-8) }));
         assert.equal(manifest.targets[0].terminalStatus, 'failed');
-        assert.equal(manifest.targets[1].state, 'pending');
-        assert.equal(manifest.attemptedTargets, 1);
+        assert.equal(manifest.targets[1].terminalStatus, 'failed');
+        assert.equal(manifest.attemptedTargets, 2);
         assert.equal(manifest.complete, false);
         assert.equal(manifest.allTargetsExecutionVerified, false);
-        assert.equal(knowledgeFiles(failedOutput).length, 1);
+        assert.equal(knowledgeFiles(failedOutput).length, 2);
         assert.ok(fs.readdirSync(failedOutput, { recursive: true }).map(String).some(name => path.basename(name) === 'failure_report.md'));
         assert.equal(finished(), beforeBatchFinished + 1);
 
@@ -132,7 +132,7 @@ test('public analysis commands reject unqualified Auto before setup and stop sch
         const beforeWholeFinished = finished();
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ ...base, requireRoleQualification: false, promptStrategy: 'tier1', validationMode: 'execution',
             filePath: file, funcName: '', outputPath: wholeOutput });
-        assert.equal(knowledgeFiles(wholeOutput).length, 1, 'whole-file scheduling also stops before second target');
+        assert.equal(knowledgeFiles(wholeOutput).length, 2, 'whole-file scheduling isolates the second target');
         assert.equal(finished(), beforeWholeFinished + 1);
         assert.equal(fs.readFileSync(file, 'utf8'), source);
     } finally {
