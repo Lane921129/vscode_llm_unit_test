@@ -5,6 +5,20 @@ import json
 from pathlib import Path
 
 
+CAPABILITY_KEYS = {'version', 'completedTransports', 'timedOutTransports', 'lengthStoppedTransports', 'outputTokens', 'outputEvalMs'}
+
+
+def capability_summary(value):
+    """Accept only the anonymized, versioned totals written by BatchJournal."""
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != CAPABILITY_KEYS
+            or value.get('version') != 'model-capability-summary-v1'
+            or any(type(value[key]) is not int or value[key] < 0 for key in CAPABILITY_KEYS - {'version'})):
+        raise ValueError('invalid-model-capability-summary')
+    return {key: value[key] for key in sorted(CAPABILITY_KEYS)}
+
+
 def group(directories):
     runs, identities = [], set()
     for directory in directories:
@@ -32,12 +46,20 @@ def group(directories):
                      'validationMode': data.get('validationMode'), 'expectedTargets': numbers[0],
                      'attemptedTargets': numbers[1], 'finishedTargets': numbers[2], 'statusCounts': counts,
                      'elapsedSeconds': elapsed,
-                     'selectedFiles': sorted(data.get('scope', {}).get('selectedFiles', []))})
+                     'selectedFiles': sorted(data.get('scope', {}).get('selectedFiles', [])),
+                     'modelCapabilitySummary': capability_summary(data.get('modelCapabilitySummary'))})
     totals = {}
     for run in runs:
         for status, count in run['statusCounts'].items():
             totals[status] = totals.get(status, 0) + count
-    return {'runs': runs, 'statusCounts': totals, 'attemptedTargets': sum(run['attemptedTargets'] for run in runs)}
+    capability_runs = [run['modelCapabilitySummary'] for run in runs if run['modelCapabilitySummary'] is not None]
+    capability_totals = None if not capability_runs else {
+        'version': 'model-capability-summary-v1',
+        **{key: sum(item[key] for item in capability_runs) for key in CAPABILITY_KEYS - {'version'}}
+    }
+    return {'runs': runs, 'statusCounts': totals, 'attemptedTargets': sum(run['attemptedTargets'] for run in runs),
+            'modelCapabilitySummary': capability_totals,
+            'capabilitySummaryRuns': len(capability_runs), 'totalRuns': len(runs)}
 
 
 def summarize(a, b):
@@ -45,12 +67,12 @@ def summarize(a, b):
     if {run['batchId'] for run in left['runs']} & {run['batchId'] for run in right['runs']}:
         raise ValueError('same-batch-in-both-groups')
     dimensions = ('model', 'validationMode', 'selectedFiles')
-    return {'schemaVersion': 'skill-ab-summary-v1', 'evidenceBasis': 'manifest-reported-outcomes-only',
+    return {'schemaVersion': 'skill-ab-summary-v2', 'evidenceBasis': 'manifest-reported-outcomes-and-capability-totals-only',
             'qualityEvidenceRevalidated': False,
             'comparisonFacts': {key: {json.dumps(run[key], sort_keys=True) for run in left['runs']}
                                 == {json.dumps(run[key], sort_keys=True) for run in right['runs']}
                                 for key in dimensions},
-            'note': 'Pending targets are not failed tests. Matching dimensions do not prove equal prompts, sampling, budgets or semantic quality. Inspect original same-candidate evidence.',
+            'note': 'Pending targets are not failed tests. Capability totals are transport observations, not quality, qualification, capacity or future-request claims. Matching dimensions do not prove equal prompts, sampling, budgets or semantic quality. Inspect original same-candidate evidence.',
             'A': left, 'B': right}
 
 
