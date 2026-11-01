@@ -147,6 +147,8 @@ test('batch revalidates AI review approval for the retained candidate and preser
         journal.knowledge({ ...checkpoint, terminalStatus: 'passed', acceptedTest: checkpoint.testFile,
             acceptedCodeHash: codeHash, resolvedTier: 1, workflowVersion: AI_WORKFLOW_VERSION, reviewApproval: approval });
         journal.record(1, 'reviewer', 'approved', { testHash: codeHash });
+        journal.record(1, 'model-request', 'timing', { version: 'model-request-timing-v1', kind: 'transport',
+            outcome: 'completed', ollama: { completionReason: 'stop', evalCount: 24, evalDurationMs: 600 } });
         fs.writeFileSync(path.join(directory, 'final_report.md'), 'reader fixture');
         const manifestPath = path.join(directory, 'run_manifest.json'), knowledgePath = path.join(directory, 'function_knowledge.json');
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -165,7 +167,10 @@ test('batch revalidates AI review approval for the retained candidate and preser
             batch.attach(0, reportPath); batch.refresh(0); batch.finish('completed');
             return JSON.parse(fs.readFileSync(path.join(output, 'batch_manifest.json'), 'utf8'));
         };
-        assert.equal(reread().allTargetsPassed, true);
+        const verified = reread();
+        assert.equal(verified.allTargetsPassed, true);
+        assert.deepEqual(verified.modelCapabilitySummary, { version: 'model-capability-summary-v1', completedTransports: 1,
+            timedOutTransports: 0, lengthStoppedTransports: 0, outputTokens: 24, outputEvalMs: 600 });
         assert.equal(reread(value => { delete value.knowledge.workflowVersion; }).allTargetsPassed, true,
             'the manifest alone identifies the new workflow');
         const corruptions: Array<(value: { manifest: any; knowledge: any }) => void> = [

@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { measuredOutputRateMilli, summarizeModelCapability } from '../llm/modelCapabilitySummary';
+import { measuredOutputRateMilli, mergeModelCapabilitySummaries, summarizeModelCapability } from '../llm/modelCapabilitySummary';
 import { renderModelCapabilitySummary } from '../pipeline/targetReport';
 
 test('capability summaries retain only aggregate completed transport evidence', () => {
@@ -22,6 +22,21 @@ test('capability summary never invents a rate from missing or invalid timing', (
         version: 'model-capability-summary-v1', completedTransports: 0, timedOutTransports: 0,
         lengthStoppedTransports: 0, outputTokens: 0, outputEvalMs: 0
     });
+});
+
+test('batch aggregation ignores malformed summaries and refuses numeric overflow', () => {
+    const merged = mergeModelCapabilitySummaries([
+        { version: 'model-capability-summary-v1', completedTransports: 2, timedOutTransports: 1,
+            lengthStoppedTransports: 0, outputTokens: 60, outputEvalMs: 1500 },
+        { version: 'model-capability-summary-v1', completedTransports: 1, timedOutTransports: 0,
+            lengthStoppedTransports: 1, outputTokens: 40, outputEvalMs: 500 },
+        { version: 'model-capability-summary-v1', completedTransports: -1, timedOutTransports: 0,
+            lengthStoppedTransports: 0, outputTokens: 0, outputEvalMs: 0 },
+        { version: 'model-capability-summary-v1', completedTransports: Number.MAX_SAFE_INTEGER,
+            timedOutTransports: 0, lengthStoppedTransports: 0, outputTokens: 0, outputEvalMs: 0 }
+    ]);
+    assert.deepEqual(merged, { version: 'model-capability-summary-v1', completedTransports: 3,
+        timedOutTransports: 1, lengthStoppedTransports: 1, outputTokens: 100, outputEvalMs: 2000 });
 });
 
 test('report presentation accepts only matching model-request timing details', () => {

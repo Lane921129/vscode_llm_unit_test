@@ -19,6 +19,14 @@ const empty = (): ModelCapabilitySummary => ({ version: 'model-capability-summar
 
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 
+function validSummary(value: unknown): value is ModelCapabilitySummary {
+    if (!value || typeof value !== 'object') { return false; }
+    const summary = value as Partial<ModelCapabilitySummary>;
+    return summary.version === 'model-capability-summary-v1' && integer(summary.completedTransports)
+        && integer(summary.timedOutTransports) && integer(summary.lengthStoppedTransports)
+        && integer(summary.outputTokens) && integer(summary.outputEvalMs);
+}
+
 /** Only allowlisted numeric timing fields survive aggregation. */
 export function summarizeModelCapability(events: readonly unknown[]): ModelCapabilitySummary {
     const summary = empty();
@@ -42,4 +50,21 @@ export function measuredOutputRateMilli(summary: ModelCapabilitySummary): number
         || !integer(summary.outputEvalMs) || summary.outputEvalMs <= 0 || summary.outputTokens <= 0) { return null; }
     const rate = Math.floor(summary.outputTokens * 1_000_000 / summary.outputEvalMs);
     return Number.isSafeInteger(rate) && rate > 0 ? rate : null;
+}
+
+/** Merge only complete summaries; malformed or overflowing observations are omitted. */
+export function mergeModelCapabilitySummaries(summaries: readonly unknown[]): ModelCapabilitySummary {
+    const merged = empty();
+    for (const value of summaries) {
+        if (!validSummary(value)) { continue; }
+        const next = {
+            completedTransports: merged.completedTransports + value.completedTransports,
+            timedOutTransports: merged.timedOutTransports + value.timedOutTransports,
+            lengthStoppedTransports: merged.lengthStoppedTransports + value.lengthStoppedTransports,
+            outputTokens: merged.outputTokens + value.outputTokens,
+            outputEvalMs: merged.outputEvalMs + value.outputEvalMs
+        };
+        if (Object.values(next).every(integer)) { Object.assign(merged, next); }
+    }
+    return merged;
 }
