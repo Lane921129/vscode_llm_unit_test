@@ -524,6 +524,32 @@ def project_addition_context(baseline):
             'baselineHash': hashlib.sha256(baseline.encode('utf-8')).hexdigest()}
 
 
+def addition_completion_prefix(baseline, method_name, is_async):
+    """A body-free continuation signature for one proven TestCase owner."""
+    schema = 'writer-addition-prefix-v1'
+    def reject(reason):
+        return {'schemaVersion': schema, 'ok': False, 'reasonCode': reason}
+    if (not isinstance(baseline, str) or not baseline.strip()
+            or len(baseline.encode('utf-8')) > 1024 * 1024
+            or not isinstance(method_name, str) or not re.fullmatch(r'test_[A-Za-z0-9_]{1,160}', method_name)
+            or type(is_async) is not bool):
+        return reject('invalid-prefix-input')
+    try:
+        tree = ast.parse(baseline)
+        bases, _ = case_bases(tree)
+        owners = [node for node in tree.body if test_class(node, bases)]
+        if len(owners) != 1:
+            return reject('ambiguous-addition-target')
+        if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method_name
+               for node in owners[0].body):
+            return reject('existing-test-method-changed')
+        return {'schemaVersion': schema, 'ok': True,
+                'baselineHash': hashlib.sha256(baseline.encode('utf-8')).hexdigest(),
+                'prefix': ('async ' if is_async else '') + f'def {method_name}(self):\n'}
+    except (SyntaxError, ValueError, TypeError, RecursionError):
+        return reject('invalid-python-structure')
+
+
 def main():
     try:
         value = json.loads(sys.stdin.buffer.read().decode('utf-8'))
@@ -531,6 +557,8 @@ def main():
             result = project_addition_context(value.get('baseline'))
         elif value.get('mode') == 'writer-addition-v1':
             result = merge_addition(value.get('baseline'), value.get('addition'))
+        elif value.get('mode') == 'writer-addition-prefix-v1':
+            result = addition_completion_prefix(value.get('baseline'), value.get('methodName'), value.get('isAsync'))
         else:
             result = merge(value.get('baseline'), value.get('snippets'), value.get('className', 'TestMergedSuite'))
     except (ValueError, AttributeError, RecursionError):

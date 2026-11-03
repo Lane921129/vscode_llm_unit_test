@@ -288,7 +288,7 @@ export function renderModelCapabilitySummary(events: readonly unknown[]): string
     return [localize('### 模型能力觀測（本次執行）'), '',
         localize('- 完成傳輸：{0}；逾時：{1}；因輸出長度停止：{2}。', summary.completedTransports,
             summary.timedOutTransports, summary.lengthStoppedTransports),
-        localize('- 已回報輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。', summary.outputTokens,
+        localize('- 有計時配對的輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。', summary.outputTokens,
             summary.outputEvalMs, rate === null ? localize('未知') : (rate / 1000).toFixed(3)),
         localize('- 這些是匿名化傳輸觀測，不代表測試品質、模型資格或後續請求保證。'), ''].join('\n');
 }

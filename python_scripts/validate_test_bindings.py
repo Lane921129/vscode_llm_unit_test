@@ -10,6 +10,7 @@ import tokenize
 from mock_behavior import (has_mock_behavior, imports as mock_imports,
                            source_function, source_module_imports, source_namespace_use_points, target_use_points)
 from target_result_evidence import has_target_result_assertion
+from target_bindings import unresolved_target_aliases
 
 
 def dotted(node):
@@ -476,6 +477,12 @@ def validate_bindings(code, context):
             extra += f' {qualified} has no module-level call use points; pass MagicMock() (or controlled objects) for parameter(s) ({", ".join(facts["parameters"])}) and assert on them.'
         return {'valid': False, 'reason': 'Mock assertion is not proven to observe an explicit target use-point patch or a mock passed to the target.' + extra}
     if context.get('requireTargetBehavior') and not (has_target_result_assertion(tree, context) or has_mock_behavior(tree, context)):
+        selected = module + ('.' + owner if owner else '') + '.' + target
+        unresolved = unresolved_target_aliases(tree, selected)
+        if unresolved:
+            return {'valid': False, 'reasonCode': 'target-alias-unresolved', 'aliases': unresolved,
+                    'reason': 'Target alias cannot be resolved: ' + ', '.join(f'{item["name"]}:{item["line"]}' for item in unresolved)
+                              + f'. Call {qualified}(...) directly using its canonical import, or bind the alias once before use in the same straight-line test scope. Do not reassign, delete or conditionally bind it.'}
         locations = ', '.join(f'{node.name}:{node.lineno}' for node in ast.walk(tree)
                              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'))[:300]
         return {'valid': False, 'reason': f'AST 未找到目標回傳值、例外或受控相依的有效斷言（{locations}）；請保留回傳值（可解包），勿覆寫後驗證常數或比較目標與自身。'}

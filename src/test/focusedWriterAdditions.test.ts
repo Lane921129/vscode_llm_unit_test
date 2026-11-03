@@ -144,7 +144,7 @@ test('merge tool failure or malformed success stops instead of asking the model 
         const opts = options(evidence(1)); let requests = 0;
         opts.request = async () => { requests++; return 'AI'; };
         opts.merge = async () => result as unknown as WriterAdditionMergeResult;
-        await assert.rejects(composeFocusedWriterAdditions(opts), error => error instanceof AnalysisStageError && error.category === 'validation');
+        await assert.rejects(composeFocusedWriterAdditions(opts), error => error instanceof AnalysisStageError && error.category === 'tool');
         assert.equal(requests, 1);
     }
 });

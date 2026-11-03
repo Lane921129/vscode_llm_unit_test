@@ -9,6 +9,10 @@ export interface OutcomeEvidence {
     validationMode?: unknown;
     executionVerified?: unknown;
     workflowVersion?: unknown;
+    failureCount?: unknown;
+    failureLimit?: unknown;
+    stopReason?: unknown;
+    effectiveSettings?: unknown;
 }
 export interface OutcomePresentation { state: string; label: string; kind: 'passed' | 'executed' | 'failed' | 'pending' | 'skipped' }
 
@@ -17,6 +21,7 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
     const state = typeof value.terminalStatus === 'string' ? value.terminalStatus : 'incomplete';
     if (value.evidenceValid === false) { return { state, label: localize("未通過：來源已變更，舊證據失效"), kind: 'failed' }; }
     if (value.failureCategory === 'environment') { return { state, label: localize("未通過：匯入／環境受阻"), kind: 'failed' }; }
+    if (value.failureCategory === 'tool') { return { state, label: localize('未通過：驗證工具受阻'), kind: 'failed' }; }
     if (state === 'passed' && value.validationMode !== 'execution' && value.qualityAssessment?.fullyPassed === true) {
         return { state, label: localize("完整通過"), kind: 'passed' };
     }
@@ -37,6 +42,7 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
         'stub-smoke-generated': [localize("僅產生 Smoke Test，未計入通過"), 'skipped'],
         'stub-skipped': [localize("已略過：無法建立測試初始化"), 'skipped'],
         cancelled: [localize("已中止，未計入通過"), 'pending'],
+        'policy-not-run': [localize('因批次停止政策未執行'), 'skipped'],
         'source-changed': [localize("未通過：來源已變更"), 'failed']
     };
     const [label, kind] = labels[state] || [localize("未完成：缺少完整通過證據"), 'pending'];
@@ -57,6 +63,9 @@ export function presentSummaryOutcome(value: OutcomeEvidence): OutcomePresentati
 export function withOutcomeHeader(body: string, evidence: OutcomeEvidence): string {
     const outcome = presentOutcome(evidence);
     return localize("## 最終結果：{0}\n\n", outcome.label)
+        + (Number.isSafeInteger(evidence.failureCount) && Number.isSafeInteger(evidence.failureLimit)
+            ? `failureCount: ${evidence.failureCount}; failureLimit: ${evidence.failureLimit}; stopReason: ${String(evidence.stopReason || 'none')}\n\n`
+                + `effectiveSettings: ${JSON.stringify(evidence.effectiveSettings)}\n\n` : '')
         + (evidence.validationMode === 'execution'
             ? localize("> **突變測試未執行：本次選擇「僅執行驗證」。** 需要突變測試時，請將「驗證目標」切換成「完整品質驗證（含突變）」並重新執行；不能把本次結果直接改標為完整通過。\n\n") : '')
         + localize("> 下方 passed／OK 僅描述個別階段或一次測試執行；覆蓋率與突變分數不是整體通過判定。\n\n")

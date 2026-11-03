@@ -352,6 +352,8 @@ def target(): return (DATA / 'result.txt').read_text()
         value = self.preflight(plan)
         self.assertFalse(value['ok'], value)
         self.assertIn('resource-schema-required', value['reason'])
+        self.assertEqual(value['diagnostic']['resource']['fixtureType'], 'sqlite')
+        self.assertRegex(value['diagnostic']['resource']['id'], '^resource-[a-f0-9]{16}$')
         self.assertEqual((self.root / 'app.db').read_bytes(), original)
         self.assertNotIn('private-source-row', json.dumps(value))
 

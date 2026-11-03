@@ -45,7 +45,8 @@ export function buildWriterSeedSystemPrompt(systemPrompt: string, isAsync?: bool
         + (executionOnly ? 'Prefer exact observed results or explicit same-test controls; '
             : 'Use exact observed results or explicit same-test controls; ')
         + 'never call dependencies to calculate expected values. '
-        + 'Use with self.assertRaises(ExactType) for an evidenced exception, no message second argument. '
+        + 'For a selected returned outcome, call normally and assert its observed return. '
+        + 'Only a selected raised outcome uses with self.assertRaises(ExactType), no message second argument. '
         + 'Pure calculations need no mocks; control external/ambient boundaries only at their source use points with fresh per-test state. '
         + (executionOnly ? EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE + ' ' : '')
         + (isKnownParameterlessFunction(sourceContext)
@@ -66,13 +67,16 @@ export function buildWriterAdditionSystemPrompt(systemPrompt: string): string {
         + 'Write one NEW unittest test method for the current focus. '
         + 'It may contain multiple target calls and must exercise EVERY supplied bound case exactly; '
         + 'do not add unrelated zero, negative or exception inputs. '
+        + 'When WRITER_ADDITION_CASE_FACTS_V1 blocks are supplied, implement EVERY exact new call and observed result in the one NEW method. '
         + 'Return one Python fence: needed imports plus a unittest class, or a complete top-level test method for the single baseline class. '
+        + 'Return implemented Python only, without an explanation, Markdown headings or an entry-point/main block. '
+        + 'Keep module imports and class headers at column 1; indent the method body consistently. '
         + 'Use explicit imports, test_ methods and self.assert*; no pytest or top-level assert. Await only async targets. '
         + 'Use the exact target module/class/property/constructor contract; never copy, redefine or mock the target or owner. '
         + 'Expected values require exact verified observations or explicit same-test controls; source expressions, hypotheses and diagnostics are not assertion oracles. '
         + 'Preserve observed input types, constructor and call order. Never calculate expected values by calling dependencies. '
         + 'Use with self.assertRaises(ExactType) only for an evidenced exception. '
-        + 'Parameter.member needs an attribute-bearing fixture, not same-named dict keys; callable members need explicit controlled behavior. '
+        + SOURCE_INPUT_SHAPE_GUIDANCE + 'Callable members need explicit controlled behavior. '
         + 'Control external/ambient dependencies at source use points with fresh per-test state; never patch immutable built-in class members. '
         + 'No direct test network, file I/O, shell, dynamic execution or shared SQLite; no skips, swallowed errors or tautologies. '
         + 'The host preserves and merges the executed baseline. Do not rewrite passing methods or fixtures. '
@@ -142,6 +146,7 @@ export function getWriterMethodEditSystemPrompt(): string {
         + 'The host owns all other methods, module imports and fixtures; never return a complete test file. '
         + 'Keep the real target callable; do not invent requirements or expected values from failures. '
         + MODULE_GLOBAL_LOOKUP_GUIDANCE
+        + SOURCE_INPUT_SHAPE_GUIDANCE
         + isolatedResourceSystemRule();
 }
 
@@ -202,4 +207,27 @@ export function buildWriterAdditionRevisionPrompt(evidencePrompt: string, baseli
         + 'Return the replacement addition only. You may correct methods that belong to the unaccepted addition; '
         + 'do not copy or edit the EXECUTED BASELINE. The host merges with that original baseline, not with this failed draft. '
         + 'Existing preservation, structure, execution and same-candidate Reviewer approval still apply.';
+}
+
+/** Restart the same addition contract without accumulating failed drafts or
+ * changing the observed focus into a generic complete-file revision. */
+export function buildWriterAdditionRepairPrompt(originalPrompt: string, reasonCode: string, feedback: string,
+    syntax?: { kind: string; line: number | null; column: number | null }): string {
+    const guidance: Record<string, string> = {
+        'invalid-python-structure': 'The addition was not valid Python. Return implemented code, not an explanation of a test.',
+        'unsupported-addition-context': 'Use only needed module imports and a TestCase class containing the new method, '
+            + 'or one complete bare test method for a single baseline class. Omit entry-point blocks, module assignments and top-level statements.',
+        'existing-test-method-changed': 'An existing test method was changed. Return only the NEW method with the host-selected signature.',
+        'fixture-definition-conflict': 'The addition changed an existing fixture. Reuse the baseline fixture unchanged; put new setup in the new method.',
+        'class-header-conflict': 'Copy the exact baseline class name and base, or return a bare method when exactly one baseline class exists.',
+        'repeated-candidate': 'The candidate repeats an earlier rejected candidate. Correct the cited failure before returning another addition.'
+    };
+    return originalPrompt + '\n\nWRITER_ADDITION_FORMAT_REPAIR_V1\n'
+        + JSON.stringify({ reasonCode, ...(syntax ? { syntax } : {}) }) + '\n'
+        + (guidance[reasonCode] || 'Correct the rejected addition using the same supplied observations and requested gap.') + '\n'
+        + summarizeRepairOutput(feedback, 1500) + '\n'
+        + 'Preserve the original executed baseline, exact current input/result evidence, selected method signature and modification scope. '
+        + 'Return one python fence containing the replacement addition only. No prose, main block, copied passing tests or new cases. '
+        + 'Use column 1 for module imports/class headers (or the bare method signature), and consistent indentation inside definitions. '
+        + 'The complete merged candidate still requires validation, execution, independent Reviewer approval and quality measurement.';
 }

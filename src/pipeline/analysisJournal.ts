@@ -10,6 +10,7 @@ import { VerificationMode } from './verificationMode';
 import type { ReportIdentity } from './targetReport';
 import { normalizeKnownSecrets, redactCredentialStrings } from './artifactSafety';
 import { AI_WORKFLOW_VERSION } from './aiWorkflow';
+import { currentStopPolicy } from './stopPolicy';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -58,6 +59,7 @@ export class AnalysisJournal {
             qualityExperimentVersion: 'quality-experiment-result-v2',
             evidenceContracts: EVIDENCE_CONTRACT_VERSIONS, roleContracts: ROLE_CONTRACT_VERSIONS,
             repairDiagnosticsVersion: 'repair-diagnostics-v1',
+            ...(currentStopPolicy() ? { stopPolicy: currentStopPolicy()!.settings } : {}),
             ...(report ? { report } : {}),
             ...(qualityPolicy ? { qualityContractVersion: 'quality-policy-v1', qualityPolicy } : {})
         }), null, 2), { encoding: 'utf8', flag: 'wx' });
@@ -124,6 +126,6 @@ export class QualityProgress {
         this.initialized = true;
         this.seenSurvivors = new Set(survivors);
         this.seenGaps = new Set(gaps);
-        return this.stalled >= this.limit;
+        return this.limit > 0 && this.stalled >= this.limit;
     }
 }

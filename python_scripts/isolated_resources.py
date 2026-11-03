@@ -452,7 +452,10 @@ class IsolatedResources:
                     # outside the mutation copy (e.g. trial/../VMS_Data). Treat
                     # only this derived root as an alias; I/O is still redirected
                     # to this worker's namespace, never performed at the alias.
-                    if inside(derived, self.trial_root) or spec.get('scope') == 'project-parent':
+                    # Flat module copies lose their original directory depth.
+                    # Their source-bound ../resource can land beside baseline
+                    # or mutant_N, inside the driver's owned temporary parent.
+                    if inside(derived, os.path.dirname(self.trial_root)) or spec.get('scope') == 'project-parent':
                         if (derived == os.path.dirname(derived)
                                 or any(derived == source or spec['kind'] == 'directory' and inside(source, derived)
                                        for source in sources)
@@ -652,6 +655,11 @@ class IsolatedResources:
             return value, False
         if type(value) is str and value.startswith('file:'):
             self.block('SQLite URI is not an isolated resource path')
+        if not is_unc_or_device(value) and _unsafe_raw_components(value):
+            # Windows abspath can turn data/CON into a device path, losing the
+            # declared directory before the mount check. Reject the requested
+            # spelling before any native normalization or resource operation.
+            self.block('isolated resource executable or unsupported filename')
         if is_unc_or_device(value):
             try:
                 unc_resource_identity(os.fsdecode(value))

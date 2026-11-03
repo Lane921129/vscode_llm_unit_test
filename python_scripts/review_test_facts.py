@@ -265,36 +265,10 @@ def target_call_syntax(method, aliases, target):
     """Conservative call-site lower bound, independent of literal input decoding.
     Never descends into nested bodies or claims execution/expected-value evidence.
     """
-    shadowed = {arg.arg for arg in [*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs]}
-    for node in ast.walk(method):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            shadowed.add(node.id)
-        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            shadowed.add(dotted(node).split('.')[0])
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node is not method:
-            shadowed.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for item in node.names:
-                if item.name == '*':
-                    shadowed.update(aliases)
-                else:
-                    shadowed.add(item.asname or (item.name.split('.')[0] if isinstance(node, ast.Import) else item.name))
-    result = []
-
-    def visit(node):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            return
-        if isinstance(node, ast.Call):
-            root, _, tail = dotted(node.func).partition('.')
-            if root and root not in shadowed and root in aliases \
-                    and aliases[root] + ('.' + tail if tail else '') == target:
-                result.append({'line': node.lineno, 'column': node.col_offset})
-        for child in ast.iter_child_nodes(node):
-            visit(child)
-
-    for statement in method.body:
-        visit(statement)
-    return result
+    from target_bindings import target_references
+    proven = target_references(method, target, aliases)
+    return [{'line': node.lineno, 'column': node.col_offset} for node in ast.walk(method)
+            if isinstance(node, ast.Call) and id(node.func) in proven]
 
 
 def build_review_facts(payload):
@@ -356,6 +330,8 @@ def build_review_facts(payload):
         return aliases[root] + ('.' + tail if tail else '')
 
     target = payload['module'] + '.' + payload['target']
+    from target_bindings import target_references
+    proven_target_refs = target_references(tree, target)
     observations = payload.get('observations', [])
     classes, methods = [], []
     # A custom loader means static test discovery cannot establish execution.
@@ -477,7 +453,7 @@ def build_review_facts(payload):
                     index = literal(node.slice)
                     if base[0] == 'result' and type(index) is int:
                         return ('result', base[1], base[2] + [index], base[3])
-                if isinstance(node, ast.Call) and resolve(node.func, local) == target:
+                if isinstance(node, ast.Call) and id(node.func) in proven_target_refs:
                     binding = dotted(node.func).split('.')[0]
                     for imported in imports:
                         if imported['binding'] == binding:

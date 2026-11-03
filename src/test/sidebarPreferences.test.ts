@@ -144,12 +144,12 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
     assert.match(engineOptions, /<option value="mutmut"[^>]*>Mutmut/);
     assert.doesNotMatch(engineOptions, /value="mutmut"[^>]*disabled/);
     assert.match(engineOptions, /Mutmut（隔離整合尚未完成）/);
-    assert.match(html, /隔離整合尚未完成，會在預檢停止/);
+    assert.ok(html.includes(t('ui.mutationEngineHint')));
     setLanguage('en');
     try {
         const englishHtml = getWebviewContent(t, 'en');
         assert.match(englishHtml, /Mutmut \(integration not yet available\)/);
-        assert.match(englishHtml, /isolated integration is not yet available/);
+        assert.ok(englishHtml.includes(t('ui.mutationEngineHint')));
     } finally { setLanguage('zh-tw'); }
     const messages: any[] = [];
     let receive!: (event: unknown) => void;
@@ -253,6 +253,9 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
                 assert.equal(message.funcName, undefined);
             } else { assert.equal(message.filePath, file); }
             assert.equal(message.maxLoops, DEFAULT_MAX_LOOPS);
+            assert.deepEqual(JSON.parse(JSON.stringify(message.stopPolicy)), {
+                failureLimit: 5, qualityNoImprovementLimit: 3, batchFailureLimit: 0
+            });
             assert.equal(message.mutpyTimeout, DEFAULT_MUTATION_TIMEOUT_SECONDS);
             assert.equal(message.timeoutSeconds, 60);
             assert.equal(message.validationMode, mode, 'both single-file and batch requests carry the displayed mode');

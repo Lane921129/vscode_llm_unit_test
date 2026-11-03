@@ -1,4 +1,7 @@
 import { localize } from '../i18n/core';
+import { currentStopPolicy } from '../pipeline/stopPolicy';
+import { currentTargetBudget } from '../pipeline/targetBudget';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { createHash } from 'crypto';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
@@ -101,13 +104,22 @@ export async function requestFocusedQualityTask(input: {
             + JSON.stringify({ scenario_id: input.observations.scenarioId, cases: input.observations.cases })
             + '\nCopy scenario_id into scenario; verification="verify-observed-behavior". Never replace these facts with a predicted output.' : '');
     let correction = '';
-    for (let attempt = 0; attempt < Math.min(2, input.maxAttempts ?? 2); attempt++) {
+    for (let attempt = 0; currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0
+        : attempt < Math.min(2, input.maxAttempts ?? 2); attempt++) {
+        currentStopPolicy()?.beginAttempt();
         input.checkCancelled();
+        currentTargetBudget()?.assertRemaining();
         if ((input.now || Date.now)() >= input.deadlineAt) {
             input.event('deadline-exhausted', { attempt, evidenceId: input.focus.id });
             return undefined;
         }
-        const raw = await input.request(prompt + correction, input.deadlineAt);
+        let raw: string;
+        try { raw = await input.request(prompt + correction, input.deadlineAt); }
+        catch (error) {
+            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            currentStopPolicy()!.reject('quality-response-format');
+            continue;
+        }
         input.checkCancelled();
         if ((input.now || Date.now)() >= input.deadlineAt) {
             input.event('deadline-exhausted', { attempt, evidenceId: input.focus.id });
@@ -118,6 +130,7 @@ export async function requestFocusedQualityTask(input: {
             attempt, contractVersion, focus: input.focus, raw, ...parsed
         });
         if (parsed.tasks) { return parsed.tasks; }
+        currentStopPolicy()?.reject('quality-response-format');
         correction = `\nCONTRACT CORRECTION: ${parsed.diagnostics.join(', ')}. Return only {"tasks":[]} or one task with evidence_id="${input.focus.id}", hypothesis, scenario, verification. No other keys or prose.`
             + (input.observations ? ` scenario="${input.observations.scenarioId}"; verification="verify-observed-behavior". Do not propose other inputs or an expected result.` : '');
     }
@@ -129,7 +142,7 @@ export class QualityAnalystSession {
     private invalidResponses = 0;
     async request(input: Parameters<typeof requestFocusedQualityTask>[0]): Promise<QualityTask[] | undefined> {
         input.checkCancelled();
-        if (this.invalidResponses >= 2) {
+        if (!currentStopPolicy() && this.invalidResponses >= 2) {
             input.event('suspended', { reason: localize("品質分析連續兩次格式無效；停止額外請求，使用實測缺口補測指引。") });
             return undefined;
         }

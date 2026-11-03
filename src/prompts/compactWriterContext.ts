@@ -59,7 +59,8 @@ interface WriterContextInput {
 
 /** Scope-neutral evidence; the outer task alone owns file/method/addition output. */
 export function buildWriterRevisionContext(input: Omit<WriterContextInput, 'focus' | 'budgetTokens'>): string {
-    return buildWriterContext({ ...input, scenarioCaseIds: undefined, budgetTokens: 0 }, true);
+    return buildWriterContext({ ...input, scenarioCaseIds: input.context?.writerGenerationPhase === 'addition'
+        ? input.context.writerScenarioCaseIds : undefined, budgetTokens: 0 }, true);
 }
 
 export function buildCompactWriterContext(input: WriterContextInput): string {
@@ -114,9 +115,10 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
         dependencyIndex: index + 1, name: dep.name, sourceHash: dep.sourceHash,
         ...partitionWriterObservations(dep.traceResult)
     }] : []);
-    if (!revision && context.writerGenerationPhase === 'seed') {
+    if (context.writerGenerationPhase === 'addition' || !revision && context.writerGenerationPhase === 'seed') {
+        const seed = context.writerGenerationPhase === 'seed';
         // Keep the complete source/setup and selected observation data. The
-        // standalone seed system already owns the general safety/oracle rules;
+        // standalone phase system already owns the general safety/oracle rules;
         // repeating the full generation tutorial here obscures the one task.
         return [
             COMPACT_WRITER_VERSION + ' (metadata, never an import)',
@@ -134,9 +136,12 @@ function buildWriterContext(input: WriterContextInput, revision: boolean): strin
                 + JSON.stringify(dependencyObservations.map(({ diagnostics: _diagnostics, ...entry }) => entry)),
             'DIAGNOSTICS (never fixtures or expected values):\n' + JSON.stringify({ target: targetObservations.diagnostics,
                 dependencies: dependencyObservations.map(({ observations: _observations, ...entry }) => entry) }),
-            'SELECTED RULES (construction constraints, not output facts):\n' + formatUniqueRules(input.evidence),
+            seed ? 'SELECTED RULES (construction constraints, not output facts):\n' + formatUniqueRules(input.evidence)
+                : 'SELECTED RULE IDS: ' + input.evidence.ruleSelection.ids.join(', '),
             ...(input.focus ? ['CURRENT REQUEST:\n' + input.focus] : []),
-            references.note(), formatWriterSeedPackaging(input.module, input.name, context)
+            references.note(), seed ? formatWriterSeedPackaging(input.module, input.name, context)
+                : 'Write the requested NEW unittest method only. Reuse the executed baseline imports and fixtures. '
+                    + 'The host will merge it into the existing test file.'
         ].filter(Boolean).join('\n\n');
     }
     const sections = [
@@ -354,11 +359,12 @@ export function selectWriterScenario(observations?: BehaviorObservations, caseId
     note: `SCENARIO SELECTION: exact case IDs ${[...wanted].join(', ')}. Other cases remain in the artifact, not this request; make no claims about them.` };
 }
 
-/** Select one complete observed call for initial generation only. Unknown or
+/** Prefer a returned call, then an exact observed exception for seed/addition generation. Unknown or
  * conflicting same-call evidence retains the full context; this is no oracle
  * inference and does not change the original Trace, later revisions or gates.
  */
-export function selectWriterSeedCaseIds(observations?: BehaviorObservations): string[] | undefined {
+export function selectWriterSeedCaseIds(observations?: BehaviorObservations,
+    excludedCalls: readonly TraceValueSnapshot[] = []): string[] | undefined {
     if (observations?.complete !== true || observations.load_error || observations.blocked_operations?.length
         || !observations.run_id || !observations.cases?.length) { return undefined; }
     const cases = observations.cases;
@@ -393,7 +399,53 @@ export function selectWriterSeedCaseIds(observations?: BehaviorObservations): st
             || !observations.examples.some(example => example.case_id === item.case_id && assertable(example.call_assertable)
                 && assertable(example.result_assertable) && !example.inputs_mutated && !example.result_truncated
                 && !example.oracle_reason && !example.non_deterministic_operations?.length))) { return undefined; }
+        if (excludedCalls.some(trace_input => callerMatchesObservation({ trace_input }, candidate.input_before))) { continue; }
+        return [candidate.case_id];
+    }
+    // Exception-only targets and untested exceptional inputs use the same small
+    // task contract as returns. A blocked/setup/timed-out worker is never an
+    // observed exception, and an unknown or conflicting same call stays unknown.
+    const pythonPath = (value: unknown): value is string => typeof value === 'string'
+        && /^[\p{L}_][\p{L}\p{N}\p{M}_]*(?:\.[\p{L}_][\p{L}\p{N}\p{M}_]*)*$/u.test(value);
+    const unmutated = (value: unknown) => value === undefined || value === false;
+    const exceptional = (candidate: NonNullable<BehaviorObservations['cases']>[number]) => {
+        const observed = observations.errors.find(item => item.case_id === candidate.case_id);
+        const index = cases.indexOf(candidate);
+        if (candidate.status !== 'raised' || !observed || !unmutated(candidate.inputs_mutated) || !unmutated(observed.inputs_mutated)
+            || !assertable(candidate.call_assertable) || !assertable(observed.call_assertable) || !assertable(observed.result_assertable)
+            || observed.result_truncated || observed.oracle_reason || observed.non_deterministic_operations?.length
+            || !pythonPath(observed.exception) || !pythonPath(observed.exception_module) || !pythonPath(observed.exception_qualname)
+            || !callerMatchesObservation({ trace_input: calls[index] }, candidate.input_before)
+            || !call(candidate.input_after) || !callerMatchesObservation({ trace_input: calls[index] }, candidate.input_after!)) { return undefined; }
+        return { module: observed.exception_module, qualname: observed.exception_qualname };
+    };
+    for (const observed of observations.errors) {
+        const candidate = cases.find(item => item.case_id === observed.case_id)!;
+        const outcome = exceptional(candidate);
+        if (!outcome) { continue; }
+        const sameCall = cases.filter(item => callerMatchesObservation({ trace_input: candidate.input_before.call_graph }, item.input_before));
+        if (sameCall.some(item => {
+            const other = exceptional(item);
+            return !other || other.module !== outcome.module || other.qualname !== outcome.qualname;
+        })) { return undefined; }
+        if (excludedCalls.some(trace_input => callerMatchesObservation({ trace_input }, candidate.input_before))) { continue; }
         return [candidate.case_id];
     }
     return undefined;
+}
+
+/** A bounded addition uses the same whole-case proof as a seed. Each selected
+ * call is excluded before choosing the next; original evidence stays intact. */
+export function selectWriterAdditionCaseIds(observations?: BehaviorObservations,
+    excludedCalls: readonly TraceValueSnapshot[] = []): string[] | undefined {
+    const selected: string[] = [], excluded = [...excludedCalls];
+    for (let index = 0; index < 2; index++) {
+        const ids = selectWriterSeedCaseIds(observations, excluded);
+        if (!ids) { break; }
+        const call = observations?.cases?.find(item => item.case_id === ids[0])?.input_before.call_graph;
+        if (!call || !typedCallFields(call)) { return undefined; }
+        selected.push(ids[0]);
+        excluded.push(call);
+    }
+    return selected.length ? selected : undefined;
 }

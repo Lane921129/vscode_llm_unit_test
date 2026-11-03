@@ -66,6 +66,11 @@ export interface MutationRecord {
     variantSourceHash?: string;
     functionActivation?: FunctionMutationActivation;
 }
+export interface MutationBaselineFailure {
+    schemaVersion: 'mutation-baseline-failure-v1';
+    category: 'environment' | 'tool' | 'validation' | 'timeout' | 'budget';
+    reasonCode: string;
+}
 export interface MutationRun extends MutationContext {
     schemaVersion: 1;
     engine: MutationEngine;
@@ -77,6 +82,7 @@ export interface MutationRun extends MutationContext {
     status: 'complete' | 'partial' | 'failed' | 'no-candidates';
     baselinePassed: boolean;
     baselineStatus: 'passed' | 'failed' | 'timeout' | 'error' | 'not-run';
+    baselineFailure?: MutationBaselineFailure;
     /** Cold-start cap and actual allocation within the original shared stage budget. */
     baselineTimeoutSeconds?: number;
     baselineAllocatedSeconds?: number;
@@ -101,6 +107,20 @@ export interface MutationRun extends MutationContext {
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+function validBaselineFailure(value: unknown, status: string): value is MutationBaselineFailure {
+    if (!record(value) || Object.keys(value).length !== 3
+        || value.schemaVersion !== 'mutation-baseline-failure-v1' || typeof value.reasonCode !== 'string') { return false; }
+    switch (value.category) {
+        case 'environment': return status === 'error' && ['baseline-environment-setup-failed',
+            'baseline-module-or-fixture-load-failed'].includes(value.reasonCode);
+        case 'tool': return ['error', 'not-run'].includes(status) && ['baseline-runner-report-unavailable',
+            'baseline-process-start-failed', 'baseline-result-invalid'].includes(value.reasonCode);
+        case 'validation': return status === 'failed' && value.reasonCode === 'baseline-tests-failed';
+        case 'timeout': return status === 'timeout' && value.reasonCode === 'baseline-timeout';
+        case 'budget': return status === 'not-run' && value.reasonCode === 'baseline-stage-budget-exhausted';
+        default: return false;
+    }
+}
 function validFunctionActivation(value: unknown, context: MutationContext, variantHash: unknown): value is FunctionMutationActivation {
     const keys = ['schemaVersion', 'policy', 'sourceHash', 'variantHash', 'testHash', 'target', 'status', 'activatedModules'];
     return record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
@@ -129,6 +149,7 @@ export function failedMutationRun(engine: MutationEngine, context: MutationConte
         scopeVersion: engine === 'builtin' ? context.targetScope.kind === 'function' ? FUNCTION_BODY_MUTATION_SCOPE_VERSION : MODULE_MUTATION_SCOPE_VERSION
             : 'external-module-report-v1', candidateSetId: null, candidateIds: [],
         baselinePassed: false, baselineStatus: 'not-run', scoreAvailable: false, diagnostic,
+        baselineFailure: { schemaVersion: 'mutation-baseline-failure-v1', category: 'tool', reasonCode: 'baseline-result-invalid' },
         counts: { available: null, selected: 0, executed: 0, notRun: 0, killed: 0, survived: 0, timeout: 0, error: 0 }, mutants: [] };
 }
 
@@ -188,6 +209,9 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         || typeof value.baselineStatus !== 'string' || !['passed', 'failed', 'timeout', 'error', 'not-run'].includes(value.baselineStatus)
         || value.baseline_passed !== (value.baselineStatus === 'passed') || (!value.scope_found && value.baseline_passed)) {
         return fail('Invalid mutation baseline evidence');
+    }
+    if (value.baselineFailure !== undefined && !validBaselineFailure(value.baselineFailure, value.baselineStatus)) {
+        return fail('Invalid mutation baseline failure classification');
     }
     if (functionBackend && value.baseline_passed && !validFunctionActivation(value.baselineFunctionActivation, context, value.sourceHash)) {
         return fail('Missing or invalid function mutation baseline activation');
@@ -294,6 +318,7 @@ function readBuiltinMutationRun(raw: unknown, context: MutationContext): Mutatio
         effectiveMutantTimeoutSeconds: value.effectiveMutantTimeoutSeconds as number | undefined,
         candidateSetId: value.candidateSetId as string | null, candidateIds: [...candidateIds],
         baselineStatus: value.baselineStatus as MutationRun['baselineStatus'], counts, mutants,
+        baselineFailure: value.baselineFailure as MutationBaselineFailure | undefined,
         excluded: { ...value.excluded } as MutationRun['excluded'],
         diagnostic: typeof value.baseline_output === 'string' ? value.baseline_output : typeof value.diagnostic === 'string' ? value.diagnostic : undefined } };
 }

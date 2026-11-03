@@ -1,12 +1,29 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from '../llm/writerSeedCompletion';
+import { writerSeedCompletionPrompt, assembleWriterSeedCompletion, writerAdditionCompletionPrompt,
+    assembleWriterAdditionCompletion } from '../llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from '../pipeline/targetContract';
 import { validateUnittestStructure } from '../validation/generatedTestValidator';
 import { getCompletedOllamaText } from '../llm/ollamaResponse';
 import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+
+test('addition completion keeps all evidence and leaves setup/calls/assertions to the model', () => {
+    const system = 'WRITER_ADDITION_V1 OUTPUT MODE';
+    const evidence = 'SOURCE\r\nOBSERVED CALL\nBASELINE WITH FIXTURES\n';
+    const prefix = 'def test_added(self):\n';
+    const prompt = writerAdditionCompletionPrompt(system, evidence, prefix);
+    const count = (system + '\n' + evidence).split('\n').length;
+    assert.equal(prompt.split('\n').slice(0, count).map(line => line.slice(2)).join('\n'), system + '\n' + evidence);
+    assert.ok(prompt.endsWith(prefix));
+    assert.match(prompt, /method-local imports/);
+    assert.doesNotMatch(prefix, /assert|return|pass/);
+    assert.equal(assembleWriterSeedCompletion(prefix, '    self.assertEqual(target(1), 2)\n'),
+        'def test_added(self):\n    self.assertEqual(target(1), 2)\n');
+    const complete = prefix + '    self.assertEqual(target(1), 2)\n';
+    assert.equal(assembleWriterAdditionCompletion(prefix, complete), complete, 'a complete repeated signature is not duplicated');
+});
 
 test('completion comments carry every evidence byte and expose only a body-free canonical wrapper', () => {
     const system = 'WRITER_SEED_V1 OUTPUT SCOPE\nComplete safety contract';

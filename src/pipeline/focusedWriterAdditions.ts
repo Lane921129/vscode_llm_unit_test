@@ -1,3 +1,4 @@
+import { currentStopPolicy } from './stopPolicy';
 import type { QualityTaskEvidence } from './qualityTaskEvidence';
 import { validTraceInputSnapshot, validTraceValueSnapshot } from './traceValues';
 import type { WriterAdditionMergeResult } from '../validation/testMerger';
@@ -26,7 +27,7 @@ const reasonCode = (reason: unknown): string => typeof reason === 'string' && /^
     ? reason : 'focused-writer-contract-rejected';
 const toolFailure = (reason: string): boolean => /(?:^|-)(?:tool-error|result-invalid)$/.test(reason);
 const failTool = (reason: string): never => {
-    throw new AnalysisStageError('validation', 'focused-writer-addition',
+    throw new AnalysisStageError('tool', 'focused-writer-addition',
         'The focused Writer composition tool could not establish a valid result.', { reasonCode: reason });
 };
 function freeze<T>(value: T): T {
@@ -63,12 +64,28 @@ export async function composeFocusedWriterAdditions(options: FocusedWriterAdditi
         const single: QualityTaskEvidence = { ...evidence, cases: [evidence.cases[index]] };
         let correction: string | undefined;
         let composed = false;
-        for (let attempt = 0; attempt <= 2; attempt++) {
+        for (let attempt = 0; currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : attempt <= 2; attempt++) {
+            currentStopPolicy()?.beginAttempt();
             const event = (status: 'requested' | 'rejected' | 'composed', detail: Partial<FocusedWriterAdditionEvent> = {}) =>
                 options.onEvent?.(status, { ordinal, total, attempt, caseId: single.cases[0].caseId,
                     executionStatus: 'not-run', reviewStatus: 'not-run', ...detail });
             event('requested');
-            const addition = await options.request(freeze(structuredClone(single)), accumulated, ordinal, total, correction);
+            let addition: string;
+            try {
+                addition = await options.request(freeze(structuredClone(single)), accumulated, ordinal, total, correction);
+            } catch (error) {
+                // A malformed model reply changes neither the case evidence nor
+                // the accumulated draft. All other failures retain their owner.
+                if (!(error instanceof AnalysisStageError) || error.category !== 'model-format') { throw error; }
+                event('rejected', { reasonCode: 'focused-writer-response-format' });
+                currentStopPolicy()?.reject('focused-writer-response-format');
+                if (!currentStopPolicy() && attempt === 2) { throw error; }
+                correction = 'The previous response did not provide complete valid Python. '
+                    + 'Return the implemented addition for this SAME exact case and method scope. '
+                    + 'Keep every existing method and fixture unchanged; do not add other cases or explanations. '
+                    + 'The accumulated draft is not yet executed or reviewed.';
+                continue;
+            }
             let rejected: string | undefined;
             let rejectDetail: string | undefined;
             let merged: WriterAdditionMergeResult | undefined;
@@ -106,7 +123,8 @@ export async function composeFocusedWriterAdditions(options: FocusedWriterAdditi
             }
             if (rejected) {
                 event('rejected', { reasonCode: rejected });
-                if (attempt === 2) { return { ok: false, reasonCode: rejected, addition }; }
+                currentStopPolicy()?.reject(rejected);
+                if (!currentStopPolicy() && attempt === 2) { return { ok: false, reasonCode: rejected, addition }; }
                 correction = `The previous addition was not accepted (${rejected}). `
                     + (rejectDetail ? `${rejectDetail} ` : '')
                     + 'Return a replacement addition for this one exact case. '

@@ -91,7 +91,12 @@ export async function runSpawn(
             proc.stdin.on('error', error => {
                 if ((error as NodeJS.ErrnoException).code !== 'EPIPE') { terminate(error); }
             });
-            proc.on('error', error => { settled = true; cleanup(); reject(terminationReason || error); });
+            proc.on('error', error => {
+                // An error during termination must not let a repair overlap the
+                // still-closing process. The close handler owns that rejection.
+                if (terminationReason) { return; }
+                settled = true; cleanup(); reject(error);
+            });
             proc.on('close', async code => {
                 if (settled) { return; }
                 settled = true;

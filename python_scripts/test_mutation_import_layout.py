@@ -16,6 +16,44 @@ sys.path.insert(0, str(TOOLS))
 from basic_mutation_runner import mutation_import_layout, prepare_trial_directory, run_mutation_trials, trial_environment
 
 
+class MutationDependencyClosureTests(unittest.TestCase):
+    def test_package_and_flat_targets_copy_root_dependencies_transitively(self):
+        for package_import in (True, False):
+            with self.subTest(package_import=package_import), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / 'project'
+                project.mkdir()
+                source_dir = project / 'reports' if package_import else project
+                source_dir.mkdir(exist_ok=True)
+                if package_import:
+                    (source_dir / '__init__.py').write_text('', encoding='utf-8')
+                config = project / 'config'
+                config.mkdir()
+                (config / '__init__.py').write_text('', encoding='utf-8')
+                (config / 'settings.py').write_text('from local_helper import OFFSET\n', encoding='utf-8')
+                (project / 'local_helper.py').write_text('OFFSET = 2\n', encoding='utf-8')
+                source = source_dir / 'reporter.py'
+                source.write_text('from config.settings import OFFSET\ndef target(value): return value + OFFSET\n', encoding='utf-8')
+                test = root / 'test_reporter.py'
+                module = 'reports.reporter' if package_import else 'reporter'
+                test.write_text('import unittest\nfrom ' + module + ' import target\n'
+                                'class Cases(unittest.TestCase):\n    def test_value(self): self.assertEqual(target(3), 5)\n', encoding='utf-8')
+                trial = root / 'trial'
+                copied_test = prepare_trial_directory(source, test, trial, source.read_text(encoding='utf-8'))
+                self.assertTrue((trial / 'config' / 'settings.py').is_file())
+                self.assertTrue((trial / 'local_helper.py').is_file())
+                env = trial_environment(trial, source, test)
+                completed = subprocess.run([sys.executable, '-B', str(TOOLS / 'generated_test_runner.py'), copied_test.stem],
+                                           cwd=trial, env=env, capture_output=True, text=True, encoding='utf-8', timeout=30)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                # Remove the original dependencies: mutant execution must still use only its copies.
+                (config / 'settings.py').unlink()
+                (project / 'local_helper.py').unlink()
+                completed = subprocess.run([sys.executable, '-B', str(TOOLS / 'generated_test_runner.py'), copied_test.stem],
+                                           cwd=trial, env=env, capture_output=True, text=True, encoding='utf-8', timeout=30)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+
 class MutationImportLayoutTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

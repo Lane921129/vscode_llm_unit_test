@@ -1,6 +1,7 @@
 import { localize } from '../i18n/core';
 import { createHash } from 'node:crypto';
 import { RoleQualificationProfile } from './roleQualification';
+import { LocalThinkingMode, localThinkingMode } from './localThinking';
 
 /** Bump only when the executable probe contract changes, not for unrelated UI releases. */
 export const QUALIFICATION_VERSION = 'python-unittest-v9';
@@ -10,13 +11,15 @@ export const LOCAL_RUNTIME_QUALIFICATION_VERSION = 'ollama-context-v1';
 export interface LocalRuntimeQualification {
     version: typeof LOCAL_RUNTIME_QUALIFICATION_VERSION;
     numCtx: number;
+    thinkingMode?: LocalThinkingMode;
 }
 
 export function isLocalRuntimeQualification(value: unknown): value is LocalRuntimeQualification {
     if (!value || typeof value !== 'object' || Array.isArray(value)) { return false; }
     const runtime = value as Partial<LocalRuntimeQualification>;
     return runtime.version === LOCAL_RUNTIME_QUALIFICATION_VERSION
-        && typeof runtime.numCtx === 'number' && Number.isSafeInteger(runtime.numCtx) && runtime.numCtx > 0;
+        && typeof runtime.numCtx === 'number' && Number.isSafeInteger(runtime.numCtx) && runtime.numCtx > 0
+        && (runtime.thinkingMode === undefined || ['provider-default', 'disabled'].includes(runtime.thinkingMode));
 }
 
 export function qualificationEndpointKey(envType: string, endpoint?: string): string {
@@ -50,6 +53,7 @@ export interface ModelQualificationRequest {
     endpointKey?: string;
     /** Effective local num_ctx, after resolving the configured value and metadata. */
     runtimeContextTokens?: number;
+    localThinkingMode?: LocalThinkingMode;
 }
 
 export type TestGenerationResponseFormat = 'test-code-json' | 'text';
@@ -146,7 +150,8 @@ export function qualificationAppliesToRequest(
         return profile.envType === 'local' && Boolean(profile.modelName?.trim())
             && isLocalRuntimeQualification(profile.qualificationRuntime)
             && Number.isSafeInteger(request.runtimeContextTokens) && request.runtimeContextTokens! > 0
-            && profile.qualificationRuntime.numCtx === request.runtimeContextTokens;
+            && profile.qualificationRuntime.numCtx === request.runtimeContextTokens
+            && localThinkingMode(profile.qualificationRuntime.thinkingMode) === localThinkingMode(request.localThinkingMode);
     }
     return true;
 }

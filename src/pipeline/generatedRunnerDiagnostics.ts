@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { canonicalExistingPath } from '../utils/fileIdentity';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
@@ -21,7 +22,7 @@ const digest = (file: string) => createHash('sha256').update(fs.readFileSync(fil
 const exactKeys = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).sort().join(',') === keys.sort().join(',');
 const localPath = (value: unknown): value is string => typeof value === 'string' && !!value
     && !/^[\\/]{2}/.test(value) && !/^\\\?\?\\/.test(value);
-const invalid = (): never => { throw new AnalysisStageError('validation', 'generated-test-runner',
+const invalid = (): never => { throw new AnalysisStageError('tool', 'generated-test-runner',
     'Generated test runner diagnostics could not be verified.', { reasonCode: 'generated-test-diagnostics-invalid' }); };
 
 /** Call only after the current runner artifacts authorize whole-candidate Writer repair. */
@@ -30,6 +31,39 @@ export function generatedLoadRepairFeedback(output: string): string {
         + 'Check decorator arguments and fixture construction, using the canonical target binding. '
         + 'Do not guess packages, change application source or treat this load failure as a target exception oracle.\n'
         + output.trim();
+}
+
+/** Timeout diagnostics identify a currently entered test body, never a pass or
+ * coverage result. A fixture/load timeout has no authorized method repair. */
+export function readNativeTimeoutFeedback(expected: {
+    progressFile: string; sourceFile: string; testFile: string; target: string;
+    testRunId: string; sourceHash: string; testHash: string; timeoutMs: number;
+}): string | undefined {
+    try {
+        if (!localPath(expected.progressFile) || fs.statSync(expected.progressFile).size > 1048576
+            || digest(expected.sourceFile) !== expected.sourceHash || digest(expected.testFile) !== expected.testHash) { return undefined; }
+        const text = fs.readFileSync(expected.progressFile, 'utf8');
+        if (!text.endsWith('\n')) { return undefined; }
+        const rows = text.trim().split('\n').map(line => JSON.parse(line));
+        if (!rows.length || rows.length > 1024 || rows.some(row => !record(row)
+            || row.schemaVersion !== 'generated-test-progress-v1' || row.testRunId !== expected.testRunId
+            || row.sourceHash !== expected.sourceHash || row.testHash !== expected.testHash || row.target !== expected.target
+            || !localPath(row.canonicalFile) || !localPath(row.canonicalTestFile)
+            || canonicalExistingPath(row.canonicalFile) !== canonicalExistingPath(expected.sourceFile)
+            || canonicalExistingPath(row.canonicalTestFile) !== canonicalExistingPath(expected.testFile)
+            || !['fixture', 'test-body-active', 'test-body-completed'].includes(String(row.phase)))) { return undefined; }
+        const last = rows[rows.length - 1];
+        if (last.phase !== 'test-body-active' || typeof last.testId !== 'string') { return undefined; }
+        const parts = last.testId.split('.');
+        if (parts.length !== 3 || parts[0] !== path.basename(expected.testFile, '.py')
+            || !/^[A-Za-z_]\w*$/.test(parts[1]) || !/^test_[A-Za-z0-9_]+$/.test(parts[2])) { return undefined; }
+        return `ERROR: ${parts[2]} (${last.testId})\n`
+            + `CandidateExecutionTimeout: the runner terminated this active test body after ${expected.timeoutMs} ms.\n`
+            + 'No completed native result or coverage evidence is available. Repair only this test method. '
+            + 'Inspect source-awaited waits, pagination termination and controlled dependency sequences at their actual source lookup points. '
+            + 'Keep the real target and meaningful assertions; do not increase timeouts or infer an expected result from this timeout. '
+            + 'The revised candidate must execute and pass all required review and quality gates again.';
+    } catch { return undefined; }
 }
 
 function boundedJson(file: string): unknown {

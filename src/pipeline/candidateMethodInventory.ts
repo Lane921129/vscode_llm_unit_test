@@ -14,7 +14,7 @@ const coordinate = (value: unknown) => value === null || Number.isSafeInteger(va
 /** No application import, generated-code execution, arbitrary stderr or source-line echo. */
 export async function readCandidateMethodInventory(options: { code: string; python: string; env?: NodeJS.ProcessEnv }): Promise<CandidateMethodInventory> {
     const failure = (reasonCode: string): never => {
-        throw new AnalysisStageError('validation', 'candidate-inventory-tool',
+        throw new AnalysisStageError('tool', 'candidate-inventory-tool',
             'The Python method inventory tool did not complete; this is not a model syntax verdict.', { reasonCode });
     };
     const result = await runSpawn(options.python, ['-B', pythonToolPath('scenarios'), '--diagnostics'], {

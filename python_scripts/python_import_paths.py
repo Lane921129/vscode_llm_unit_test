@@ -1,6 +1,7 @@
 """Transport application search roots as data, never as Python startup paths."""
 import json
 import os
+import sys
 from pathlib import Path
 
 IMPORT_PATHS_ENV = 'LLM_UNIT_TEST_IMPORT_PATHS'
@@ -42,7 +43,7 @@ def package_context(file_path):
 
 
 def source_import_paths(file_path, module_name=None, paths=()):
-    """Exclude package interiors while retaining canonical and explicit roots.
+    """Retain canonical roots and collision-free legacy sibling import roots.
 
     A namespace module's exact name can also establish its root. No application
     module is imported, and this helper grants no file or execution permission.
@@ -57,14 +58,27 @@ def source_import_paths(file_path, module_name=None, paths=()):
     if os.path.normcase(str(root / relative)) != os.path.normcase(str(target)):
         root = Path(package_root)
     result = []
-    for raw in [str(root), *paths]:
+    for raw in [str(root), *paths, str(target.parent)]:
         candidate = Path(os.path.abspath(raw))
-        # A package directory is not a top-level import root. In particular,
-        # its email.py/types.py must not replace the standard library modules.
-        if candidate != root and (candidate / '__init__.py').is_file():
-            continue
+        # Canonical roots remain first. A legacy package interior may follow
+        # only when its files cannot replace standard-library modules.
+        package_interior = candidate != root and (candidate / '__init__.py').is_file()
+        if package_interior:
+            # Legacy packages can mix .module and bare sibling imports. Admit
+            # their directory when its modules cannot shadow stdlib names.
+            stdlib = set(getattr(sys, 'stdlib_module_names', ())) | set(sys.builtin_module_names)
+            try:
+                collision = not getattr(sys, 'stdlib_module_names', ()) or any(
+                    (item.is_file() and item.suffix in ('.py', '.pyw') and item.stem in stdlib)
+                    or (item.is_dir() and item.name in stdlib and (item / '__init__.py').is_file())
+                    for item in candidate.iterdir())
+            except OSError:
+                collision = True
+            if collision:
+                continue
         if candidate != root and candidate.is_relative_to(root) and target.is_relative_to(candidate):
-            continue
+            if not package_interior:
+                continue
         text = str(candidate)
         if text not in result:
             result.append(text)

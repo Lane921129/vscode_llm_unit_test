@@ -7,6 +7,7 @@ tests are still allowed to verify invalid-call behaviour with assertRaises.
 import ast
 import json
 import sys
+from target_bindings import target_references, unresolved_target_aliases
 
 
 def exception_name(node):
@@ -36,34 +37,7 @@ def has_type_error_guard(ancestors):
     return False
 
 
-def imported_target_names(tree, target_name):
-    """Return direct names that are proven aliases of the selected target."""
-    names = {target_name}
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                if alias.name == target_name:
-                    names.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                names.add(alias.asname or alias.name)
-    return names
-
-
-def target_call(node, target_names, target_name):
-    if isinstance(node.func, ast.Name):
-        return node.func.id in target_names
-    if isinstance(node.func, ast.Attribute) and node.func.attr == target_name:
-        val = node.func.value
-        if isinstance(val, ast.Name):
-            return val.id in target_names or val.id in ('self', 'cls', 'instance', 'target')
-        if isinstance(val, ast.Attribute) and isinstance(val.value, ast.Name) and val.value.id in ('self', 'cls'):
-            return True
-        return False
-    return False
-
-
-def validate_target_calls(code, target_name, signature):
+def validate_target_calls(code, target_name, signature, context=None):
     try:
         tree = ast.parse(code)
     except SyntaxError as error:
@@ -73,7 +47,28 @@ def validate_target_calls(code, target_name, signature):
     if not target_name or not parameters:
         return {'valid': True}
 
-    target_names = imported_target_names(tree, target_name)
+    selected = None
+    if context and context.get('module'):
+        selected = context['module'] + ('.' + context['className'] if context.get('className') else '') + '.' + target_name
+    if selected:
+        references = target_references(tree, selected)
+        unresolved = unresolved_target_aliases(tree, selected)
+        if unresolved:
+            return {'valid': False, 'reasonCode': 'target-alias-unresolved',
+                    'reason': 'Target alias cannot be resolved at ' + ', '.join(f'{item["name"]}:{item["line"]}' for item in unresolved)
+                              + f'. Call {selected}(...) with a canonical import, or assign the alias once before use in the same straight-line scope without rebinding.'}
+    else:
+        # Legacy signature-only callers lack a canonical module. Use the same
+        # flow proof, with explicit syntactic origins rather than name heuristics.
+        selected_paths = {target_name}
+        for stmt in tree.body:
+            if isinstance(stmt, ast.ImportFrom) and not stmt.level:
+                for item in stmt.names:
+                    origin = (stmt.module or '') + '.' + item.name
+                    selected_paths.add(origin if item.name == target_name else origin + '.' + target_name)
+            elif isinstance(stmt, ast.Import):
+                selected_paths.update(item.name + '.' + target_name for item in stmt.names)
+        references = set().union(*(target_references(tree, path, {target_name: target_name}) for path in selected_paths))
 
     positional = [
         param for param in parameters
@@ -88,7 +83,7 @@ def validate_target_calls(code, target_name, signature):
     failures = []
 
     def visit(node, ancestors):
-        if isinstance(node, ast.Call) and target_call(node, target_names, target_name):
+        if isinstance(node, ast.Call) and id(node.func) in references:
             invalid = None
             fixed_positional_count = sum(not isinstance(argument, ast.Starred) for argument in node.args)
             if not accepts_varargs and fixed_positional_count > len(positional):
@@ -123,4 +118,5 @@ if __name__ == '__main__':
         target_signature = []
     # Keep this process protocol-safe even when Windows' active code page is
     # not UTF-8. json.loads restores escaped text for the TypeScript caller.
-    print(json.dumps(validate_target_calls(sys.stdin.read(), target, target_signature)))
+    context = json.loads(sys.argv[3]) if len(sys.argv) > 3 else None
+    print(json.dumps(validate_target_calls(sys.stdin.read(), target, target_signature, context)))

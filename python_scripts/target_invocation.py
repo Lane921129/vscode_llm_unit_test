@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import threading
 import types
+import unittest
 
 
 def canonical_path(value):
@@ -74,6 +75,48 @@ class TargetInvocationTracker:
         self.observed = False
         self.testing = False
         self.profile_intact = True
+        self.progress_stream = None
+        self.progress_code = None
+        self.progress_test_id = None
+        self.progress_active = False
+        self.progress_call_frame = None
+        self.test_call_codes = (unittest.TestCase._callTestMethod.__code__,
+                                unittest.IsolatedAsyncioTestCase._callTestMethod.__code__)
+
+    def start_test(self, test):
+        """Identify the actual unittest body; setup/teardown are never its scope."""
+        self.progress_code = None
+        self.progress_active = False
+        self.progress_test_id = None
+        self.progress_call_frame = None
+        if self.progress_stream is None:
+            return
+        name = vars(test).get('_testMethodName')
+        method = getattr(type(test), name, None) if isinstance(name, str) else None
+        code = getattr(method, '__code__', None)
+        call_code = getattr(getattr(type(test), '_callTestMethod', None), '__code__', None)
+        if (call_code in self.test_call_codes and isinstance(code, types.CodeType) and code.co_name == name
+                and canonical_path(code.co_filename) == self.test_file
+                and code.co_qualname == type(test).__qualname__ + '.' + name):
+            self.progress_code = code
+            self.progress_test_id = type(test).__module__ + '.' + type(test).__qualname__ + '.' + name
+        self._progress('fixture')
+
+    def stop_test(self):
+        self.progress_active = False
+        self._progress('fixture')
+        self.progress_code = None
+        self.progress_test_id = None
+        self.progress_call_frame = None
+
+    def _progress(self, phase):
+        if self.progress_stream is not None:
+            self.progress_stream.write(json.dumps({
+                'schemaVersion': 'generated-test-progress-v1', 'testRunId': self.test_run_id,
+                'canonicalFile': self.source_file, 'canonicalTestFile': self.test_file,
+                'sourceHash': self.source_hash, 'testHash': self.test_hash, 'target': self.target,
+                'testId': self.progress_test_id, 'phase': phase}) + '\n')
+            self.progress_stream.flush()
 
     @contextmanager
     def observe(self):
@@ -84,6 +127,21 @@ class TargetInvocationTracker:
         matched = {}
 
         def observe_call(frame, event):
+            if self.testing and self.progress_code is not None:
+                # Both stdlib wrappers are synchronous, including the async
+                # case's Runner.run. Their return is a real method boundary;
+                # coroutine profile returns are also emitted for suspension.
+                if event == 'call' and frame.f_code in self.test_call_codes:
+                    self.progress_call_frame = frame
+                elif event == 'return' and frame is self.progress_call_frame:
+                    self.progress_call_frame = None
+                    if self.progress_active:
+                        self.progress_active = False
+                        self._progress('test-body-completed')
+                elif (event == 'call' and frame.f_code is self.progress_code
+                        and self.progress_call_frame is not None and not self.progress_active):
+                    self.progress_active = True
+                    self._progress('test-body-active')
             if self.testing and event == 'call' and frame.f_code.co_name == expected.co_name:
                 code = frame.f_code
                 key = id(code)
@@ -110,6 +168,7 @@ class TargetInvocationTracker:
             yield
         finally:
             self.testing = False
+            self.progress_call_frame = None
             self.profile_intact = sys.getprofile() is profile and threading.getprofile() is thread_profile
             try:
                 sys.setprofile(previous)

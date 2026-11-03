@@ -94,7 +94,9 @@ const pythonTests = [
     'python_scripts/test_secret_scan.py',
     'python_scripts/test_edit_test_methods.py',
     'python_scripts/test_dependency_skill_facts.py',
-    'python_scripts/test_skill_ab_summary.py'
+    'python_scripts/test_skill_ab_summary.py',
+    'python_scripts/test_resource_diagnostics.py',
+    'python_scripts/test_target_alias_bindings.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',

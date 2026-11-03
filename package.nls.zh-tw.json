@@ -1,4 +1,5 @@
 {
+  "contributes.configuration.properties.llmUnitTest.stopPolicy.description": "停止政策：同一目標累計第 N 次可恢復失敗後停止，第一次失敗算 1 次。Writer、局部修訂、候選驗證及 Reviewer／分析師格式修復共用計數。環境／工具受阻與 HTTP 重試分開統計。qualityNoImprovementLimit 設 0 關閉品質停滯限制；batchFailureLimit 設 0 不中止整批。目標時間與請求預算獨立生效。",
   "contributes.commands.configureWriterSeedPromptMode.title": "LLM Unit Test: 選擇 Writer 生成方式",
   "contributes.configuration.properties.llmUnitTest.writerSeedPromptMode.description": "本機 Writer 初始種子：instruction 保留模型模板；code-completion 以無測試內容的 Python 外框和完整註解證據開始續寫。其他角色保持原請求方式。下次執行生效，仍須實跑及品質驗證。",
   "contributes.configuration.properties.llmUnitTest.requireRoleQualification.description": "可選的事先角色資格要求，預設關閉：直接生成，不插入固定能力探針。開啟時須有相同模型／端點／容量的角色資格。正式候選的實際執行、Reviewer 核准與品質檢查始終保留。",
@@ -34,6 +35,7 @@
   "contributes.configuration.properties.llmUnitTest.validationMode.enumDescriptions.1": "預設流程：通過前置驗證後執行覆蓋率、突變與品質審查，符合完整門檻才通過。",
   "contributes.configuration.properties.llmUnitTest.validationMode.description": "預設完整品質驗證，包含突變測試。只有需要診斷生成測試時才選 execution；已保存的明確選擇仍會保留。",
   "contributes.configuration.properties.llmUnitTest.cloudThinkingMode.description": "Cloud 思考量：minimal 優先降低等待時間；供應商明確不支援時沿原時限回退。provider-default 使用服務預設。兩者均保留完整測試品質檢查。",
+  "contributes.configuration.properties.llmUnitTest.localThinkingMode.description": "Ollama 思考模式：provider-default 使用模型預設；disabled 傳送 think=false，讓支援的模型將輸出用於程式碼／JSON。模型須支援選取的選項。Context、輸出與時間預算及品質要求獨立。角色資格綁定此模式；更改後請重新測試連線。",
   "contributes.configuration.properties.llmUnitTest.pythonPath.description": "測試使用的 Python。可用「檢查並補齊 Python 測試環境」尋找相依完整的既有環境並保存完整路徑；AST、模型資格、Trace、coverage 與突變測試共用此設定。留空時沿用專案／工作區 .venv，否則使用 PATH python。",
   "contributes.configuration.properties.llmUnitTest.packageMappings.description": "沒有 requirements 時，優先使用這裡的 import → pip 套件名稱，例如 PIL → Pillow。未設定者在安裝清單帶入同名候選，確認後才嘗試 pip 安裝並重新檢查；也可在清單修改名稱並保存對應。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.description": "匯入前測試設定。只模擬指定來源檔在模組初始化期間的外部操作，不修改受測原檔；預檢、Trace、測試及內建突變共用設定。file 相對於受測專案目錄。設定檔內容僅填測試資料，勿填憑證。",

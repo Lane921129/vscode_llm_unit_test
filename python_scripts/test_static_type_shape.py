@@ -15,6 +15,31 @@ from input_planner import plan_inputs
 
 
 class StaticTypeShapeTests(unittest.TestCase):
+    def test_later_parameter_source_value_survives_tight_case_budget(self):
+        tree = ast.parse('def target(first: int, second: str):\n'
+                         '    if first > 50: return 1\n'
+                         '    if second == "accepted": return 2\n'
+                         '    return 3\n')
+        node = tree.body[0]
+        plan = plan_inputs(tree, node, resolve_parameter_shapes(tree, node, ()), limits={'max_cases': 6})
+        self.assertTrue(any(case['args'] == [1, 'accepted'] for case in plan['cases']), plan)
+        self.assertTrue(any(case['args'][0] > 50 for case in plan['cases']), plan)
+        self.assertLessEqual(len(plan['cases']), 6)
+        self.assertTrue(any(item['reason'] == 'case-count' for item in plan['diagnostics']))
+
+    def test_interleaved_variations_preserve_defaults_and_keyword_only_calls(self):
+        tree = ast.parse('def target(first: int = 5, /, *, second: str = "base"):\n'
+                         '    if first > 50: return 1\n'
+                         '    if second == "accepted": return 2\n'
+                         '    return 3\n')
+        node = tree.body[0]
+        plan = plan_inputs(tree, node, resolve_parameter_shapes(tree, node, ()), limits={'max_cases': 7})
+        self.assertTrue(any(case['args'] == [5] and case['kwargs'] == {'second': 'accepted'}
+                            for case in plan['cases']), plan)
+        self.assertTrue(any(case['metadata']['reason'] == 'omit-default' for case in plan['cases']))
+        self.assertTrue(all('first' not in case['kwargs'] for case in plan['cases']))
+        self.assertLessEqual(len(plan['cases']), 7)
+
     def test_deduplicated_baseline_keeps_source_condition_provenance(self):
         tree = ast.parse('def target(value):\n    if value == "other": return 1\n    return 2')
         node = tree.body[0]

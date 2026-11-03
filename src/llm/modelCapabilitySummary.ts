@@ -18,13 +18,16 @@ const empty = (): ModelCapabilitySummary => ({ version: 'model-capability-summar
     timedOutTransports: 0, lengthStoppedTransports: 0, outputTokens: 0, outputEvalMs: 0 });
 
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
+const milliseconds = (value: unknown): value is number => typeof value === 'number'
+    && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 
 function validSummary(value: unknown): value is ModelCapabilitySummary {
     if (!value || typeof value !== 'object') { return false; }
     const summary = value as Partial<ModelCapabilitySummary>;
     return summary.version === 'model-capability-summary-v1' && integer(summary.completedTransports)
         && integer(summary.timedOutTransports) && integer(summary.lengthStoppedTransports)
-        && integer(summary.outputTokens) && integer(summary.outputEvalMs);
+        && integer(summary.outputTokens) && milliseconds(summary.outputEvalMs)
+        && (summary.outputTokens === 0 || summary.outputEvalMs > 0);
 }
 
 /** Only allowlisted numeric timing fields survive aggregation. */
@@ -38,16 +41,20 @@ export function summarizeModelCapability(events: readonly unknown[]): ModelCapab
         if (timing.outcome === 'timeout') { summary.timedOutTransports++; }
         if (timing.ollama?.completionReason === 'length') { summary.lengthStoppedTransports++; }
         const tokens = timing.ollama?.evalCount, duration = timing.ollama?.evalDurationMs;
-        if (integer(tokens)) { summary.outputTokens += tokens; }
-        if (integer(duration)) { summary.outputEvalMs += duration; }
+        if (timing.outcome === 'completed' && integer(tokens) && milliseconds(duration) && duration > 0
+            && Number.isSafeInteger(summary.outputTokens + tokens)
+            && milliseconds(summary.outputEvalMs + duration)) {
+            summary.outputTokens += tokens;
+            summary.outputEvalMs += duration;
+        }
     }
     return summary;
 }
 
-/** Millitokens/second avoids floating point persistence; null means no measured output. */
+/** Integer millitokens/second; null means no measured output. */
 export function measuredOutputRateMilli(summary: ModelCapabilitySummary): number | null {
     if (summary.version !== 'model-capability-summary-v1' || !integer(summary.outputTokens)
-        || !integer(summary.outputEvalMs) || summary.outputEvalMs <= 0 || summary.outputTokens <= 0) { return null; }
+        || !milliseconds(summary.outputEvalMs) || summary.outputEvalMs <= 0 || summary.outputTokens <= 0) { return null; }
     const rate = Math.floor(summary.outputTokens * 1_000_000 / summary.outputEvalMs);
     return Number.isSafeInteger(rate) && rate > 0 ? rate : null;
 }
@@ -64,7 +71,9 @@ export function mergeModelCapabilitySummaries(summaries: readonly unknown[]): Mo
             outputTokens: merged.outputTokens + value.outputTokens,
             outputEvalMs: merged.outputEvalMs + value.outputEvalMs
         };
-        if (Object.values(next).every(integer)) { Object.assign(merged, next); }
+        if (Object.entries(next).every(([key, value]) => key === 'outputEvalMs' ? milliseconds(value) : integer(value))) {
+            Object.assign(merged, next);
+        }
     }
     return merged;
 }

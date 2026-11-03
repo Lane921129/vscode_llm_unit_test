@@ -79,6 +79,8 @@ export interface BehaviorObservations {
     input_plan?: InputPlanSummary;
     input_deduplication?: { schema_version: 'probe-case-deduplication-v1'; planned_count: number;
         unique_count: number; duplicate_count: number; source_count: number };
+    /** Discovery proposals rejected before scheduling; never execution evidence. */
+    input_rejections?: Array<{ source: ObservationOrigin; reason: 'unreplayable-caller-input' }>;
     recovery_reason?: string;
     func_name: string;
     args: string[];

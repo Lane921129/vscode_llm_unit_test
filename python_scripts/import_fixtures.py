@@ -64,10 +64,26 @@ class ImportFixtures:
         self.installed_entries = set()
         self.installing_entries = False
         self.resources = None
+        self.external_source_copies = set()
         _last_evidence = None
         if not self.plan:
             return
         root = _absolute(self.plan['root'])
+        copies = self.plan.get('externalSourceCopies', [])
+        if not isinstance(copies, list) or len(copies) > 512:
+            raise ValueError('Invalid mutation external source copies')
+        for copied in copies:
+            if (not isinstance(copied, dict) or set(copied) != {'sourceFile', 'resolvedFile', 'sourceHash'}
+                    or not all(type(copied[key]) is str for key in copied)
+                    or not re.fullmatch(r'[a-f0-9]{64}', copied['sourceHash'])
+                    or not self.plan.get('trialRoot') or _inside(copied['sourceFile'], root)
+                    or not _inside(copied['resolvedFile'], self.plan['trialRoot'])
+                    or not copied['sourceFile'].endswith('.py') or not copied['resolvedFile'].endswith('.py')
+                    or Path(copied['sourceFile']).is_symlink() or Path(copied['resolvedFile']).is_symlink()
+                    or any(hashlib.sha256(Path(copied[key]).read_bytes()).hexdigest() != copied['sourceHash']
+                           for key in ('sourceFile', 'resolvedFile'))):
+                raise ValueError('Mutation external source identity changed or is application code')
+            self.external_source_copies.add(_absolute(copied['resolvedFile']))
         # Rebasing is generated solely by the trusted mutation driver.
         for rule in self.plan['rules']:
             if not isinstance(rule, dict) or not isinstance(rule.get('file'), str):
@@ -153,7 +169,8 @@ class ImportFixtures:
                     continue
                 origin = getattr(module, '__file__', None)
                 if (not origin or _inside(origin, self.plan['root'])
-                        or self.plan.get('trialRoot') and _inside(origin, self.plan['trialRoot'])):
+                        or self.plan.get('trialRoot') and _inside(origin, self.plan['trialRoot'])
+                        and _absolute(origin) not in self.external_source_copies):
                     raise ValueError('Startup fixture must target an external dependency')
                 original = vars(module).get(attribute)
                 # A callable instance/partial has no own __code__ and can hide
@@ -164,7 +181,8 @@ class ImportFixtures:
                     raise ValueError('Startup fixture requires a plain external Python function')
                 code = original.__code__
                 if (_inside(code.co_filename, self.plan['root'])
-                             or self.plan.get('trialRoot') and _inside(code.co_filename, self.plan['trialRoot'])):
+                             or self.plan.get('trialRoot') and _inside(code.co_filename, self.plan['trialRoot'])
+                             and _absolute(code.co_filename) not in self.external_source_copies):
                     raise ValueError('Startup fixture cannot replace application code')
 
                 def wrapper(function, name):
@@ -309,6 +327,26 @@ def mutation_environment(environment, trial_root, source_file, copy_bindings):
         return environment
     plan = dict(plan, trialRoot=str(Path(trial_root).resolve()), rules=[dict(rule) for rule in plan['rules']])
     source_file, trial_root = Path(source_file).resolve(), Path(trial_root).resolve()
+    external_copies = {}
+    for original, destination, is_package in copy_bindings:
+        original, destination = Path(original).resolve(), Path(destination).resolve()
+        if _inside(original, plan['root']):
+            continue
+        paths = destination.rglob('*.py') if is_package else [destination]
+        for copied in paths:
+            source = original / copied.relative_to(destination) if is_package else original
+            # An ancestor package may contain both application and external
+            # files. Never grant an external identity to its application subtree.
+            if _inside(source, plan['root']):
+                continue
+            if (not copied.is_relative_to(trial_root) or copied.is_symlink() or source.is_symlink()
+                    or not source.name.endswith('.py')):
+                raise ValueError('Invalid external mutation dependency binding')
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            if hashlib.sha256(copied.read_bytes()).hexdigest() != digest:
+                raise ValueError('External mutation dependency changed during copy')
+            external_copies[str(copied)] = {'sourceFile': str(source), 'resolvedFile': str(copied), 'sourceHash': digest}
+    plan['externalSourceCopies'] = list(external_copies.values())
     extra = []
     seen = {}
     for rule in plan['rules']:

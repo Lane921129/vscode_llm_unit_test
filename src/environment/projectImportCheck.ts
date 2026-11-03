@@ -67,6 +67,10 @@ export async function inspectProjectImports(root: string, python: string, target
             localize("    例外：{0}", row.diagnostic?.exceptionType || localize("未取得結構化例外")),
             localize("    原因：{0}", row.diagnostic?.message || row.issue?.issue || localize("未取得具體訊息")),
             ...(row.issue?.origin ? [localize("    位置：{0}:{1}", row.issue.origin.file, row.issue.origin.line)] : []),
+            ...(row.issue?.resource ? [`Resource: ${row.issue.resource.id}; fixture: ${row.issue.resource.fixtureType}`] : []),
+            ...(row.issue?.fixtureExample ? ['llmUnitTest.importFixtures:', '```json',
+                JSON.stringify([row.issue.fixtureExample], null, 2), '```',
+                localize('範例中的預留值必須依原專案補齊，不能直接套用。')] : []),
             ...(row.suggestion ? [localize("    可預覽替身：{0}（{1}:{2}）", row.suggestion.operation, row.suggestion.file, row.suggestion.line),
                 localize("    依據：模組頂層直接呼叫、回傳值未使用、實際呼叫鏈遭隔離阻擋。"),
                 row.suggestion.kind === 'read-file' && row.suggestion.resourcePath

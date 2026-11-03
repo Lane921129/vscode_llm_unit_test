@@ -1,6 +1,7 @@
 import { localize } from '../i18n/core';
 import { isTestFocus } from '../pipeline/testFocus';
 import { qualifyLocalConnection } from '../llm/connectionQualification';
+import { localThinkingMode } from '../llm/localThinking';
 import { runLocalRuntimeQualificationProbe } from '../llm/localRuntimeRequalification';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
@@ -28,6 +29,7 @@ import { configuredPythonForResource } from '../environment/pythonEnvironmentCon
 import { pythonEnvironmentActivity } from '../environment/pythonEnvironmentSetup';
 import { API_TIMEOUT_PREFERENCE_KEY, MAX_EXECUTION_TIMEOUT_SECONDS, parseExecutionTimingSettings, snapshotExecutionTargetBudget } from '../pipeline/executionTimingSettings';
 import { DEFAULT_TARGET_BUDGET } from '../pipeline/targetBudget';
+import { normalizeStopPolicy } from '../pipeline/stopPolicy';
 
 export class MutationViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'mutation-test-view';
@@ -246,6 +248,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
             switch (message.command) {
                 case 'getInitialData': {
+                    this.webview?.postMessage({ command: 'stopPolicySettings',
+                        settings: normalizeStopPolicy(config.get('stopPolicy', {})),
+                        budget: config.get<object>('targetBudget', {}) });
                     const savedBudget = config.get<{ timeoutMs?: number } | null>('targetBudget', {});
                     const rawTimeoutMs = savedBudget && typeof savedBudget === 'object' ? savedBudget.timeoutMs : undefined;
                     const targetTimeoutMs = typeof rawTimeoutMs === 'number' && Number.isFinite(rawTimeoutMs)
@@ -567,6 +572,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             params.targetTimeoutSeconds ?? (snapshotExecutionTargetBudget(savedBudget).timeoutMs! / 1000));
                         params.timeoutSeconds = timing.timeoutSeconds;
                         params.targetBudget = snapshotExecutionTargetBudget(savedBudget, timing.targetTimeoutSeconds);
+                        params.stopPolicy = Object.freeze(normalizeStopPolicy(params.stopPolicy ?? config.get('stopPolicy', {})));
                         if (params.envType === 'cloud') {
                             const keys = await this.getStoredCloudCredentials();
                             if (this.activeAnalysis || this.pendingStartCancelled) { break; }
@@ -594,6 +600,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                             } catch (e) {
                                 console.error(localize("更新 targetBudget 設定失敗"), e);
                             }
+                        }
+                        if (message.stopPolicy !== undefined) {
+                            await this.rememberRunPreference(config, 'stopPolicy', { ...params.stopPolicy });
                         }
                         try {
                             await this.uiState.update(API_TIMEOUT_PREFERENCE_KEY, timing.timeoutSeconds);
@@ -696,6 +705,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                             if (message.envType === 'local') {
                                 const config = vscode.workspace.getConfiguration('llmUnitTest');
+                                const selectedThinkingMode = localThinkingMode(config.get('localThinkingMode', 'provider-default'));
                                 const baseUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
                                 const { response } = await timedJson(
                                     `${baseUrl}/api/tags`,
@@ -733,16 +743,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                         vscode.window.showWarningMessage(localize("⚠️ Local Ollama 服務可連線，但本機 Context 設定不可用（{0}）。未執行角色探針，請修正設定後重新測試連線。", reason));
                                         return;
                                     }
-                                    const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: runtime.contextWindow } as const;
+                                    const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION,
+                                        numCtx: runtime.contextWindow, thinkingMode: selectedThinkingMode } as const;
                                     if (!metadata.contextLengthKnown) {
                                         this.webview?.postMessage({ command: 'appendLog', text: localize("模型未提供可驗證的 Context 上限，本次角色探針使用已選容量 {0} tokens；資格僅綁定此值。", runtime.contextWindow.toLocaleString()) });
                                     }
                                     this.webview?.postMessage({ command: 'modelProbeResult', profile });
                                     vscode.commands.executeCommand('llm-unit-test.updateModelProfile', profile);
                                     const assessed = await qualifyLocalConnection({ numCtx: runtime.contextWindow, timeoutMs: qualificationTimeoutMs,
+                                        thinkingMode: selectedThinkingMode,
                                         request: async (_role, prompt, format) => {
                                             const response = await requestOllamaQualification(baseUrl,
-                                                buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow),
+                                                buildOllamaRoleQualificationProbe(message.modelName, prompt, format, runtime.contextWindow, selectedThinkingMode),
                                                 qualificationTimeoutMs, undefined, qualificationAbort.signal);
                                             return typeof response?.response === 'string' ? response.response : undefined;
                                         },

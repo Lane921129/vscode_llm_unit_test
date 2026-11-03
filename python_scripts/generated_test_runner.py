@@ -97,9 +97,20 @@ def candidate_load_failure(error, module_name, test_file):
 
 class StructuredTestResult(unittest.TextTestResult):
     """Record identifiers only; exception text and subTest values stay private."""
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, tracker=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.test_failures = []
+        self.tracker = tracker
+
+    def startTest(self, test):
+        super().startTest(test)
+        if self.tracker:
+            self.tracker.start_test(test)
+
+    def stopTest(self, test):
+        if self.tracker:
+            self.tracker.stop_test()
+        super().stopTest(test)
 
     def _record(self, test, kind, err=None):
         identifier = _safe_test_id(test)
@@ -148,8 +159,15 @@ class TestIsolationError(RuntimePolicyError):
 
 
 @contextmanager
-def guarded_test_runtime():
-    with guarded_runtime(error_type=TestIsolationError, protect_profile=_target_tracking) as violations:
+def guarded_test_runtime(test_directory=None):
+    from python_import_paths import configured_import_paths
+    paths = configured_import_paths()
+    if test_directory:
+        # The bound generated file wins over an application module with the
+        # same name (for example data/loop1_test.py). This must happen inside
+        # the guard, which installs the declared roots in their given order.
+        paths = [test_directory, *paths]
+    with guarded_runtime(error_type=TestIsolationError, protect_profile=_target_tracking, import_paths=paths) as violations:
         yield violations
 
 
@@ -165,6 +183,7 @@ def main(argv=None):
     parser.add_argument('--target-evidence')
     parser.add_argument('--target-run-id')
     parser.add_argument('--target-test-file')
+    parser.add_argument('--test-progress')
     parser.add_argument('--function-mutation-manifest')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args(argv)
@@ -172,10 +191,17 @@ def main(argv=None):
     target_options = [args.target_file, args.target_name, args.target_evidence, args.target_run_id, args.target_test_file]
     if any(target_options) and not all(target_options):
         parser.error('Target invocation evidence requires all five --target-* options.')
+    if args.test_progress and not all(target_options):
+        parser.error('--test-progress requires target invocation identity.')
     tracker = TargetInvocationTracker(args.target_file, args.target_name, args.target_test_file,
                                       args.target_run_id) if all(target_options) else None
     if tracker:
         tracker.save(args.target_evidence, 'running')
+    # Open outside the runtime guard. Only the runner profile writes identities
+    # and body phases; candidate stdout is never used to infer a repair scope.
+    progress_stream = open(args.test_progress, 'w', encoding='utf-8') if args.test_progress else None
+    if tracker:
+        tracker.progress_stream = progress_stream
 
     def record(event, **detail):
         if args.violation_report:
@@ -210,7 +236,7 @@ def main(argv=None):
             activation = FunctionMutationActivation(args.function_mutation_manifest)
         with activation if activation else nullcontext(), observation:
             _target_tracking = bool(tracker)
-            with guarded_test_runtime() as violations:
+            with guarded_test_runtime(os.path.dirname(tracker.test_file) if tracker else None) as violations:
                 # A fresh loader prevents errors from an earlier main() call
                 # from becoming evidence about this candidate.
                 try:
@@ -243,7 +269,7 @@ def main(argv=None):
                     elif not load_diagnostics:
                         tracker.testing = True
                 result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1,
-                                                 resultclass=StructuredTestResult).run(suite)
+                    resultclass=lambda *a, **kw: StructuredTestResult(*a, tracker=tracker, **kw)).run(suite)
                 structured_result = result
                 test_result = {'testsRun': result.testsRun, 'failures': len(result.failures),
                                'errors': len(result.errors), 'skipped': len(result.skipped),
@@ -269,6 +295,8 @@ def main(argv=None):
         exit_code = 1
     finally:
         _target_tracking = False
+        if progress_stream:
+            progress_stream.close()
         if coverage:
             coverage.stop()
             coverage.save()

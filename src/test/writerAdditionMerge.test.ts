@@ -3,12 +3,31 @@ import * as path from 'node:path';
 import { test } from 'node:test';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { validatePassingTestPreservation } from '../pipeline/passingTestPreservation';
-import { extractWriterAdditionCode, mergeWriterTestAddition } from '../validation/testMerger';
+import { extractWriterAdditionCode, mergeWriterTestAddition, writerAdditionCompletionPrefix } from '../validation/testMerger';
 
 const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
 const baseline = 'import unittest\nfrom neutral_source import target\nclass Cases(unittest.TestCase):\n'
     + '    def setUp(self): self.value = 1\n'
     + '    def test_passed(self): self.assertEqual(target(self.value), 2)\n';
+
+test('addition continuation supplies a fresh method signature and preserves its fixture owner', async () => {
+    for (const isAsync of [false, true]) {
+        const result = await writerAdditionCompletionPrefix({ baseline, methodName: 'test_added', isAsync, python });
+        assert.ok(result.ok);
+        assert.equal(result.prefix, `${isAsync ? 'async ' : ''}def test_added(self):\n`);
+        const merged = await mergeWriterTestAddition({ baseline,
+            addition: result.prefix + '    self.assertEqual(self.value, 1)\n', python });
+        assert.ok(merged.ok);
+        assert.ok(merged.mergedCode.startsWith(baseline));
+    }
+    for (const [code, methodName, reason] of [
+        [baseline, 'test_passed', 'existing-test-method-changed'],
+        [baseline + '\nclass Other(unittest.TestCase):\n    pass\n', 'test_added', 'ambiguous-addition-target']
+    ]) {
+        const result = await writerAdditionCompletionPrefix({ baseline: code, methodName, isAsync: false, python });
+        assert.deepEqual(result, { ok: false, reasonCode: reason });
+    }
+});
 
 test('a complete new method inherits the preserved fixture and remains subject to preservation', async () => {
     const result = await mergeWriterTestAddition({ baseline, addition: 'def test_added(self): self.assertEqual(target(2), 3)\n', python });

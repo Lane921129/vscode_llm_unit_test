@@ -2,6 +2,19 @@ import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { describeImportIssue, summarizeImportException } from '../environment/importDiagnostics';
 
+test('resource diagnostics retain only a bounded identifier and source location with an editable fixture example', () => {
+    const issue = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: 'file read',
+        origin: { file: 'scrapers/housefun_scraper.py', line: 42 },
+        resource: { id: 'resource-0123456789abcdef', fixtureType: 'text', path: 'password=private' } }, 'module-import');
+    assert.deepEqual(issue.resource, { id: 'resource-0123456789abcdef', fixtureType: 'text' });
+    assert.equal(issue.origin?.line, 42);
+    assert.ok(issue.fixtureExample);
+    assert.doesNotMatch(JSON.stringify(issue), /private|password/);
+    const schema = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: 'resource-schema-required',
+        origin: { file: 'db/database.py', line: 12 } }, 'module-import');
+    assert.match(JSON.stringify(schema.fixtureExample), /sqlite.*tables/);
+});
+
 test('missing isolated schema has actionable fixture advice without guessing an assertion', () => {
     const issue = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: 'resource-schema-required' }, 'module-import');
     assert.equal(issue.issue, 'resource-schema-required');

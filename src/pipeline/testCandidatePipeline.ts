@@ -1,3 +1,4 @@
+import { currentStopPolicy } from './stopPolicy';
 import { localize } from '../i18n/core';
 import { RepairFeedback, repairFailureKey } from '../validation/repairFeedback';
 import { TestReview } from '../roles/testReviewer';
@@ -10,6 +11,7 @@ import type { CandidateRejectionGate } from './rejectedCandidateStore';
 import { AnalysisStageError, classifyExecutionFailure } from '../utils/executionFailureCategory';
 import { wholeCandidateNameException } from '../validation/unittestException';
 import { isMockInitializationFailure } from '../roles/bugFixer';
+import { writerMethodEditFormatGuidance } from '../validation/writerMethodEdits';
 
 export interface CandidateExecution {
     ok: boolean;
@@ -65,6 +67,11 @@ export async function validateTestCandidate(
     /** Exact candidate approved by a valid, zero-finding review; absent in diagnostic mode. */
     approvedCodeHash?: string;
 }> {
+    const policy = currentStopPolicy();
+    const reject = async (candidate: string, attempt: number, gate: CandidateRejectionGate, reasonCode: string) => {
+        await hooks.rejectedCandidate?.(candidate, attempt, gate, reasonCode);
+        if (!/tool|scope-result-invalid|preservation-tool-error|source-changed/.test(reasonCode)) { policy?.reject(reasonCode); }
+    };
     let code = initialCode;
     const feedback = new RepairFeedback(baseline?.code || initialCode, baseline?.output || '');
     let retainedCode = baseline?.code || initialCode;
@@ -81,7 +88,7 @@ export async function validateTestCandidate(
     // One reserved handoff after a no-op or unusable method repair response.
     // It still consumes the enclosing target's candidate/request/time budgets.
     const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change' | 'response-format'): boolean => {
-        if (writerRecoveryUsed || maxRevisions < 1) { return false; }
+        if (!policy && (writerRecoveryUsed || maxRevisions < 1)) { return false; }
         writerRecoveryUsed = true;
         writerRecoveryPending = true;
         revisionLimit = Math.max(revisionLimit, attempt + 1);
@@ -108,8 +115,9 @@ export async function validateTestCandidate(
             exceptionType, previousTestHash: repairHash(code) });
         return true;
     };
-    for (let attempt = 0; attempt <= revisionLimit; attempt++) {
+    for (let attempt = 0; policy ? policy.remainingFailures > 0 : attempt <= revisionLimit; attempt++) {
         hooks.checkCancelled();
+        policy?.beginAttempt();
         currentTargetBudget()?.consumeCandidateAttempt();
         const writerRecoveryAttempt = writerRecoveryPending;
         writerRecoveryPending = false;
@@ -140,7 +148,7 @@ export async function validateTestCandidate(
             }
             if (!arithmetic && role === 'bug-fixer') {
                 const failureKey = repairFailureKey(lastFailure);
-                if (attemptedBugFixFailures.has(failureKey)) {
+                if (!policy && attemptedBugFixFailures.has(failureKey)) {
                     hooks.event(role, 'repair-rejected', { attempt, category: 'validation', contractVersion: ROLE_CONTRACT_VERSIONS.bugFix,
                         diagnostic: { version: 'repair-diagnostics-v1', gate: 'candidate-deduplication',
                             reasonCodes: ['repeated-failure'], previousTestHash: repairHash(code), previousTestUnchanged: true } satisfies RepairDiagnostic });
@@ -154,8 +162,18 @@ export async function validateTestCandidate(
                 candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt, verifiedRepairEvidence);
             } catch (error) {
                 hooks.checkCancelled();
+                if (policy && (error instanceof RepairResponseError
+                    || error instanceof AnalysisStageError && error.category === 'model-format')) {
+                    const reasonCode = error instanceof AnalysisStageError && error.stage === 'writer-method-edit-scope'
+                        && error.diagnostic && typeof error.diagnostic === 'object'
+                        ? (error.diagnostic as { reasonCode?: unknown }).reasonCode : undefined;
+                    const guidance = writerMethodEditFormatGuidance(reasonCode);
+                    await reject('', attempt, 'response-format', guidance ? String(reasonCode) : 'response-format');
+                    lastFailure = 'FORMAT REPAIR: ' + (guidance || 'Return valid Python within the original edit scope.') + ' ' + lastFailure;
+                    continue;
+                }
                 if (role === 'bug-fixer' && error instanceof RepairResponseError) {
-                    await hooks.rejectedCandidate?.('', attempt, 'response-format',
+                    await reject('', attempt, 'response-format',
                         error.diagnostic.reasonCodes[0] || 'response-format');
                     if (recoverWithWriter(attempt, 'response-format')) { continue; }
                 }
@@ -165,7 +183,7 @@ export async function validateTestCandidate(
             hooks.event(arithmetic ? 'source-expectation-repair' : role, 'candidate', {
                 attempt, code: candidate, ...(arithmetic ? { evidence: arithmetic.evidence } : {}) });
             if (!feedback.consider(candidate, lastFailure)) {
-                await hooks.rejectedCandidate?.(candidate, attempt, 'candidate-deduplication', 'repeated-candidate');
+                await reject(candidate, attempt, 'candidate-deduplication', 'repeated-candidate');
                 lastFailure = feedback.output;
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure, category: 'validation', contractVersion: role === 'bug-fixer'
                     ? ROLE_CONTRACT_VERSIONS.bugFix : ROLE_CONTRACT_VERSIONS.writerRevision,
@@ -176,6 +194,7 @@ export async function validateTestCandidate(
                     if (recoverWithWriter(attempt, 'repeated-candidate')) { continue; }
                     throw new CandidateValidationError(localize("Bug Fixer 未產生有效變更，停止重複修復：{0}", lastFailure));
                 }
+                if (policy) { code = retainedCode; lastFailure = 'Repeated candidate: change the rejected cause. ' + lastFailure; continue; }
                 break;
             }
             if (arithmetic) {
@@ -189,12 +208,16 @@ export async function validateTestCandidate(
                 const reason = typeof revisionViolation === 'string' ? revisionViolation : revisionViolation.reason;
                 const toolReason = typeof revisionViolation !== 'string' ? revisionViolation.reasonCode : undefined;
                 if (toolReason && ['scope-tool-error', 'scope-result-invalid', 'preservation-tool-error'].includes(toolReason)) {
-                    await hooks.rejectedCandidate?.(candidate, attempt, 'revision-scope', toolReason);
+                    await reject(candidate, attempt, 'revision-scope', toolReason);
                     hooks.event('revision-validation', 'tool-failed', { attempt, reasonCode: toolReason, category: 'validation' });
-                    throw new AnalysisStageError('validation', 'repair-scope', localize('修訂驗證工具無法完成；未繼續模型修復或降級 Tier。'),
+                    throw new AnalysisStageError('tool', 'repair-scope', localize('修訂驗證工具無法完成；未繼續模型修復或降級 Tier。'),
                         { reasonCode: toolReason });
                 }
-                await hooks.rejectedCandidate?.(candidate, attempt, 'revision-scope',
+                if (policy && !['candidate-syntax', 'no-method-change', 'edit-no-method-change', 'invalid-edit-python'].includes(toolReason || '')) {
+                    throw new AnalysisStageError('validation', 'repair-scope', reason,
+                        { reasonCode: toolReason || 'scope-rejected', previousTestUnchanged: true });
+                }
+                await reject(candidate, attempt, 'revision-scope',
                     repairReasonCode(typeof revisionViolation === 'string' ? undefined : revisionViolation.reasonCode));
                 feedback.reject(reason);
                 lastFailure = feedback.output;
@@ -221,7 +244,7 @@ export async function validateTestCandidate(
         if (invalid) {
             executionRepairRole = undefined;
             unresolvedReview = false;
-            await hooks.rejectedCandidate?.(code, attempt,
+            await reject(code, attempt,
                 typeof invalid === 'string' ? 'unittest-structure' : invalid.gate,
                 typeof invalid === 'string' ? 'candidate-structure-rejected' : invalid.reasonCode);
             lastFailure = invalidReason!;
@@ -235,7 +258,13 @@ export async function validateTestCandidate(
             } else { code = retainedCode; }
             // A malformed file has no proven failing method to replace.
             role = 'writer';
-            if (writerRecoveryAttempt) { break; }
+            if (writerRecoveryAttempt && !policy) { break; }
+            continue;
+        }
+        if (policy && !policy.firstExecution(repairHash(code))) {
+            await reject(code, attempt, 'candidate-deduplication', 'repeated-candidate');
+            lastFailure = 'Repeated candidate: this exact candidate was already executed. Change the rejected cause using existing evidence.';
+            role = 'writer';
             continue;
         }
         executionAttempted = true;
@@ -246,11 +275,11 @@ export async function validateTestCandidate(
         const regression = feedback.record(execution.out, execution.testModule);
         if (!regression.accepted) {
             unresolvedReview = false;
-            await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-regression');
+            await reject(code, attempt, 'execution', 'candidate-regression');
             lastFailure = feedback.output;
             code = retainedCode;
             role = executionRepairRole === 'writer' ? 'writer' : 'bug-fixer';
-            if (writerRecoveryAttempt) { break; }
+            if (writerRecoveryAttempt && !policy) { break; }
             continue;
         }
         retainedCode = code;
@@ -266,7 +295,7 @@ export async function validateTestCandidate(
                     const message = error instanceof Error ? error.message : String(error);
                     const category = error instanceof AnalysisStageError ? error.category : classifyExecutionFailure(message);
                     hooks.event('reviewer', 'failed', { attempt, category, reasonCode: 'review-request-failed' });
-                    await hooks.rejectedCandidate?.(code, attempt, 'review', 'review-request-failed');
+                    if (!(error instanceof AnalysisStageError)) { await reject(code, attempt, 'review', 'review-request-failed'); }
                     if (error instanceof AnalysisStageError) {
                         throw new AnalysisStageError(error.category, 'reviewer', error.message, error.diagnostic);
                     }
@@ -277,18 +306,18 @@ export async function validateTestCandidate(
             hooks.checkCancelled();
             hooks.event('reviewer', reviewStatus === 'not-required' ? 'not-required' : review ? 'assessed' : 'unavailable', { attempt, review });
             if (hooks.reviewRequired !== false && !review) {
-                await hooks.rejectedCandidate?.(code, attempt, 'review', 'review-unavailable');
+                await reject(code, attempt, 'review', 'review-unavailable');
                 throw new AnalysisStageError('validation', 'reviewer',
                     localize("Reviewer 審查未完成；工具執行通過不代表模型審查通過。"),
                     { reasonCode: 'review-unavailable', attempt });
             }
             if (review?.issues.length) {
                 unresolvedReview = true;
-                await hooks.rejectedCandidate?.(code, attempt, 'review',
+                await reject(code, attempt, 'review',
                     review.issues.some(issue => issue.severity === 'blocking') ? 'review-blocking' : 'review-quality');
                 lastFailure = JSON.stringify(review.issues);
                 role = 'writer';
-                if (writerRecoveryAttempt) { break; }
+                if (writerRecoveryAttempt && !policy) { break; }
                 continue;
             }
             const approvedCodeHash = reviewStatus === 'completed' ? repairHash(code) : undefined;
@@ -303,10 +332,10 @@ export async function validateTestCandidate(
             };
         }
         unresolvedReview = false;
-        await hooks.rejectedCandidate?.(code, attempt, 'execution', 'candidate-execution-failed');
+        await reject(code, attempt, 'execution', 'candidate-execution-failed');
         lastFailure = execution.out;
         executionFailure = true;
-        if (writerRecoveryAttempt) { break; }
+        if (writerRecoveryAttempt && !policy) { break; }
         // A module/fixture failure is not a failed test-method replacement.
         role = executionRepairRole === 'writer' || preferWholeCandidateRepair(execution.out, attempt)
             || /(?:_FailedTest|ImportError:|ModuleNotFoundError:|\bin (?:setUp|tearDown)(?:Class|Module)?\b)/.test(execution.out)

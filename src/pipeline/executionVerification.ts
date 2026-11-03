@@ -7,14 +7,17 @@ import { reserveArtifactFiles } from './artifactPaths';
 import { ExecutionBaseline, verifyExecutionEvidence } from './executionEvidence';
 import { validateTestCandidate, CandidatePipelineHooks } from './testCandidatePipeline';
 import { generatedUnittestArguments } from '../utils/pythonTestEnvironment';
-import { runSpawn } from '../utils/processRunner';
+import { ProcessTimeoutError, runSpawn } from '../utils/processRunner';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { throwIfExecutionCancelled } from './executionContext';
 import { pythonToolPath } from './pythonTools';
 import { currentImportFixtures } from './importFixtures';
 import { readResourceSetupFailure } from './resourceSetupFailure';
-import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics } from './generatedRunnerDiagnostics';
+import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics, readNativeTimeoutFeedback } from './generatedRunnerDiagnostics';
 import { digestReferenceHypotheses } from './digestReference';
+import { currentStopPolicy } from './stopPolicy';
+import { currentTargetBudget } from './targetBudget';
+import { canRepairTestMethod } from '../roles/bugFixer';
 
 interface ExecutionVerificationOptions {
     directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
@@ -45,7 +48,16 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
         }
     };
     checkCurrent();
-    const initial = await options.generate();
+    let initial: string;
+    for (;;) {
+        currentStopPolicy()?.beginAttempt();
+        try { initial = await options.generate(); break; }
+        catch (error) {
+            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            currentStopPolicy()!.reject('writer-response-format');
+            hooks.event('writer', 'format-rejected', { reasonCode: 'writer-response-format', previousTestUnchanged: true });
+        }
+    }
     hooks.event('writer', 'candidate', { code: initial, validationMode: 'execution' });
     const candidate = await validateTestCandidate(initial, {
         ...hooks, reviewRequired: false, continueUnexecutedWriterDraft: true,
@@ -89,15 +101,31 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
             const testPath = path.join(artifacts, testFile);
             fs.writeFileSync(testPath, code, { encoding: 'utf8', flag: 'wx' });
             const [invocation, isolation, resultFile] = reserveArtifactFiles(artifacts, ['invocation', 'isolation', 'runner'], 'jsonl');
+            const [progressFile] = reserveArtifactFiles(artifacts, ['progress'], 'jsonl');
             const baseline: ExecutionBaseline = { schemaVersion: 'execution-baseline-v1', validationMode: 'execution',
                 ...expected, testFile, testHash: evidenceHash(code), testRunId: randomUUID(),
                 invocationFile: path.basename(invocation), isolationFile: path.basename(isolation), dependencyVersions: dependencies };
-            const run = await runSpawn(python, [
+            const executionArguments = [
                 ...generatedUnittestArguments(path.basename(testFile, '.py'), path.dirname(file), false, true),
                 '--target-file', file, '--target-name', target, '--target-test-file', testPath,
                 '--target-evidence', invocation, '--target-run-id', baseline.testRunId, '--violation-report', isolation,
-                '--result-json', resultFile
-            ], { cwd: artifacts, env, timeout: 30000 });
+                '--result-json', resultFile, '--test-progress', progressFile
+            ];
+            let run: Awaited<ReturnType<typeof runSpawn>>;
+            try {
+                run = await runSpawn(python, executionArguments, { cwd: artifacts, env, timeout: 30000 });
+            } catch (error) {
+                if (!(error instanceof ProcessTimeoutError)) { throw error; }
+                checkCurrent(); currentTargetBudget()?.assertRemaining();
+                const out = readNativeTimeoutFeedback({ progressFile, sourceFile: file, testFile: testPath,
+                    target, testRunId: baseline.testRunId, sourceHash: baseline.sourceHash,
+                    testHash: baseline.testHash, timeoutMs: error.timeoutMs });
+                if (!out || !canRepairTestMethod(code, out)) { throw error; }
+                hooks.event('validation', 'native-timeout-repairable', { reasonCode: 'native-test-body-timeout',
+                    testRunId: baseline.testRunId, testHash: baseline.testHash, progressFile: path.basename(progressFile),
+                    timeoutMs: error.timeoutMs, completedExecutionEvidence: false, repairScope: 'single-test-method' });
+                return { ok: false, out, qualityGaps: [], testModule: path.basename(testFile, '.py') };
+            }
             checkCurrent();
             const resourceFailure = readResourceSetupFailure({ isolationFile: isolation, sourceFile: file, testFile: testPath,
                 targetRunId: baseline.testRunId, sourceHash: journal.sourceHash, testHash: baseline.testHash,
@@ -111,14 +139,14 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
                 sourceHash: baseline.sourceHash, testHash: baseline.testHash });
             if (diagnostic) {
                 if (run.code === 0) {
-                    throw new AnalysisStageError('validation', 'generated-test-runner',
+                    throw new AnalysisStageError('tool', 'generated-test-runner',
                         'Generated test runner exit status contradicts its load failure diagnostic.',
                         { reasonCode: 'generated-test-diagnostics-exit-mismatch' });
                 }
                 hooks.event('generated-test-runner', diagnostic.repairRole === 'writer' ? 'load-failed' : 'unavailable',
                     { ...diagnostic, resultFile: path.basename(resultFile), invocationFile: path.basename(invocation) });
                 if (diagnostic.repairRole === 'none') {
-                    throw new AnalysisStageError('validation', 'generated-test-runner',
+                    throw new AnalysisStageError('tool', 'generated-test-runner',
                         'Generated test runner could not establish a repairable candidate load failure.', diagnostic);
                 }
                 return { ok: false, out: generatedLoadRepairFeedback((run.stdout + run.stderr).trim() || diagnostic.reasonCode),

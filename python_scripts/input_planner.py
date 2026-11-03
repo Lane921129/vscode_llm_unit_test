@@ -6,6 +6,8 @@ or compute a Cartesian product. Runtime tracing remains the only output oracle.
 import ast
 import copy
 import math
+import re
+from collections import Counter
 
 from trace_value_codec import restore_value, snapshot_value
 
@@ -308,6 +310,200 @@ def _comparison(node, names, allow_len, limits):
     return None
 
 
+def _string_input_origin(node, origins, depth=0):
+    """Map a bounded builtin string expression to its original input parameter.
+
+    This is candidate provenance only, not a claim that a proposed input will
+    satisfy the transformed predicate. Runtime observations establish outcomes.
+    """
+    if depth > 6:
+        return None
+    if isinstance(node, ast.Name):
+        found = origins.get(node.id)
+        return found[0] if found and getattr(node, 'lineno', 0) > found[1] else None
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ('strip', 'lstrip', 'rstrip', 'lower', 'upper', 'casefold')
+            and not node.args and not node.keywords):
+        return _string_input_origin(node.func.value, origins, depth + 1)
+    return None
+
+
+def _string_input_origins(target, nodes, names):
+    """Only straight-line, single-write aliases; control-flow writes revoke them."""
+    writes = Counter(node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)))
+    for node in nodes:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler)) and node.name:
+            writes[node.name] += 1
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for item in node.names:
+                writes[item.asname or item.name.split('.')[0]] += 1
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            writes[node.name] += 1
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            writes[node.rest] += 1
+    origins = {name: (name, 0) for name in names if not writes[name]}
+    inspected = {id(node) for node in nodes}
+    for stmt in target.body:
+        if id(stmt) not in inspected:
+            break
+        if not isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name) or writes[targets[0].id] != 1:
+            continue
+        origin = _string_input_origin(stmt.value, origins)
+        if origin:
+            origins[targets[0].id] = (origin, stmt.lineno)
+    return origins
+
+
+def _regex_samples(pattern, limits):
+    """Bounded syntax representatives, not a regex solver or output oracle.
+
+    Unsupported operators yield no proposal. The stdlib parser is optional:
+    runtimes without it retain the ordinary literal/shape planning path.
+    """
+    try:
+        from re import _parser as parser
+        tree = parser.parse(pattern, 0)
+        cap = limits['max_text_length']
+
+        def render(sequence, longest, depth=0):
+            if depth > limits['max_depth'] + 4:
+                raise ValueError('regex-depth')
+            output = ''
+            for op, arg in sequence:
+                kind = str(op)
+                if kind == 'LITERAL':
+                    part = chr(arg)
+                elif kind == 'IN':
+                    choices = [chr(value) if str(tag) == 'LITERAL' else chr(value[0])
+                               for tag, value in arg if str(tag) in ('LITERAL', 'RANGE')]
+                    if not choices or any(str(tag) not in ('LITERAL', 'RANGE') for tag, _ in arg):
+                        raise ValueError('regex-character-class')
+                    part = choices[0]
+                elif kind == 'SUBPATTERN':
+                    part = render(arg[-1], longest, depth + 1)
+                elif kind == 'BRANCH':
+                    part = render(arg[1][0], longest, depth + 1)
+                elif kind in ('MAX_REPEAT', 'MIN_REPEAT', 'POSSESSIVE_REPEAT'):
+                    low, high, child = arg
+                    count = high if longest and high < parser.MAXREPEAT else low
+                    unit = render(child, longest, depth + 1)
+                    if count > cap or len(unit) * count > cap:
+                        raise ValueError('regex-repeat-budget')
+                    part = unit * count
+                elif kind == 'AT':
+                    part = ''
+                elif kind == 'ANY':
+                    part = 'x'
+                else:
+                    raise ValueError('unsupported-regex-operator')
+                output += part
+                if len(output) > cap:
+                    raise ValueError('regex-text-budget')
+            return output
+
+        samples = []
+        for longest in (False, True):
+            try:
+                samples.append(render(tree, longest))
+            except ValueError:
+                pass
+        return _unique(samples)
+    except (ImportError, AttributeError, TypeError, ValueError, OverflowError, RecursionError, re.error):
+        return []
+
+
+def _regex_input_proposals(nodes, names, limits):
+    """Follow bounded source expressions only to propose inputs for regex calls.
+
+    Slices and nested branch assignments are deliberately lossy here: proposals
+    do not prove a branch, a target binding, or an expected result. Runtime
+    tracing must confirm each proposal before it becomes observation evidence.
+    """
+    writes = Counter(node.id for node in nodes if isinstance(node, ast.Name)
+                     and isinstance(node.ctx, (ast.Store, ast.Del)))
+    bindings = {}
+    for node in nodes:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if len(targets) == 1 and isinstance(targets[0], ast.Name):
+                bindings.setdefault(targets[0].id, []).append((node.value, node.lineno))
+
+    def origin(node, depth=0):
+        if depth > 12:
+            return None
+        if isinstance(node, ast.Name):
+            if node.id in names and not writes[node.id]:
+                return node.id, '', ''
+            found = bindings.get(node.id)
+            if (found and len(found) == writes[node.id] and len(found) <= 4
+                    and all(line < node.lineno for _, line in found)):
+                # Branch-local slices may converge on the same input position.
+                # This only proposes an input; it grants no binding proof.
+                choices = [origin(value, depth + 1) for value, _ in found]
+                if choices[0] and all(item == choices[0] for item in choices):
+                    return choices[0]
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ('strip', 'lstrip', 'rstrip', 'lower', 'upper', 'casefold')
+                and not node.args and not node.keywords):
+            return origin(node.func.value, depth + 1)
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.slice, ast.Slice):
+                return origin(node.value, depth + 1)
+            value = node.value
+            if isinstance(value, ast.Name) and len(bindings.get(value.id, [])) == 1 and writes[value.id] == 1:
+                bound, line = bindings[value.id][0]
+                value = bound if line < value.lineno else None
+            if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                    and value.func.attr in ('split', 'rsplit') and value.args
+                    and not value.keywords and len(value.args) <= 2):
+                delimiter = _literal(value.args[0], limits)
+                index = _literal(node.slice, limits)
+                # One explicit separator and the first/last segment only.
+                count = _literal(value.args[1], limits) if len(value.args) == 2 else None
+                if type(delimiter) is str and delimiter and type(index) is int and count == 1:
+                    base = origin(value.func.value, depth + 1)
+                    if base and index in (0, 1, -1, -2):
+                        name, prefix, suffix = base
+                        return ((name, prefix, delimiter + 'x' + suffix) if index in (0, -2)
+                                else (name, prefix + 'x' + delimiter, suffix))
+        return None
+
+    groups = {}
+    for node in nodes:
+        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute)
+                or node.func.attr not in ('match', 'search', 'fullmatch') or len(node.args) < 2):
+            continue
+        # A regex source can be longer than the generated input, e.g. a list
+        # of city alternatives. Keep its own bounded syntax budget.
+        pattern_node = node.args[0]
+        pattern = (pattern_node.value if isinstance(pattern_node, ast.Constant)
+                   and type(pattern_node.value) is str and len(pattern_node.value) <= limits['max_nodes'] else _MISSING)
+        found = origin(node.args[1])
+        if type(pattern) is str and found:
+            samples = _regex_samples(pattern, limits)
+            if samples:
+                groups.setdefault(found, []).append((node, samples, pattern.endswith(('$', '\\Z', '\\z'))))
+    combined, alternatives, singles = [], [], []
+    for (name, prefix, suffix), patterns in groups.items():
+        # Only adjacent source patterns, two orderings, no Cartesian product.
+        for (left, a, left_end), (right, b, right_end) in zip(patterns, patterns[1:]):
+            choices = [a[0] + b[-1], b[0] + a[-1]]
+            if left_end and not right_end:
+                choices.reverse()
+            reason = 'regex-composition:%s,%s' % (left.lineno, right.lineno)
+            combined.append((name, prefix + choices[0] + suffix, right, reason))
+            alternatives.append((name, prefix + choices[1] + suffix, right, 'regex-alternative:' + reason))
+        for node, samples, _ in patterns:
+            for text in samples:
+                reason = ('regex-segment-representative' if node is patterns[0][0] and text == samples[0]
+                          else 'regex-length-boundary')
+                singles.append((name, prefix + text + suffix, node, reason))
+    return [item for item in combined + singles + alternatives if len(item[1]) <= limits['max_text_length']]
+
+
 def _test(operator, left, right):
     try:
         if isinstance(operator, ast.Eq): return left == right
@@ -420,6 +616,8 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
 
     source_options = {name: [] for name in names}
     conditions, relations, indexes = [], [], []
+    string_origins = {} if truncated else _string_input_origins(target_node, nodes,
+        {name for name in direct_names if any(type(value) in (str, bytes) for value in options[name])})
 
     def add_source(name, value, node, reason):
         value = admit(name, value)
@@ -427,7 +625,53 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
             source_options[name].append((value, {'source': 'source-condition', 'parameter': name, 'reason': reason,
                                                 'line': node.lineno, 'intent': 'valid'}))
 
+    regex_proposals = [] if truncated else _regex_input_proposals(nodes, direct_names, bounds)
+    for name, value, node, reason in regex_proposals:
+        if reason.startswith('regex-composition:') or reason == 'regex-segment-representative':
+            add_source(name, value, node, reason)
+
     for node in nodes:
+        string_subject, string_literals, string_reason = None, [], None
+        if isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1:
+            right = node.comparators[0]
+            if isinstance(node.ops[0], (ast.In, ast.NotIn)):
+                string_subject = _string_input_origin(right, string_origins)
+                string_literals = [_literal(node.left, bounds)]
+                string_reason = 'substring-literal'
+            elif isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+                string_subject = _string_input_origin(node.left, string_origins)
+                literal = _literal(right, bounds)
+                if not string_subject:
+                    string_subject = _string_input_origin(right, string_origins)
+                    literal = _literal(node.left, bounds)
+                string_literals, string_reason = [literal], 'normalized-string-comparison'
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.args and not node.keywords):
+            method = node.func.attr
+            if method in ('startswith', 'endswith') and len(node.args) == 1:
+                literal = _literal(node.args[0], bounds)
+                string_literals = list(literal) if type(literal) is tuple else [literal]
+                string_reason = 'string-prefix-literal' if method == 'startswith' else 'string-suffix-literal'
+            elif method in ('split', 'rsplit', 'partition', 'rpartition'):
+                string_literals, string_reason = [_literal(node.args[0], bounds)], 'string-delimiter-literal'
+            if string_reason:
+                string_subject = _string_input_origin(node.func.value, string_origins)
+        if string_subject:
+            for literal in string_literals:
+                if type(literal) not in (str, bytes):
+                    continue
+                marker = 'x' if type(literal) is str else b'x'
+                choices = [literal]
+                if string_reason in ('substring-literal', 'string-delimiter-literal'):
+                    choices += [marker + literal + marker, literal + marker, marker + literal]
+                elif string_reason == 'string-prefix-literal':
+                    choices.append(literal + marker)
+                elif string_reason == 'string-suffix-literal':
+                    choices.append(marker + literal)
+                choices.append(literal[:0])
+                for value in choices:
+                    if len(value) <= bounds['max_text_length']:
+                        add_source(string_subject, value, node, string_reason)
         parts = _comparison(node, direct_names, allow_len, bounds)
         if parts:
             (name, mode), operator, right = parts
@@ -463,7 +707,12 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
         if isinstance(node, (ast.If, ast.While, ast.IfExp)):
             condition = node.test.operand if isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not) else node.test
             if isinstance(condition, ast.Name) and condition.id in direct_names:
+                truth_values = set()
                 for candidate in options[condition.id]:
+                    truth = bool(candidate)
+                    if truth in truth_values:
+                        continue
+                    truth_values.add(truth)
                     add_source(condition.id, candidate, node, 'direct-truthiness')
         if isinstance(node, ast.Match) and isinstance(node.subject, ast.Name) and node.subject.id in direct_names:
             name = node.subject.id
@@ -479,6 +728,10 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
             index = _literal(node.slice, bounds)
             if type(index) is int or isinstance(node.slice, ast.Name) and node.slice.id in direct_names:
                 indexes.append((node.value.id, node.slice, node))
+
+    for name, value, node, reason in regex_proposals:
+        if reason == 'regex-length-boundary' or reason.startswith('regex-alternative:'):
+            add_source(name, value, node, reason)
 
     required_unknown = [name for name in names if name not in defaults and not options[name] and not source_options[name]]
     if required_unknown:
@@ -590,6 +843,7 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
                 value, offset = planner.sized(shapes[name], index + 1, name), admit(index_node.id, index)
                 if value is not _MISSING and offset is not _MISSING:
                     emit({name: value, index_node.id: offset}, {'source': 'source-condition', 'reason': 'container-index-relation', 'line': node.lineno})
+    variations = {}
     for name in names:
         if name in defaults:
             omitted.add(name)
@@ -598,6 +852,7 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
             emit({}, {'source': 'default-omission', 'parameter': name, 'reason': 'omit-default'}, trailing)
         choices = source_options[name] + [(value, {'source': 'shape-variation', 'parameter': name, 'reason': 'one-parameter-variation'}) for value in options[name]]
         used = set()
+        variations[name] = []
         for value, metadata in choices:
             key = _identity(value)
             if key in used:
@@ -606,7 +861,16 @@ def plan_inputs(tree, target_node, parameter_shapes, *, method_kind='module', ex
                 planner.diagnostic(name, 'budget-exceeded', 'parameter-value-count')
                 break
             used.add(key)
-            emit({name: value}, metadata)
+            variations[name].append((value, metadata))
+    # Every case starts a fresh guarded worker under one unchanged deadline.
+    # A parameter with many boundaries must not spend the whole case/time
+    # budget before later parameters get their first source-derived value.
+    # Keep each parameter's priority, limits and provenance, then interleave.
+    for rank in range(max((len(items) for items in variations.values()), default=0)):
+        for name in names:
+            if rank < len(variations[name]):
+                value, metadata = variations[name][rank]
+                emit({name: value}, metadata)
     if omitted:
         emit({}, {'source': 'default-omission', 'reason': 'omit-all-defaults'}, omitted)
     result['stats']['cases'] = len(result['cases'])

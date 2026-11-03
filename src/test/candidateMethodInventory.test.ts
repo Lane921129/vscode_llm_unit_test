@@ -37,7 +37,7 @@ test('an inventory process failure is a typed tool failure and never a model syn
     await assert.rejects(readCandidateMethodInventory({ code, python: process.execPath }), (error: unknown) => {
         assert.ok(error instanceof AnalysisStageError);
         assert.equal(error.stage, 'candidate-inventory-tool');
-        assert.equal(error.category, 'validation');
+        assert.equal(error.category, 'tool');
         assert.deepEqual(error.diagnostic, { reasonCode: 'inventory-process-failed' });
         assert.doesNotMatch(error.message, /test_中文|must not execute|bad option/);
         return true;

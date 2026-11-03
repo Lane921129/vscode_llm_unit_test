@@ -1,5 +1,5 @@
 import * as assert from 'node:assert/strict';
-import * as path from 'node:path';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { test } from 'node:test';
 import { buildReviewFacts, ReviewFacts } from '../roles/reviewFacts';
 import { parseTestReviewDetailed, ReviewConstraints } from '../roles/testReviewer';
@@ -10,6 +10,7 @@ import { BehaviorObservations, TraceValueSnapshot } from '../pipeline/evidenceCo
 import { testCodeBasis } from './reviewBasisFixture';
 
 const identity = { runId: 'review-facts-test', sourceHash: 'a'.repeat(64), target: 'score' };
+const python = resolvePythonExecutable(undefined, process.cwd());
 const code = 'import unittest\nfrom sample import score\nclass Cases(unittest.TestCase):\n'
     + '    def test_value(self):\n        value = 100\n        expected = 30.86\n'
     + '        number, label = score(value, 180)\n        self.assertEqual(number, expected)\n'
@@ -24,7 +25,7 @@ ledger.add('VERIFIED NUMERIC OBSERVATIONS (evidence only; the AI must revise the
 }));
 let cached: Promise<ReviewFacts> | undefined;
 const facts = () => cached ||= buildReviewFacts({ ...identity, code, module: 'sample',
-    python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+    python,
     env: process.env, executionVerified: true, numericEvidencePrompt: ledger.prompt(10000) });
 const constraints = (value: ReviewFacts): ReviewConstraints => ({ target: identity.target, methodKind: 'module', module: 'sample', identity, facts: value });
 const response = (line: number, category: string, reason: string, action: string, basis = testCodeBasis(line)) => JSON.stringify({ findings: [{ category,
@@ -191,7 +192,7 @@ test('only completed same-identity assertable Trace outcomes protect an expected
         cases: [{ case_id: 'c1', source: { kind: 'caller_literals' }, status: 'returned', duration_ms: 1,
             input_before: input, input_after: structuredClone(input), result_snapshot: result } as any] };
     const options = { ...identity, code, module: 'sample', executionVerified: true,
-        python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), env: process.env };
+        python, env: process.env };
     const actual = await buildReviewFacts({ ...options, observations: { ...identity, value: trace } });
     assert.equal(actual.methods[0].assertions[0].observationVerified, true);
     for (const change of [(value: BehaviorObservations) => { value.complete = false; },
@@ -211,7 +212,7 @@ const mechanicalCode = 'import unittest\nfrom unittest.mock import patch\nfrom s
     + '        channel.assert_called_once()\n        worker.send.assert_called_once_with("item")\n';
 const mechanicalFacts = (tests = mechanicalCode, executionVerified = true) => buildReviewFacts({ ...identity,
     code: tests, module: 'sample', executionVerified, env: process.env,
-    python: path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') });
+    python });
 
 test('executed bindings and interactions contradict unbound and already-present claims without approving the review', async () => {
     const current = await mechanicalFacts();

@@ -175,6 +175,12 @@
           "minimum": 0,
           "description": "%contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description%"
         },
+        "llmUnitTest.localThinkingMode": {
+          "type": "string",
+          "enum": ["provider-default", "disabled"],
+          "default": "provider-default",
+          "description": "%contributes.configuration.properties.llmUnitTest.localThinkingMode.description%"
+        },
         "llmUnitTest.cloudThinkingMode": {
           "type": "string",
           "enum": [
@@ -317,6 +323,17 @@
               }
             }
           }
+        },
+        "llmUnitTest.stopPolicy": {
+          "type": "object",
+          "default": { "failureLimit": 5, "qualityNoImprovementLimit": 3, "batchFailureLimit": 0 },
+          "additionalProperties": false,
+          "properties": {
+            "failureLimit": { "type": "integer", "minimum": 1, "default": 5 },
+            "qualityNoImprovementLimit": { "type": "integer", "minimum": 0, "default": 3 },
+            "batchFailureLimit": { "type": "integer", "minimum": 0, "default": 0 }
+          },
+          "description": "%contributes.configuration.properties.llmUnitTest.stopPolicy.description%"
         },
         "llmUnitTest.targetBudget": {
           "type": "object",

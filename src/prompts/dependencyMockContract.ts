@@ -2,9 +2,17 @@ import { createHash } from 'node:crypto';
 import { sameRecordedFile } from '../utils/fileIdentity';
 import { dependencySkillBindings } from '../skills/dependencyFacts';
 
+export const MAPPING_KEY_TYPE_GUIDANCE = 'Match controlled mapping key types to the actual source lookup and call, including explicit str/int conversions. '
+    + 'JSON object keys are strings and do not prove the Python key type; an integer key and its decimal text are different keys. Type annotations do not coerce calls. ';
+
+export const SOURCE_ASYNC_CONTROL_GUIDANCE = 'Source-awaited dependencies need awaitable behavior such as AsyncMock; keep unawaited factories and lookups synchronous. '
+    + 'For timing-independent unit cases, control source-awaited sleep/delay calls at their exact source use points with scoped async replacements and restore them afterward. '
+    + 'Never replace the selected target or change time behavior that the case is intended to assert. Verify awaited interactions when asserting those calls. ';
+
 export const SOURCE_INPUT_SHAPE_GUIDANCE = 'Source parameter.member needs an attribute-bearing fixture (for example types.SimpleNamespace), not a dict of same-named keys. '
     + 'Follow mixed accesses one level at a time: obj.member["key"] needs a mapping-valued member; obj.member.key needs attribute-bearing values. '
-    + 'Do not turn all nested values into namespaces. This applies to inputs actually passed to the target, not local stand-ins for module globals.';
+    + 'Do not turn all nested values into namespaces. This applies to inputs actually passed to the target, not local stand-ins for module globals. '
+    + MAPPING_KEY_TYPE_GUIDANCE + SOURCE_ASYNC_CONTROL_GUIDANCE;
 
 /** The structure finding is a repair task, not patch authority or an output oracle. */
 export function unusedSetupRepairGuidance(finding: { reasonCode?: string; unusedSetupName?: string }): string {
@@ -244,7 +252,9 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
         && ['module-global', 'parameter', 'literal', 'unknown'].includes(value.scope);
     const declaredParameters: unknown[] = Array.isArray(context?.signature)
         ? context.signature.map((parameter: any) => parameter?.name) : Array.isArray(context?.args) ? context.args : [];
-    const instanceReceiver = context?.class_name && context?.method_kind !== 'static' ? declaredParameters[0] : undefined;
+    // ast_extractor.signature/args already exclude the implicit bound receiver.
+    // Its source contract separately excludes receiver members as well. The
+    // first callable parameter (e.g. page) must remain a valid fixture owner.
     if (returnFlow !== undefined && (!returnFlow
         || !['normal-completion-none', 'contains-value-return', 'unknown'].includes(returnFlow.kind)
         || !Array.isArray(returnFlow.discardedCalls) || returnFlow.discardedCalls.length > 64
@@ -263,7 +273,7 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
             || !(Number.isSafeInteger(item.position) && item.position > 0 && item.keyword === undefined
                 || item.position === undefined && identifier(item.keyword)))
         || parameterMembers.some((item: any) => !item || !identifier(item.parameter)
-            || !declaredParameters.includes(item.parameter) || item.parameter === instanceReceiver
+            || !declaredParameters.includes(item.parameter)
             || !Array.isArray(item.members) || !item.members.length || item.members.length > 8 || !item.members.every(identifier)
             || !['read', 'write', 'call'].includes(item.usage) || !Number.isSafeInteger(item.line) || item.line <= 0)) { return ''; }
     if (!facts.calls.length && !facts.optionalLookups.length && !facts.sourceLocations.length
@@ -272,16 +282,20 @@ export function sourceSetupCallGuidance(module: string, context?: any): string {
     const origins = dependencySkillBindings(context);
     // A compact arrangement task precedes the original full evidence. It is
     // setup navigation, never a generated fixture or an executable candidate.
-    if (origins.length && facts.calls.length && facts.calls.length <= 8) {
+    if (facts.calls.length && facts.calls.length <= 8) {
         lines.push('DEPENDENCY_FIXTURE_PLAN_V1 (source-bound setup navigation; not code, runtime types, expected outputs or patch authorization):',
             JSON.stringify({ sourceHash: facts.targetSourceHash, target: facts.target,
                 bindings: origins, calls: facts.calls.map((call: any) => ({ callee: call.callee,
-                    ...(call.callee.split('.').every(identifier) && origins.some(binding => binding.name === call.callee.split('.')[0])
-                        ? { lookupExpression: `${module}.${call.callee}` } : {}),
+                    ...(call.callee.split('.').every(identifier)
+                        ? { lookupExpression: `${module}.${call.callee}`,
+                            lookupRoot: `${module}.${call.callee.split('.')[0]}` } : {}),
                     args: call.args.map((arg: any) => ({ ...arg, ...(arg.scope === 'module-global' ? { lookupModule: module } : {}) })),
                     keywords: call.keywords.map((arg: any) => ({ ...arg, ...(arg.scope === 'module-global' ? { lookupModule: module } : {}) })) })) }),
             'Arrange only source-supported inputs and consumed dependency members; keep unknown values unknown. '
-            + 'Use each lookupExpression in the actual target module; keep an existing client/resource instead of rebuilding or patching its factory. '
+            + 'Each lookupRoot is the binding in the actual target module, regardless of its original import location. '
+            + 'A from-import uses its bound name directly: do not insert the origin package into that lookup. '
+            + 'A lookupExpression identifies a source call, not necessarily a writable patch attribute; control a mapping/object through its root when its member is read-only. '
+            + 'Keep an existing client/resource instead of rebuilding or patching its factory. '
             + 'Then write the requested Python test method: call the real target and assert its observable result/effect under those controls. '
             + 'Do not return this plan or explain these instructions.');
     }
@@ -522,6 +536,11 @@ export function missingNameRepairGuidance(output: string): string {
 /** Conditional repair hints for mock call-count and call-argument AssertionErrors. */
 export function executionFailureRepairGuidance(output: string): string {
     const hints: string[] = [];
+    if (/^AssertionError: (?:0 != [1-9]\d*|[1-9]\d* != 0)\r?$/m.test(output)) {
+        hints.push('EMPTY RESULT SETUP CHECK: If a mapping lookup gates an early return, inspect the controlled keys and actual lookup type first. '
+            + MAPPING_KEY_TYPE_GUIDANCE
+            + 'Check supplied source and fixture values before unrelated constructor patches or changing assertions; this hint supplies no expected result.');
+    }
     if (/^TypeError: '(?:types\.)?SimpleNamespace' object is not subscriptable\r?$/m.test(output)) {
         hints.push('INPUT SHAPE REPAIR CHECK: ' + SOURCE_INPUT_SHAPE_GUIDANCE
             + ' Inspect the actual failing receiver in the supplied source; preserve the real target call, controlled values and assertion strength.');

@@ -52,6 +52,9 @@ export const reviewFactId = (kind: 'assertion' | 'call' | 'method' | 'import' | 
 };
 
 interface FactRecord { fields: Record<string, string>; relevantLines: number[]; methodRange?: [number, number] }
+const factAppliesToLine = (ref: string, fact: FactRecord, line: number): boolean => ref === 'E1'
+    || fact.relevantLines.includes(line)
+    || !!(fact.methodRange && fact.methodRange[0] <= line && line <= fact.methodRange[1]);
 /** Only explicit scalar facts are addressable. Absence never becomes false or unknown. */
 function reviewFactRecords(facts: ReviewFacts): Map<string, FactRecord> {
     const result = new Map<string, FactRecord>();
@@ -83,6 +86,19 @@ function reviewFactRecords(facts: ReviewFacts): Map<string, FactRecord> {
     return result;
 }
 
+/** Bounded correction metadata from the same records as validation. These are
+ * field names and line relationships, never a repaired finding or a verdict. */
+export function reviewEvidenceBasisRepairHints(requests: readonly { line: number; basis: ReviewEvidenceBasis }[],
+    facts?: ReviewFacts): Array<{ test_line: string; ref: string; field: string; availableFields: string[]; relevantToLine: boolean }> {
+    const records = facts ? reviewFactRecords(facts) : new Map<string, FactRecord>();
+    return requests.filter(item => ['host-fact', 'evidence-gap'].includes(item.basis.kind)).slice(0, 5).map(({ line, basis }) => {
+        const fact = records.get(basis.ref);
+        return { test_line: `L${line}`, ref: basis.ref, field: basis.field,
+            availableFields: fact ? Object.keys(fact.fields) : [],
+            relevantToLine: !!fact && factAppliesToLine(basis.ref, fact, line) };
+    });
+}
+
 /** Checks lineage and explicit premises; it does not verify arbitrary prose or an oracle. */
 export function reviewEvidenceBasisDiagnostic(basis: ReviewEvidenceBasis, line: number,
     context: { identity?: ReviewFactIdentity; facts?: ReviewFacts; requirements?: ReviewRequirements }): ReviewBasisRejection | undefined {
@@ -104,8 +120,7 @@ export function reviewEvidenceBasisDiagnostic(basis: ReviewEvidenceBasis, line: 
     if (!context.facts) { return 'evidence-reference-missing'; }
     const record = reviewFactRecords(context.facts).get(basis.ref);
     if (!record || !Object.hasOwn(record.fields, basis.field)) { return 'evidence-reference-missing'; }
-    if (basis.ref !== 'E1' && !record.relevantLines.includes(line)
-        && !(record.methodRange && record.methodRange[0] <= line && line <= record.methodRange[1])) { return 'evidence-reference-unrelated'; }
+    if (!factAppliesToLine(basis.ref, record, line)) { return 'evidence-reference-unrelated'; }
     if (record.fields[basis.field] !== basis.value) { return 'evidence-fact-contradiction'; }
     if (basis.kind === 'evidence-gap' && (!['observationStatus', 'expectedOrigin'].includes(basis.field) || basis.value !== 'unknown')) {
         return 'invalid-evidence-basis';

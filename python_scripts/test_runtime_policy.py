@@ -79,6 +79,64 @@ print('isolated-probe-denied')
                                 env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}, cwd=cwd, timeout=timeout)
         return result
 
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows stdlib version probe')
+    def test_windows_host_version_replay_restores_probe_and_still_blocks_subprocess(self):
+        script = f'''
+import sys, platform, subprocess
+sys.path.insert(0, {str(TOOLS)!r})
+import runtime_policy as policy
+original = platform._syscmd_ver
+expected = original()
+with policy.guarded_runtime():
+    assert platform._syscmd_ver() == expected
+    assert platform._syscmd_ver('s', 'r', 'v', supported_platforms=()) == ('s', 'r', 'v')
+    assert platform.win32_ver()[1]
+assert platform._syscmd_ver is original
+try:
+    with policy.guarded_runtime():
+        try: subprocess.run([sys.executable, '-c', 'pass'])
+        except Exception: pass
+except policy.RuntimePolicyError:
+    print('application-subprocess-blocked')
+else:
+    raise AssertionError('subprocess was allowed')
+assert platform._syscmd_ver is original
+'''
+        result = subprocess.run([sys.executable, '-B', '-c', script], capture_output=True,
+                                text=True, encoding='utf-8', timeout=25)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('application-subprocess-blocked', result.stdout)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows SQLAlchemy import regression')
+    def test_sqlalchemy_platform_detection_works_in_every_execution_phase(self):
+        import importlib.util
+        if importlib.util.find_spec('sqlalchemy') is None:
+            self.skipTest('SQLAlchemy is not installed in this interpreter')
+        with tempfile.TemporaryDirectory(prefix='platform-import-regression-') as directory:
+            source = Path(directory, 'neutral.py')
+            source.write_text('from sqlalchemy import create_engine\n'
+                              'def target(value): return value + 1\n', encoding='utf-8')
+            preflight_run = self.invoke('module_preflight.py', payload={
+                'file': str(source), 'module': 'neutral', 'importPaths': [directory]})
+            self.assertEqual(preflight_run.returncode, 0, preflight_run.stderr)
+            preflight = json.loads(preflight_run.stdout)
+            self.assertTrue(preflight['ok'], preflight)
+            trace = self.invoke('dynamic_tracer.py', [source, 'target', '[[1]]'])
+            facts = json.loads(trace.stdout)
+            self.assertEqual(facts['examples'][0]['result'], '2', facts)
+            test = Path(directory, 'generated.py')
+            test.write_text('import unittest\nfrom neutral import target\n'
+                            'class Cases(unittest.TestCase):\n'
+                            '    def test_target(self): self.assertEqual(target(1), 2)\n', encoding='utf-8')
+            native = self.invoke('generated_test_runner.py', ['generated'], cwd=directory)
+            self.assertEqual(native.returncode, 0, native.stderr)
+            mutation = self.invoke('basic_mutation_runner.py', [source, test, '4', '5', 'target'],
+                                   cwd=directory, timeout=45)
+            self.assertEqual(mutation.returncode, 0, mutation.stderr)
+            report = json.loads(mutation.stdout)
+            self.assertTrue(report['baseline_passed'], report)
+            self.assertGreater(report['killed'], 0, report)
+
     def test_import_and_trace_block_swallowed_real_reads_and_loopback(self):
         operations = [
             "open(__file__).read()",

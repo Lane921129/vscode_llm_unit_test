@@ -51,9 +51,14 @@ def import_diagnostic(error, source_root=None):
     diagnostic = {'stage': 'module-import', 'exception_type': name,
             'message': message,
             'missing_module': missing if type(missing) is str else None,
-            'traceback': (''.join(traceback.format_list(frames)) + name + ': ' + message)[-5000:]}
+            # Locations remain useful; source-line text may contain resource paths or secrets.
+            'traceback': (''.join(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n'
+                                  for frame in frames) + name + ': ' + message)[-5000:]}
     if isinstance(error, TraceSafetyError):
         diagnostic['blocked_operation'] = message.removeprefix('Dynamic trace safety gate blocked ')[:120]
+        resource = vars(error).get('resource_diagnostic')
+        if type(resource) is dict:
+            diagnostic['resource'] = resource
     if source_root:
         root = os.path.normcase(os.path.realpath(source_root))
         tool_files = {os.path.normcase(os.path.realpath(path)) for path in

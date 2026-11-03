@@ -1,4 +1,5 @@
 import { mergeBugFixReplacement } from '../roles/bugFixer';
+import { LocalThinkingMode } from './localThinking';
 import { spawn } from 'child_process';
 import { MODEL_QUALIFICATION_EXECUTION_TIMEOUT_MS } from './connectionTimeout';
 import {
@@ -20,6 +21,7 @@ export type LocalRequalificationRole = 'writer' | 'reviewer' | 'bug-fixer';
 export interface LocalRuntimeRequalificationOptions {
     /** The caller must send this same validated num_ctx for every request. */
     numCtx: number;
+    thinkingMode?: LocalThinkingMode;
     /** Only a previously verified Bug Fixer needs to retain that role at the new capacity. */
     includeBugFixer?: boolean;
     /** The caller owns transport, cancellation, the shared deadline and target accounting. */
@@ -101,7 +103,7 @@ function applyExecution(status: RoleQualificationStatus, execution: boolean | Ru
 }
 
 export interface LocalRuntimeRequalificationResult extends ModelQualificationProfile {
-    qualificationRuntime: { version: typeof LOCAL_RUNTIME_QUALIFICATION_VERSION; numCtx: number };
+    qualificationRuntime: { version: typeof LOCAL_RUNTIME_QUALIFICATION_VERSION; numCtx: number; thinkingMode?: LocalThinkingMode };
     qualificationVersion: typeof QUALIFICATION_VERSION;
     roleQualification: RoleQualificationProfile;
     testGenerationReady: boolean;
@@ -118,7 +120,8 @@ export interface LocalRuntimeRequalificationResult extends ModelQualificationPro
 export async function requalifyLocalRuntime(
     options: LocalRuntimeRequalificationOptions
 ): Promise<LocalRuntimeRequalificationResult> {
-    const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: options.numCtx };
+    const qualificationRuntime = { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx: options.numCtx,
+        ...(options.thinkingMode ? { thinkingMode: options.thinkingMode } : {}) };
     if (!isLocalRuntimeQualification(qualificationRuntime)) { throw new Error('invalid-runtime-context'); }
     const executor = options.executor ?? runLocalRuntimeQualificationProbe;
     const writerResponse = await options.request('writer', '', PLAIN_TEST_GENERATION_PROBE_PROMPT, 'text');

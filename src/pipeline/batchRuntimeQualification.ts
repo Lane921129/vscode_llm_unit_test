@@ -54,7 +54,7 @@ export class BatchRuntimeQualification {
     }
     private preferenceKey(identity: RuntimeQualificationIdentity): string {
         return digest(JSON.stringify([identity.endpointKey, identity.modelName, identity.qualificationVersion,
-            identity.pythonIdentity, identity.scopeIdentity]));
+            identity.pythonIdentity, identity.scopeIdentity, identity.thinkingMode ?? 'provider-default']));
     }
     preferredContext(identity: RuntimeQualificationIdentity): number | undefined {
         return this.current() ? this.preferred.get(this.preferenceKey(identity)) : undefined;

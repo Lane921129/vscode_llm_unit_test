@@ -552,9 +552,11 @@ function normalizePythonTransportBlock(code: string): string {
  * it blank.  The extractor never accepts prose: it returns a fence only when
  * it contains unittest/TestCase evidence (or a test method in addition mode),
  * otherwise it leaves the response for the normal structural validator to reject.
- * Additions require a single complete fence: never choose between partial drafts.
+ * Additions and method edits require a single complete fence. Method edits
+ * unwrap transport only: the AST compositor must see fixture-only and other
+ * out-of-scope Python rather than mistake its rejected wrapper for syntax.
  */
-export function extractPythonTestCode(response: string, shape: 'file' | 'addition' = 'file'): string {
+export function extractPythonTestCode(response: string, shape: 'file' | 'addition' | 'method-edit' = 'file'): string {
     const raw = unwrapGeneratedCodeEnvelope(response);
     const unwrapped = raw.trim();
     // Legacy model wrappers are transport markup, never Python expressions.
@@ -583,11 +585,12 @@ export function extractPythonTestCode(response: string, shape: 'file' | 'additio
         return normalizePythonTransportBlock(bracket ? bracket[1] : raw);
     }
 
-    if (shape === 'addition' && (fencedBlocks.length !== 1 || opening)) { return unwrapped; }
+    if (shape !== 'file' && (fencedBlocks.length !== 1 || opening)) { return unwrapped; }
 
     const hasUnittestEvidence = (block: { language: string; code: string }) => {
         if (shape === 'file') { return /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(block.code); }
         if (!['', 'python', 'py', 'json'].includes(block.language)) { return false; }
+        if (shape === 'method-edit') { return true; }
         const code = executablePythonText(unwrapGeneratedCodeEnvelope(block.code));
         return /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(code)
             || /^[ \t]*(?:async[ \t]+)?def[ \t]+test[\p{ID_Continue}]*[ \t]*\(/mu.test(code);

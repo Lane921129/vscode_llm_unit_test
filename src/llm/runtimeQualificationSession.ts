@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { LocalRuntimeRequalificationResult } from './localRuntimeRequalification';
 import { RoleQualificationProfile, RoleQualificationStatus } from './roleQualification';
 import { LOCAL_RUNTIME_QUALIFICATION_VERSION } from './modelQualification';
+import { LocalThinkingMode, localThinkingMode } from './localThinking';
 
 /** All identities are bound by the caller to the current batch's verified runtime. */
 export interface RuntimeQualificationIdentity {
@@ -9,6 +10,7 @@ export interface RuntimeQualificationIdentity {
     endpointKey: string;
     modelName: string;
     numCtx: number;
+    thinkingMode?: LocalThinkingMode;
     qualificationVersion: string;
     /** Selected interpreter + interpreter/environment fingerprint, not just 'python'. */
     pythonIdentity: string;
@@ -24,7 +26,7 @@ function identityKey(identity: RuntimeQualificationIdentity): string | undefined
     }
     // No normalization can accidentally combine different endpoints or models.
     return createHash('sha256').update(JSON.stringify([identity.endpointKey, identity.modelName, identity.numCtx,
-        identity.qualificationVersion, identity.pythonIdentity, identity.scopeIdentity])).digest('hex');
+        identity.qualificationVersion, identity.pythonIdentity, identity.scopeIdentity, localThinkingMode(identity.thinkingMode)])).digest('hex');
 }
 
 function completedEvidence(status: RoleQualificationStatus): boolean {
@@ -54,7 +56,8 @@ function copyResult(result: LocalRuntimeRequalificationResult): LocalRuntimeRequ
             }
         } } : {}) };
     };
-    return { qualificationRuntime: { version: result.qualificationRuntime.version, numCtx: result.qualificationRuntime.numCtx },
+    return { qualificationRuntime: { version: result.qualificationRuntime.version, numCtx: result.qualificationRuntime.numCtx,
+        ...(result.qualificationRuntime.thinkingMode ? { thinkingMode: result.qualificationRuntime.thinkingMode } : {}) },
         qualificationVersion: result.qualificationVersion,
         roleQualification: { writer: role(result.roleQualification.writer), reviewer: role(result.roleQualification.reviewer),
             bugFixer: role(result.roleQualification.bugFixer) },
@@ -82,6 +85,7 @@ export class RuntimeQualificationSession {
         if (!key || result.qualificationVersion !== identity.qualificationVersion
             || result.qualificationRuntime.version !== LOCAL_RUNTIME_QUALIFICATION_VERSION
             || result.qualificationRuntime.numCtx !== identity.numCtx
+            || localThinkingMode(result.qualificationRuntime.thinkingMode) !== localThinkingMode(identity.thinkingMode)
             || !completedEvidence(result.roleQualification.writer) || !completedEvidence(result.roleQualification.reviewer)) { return false; }
         const copied = copyResult(result);
         if (!completedEvidence(copied.roleQualification.bugFixer)) {

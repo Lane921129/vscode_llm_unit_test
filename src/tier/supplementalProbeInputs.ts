@@ -119,14 +119,21 @@ export function buildSupplementalProbeInputs(
     }
 
     const materialize = (values: ReadonlyMap<string, SafeScalar>): SupplementalProbeInput => {
-        const args = fixedParameters
-            .filter(parameter => parameter.kind === 'positional_only')
-            .map(parameter => values.get(parameter.name));
+        // These are unexecuted proposals. Use positional arguments while the
+        // signature has no omission hole; Trace will execute and record this
+        // exact form. Existing caller observations are never rewritten.
+        const args: unknown[] = [];
         const kwargs: Record<string, unknown> = {};
+        let positionalHole = false;
         for (const parameter of fixedParameters) {
-            if (parameter.kind === 'positional_only') {continue;}
             const value = values.get(parameter.name);
-            if (value !== undefined) {kwargs[parameter.name] = value;}
+            if (parameter.kind !== 'keyword_only' && !positionalHole && value !== undefined) {
+                args.push(value);
+            } else if (value !== undefined) {
+                kwargs[parameter.name] = value;
+            } else if (parameter.kind !== 'keyword_only') {
+                positionalHole = true;
+            }
         }
         return { args, kwargs };
     };

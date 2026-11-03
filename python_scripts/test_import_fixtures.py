@@ -16,6 +16,34 @@ TOOLS = Path(__file__).resolve().parent
 
 
 class ImportFixtureTests(unittest.TestCase):
+    def test_external_copy_binding_cannot_reclassify_application_code_or_changed_dependencies(self):
+        sys.path.insert(0, str(TOOLS))
+        from import_fixtures import ImportFixtures
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, trial, external = base / 'app', base / 'trial', base / 'external'
+            for folder in (root, trial, external):
+                folder.mkdir()
+            original, copied = external / 'dependency.py', trial / 'dependency.py'
+            original.write_text('def launch(): return None\n', encoding='utf-8')
+            copied.write_bytes(original.read_bytes())
+            digest = hashlib.sha256(original.read_bytes()).hexdigest()
+            source = root / 'app.py'
+            source.write_text('def target(): return 1\n', encoding='utf-8')
+            plan = self.plan(root, [{'file': 'app.py'}])
+            plan['trialRoot'] = str(trial)
+            plan['externalSourceCopies'] = [{'sourceFile': str(original), 'resolvedFile': str(copied), 'sourceHash': digest}]
+            with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan)}):
+                ImportFixtures()
+            copied.write_text('def launch(): return 2\n', encoding='utf-8')
+            with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan)}):
+                with self.assertRaisesRegex(ValueError, 'identity changed'):
+                    ImportFixtures()
+            plan['externalSourceCopies'][0]['sourceFile'] = str(source)
+            with patch.dict(os.environ, {'LLM_UNIT_TEST_IMPORT_FIXTURES': json.dumps(plan)}):
+                with self.assertRaisesRegex(ValueError, 'application code'):
+                    ImportFixtures()
+
     def test_selected_mutant_rebinds_self_dependency_without_approving_other_changes(self):
         sys.path.insert(0, str(TOOLS))
         from import_fixtures import ImportFixtures, mutation_environment

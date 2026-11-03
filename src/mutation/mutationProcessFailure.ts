@@ -23,7 +23,10 @@ export function mutationProcessFailure(engine: string, result: { code: number | 
     const stderr = exception ? summarizeImportException({ exception_type: exception[1], message: exception[2] }) : undefined;
     const reason = stdout?.diagnosticCode || stdout?.error
         || (stderr ? `${stderr.exceptionType}: ${stderr.message}` : 'no-structured-diagnostic');
-    return new AnalysisStageError('mutation', 'mutation-execution',
+    const environmentBlocked = stdout?.error === 'external-engine-unavailable'
+        || stdout?.diagnosticCode === 'package-missing' || stdout?.diagnosticCode === 'unsupported-platform'
+        || stderr?.exceptionType === 'ModuleNotFoundError' || stderr?.exceptionType === 'ImportError';
+    return new AnalysisStageError(environmentBlocked ? 'environment' : 'tool', 'mutation-execution',
         localize('突變引擎 {0} 執行失敗；已停止，不改用其他引擎。', engine)
             + ` (exitCode=${result.code ?? 'signal'}; ${reason})`,
         { engine, exitCode: result.code, reason, stdout, stderr });

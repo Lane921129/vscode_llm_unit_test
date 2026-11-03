@@ -3,6 +3,20 @@ import { test } from 'node:test';
 import { measuredOutputRateMilli, mergeModelCapabilitySummaries, summarizeModelCapability } from '../llm/modelCapabilitySummary';
 import { renderModelCapabilitySummary } from '../pipeline/targetReport';
 
+test('fractional milliseconds and tokens aggregate only as valid completed pairs', () => {
+    const event = (evalCount: unknown, evalDurationMs: unknown, outcome = 'completed') => ({
+        version: 'model-request-timing-v1', kind: 'transport', outcome, ollama: { evalCount, evalDurationMs }
+    });
+    const summary = summarizeModelCapability([event(10, 100.25), event(20, 200.5),
+        event(900, null), event(null, 800), event(50, 0), event(100, 2, 'timeout'), event(1, Infinity)]);
+    assert.equal(summary.outputTokens, 30);
+    assert.equal(summary.outputEvalMs, 300.75);
+    assert.equal(measuredOutputRateMilli(summary), Math.floor(30 * 1_000_000 / 300.75));
+    assert.deepEqual(mergeModelCapabilitySummaries([summary]), summary);
+    assert.deepEqual(mergeModelCapabilitySummaries([summary, { ...summary, outputTokens: 900, outputEvalMs: 0 }]), summary,
+        'historical summaries with tokens but no timing must not distort another measured rate');
+});
+
 test('capability summaries retain only aggregate completed transport evidence', () => {
     const summary = summarizeModelCapability([
         { version: 'model-request-timing-v1', kind: 'transport', outcome: 'completed',

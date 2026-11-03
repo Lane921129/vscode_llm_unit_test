@@ -12,6 +12,42 @@ import { CandidateCheckpointStore } from '../pipeline/candidateCheckpoint';
 import { AI_WORKFLOW_VERSION } from '../pipeline/aiWorkflow';
 import { SOURCE_VERSIONS_VERSION } from '../pipeline/sourceVersions';
 
+test('batch failure limit stops dispatch after the Nth final failure and labels remaining targets as policy-not-run', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-stop-policy-'));
+    try {
+        const directory = createBatchDirectory(root, 'fixed-minute', 'project');
+        const batch = new BatchJournal(directory, root, { model: 'fixture', buildTimestamp: 'build', python: 'python',
+            stopPolicy: { batchFailureLimit: 2 } });
+        const file = path.join(root, 'sample.py');
+        batch.discover(file, ['blocked', 'failure1', 'failure2', 'unstarted']);
+        batch.start();
+        for (let id = 0; id < 3; id++) {
+            assert.equal(batch.stopDispatch(), false);
+            batch.begin(id);
+            const name = ['blocked', 'failure1', 'failure2'][id];
+            const targetDir = createAnalysisDirectory(root, 'fixed-minute', file, name, 'project', root, directory);
+            batch.attach(id, targetDir);
+            fs.writeFileSync(path.join(targetDir, 'final_report.md'), 'failed report');
+            const journal = new AnalysisJournal(targetDir, 'source', name, 'fixture');
+            journal.record(0, 'pipeline', 'failed', {});
+            journal.knowledge({ terminalStatus: 'failed', failureCategory: id === 0 ? 'environment' : 'validation',
+                failureStage: id === 0 ? 'mutation-environment' : 'target-failure-policy',
+                failureCount: id === 0 ? 0 : 5, failureLimit: 5, stopReason: id === 0 ? 'environment-blocked' : 'failure-limit' });
+            batch.refresh(id);
+        }
+        assert.equal(batch.stopDispatch(), true);
+        batch.finish('completed');
+        const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'batch_manifest.json'), 'utf8'));
+        assert.equal(manifest.status, 'policy-stopped');
+        assert.equal(manifest.stopReason, 'batch-failure-limit');
+        assert.equal(manifest.targets[3].terminalStatus, 'policy-not-run');
+        assert.equal(manifest.targets[3].modelRequests, 0);
+        assert.equal(manifest.attemptedTargets, 3);
+        assert.equal(manifest.targets[1].failureCount, 5);
+        assert.equal(manifest.allTargetsPassed, false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('batch inventory distinguishes completion, verified passes, skips and incomplete provenance across reruns', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-journal-'));
     try {

@@ -1,11 +1,30 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildWriterAdditionRevisionPrompt, buildWriterAdditionSystemPrompt, buildWriterExpansionPrompt,
+    buildWriterAdditionRepairPrompt,
     buildWriterSeedPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
     selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction, buildWriterMethodEditPrompt,
     getWriterMethodEditSystemPrompt } from '../roles/writerPhases';
 import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
 import { getExecutionWriterSystemPrompt } from '../roles/unittestWriter';
+
+test('addition format recovery preserves the original focus and provides precise merge guidance', () => {
+    const original = 'SOURCE_EXACT\nOBSERVED_CASE_EXACT\nBASELINE_EXACT\ndef test_add_selected(self):\n';
+    for (const reason of ['invalid-python-structure', 'unsupported-addition-context',
+        'existing-test-method-changed', 'fixture-definition-conflict', 'class-header-conflict', 'repeated-candidate']) {
+        const repaired = buildWriterAdditionRepairPrompt(original, reason, 'PRECISE_MERGE_FAILURE',
+            { kind: 'IndentationError', line: 1, column: 2 });
+        assert.ok(repaired.startsWith(original));
+        assert.equal(repaired.split(original).length, 2);
+        assert.match(repaired, /WRITER_ADDITION_FORMAT_REPAIR_V1/);
+        assert.ok(repaired.includes(reason));
+        assert.match(repaired, /PRECISE_MERGE_FAILURE/);
+        assert.match(repaired, /replacement addition only/);
+        assert.match(repaired, /selected method signature and modification scope/);
+        assert.match(repaired, /independent Reviewer approval and quality measurement/);
+        assert.doesNotMatch(repaired, /WRITER_REVISION_REQUEST|complete current unittest file/);
+    }
+});
 
 test('method revisions supply exact AST owner headers without placeholder class names', () => {
     const prompt = buildWriterMethodEditPrompt('complete read-only baseline and evidence', { baselineHash: 'base', planHash: 'plan',

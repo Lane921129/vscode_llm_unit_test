@@ -9,6 +9,7 @@ import { mergeBugFixReplacement } from '../roles/bugFixer';
 import { LocalRuntimeRequalificationResult, RuntimeQualificationProbeExecution } from './localRuntimeRequalification';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
+import { LocalThinkingMode } from './localThinking';
 
 export type ProbeRole = 'writer' | 'reviewer' | 'bugFixer';
 export const CONNECTION_PROBE_OUTPUT_TOKEN_LIMIT = 1024;
@@ -21,11 +22,11 @@ export interface ConnectionProbeEvent {
     elapsedMs: number; reasonCode?: string; reason?: string; httpStatus?: number; roleState?: RoleQualificationStatus['state'];
     contextTokens?: number; outputTokenLimit?: number;
 }
-export function unprobedLocalQualification(numCtx: number): LocalRuntimeRequalificationResult {
+export function unprobedLocalQualification(numCtx: number, thinkingMode?: LocalThinkingMode): LocalRuntimeRequalificationResult {
     if (!Number.isSafeInteger(numCtx) || numCtx <= 0) { throw new TypeError('Invalid runtime context'); }
     const pending = (): RoleQualificationStatus => ({ state: 'not-run', reason: localize('尚未執行事先角色資格測試。') });
     return { qualificationVersion: QUALIFICATION_VERSION,
-        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx },
+        qualificationRuntime: { version: LOCAL_RUNTIME_QUALIFICATION_VERSION, numCtx, ...(thinkingMode ? { thinkingMode } : {}) },
         testGenerationReady: false, testGenerationMode: 'plain', testGenerationReason: pending().reason,
         roleQualification: { writer: pending(), reviewer: pending(), bugFixer: pending() } };
 }
@@ -40,11 +41,12 @@ function unavailable(reason: ProbeFailure, role: ProbeRole): RoleQualificationSt
  * Each successful role still requires its own contract and execution evidence. */
 export async function qualifyLocalConnection(options: {
     numCtx: number; timeoutMs: number;
+    thinkingMode?: LocalThinkingMode;
     request: (role: ProbeRole, prompt: string, format: 'text' | 'review-json') => Promise<string | undefined>;
     execute: (code: string) => Promise<RuntimeQualificationProbeExecution>;
     onEvent?: (event: ConnectionProbeEvent) => void;
 }): Promise<LocalRuntimeRequalificationResult> {
-    const result = unprobedLocalQualification(options.numCtx);
+    const result = unprobedLocalQualification(options.numCtx, options.thinkingMode);
     const roles: RoleQualificationProfile = result.roleQualification;
     const prompts = { writer: PLAIN_TEST_GENERATION_PROBE_PROMPT, reviewer: REVIEWER_QUALIFICATION_PROMPT,
         bugFixer: BUG_FIXER_QUALIFICATION_PROMPT };

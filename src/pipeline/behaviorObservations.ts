@@ -68,6 +68,11 @@ export function parseBehaviorObservations(raw: string | unknown, target: string)
     if (value.input_deduplication !== undefined && !validDeduplication(value.input_deduplication)) {
         return invalidContract('Invalid probe case planning contract', 'invalid-probe-case-plan');
     }
+    if (value.input_rejections !== undefined && (!Array.isArray(value.input_rejections)
+        || !value.input_rejections.every((item: unknown) => object(item) && validOrigin(item.source)
+            && item.source.kind === 'caller_literals' && item.reason === 'unreplayable-caller-input'))) {
+        return invalidContract('Invalid rejected probe input diagnostic', 'invalid-input-rejections');
+    }
     const cases = new Map(value.cases.map((item: ProbeCaseObservation) => [item.case_id, item]));
     if (cases.size !== value.cases.length) { return invalidContract('Duplicate controlled observation case identity', 'duplicate-case-identity'); }
     const observed = new Set<string>();
@@ -205,6 +210,7 @@ export function mergeBehaviorObservations(initial: BehaviorObservations | undefi
         examples: unique(observations.filter(item => item.exception === undefined)),
         errors: unique(observations.filter(item => item.exception !== undefined)),
         cases,
+        input_rejections: unique([...(initial.input_rejections || []), ...(additional.input_rejections || [])]),
         blocked_operations: unique([...(initial.blocked_operations || []), ...(additional.blocked_operations || [])]),
         input_source: 'semantic_guided' };
 }

@@ -12,6 +12,24 @@ const evidence: WriterEvidenceBundleV3 = {
     evidencePriority: ['executed-observations', 'explicit-source-paths', 'ast-structure', 'analyst-hypotheses-and-rule-guidance']
 };
 
+test('addition prompts retain source/setup while asking for a new method instead of a whole file', () => {
+    const target = 'def target(value):\n    return helper(value) + LIMIT\n';
+    const helper = 'def helper(value):\n    return value * 2\n';
+    const context = { name: 'target', code: target, args: ['value'], target_import_module: 'sample',
+        referenced_globals: [{ name: 'LIMIT', code: 'LIMIT = 99' }],
+        dependencyContexts: [{ name: 'helper', code: helper, args: ['value'] }] };
+    const full = getUserPrompt('sample.py', 'target', target, 'small', context, '', 6000, '', evidence);
+    const addition = getUserPrompt('sample.py', 'target', target, 'small',
+        { ...context, writerGenerationPhase: 'addition' }, '', 6000, '', evidence);
+    assert.ok(addition.length < full.length);
+    assert.ok(addition.includes(target));
+    assert.ok(addition.includes(helper));
+    assert.ok(addition.includes('LIMIT = 99'));
+    assert.ok(addition.includes(sourceHash));
+    assert.match(addition, /requested NEW unittest method only/);
+    assert.doesNotMatch(addition, /Write one complete unittest file|GeneratedSeedTests|WRITER_SEED_PACKAGING/);
+});
+
 test('full large Writer retains required source and setup through the same concise projection as small', () => {
     const target = 'def target(value):\n    return helper(value) + LIMIT\n';
     const helper = 'def helper(value):\n    return value * 2\n';

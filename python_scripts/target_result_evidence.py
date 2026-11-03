@@ -5,6 +5,7 @@ No submitted code is executed. Unsupported flows do not manufacture evidence.
 import ast
 import textwrap
 from ast_extractor import function_scope_bindings
+from target_bindings import target_references
 
 
 def dotted(node):
@@ -116,6 +117,7 @@ def has_target_result_assertion(tree, context):
     target = context.get('target', '')
     root = context.get('module', '') + ('.' + owner if owner else '')
     selected = root + '.' + target
+    target_refs = target_references(tree, selected)
     module_aliases = aliases.copy()
     state_function, parameter_writes = direct_parameter_writes(context)
     namespace_module_aliases = {}
@@ -167,9 +169,7 @@ def has_target_result_assertion(tree, context):
             namespace_authorized = state_safe
 
             def is_target(node):
-                return resolve(node, hidden) == selected or bool(owner and isinstance(node, ast.Attribute)
-                    and node.attr == target and (dotted(node.value) in instances or (
-                        isinstance(node.value, ast.Call) and resolve(node.value.func, hidden) == root)))
+                return id(node) in target_refs
 
             def derived(node):
                 if isinstance(node, ast.Await):

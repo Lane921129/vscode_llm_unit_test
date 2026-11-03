@@ -19,6 +19,30 @@ export type WriterAdditionMergeResult = ({ ok: true; addedMethodsCount: number; 
 export type WriterAdditionContext = { ok: true; contextCode: string; methodIds: string[]; baselineHash: string }
     | { ok: false; reasonCode: string };
 
+export async function writerAdditionCompletionPrefix(options: {
+    baseline: string; methodName: string; isAsync: boolean | undefined; python: string; env?: NodeJS.ProcessEnv;
+}): Promise<{ ok: true; prefix: string; baselineHash: string } | { ok: false; reasonCode: string }> {
+    const run = await runSpawn(options.python, ['-B', pythonToolPath('testMerge')], {
+        input: JSON.stringify({ mode: 'writer-addition-prefix-v1', baseline: options.baseline,
+            methodName: options.methodName, isAsync: options.isAsync }), env: options.env, timeout: 5000
+    });
+    if (run.code === 0) {
+        try {
+            const value = JSON.parse(run.stdout);
+            if (value.schemaVersion === 'writer-addition-prefix-v1') {
+                const baselineHash = createHash('sha256').update(options.baseline).digest('hex');
+                const prefix = `${options.isAsync ? 'async ' : ''}def ${options.methodName}(self):\n`;
+                if (value.ok === true && typeof options.isAsync === 'boolean' && value.baselineHash === baselineHash
+                    && value.prefix === prefix) { return { ok: true, prefix, baselineHash }; }
+                if (value.ok === false && typeof value.reasonCode === 'string' && /^[a-z-]+$/.test(value.reasonCode)) {
+                    return { ok: false, reasonCode: value.reasonCode };
+                }
+            }
+        } catch { /* No partial prefix from a failed tool. */ }
+    }
+    return { ok: false, reasonCode: 'prefix-tool-error' };
+}
+
 /** Prompt-only AST view for fixture-free suites. The original baseline remains
  * the sole executed/preserved artifact; this projection grants no approval. */
 export async function projectWriterAdditionContext(options: {

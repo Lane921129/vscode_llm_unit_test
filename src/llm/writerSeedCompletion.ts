@@ -15,3 +15,14 @@ export function writerSeedCompletionPrompt(system: string, prompt: string, prefi
 export function assembleWriterSeedCompletion(prefix: string, response: string): string {
     return /^\s*```(?:python|py)\s*\r?\n/.test(response) ? response : prefix + response;
 }
+
+export function writerAdditionCompletionPrompt(system: string, prompt: string, prefix: string): string {
+    return (system + '\n' + prompt).split('\n').map(line => '# ' + line).join('\n')
+        + '\n# Continue ONLY the new test method body below. Reuse the baseline imports and fixtures.\n'
+        + '# Write the setup, real target call and assertions yourself. Add method-local imports if needed.\n'
+        + '# Return indented Python, without explanations or a repeated method signature.\n' + prefix;
+}
+
+export function assembleWriterAdditionCompletion(prefix: string, response: string): string {
+    return response.startsWith(prefix) ? response : assembleWriterSeedCompletion(prefix, response);
+}

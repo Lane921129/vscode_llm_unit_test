@@ -5,6 +5,8 @@ export interface ImportIssue {
     issue: string;
     advice: string;
     origin?: { file: string; line: number };
+    resource?: { id: string; fixtureType: 'text' | 'directory' | 'sqlite' };
+    fixtureExample?: object;
 }
 
 export interface ImportExceptionSummary {
@@ -99,5 +101,21 @@ export function describeImportIssue(diagnostic: any, stage: string): ImportIssue
     if (origin && typeof origin.file === 'string' && origin.file.length <= 1000 && !/^[\\/]|:|[\r\n|]/.test(origin.file)
         && !origin.file.split(/[\\/]/).some((part: string) => part === '..' || part === '')
         && Number.isSafeInteger(origin.line) && origin.line > 0) { result.origin = { file: origin.file, line: origin.line }; }
+    if (value.resource && /^resource-[a-f0-9]{16}$/.test(value.resource.id)
+        && ['text', 'directory', 'sqlite'].includes(value.resource.fixtureType)) {
+        result.resource = { id: value.resource.id, fixtureType: value.resource.fixtureType };
+    }
+    if (value.exception_type === 'TraceSafetyError') {
+        const kind = value.blocked_operation === 'resource-schema-required' ? 'sqlite' : result.resource?.fixtureType;
+        if (kind) {
+            result.fixtureExample = { file: result.origin?.file || '<source-file.py>', resources: [{
+                path: '<logical-resource-path-from-source>', kind,
+                ...(kind === 'text' ? { text: '<test-only-content>' } : {}),
+                ...(kind === 'sqlite' ? { tables: [{ name: '<table-from-project-schema>',
+                    columns: [{ name: '<column-from-project-schema>', type: 'TEXT' }], rows: [] }] } : {})
+            }] };
+            result.advice += ' ' + localize('請依來源位置確認邏輯資源路徑，填入測試用內容或原專案 schema；補齊前停止生成測試。');
+        }
+    }
     return result;
 }

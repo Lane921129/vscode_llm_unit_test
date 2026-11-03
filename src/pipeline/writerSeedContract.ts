@@ -108,7 +108,7 @@ export function validateWriterSeedContract(input: WriterSeedEvidenceInput & { fa
 }
 
 /** Render the selected executed case once. Typed trees remain in artifacts. */
-export function seedCaseFactsForPrompt(input: WriterSeedEvidenceInput): string {
+function observedCaseFactsForPrompt(input: WriterSeedEvidenceInput, addition: boolean): string {
     const selected = selectedSeedCase(input);
     if (!selected) { return ''; }
     const observedResult = selected.result && traceValuePythonLiteral(selected.result.value);
@@ -116,14 +116,42 @@ export function seedCaseFactsForPrompt(input: WriterSeedEvidenceInput): string {
     const fact = selected.fact;
     const targetCall = input.targetKind === 'sync-top-level-function' && !input.identity.target.includes('.')
         ? observedTargetCallForPrompt(input.identity.target, selected.case.input_before) : undefined;
-    return 'WRITER_SEED_CASE_FACTS_V1\n' + JSON.stringify({ ...input.identity, caseId: selected.case.case_id,
+    const pythonCase = selected.result
+        ? '\nSELECTED_CASE_PYTHON_LITERALS\n'
+            + (targetCall ? `Target call expression: ${targetCall}\n` : 'Use the selected target binding and exact input literals above.\n')
+            + `Observed return value (Python literal): ${observedResult}\n`
+            + 'This call returned normally. Assert its returned value; do not expect an exception for this input. '
+        : '\nSELECTED_CASE_PYTHON_LITERALS\n'
+            + (targetCall ? `Target call expression: ${targetCall}\n` : 'Use the selected target binding and exact input literals above.\n')
+            + `Observed exception class: ${selected.exception!.module}.${selected.exception!.qualname}\n`
+            + 'This call raised that exact exception. Check it without assuming a returned value. ';
+    return (addition ? 'WRITER_ADDITION_CASE_FACTS_V1\n' : 'WRITER_SEED_CASE_FACTS_V1\n')
+        + JSON.stringify({ ...input.identity, caseId: selected.case.case_id,
         args: fact.args, kwargs: fact.kwargs || {},
         ...(targetCall ? { targetCall } : {}),
         ...(fact.constructor_args?.length ? { constructorArgs: fact.constructor_args } : {}),
         ...(fact.constructor_kwargs && Object.keys(fact.constructor_kwargs).length ? { constructorKwargs: fact.constructor_kwargs } : {}),
         observedOutcome: selected.case.status,
         ...(selected.result ? { observedResult } : { exception: selected.exception }),
-        instruction: 'Use this selected observed case only: one test method and one exact target call. '
+        instruction: (addition
+            ? 'Implement this exact observed call and assertion in the NEW method. Include EVERY supplied bound case in that method, with fresh per-case state. '
+            : 'Use this selected observed case only: one test method and one exact target call. ')
             + 'If targetCall is provided, copy its Python literals exactly; do not swap arguments or choose another Analyst or model-suggested input. '
-            + 'These are executed implementation observations, not independent requirements. Execution, assertion evidence and Reviewer approval remain required.' });
+            + 'These are executed implementation observations, not independent requirements. Execution, assertion evidence and Reviewer approval remain required.' })
+        + pythonCase
+        + 'The JSON record is host metadata, not a Python fixture. args/kwargs/observedResult contain Python literal spellings, '
+        + 'not runtime strings or a dictionary to unpack. Write the literal call and expected value directly in your own test body; '
+        + 'do not copy the metadata, call eval, parse strings or reuse another case\'s exception.';
+}
+
+export function seedCaseFactsForPrompt(input: WriterSeedEvidenceInput): string {
+    return observedCaseFactsForPrompt(input, false);
+}
+
+/** At most two individually proved observations; no synthesized expectations. */
+export function additionCaseFactsForPrompt(input: WriterSeedEvidenceInput): string {
+    const ids = input.selectedCaseIds;
+    if (!ids?.length || ids.length > 2 || new Set(ids).size !== ids.length) { return ''; }
+    const blocks = ids.map(id => observedCaseFactsForPrompt({ ...input, selectedCaseIds: [id] }, true));
+    return blocks.every(Boolean) ? blocks.join('\n\n') : '';
 }

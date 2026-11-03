@@ -1,10 +1,11 @@
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { ReviewFactIdentity, ReviewFacts, reviewAssertionObservationStatus, reviewFactsForPrompt, validReviewExpectedOrigin } from './reviewFacts';
+import { traceValuePythonLiteral } from '../pipeline/probeInputs';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { redactCredentialStrings } from '../pipeline/artifactSafety';
 import { isReviewEvidenceBasis, ReviewBasisRejection, ReviewEvidenceBasis, ReviewRequirements,
-    reviewEvidenceBasisDiagnostic, validReviewRequirements } from './reviewEvidenceBasis';
+    reviewEvidenceBasisDiagnostic, reviewFactId, validReviewRequirements } from './reviewEvidenceBasis';
 
 export const REVIEW_FINDING_LIMIT = 5;
 export const REVIEW_CATEGORIES = {
@@ -101,14 +102,33 @@ export function reviewableLineIds(tests: string): string[] {
     return tests.split(/\r?\n/).flatMap((line, index) => line.trim() && !/^\s*#/.test(line) ? [`L${index + 1}`] : []);
 }
 
+/** Readable projection of supplied same-call facts, never a review verdict or a
+ * new oracle. Complete typed facts remain alongside it for independent review. */
+function verifiedAssertionResults(facts?: ReviewFacts): string {
+    if (!facts) { return ''; }
+    const results = facts.methods.flatMap((method, index) => method.assertions.flatMap((assertion, child) => {
+        const call = method.calls.find(item => item.line === assertion.targetCallLine);
+        if (assertion.targetResult !== true || reviewAssertionObservationStatus(assertion) !== 'verified'
+            || call?.observationReturned !== true || assertion.expected === undefined) { return []; }
+        const expected = traceValuePythonLiteral(assertion.expected.value);
+        const reference = reviewFactId('assertion', index, child);
+        const value = expected !== undefined && expected.length <= 600 ? `Python literal ${expected}` : `the typed expected value in ${reference}`;
+        return [`${reference} at L${assertion.line}: ${assertion.kind} compares the real target result from L${call.line} with ${value}. `
+            + `The exact-input returned observation matches this assertion (${reference}.observationStatus=verified, `
+            + `${reviewFactId('call', index, method.calls.indexOf(call))}.observationReturned=true).`];
+    }));
+    return results.length ? '\nVERIFIED_ASSERTION_RESULTS_V1 (implementation observations, not independent requirements):\n'
+        + results.join('\n') + '\nMissing scenarios and independent source/contract defects still require review.\n' : '';
+}
+
 /** Review is an assessment, never a replacement test file or execution verdict. */
 export function getTestReviewerSystemPrompt(): string {
-    return `You are the test Reviewer. Inspect tests; never replace code.
-Return ONLY {"findings":[]} when no concrete defect is shown, otherwise ONE findings array with at most ${REVIEW_FINDING_LIMIT} items; no quota, echoes or text outside JSON.
+    return `You are the Python unittest Reviewer. Inspect the actual TEST_FILE against the supplied source, execution results and observations; never replace code.
+Return exactly one JSON object containing a findings array with at most ${REVIEW_FINDING_LIMIT} items. List concrete demonstrated defects. If there are none, the array is empty. There is no quota; do not echo instructions or add text outside JSON.
 Each finding has exactly: category, test_line, reason, action, basis. Cite a VALID_TEST_LINE_IDS line showing the TEST_FILE defect, never source/context, blanks, comments or unrelated lines.
 Every basis has kind, ref, field, value (strings). host-fact: copy a supplied id's present field and exact value (booleans "true"/"false"). Allowed fields: E=executionVerified; I=binding/origin; H=name/kind; M=name; A=kind/targetResult/expectedOrigin/expectedType/observationStatus; C=observationReturned. evidence-gap: assertion observationStatus or expectedOrigin="unknown", never a wrong result. test-code: ref=test_line, field="judgment", value="unverified" means semantic advice. requirement: supplied R-id, field="statement", exact supplied statement as value. Never invent requirements or derive them from source formulas or observations.
 Categories: setup-error, target-binding, assertion-evidence, mock-isolation for existing constraint violations; missing-scenario, assertion-quality, typing-style for missing cases, weak assertions or optional style, not failed execution.
-Reason explains evidence; action specifies a test-only change. No generic advice, source edits or Markdown.
+Reason explains evidence; action specifies a concrete change to Python test code. Host fields (executionVerified, observationReturned, observationStatus) are read-only evidence, never assertions or flags to add to a test. No generic advice, source edits or Markdown.
 Audit every test case's actual target call, input and expected return/exception: constructor/setup, argument types and keyword order. The reason must name the asserted input/expected pair and its source-supported contract, exact-input observation or same-test dependency mock; cite the relevant observation/fact ID when supplied.
 Replacing a return assertion with an exception check requires the exact input, a concrete exception class, and its source/contract or controlled observation basis. An exact-input returned observation contradicts a mechanical exception claim for that call. New inputs and explicit business requirements stay separate findings; request missing evidence, never invent exceptions.
 Input-state assertions must follow the real call on the same controlled object. Missing return facts do not disprove them; verify expected state separately.
@@ -118,7 +138,7 @@ ISOLATED_EXECUTION_PASSED confirms this exact file imported and ran; its AST-res
 Never mock the target. Dependency patches must match complete actual use points; importing patch proves no patch. Mock call assertions test interactions; return checks need source/contract evidence.
 Fixed expected values require exact-input assertable observations or explicit same-test dependency mocks. Uncontrolled clocks/randomness, model hypotheses, source formulas and annotations are not independent oracles; annotations do not enforce input types.
 HOST_VERIFIED_REVIEW_FACTS binds supplied test facts. TestCase is harness, not target. Keep observed values and exact strings; never mock scalars. assertRaises checks exceptions, not setup failure.
-With verified execution and verified+same-call observationReturned, literal/tuple assertions need no recalculation. Independent requirements remain reviewable.
+With verified execution and verified+same-call observationReturned, literal/tuple assertions need no recalculation. assertEqual(target(input), expected) and assertEqual(result, expected) already check the returned value when result is bound to that call. An identical assertion is not a correction. Independent requirements remain reviewable.
 expectedOrigin: static-literal=fixed literal/local literal alias; unknown=unproven provenance, not computed or wrong. Fixed syntax does not prove independent requirements; do not request an unspecified fixed replacement.
 Execution is not full quality; missing cases and stronger assertions remain reviewable. Review cannot certify execution or mutation.${isolatedResourceSystemRule()}`;
 }
@@ -364,6 +384,26 @@ export function parseTestReview(raw: string, tests: string, requireCurrent = fal
     return parseTestReviewDetailed(raw, tests, requireCurrent).review;
 }
 
+/** Host-owned context must be valid before requesting or interpreting an assessment. */
+export function reviewContextDiagnostic(tests: string, constraints?: ReviewConstraints): ReviewRejectionCode | undefined {
+    if (constraints?.requirements && !validReviewRequirements(constraints.requirements, constraints.identity)) {
+        return 'requirement-identity-mismatch';
+    }
+    if (constraints?.facts) {
+        const { facts, identity } = constraints;
+        if (!identity || facts.testHash !== evidenceHash(tests) || facts.target !== constraints.target
+            || facts.module !== constraints.module || facts.runId !== identity.runId || facts.sourceHash !== identity.sourceHash
+            || facts.target !== identity.target) { return 'review-facts-identity-mismatch'; }
+        if (facts.methods.some(method => method.assertions.some(assertion => reviewAssertionObservationStatus(assertion) === undefined))) {
+            return 'review-facts-observation-shape';
+        }
+        if (facts.methods.some(method => method.assertions.some(assertion => !validReviewExpectedOrigin(assertion)))) {
+            return 'review-facts-expected-origin-shape';
+        }
+    }
+    return undefined;
+}
+
 /** Codes only: diagnostics never echo source, credentials or provider content. */
 export function parseTestReviewDetailed(raw: string, tests: string, requireCurrent = false,
     constraints?: ReviewConstraints): { review?: TestReview; diagnostics: ReviewRejectionCode[] } {
@@ -372,21 +412,8 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
         if (!diagnostics.includes(code)) { diagnostics.push(code); }
         return undefined;
     };
-    if (constraints?.requirements && !validReviewRequirements(constraints.requirements, constraints.identity)) {
-        reject('requirement-identity-mismatch'); return { diagnostics };
-    }
-    if (constraints?.facts) {
-        const { facts, identity } = constraints;
-        if (!identity || facts.testHash !== evidenceHash(tests) || facts.target !== constraints.target
-            || facts.module !== constraints.module || facts.runId !== identity.runId || facts.sourceHash !== identity.sourceHash
-            || facts.target !== identity.target) { reject('review-facts-identity-mismatch'); return { diagnostics }; }
-        if (facts.methods.some(method => method.assertions.some(assertion => reviewAssertionObservationStatus(assertion) === undefined))) {
-            reject('review-facts-observation-shape'); return { diagnostics };
-        }
-        if (facts.methods.some(method => method.assertions.some(assertion => !validReviewExpectedOrigin(assertion)))) {
-            reject('review-facts-expected-origin-shape'); return { diagnostics };
-        }
-    }
+    const contextFailure = reviewContextDiagnostic(tests, constraints);
+    if (contextFailure) { return { diagnostics: [contextFailure] }; }
     const candidates = jsonObjects(raw);
     if (requireCurrent && candidates.length > 1) { reject('invalid-envelope'); return { diagnostics }; }
     for (const candidate of candidates) {
@@ -416,7 +443,7 @@ export function fitReviewPrompt(parts: { tests: string; evidence: string; execut
         throw new TypeError('Review requirements are not bound to this source identity');
     }
     const requirements = parts.requirements ? '\nHOST_REVIEW_REQUIREMENTS_V1\n' + JSON.stringify(parts.requirements) : '';
-    const prompt = `REVIEW_REQUEST_V8\nCASE_AUDIT: Check every test input and expected return/exception. Give each finding a structured basis and an actionable test-only correction; test-code judgments remain unverified.\n${parts.executionVerified === true ? 'ISOLATED_EXECUTION_PASSED: this exact TEST_FILE imported and executed successfully.\n' : ''}VALID_TEST_LINE_IDS: ${reviewableLineIds(parts.tests).join(', ')}\n<TEST_FILE>\n${numberReviewLines(parts.tests)}\n</TEST_FILE>\n\n<REVIEW_CONTEXT>\n${parts.evidence}${parts.facts ? '\n' + reviewFactsForPrompt(parts.facts) : ''}${requirements}\n</REVIEW_CONTEXT>`;
+    const prompt = `REVIEW_REQUEST_V8\nCASE_AUDIT: Check every test input and expected return/exception. Give each finding a structured basis and an actionable test-only correction; test-code judgments remain unverified.\n${parts.executionVerified === true ? 'ISOLATED_EXECUTION_PASSED: this exact TEST_FILE imported and executed successfully.\n' : ''}<REVIEW_CONTEXT>\n${parts.evidence}${parts.facts ? '\n' + reviewFactsForPrompt(parts.facts) : ''}${requirements}\n</REVIEW_CONTEXT>\n${verifiedAssertionResults(parts.facts)}\nVALID_TEST_LINE_IDS: ${reviewableLineIds(parts.tests).join(', ')}\n<TEST_FILE>\n${numberReviewLines(parts.tests)}\n</TEST_FILE>\nAssess this exact TEST_FILE. Report concrete defects or missing cases with an actionable Python-test change; do not turn satisfied host facts into missing flags to add. Return one findings JSON object; an empty array requires that no concrete defect is demonstrated.`;
     return prompt.length <= maxChars ? prompt : undefined;
 }
 

@@ -1,3 +1,4 @@
+import { currentStopPolicy } from '../pipeline/stopPolicy';
 import { createHash } from 'node:crypto';
 import { boundedRoleAttemptDeadline } from '../llm/requestTiming';
 import { currentTargetBudget } from '../pipeline/targetBudget';
@@ -73,15 +74,22 @@ export async function semanticWithContractRepair(options: SemanticContractOption
     };
     let prompt = options.prompt;
     let previousResponseHash: string | undefined;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : attempt < 2; attempt++) {
+        currentStopPolicy()?.beginAttempt();
         check();
         const requestStartedAt = now();
         const requestDeadlineAt = options.attemptTimeoutSeconds === undefined ? deadlineAt
             : boundedRoleAttemptDeadline(deadlineAt, options.attemptTimeoutSeconds, requestStartedAt);
         const attemptAllowanceMs = Math.max(0, requestDeadlineAt - requestStartedAt);
         // Transport, cancellation and prompt-budget errors propagate; no repair request follows them.
-        const raw = await options.request(prompt, requestDeadlineAt,
-            attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0, deadlineAt);
+        let raw: string;
+        try { raw = await options.request(prompt, requestDeadlineAt,
+            attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0, deadlineAt); }
+        catch (error) {
+            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            currentStopPolicy()!.reject('semantic-response-format');
+            continue;
+        }
         check();
         const { analysis: normalized, diagnostic } = parseSemanticAnalysisDetailed(raw);
         const scoped = normalized && restrictSemanticInputHintsToTargetParameters(normalized, options.targetParameters);
@@ -99,7 +107,8 @@ export async function semanticWithContractRepair(options: SemanticContractOption
         });
         previousResponseHash = responseHash;
         if (parsed) { return parsed; }
-        if (attempt === 0) {
+        currentStopPolicy()?.reject('semantic-response-format');
+        if (currentStopPolicy() || attempt === 0) {
             const repairStartedAt = now();
             const repairDeadlineAt = options.attemptTimeoutSeconds === undefined ? deadlineAt
                 : boundedRoleAttemptDeadline(deadlineAt, options.attemptTimeoutSeconds, repairStartedAt);

@@ -114,14 +114,14 @@ test('full and execution repair the current Checker candidate locally; rejected 
             }
             response = '```python\n' + (scenario === 'scope' ? seed.replace('token = make_token()', 'token = None')
                 : scenario === 'unchanged' ? 'class Cases:\n' + seed.slice(seed.indexOf('    def test_seed')) : fixed) + '\n```';
-            if (scenario === 'syntax') { response = '```python\nclass Cases:\n    def test_seed(self):\n        token = (\n```'; }
+            if (scenario === 'syntax' || scenario === 'syntax-recover' && edits < 3) { response = '```python\nclass Cases:\n    def test_seed(self):\n        token = (\n```'; }
             if (scenario === 'ambiguous') { response += '\nAnother option:\n```python\n' + fixed + '\n```'; }
             if (scenario === 'side-effect') { response = '```python\n' + effectFixed + '\n```'; }
             if (scenario === 'http-client') { response = '```python\n' + httpFixed + '\n```'; }
         } else if (scenario === 'unused-known-names'
             && /WRITER_REVISION_REQUEST_V2|ACTUAL VALIDATION FAILURE/.test(request.prompt)) {
             wholeRevisions++;
-            assert.equal(wholeRevisions, 1, 'the original bounded retry is retained');
+            assert.ok(wholeRevisions <= 2, 'whole-file retries share the configured three-failure limit');
             assert.match(request.prompt, /SOURCE_UNUSED_SETUP_GUIDANCE_V1/);
             assert.match(request.prompt, /unused dependency result assigned to 'spare'/);
             response = '```python\n' + activeSeed + '\n```';
@@ -138,7 +138,7 @@ test('full and execution repair the current Checker candidate locally; rejected 
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
         for (const mode of ['full', 'execution']) {
-            for (const variant of ['success', 'unused-setup', 'unused-known-names', 'scope', 'unchanged', 'syntax', 'ambiguous', ...(mode === 'execution' ? ['side-effect', 'http-client'] : [])]) {
+            for (const variant of ['success', 'unused-setup', 'unused-known-names', 'scope', 'unchanged', 'syntax', 'syntax-recover', 'ambiguous', ...(mode === 'execution' ? ['side-effect', 'http-client'] : [])]) {
                 await t.test(`${mode}/${variant}`, async () => {
                     scenario = variant; writers = 0; edits = 0; reviews = 0; wholeRevisions = 0; reviewCode = ''; messages.length = 0;
                     activeSeed = variant === 'side-effect' ? effectSeed : variant === 'http-client' ? httpSeed
@@ -147,6 +147,7 @@ test('full and execution repair the current Checker candidate locally; rejected 
                     fs.writeFileSync(file, activeSource);
                     const output = path.join(root, `${mode}-${variant}`);
                     await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture',
+                        stopPolicy: { failureLimit: variant === 'syntax-recover' ? 4 : 3 },
                         maxLoops: 1, timeoutSeconds: 60, targetTimeoutSeconds: 300, promptStrategy: 'tier1',
                         requireRoleQualification: false, validationMode: mode, mutationEngine: 'builtin',
                         filePath: file, funcName: 'target', outputPath: output });
@@ -163,7 +164,7 @@ test('full and execution repair the current Checker candidate locally; rejected 
                     if (variant === 'unused-known-names') {
                         assert.equal(edits, 0);
                         assert.equal(planned, undefined);
-                        assert.equal(wholeRevisions, 1);
+                        assert.equal(wholeRevisions, 2);
                         assert.equal(reviews, 0);
                         assert.equal(knowledge.terminalStatus, 'failed');
                         assert.equal(fs.existsSync(path.join(directory, 'executable_baseline.json')), false);
@@ -174,12 +175,17 @@ test('full and execution repair the current Checker candidate locally; rejected 
                         assert.equal(fs.readFileSync(file, 'utf8'), activeSource);
                         return;
                     }
-                    assert.equal(edits, 1, JSON.stringify(knowledge.lastFailure));
+                    assert.equal(edits, variant === 'syntax-recover' ? 3 : ['syntax', 'ambiguous', 'unchanged'].includes(variant) ? 2 : 1, JSON.stringify(knowledge.lastFailure));
+                    if (['syntax', 'ambiguous', 'unchanged'].includes(variant)) {
+                        assert.equal(knowledge.failureCount, 3);
+                        assert.equal(knowledge.stopReason, 'failure-limit');
+                    }
+                    if (variant === 'syntax-recover') { assert.equal(knowledge.failureCount, 3); }
                     assert.ok(planned, JSON.stringify(events.slice(-4)));
                     if (variant === 'unused-setup') {
                         assert.equal(planned.detail.precedingStructureReasonCode, 'writer-unused-dependency-setup');
                     }
-                    if (variant === 'success' || variant === 'unused-setup' || variant === 'side-effect' || variant === 'http-client') {
+                    if (variant === 'success' || variant === 'syntax-recover' || variant === 'unused-setup' || variant === 'side-effect' || variant === 'http-client') {
                         assert.ok(events.some(event => event.stage === 'writer-method-edit' && event.status === 'applied'));
                         const baseline = JSON.parse(fs.readFileSync(path.join(directory,
                             mode === 'full' ? 'executable_baseline.json' : 'execution_baseline.json'), 'utf8'));

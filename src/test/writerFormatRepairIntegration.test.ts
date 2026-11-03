@@ -82,9 +82,10 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                     : malformed;
             }
             else if (scenario === 'review-scope') {
-                assert.match(request.prompt, /WRITER_REVIEW_CORRECTION_V1/);
-                response = writers === 2 ? good.replace('\n```', '\n    def test_unrelated(self):\n        self.assertEqual(increment(2), 3)\n```')
-                    : good.replace('def test_seed(self):\n', 'def test_seed(self):\n        """Verify the observed increment input and result."""\n');
+                assert.match(request.prompt, /WRITER_METHOD_EDIT_V1/);
+                response = '```python\nclass Cases:\n    def test_seed(self):\n'
+                    + '        self.assertEqual(increment(1), 2)\n'
+                    + '    def test_unrelated(self):\n        self.assertEqual(increment(2), 3)\n```';
             } else if (scenario === 'length-recovery') {
                 assert.match(request.prompt, /WRITER_OUTPUT_FORMAT_REPAIR_V1/); response = good;
             }
@@ -111,6 +112,7 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                 scenario = mode; writers = 0; reviews = 0; requests.length = 0;
                 const output = path.join(root, mode);
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-format-proof',
+                    stopPolicy: { failureLimit: 2 },
                     filePath: sourceFile, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full',
                     maxLoops: 1, timeoutSeconds: mode === 'length-recovery' ? 6000 : 45,
                     targetBudget: mode === 'length-recovery' ? { timeoutMs: 6000000 } : undefined,
@@ -129,19 +131,23 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                     assert.equal(failed.length, 0);
                     assert.ok(events.some(event => event.stage === 'candidate-methods' && event.status === 'tool-unavailable'));
                     assert.match(reports, /inventory tool did not complete/);
-                } else if (['reviewer-type', 'review-scope', 'length-recovery'].includes(mode)) {
-                    assert.equal(writers, mode === 'reviewer-type' ? 1 : mode === 'review-scope' ? 3 : 2,
+                } else if (mode === 'review-scope') {
+                    assert.equal(writers, 2, 'a method edit outside its scope must stop without a wider retry');
+                    assert.equal(failed.length, 0);
+                    const knowledgeFile = files.find(name => path.basename(name) === 'function_knowledge.json');
+                    assert.ok(knowledgeFile);
+                    const knowledge = JSON.parse(fs.readFileSync(path.join(output, knowledgeFile), 'utf8'));
+                    assert.equal(knowledge.failureStage, 'writer-method-edit-scope');
+                    assert.equal(events.filter(event => event.stage === 'validation' && event.status === 'passed').length, 1);
+                    assert.ok(!events.some(event => event.stage === 'mutation'));
+                } else if (['reviewer-type', 'length-recovery'].includes(mode)) {
+                    assert.equal(writers, mode === 'reviewer-type' ? 1 : 2,
                         JSON.stringify(events.filter(event => ['failed', 'error', 'budget-exceeded', 'tool-unavailable', 'invalid-response'].includes(event.status))));
                     assert.equal(failed.length, 0);
                     if (mode === 'reviewer-type') {
                         assert.equal(reviews, 2);
                         assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
                             && event.detail.diagnostics.includes('expected-literal-type-contradiction')));
-                    }
-                    if (mode === 'review-scope') {
-                        assert.ok(events.some(event => event.stage === 'writer-review-scope' && event.status === 'rejected'));
-                        assert.equal(events.filter(event => event.stage === 'validation' && event.status === 'passed').length, 2,
-                            'the expanded candidate must not execute');
                     }
                     if (mode === 'length-recovery') {
                         const retry = events.find(event => event.stage === 'model-request' && event.status === 'output-format-retry');
@@ -157,7 +163,7 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                     assert.match(reports, /A completed explanation before the test/);
                     assert.doesNotMatch(JSON.stringify(failed), /SOURCE_PRIVATE_SENTINEL/);
                 }
-                if (['repair', 'reviewer-type', 'review-scope', 'length-recovery'].includes(mode)) {
+                if (['repair', 'reviewer-type', 'length-recovery'].includes(mode)) {
                     assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'approved'));
                     assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'));
                 } else {

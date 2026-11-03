@@ -22,6 +22,16 @@ function observations(): BehaviorObservations {
             result_snapshot: snap({ type: 'int', value }) })) };
 }
 
+test('addition case selection skips complete calls already present in the executed baseline', () => {
+    const all = observations();
+    const before = JSON.stringify(all);
+    assert.deepEqual(selectWriterSeedCaseIds(all, [input('1').call_graph!]), ['case-1']);
+    assert.equal(selectWriterSeedCaseIds(all, [input('1').call_graph!, input('2').call_graph!]), undefined);
+    assert.deepEqual(selectWriterSeedCaseIds(all, [input('1', '9').call_graph!]), ['case-0'],
+        'different constructor state is a different call');
+    assert.equal(JSON.stringify(all), before);
+});
+
 test('seed selects one complete exact scenario without mutating full evidence or affecting revision context', () => {
     const all = observations(), before = JSON.stringify(all);
     const selected = selectWriterSeedCaseIds(all);
@@ -39,6 +49,10 @@ test('seed selects one complete exact scenario without mutating full evidence or
     const revision = buildWriterRevisionContext({ module: 'neutral', name: 'read', source: 'def read(value): return value',
         context: { traceResult: all }, scenarioCaseIds: selected, evidence });
     assert.match(revision, /case-0/); assert.match(revision, /case-1/);
+    const addition = buildWriterRevisionContext({ module: 'neutral', name: 'read', source: 'def read(value): return value',
+        context: { traceResult: all, writerGenerationPhase: 'addition', writerScenarioCaseIds: ['case-1'] }, evidence });
+    assert.match(addition, /case-1/);
+    assert.doesNotMatch(addition, /case-0|Write one complete unittest file/);
 });
 
 test('unknown, incomplete, ambiguous and unassertable seed evidence retains all scenarios', () => {

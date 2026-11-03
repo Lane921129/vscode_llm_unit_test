@@ -1,7 +1,7 @@
 import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
 import { loadTargetProbeFixtures, ProbeFixtureIdentity } from './pipeline/probeInputFixtures';
 import { traceTimingPreferences } from './pipeline/traceStartupBudget';
-import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics } from './pipeline/generatedRunnerDiagnostics';
+import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics, readNativeTimeoutFeedback } from './pipeline/generatedRunnerDiagnostics';
 import { localize, withLanguage } from './i18n/core';
 import { initI18n } from './i18n';
 import * as vscode from 'vscode';
@@ -24,14 +24,15 @@ import { formatModelRequestTimeout } from './pipeline/modelRequestTimingPresenta
 import { validatePassingTestPreservation } from './pipeline/passingTestPreservation';
 import { passingTestIds, summarizeRepairOutput } from './validation/repairFeedback';
 import { buildWriterSeedPrompt, buildWriterExpansionPrompt, buildWriterAdditionRevisionPrompt,
+    buildWriterAdditionRepairPrompt,
     buildWriterAdditionSystemPrompt, buildWriterSeedSystemPrompt, buildWriterCaseAdditionPrompt,
     selectWriterAdditionMethodName, buildWriterAdditionMethodInstruction } from './roles/writerPhases';
 import { bindQualityTaskObservations, QualityTaskEvidence, qualityTasksForWriter,
     qualityFocusInputDiagnostic, qualityFocusInputMismatchDetail, formatQualityFocusInputMismatch,
     qualityInputAlreadyTested, qualityFocusCasesForPrompt,
     resolveQualityTaskTraceCaseIds } from './pipeline/qualityTaskEvidence';
-import { selectWriterSeedCaseIds } from './prompts/compactWriterContext';
-import { seedCaseFactsForPrompt, validateWriterSeedContract } from './pipeline/writerSeedContract';
+import { selectWriterSeedCaseIds, selectWriterAdditionCaseIds } from './prompts/compactWriterContext';
+import { seedCaseFactsForPrompt, additionCaseFactsForPrompt, validateWriterSeedContract } from './pipeline/writerSeedContract';
 import { composeFocusedWriterAdditions } from './pipeline/focusedWriterAdditions';
 import { getRuntimeContextPreference, RuntimeContextPreference } from './llm/runtimeContextPreferences';
 import { LocalRuntimeMetadataDiagnostic } from './llm/localRuntimeMetadata';
@@ -40,7 +41,7 @@ import { NumericEvidenceLedger } from './pipeline/numericEvidenceLedger';
 import { verificationMode, VerificationMode } from './pipeline/verificationMode';
 import { runExecutionVerification } from './pipeline/executionVerification';
 import { readSavedWriterCandidate, SavedWriterCandidateRequest } from './pipeline/savedWriterCandidate';
-import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, executionHelperRepairGuidance, sourceHelperUsePointNames, sourceLiteralRepairGuidance, unusedSetupRepairGuidance } from './prompts/dependencyMockContract';
+import { EXECUTION_DEPENDENCY_BOUNDARY_GUIDANCE, executionHelperRepairGuidance, sourceHelperUsePointNames, sourceLiteralRepairGuidance, sourceSetupCallGuidance, unusedSetupRepairGuidance } from './prompts/dependencyMockContract';
 import { getExecutionWriterSystemPrompt, getExecutionWriterPrompt } from './roles/unittestWriter';
 import { repairSourceLiteralArgument, repairSourceMockReceiver, repairSourceTestBinding, repairSourceMockSetup, repairSourceParameterMock } from './pipeline/sourceLiteralArgumentRepair';
 import { compareCoverageQuality, coverageGapIds } from './pipeline/qualityRegression';
@@ -48,8 +49,9 @@ import { AnalysisJournal, evidenceHash, QualityProgress } from './pipeline/analy
 import { CandidateCheckpointStore, CandidateCoverage } from './pipeline/candidateCheckpoint';
 import { SOURCE_VERSIONS_VERSION, sourceVersionsCurrent } from './pipeline/sourceVersions';
 import { TargetBudget, TargetBudgetLimits, currentTargetBudget, runWithTargetBudget, planAnalysisTargetBudget } from './pipeline/targetBudget';
+import { currentStopPolicy, normalizeStopPolicy, runWithStopPolicy, TargetStopPolicy, StopPolicySettings } from './pipeline/stopPolicy';
 import { parseBehaviorObservations, recoverBehaviorProgress, mergeBehaviorObservations } from './pipeline/behaviorObservations';
-import { buildProbeInputs, callerForPrompt, TypedProbeInputsV1 } from './pipeline/probeInputs';
+import { buildProbeInputs, callerForPrompt, typedCallFields, TypedProbeInputsV1 } from './pipeline/probeInputs';
 import { createDefaultQualityPolicy } from './pipeline/qualityPolicy';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { snapshotExecutionTargetBudget } from './pipeline/executionTimingSettings';
@@ -84,7 +86,7 @@ import { dispatchTestRules } from './pipeline/testRuleDispatcher';
 import { pythonToolPath } from './pipeline/pythonTools';
 import { extractFunctionsWithAst, findPythonFilesInDir } from './utils/utils';
 import { mergeTestSnippets, mergeTestSnippetsPreservingBaseline, mergeWriterTestAddition,
-    extractWriterAdditionCode, projectWriterAdditionContext } from './validation/testMerger';
+    extractWriterAdditionCode, projectWriterAdditionContext, writerAdditionCompletionPrefix } from './validation/testMerger';
 import { buildGoogleGenerateContentRequest, getGoogleGeneratedText, GoogleGenerateContentRequest, googleThinkingSession, resolveGoogleApiKey } from './llm/cloudApi';
 import { buildOllamaPromptEnvelope } from './llm/ollamaPrompt';
 import { addOutputContract, buildCustomChatCompletionBody, CustomOutputFormat, getCustomChatCompletionText, isStructuredResponseUsable, responseSchemaForOutputFormat, shouldRetryStructuredOutputAsText } from './llm/customApi';
@@ -133,6 +135,7 @@ import { CONTEXT_GROWTH_INPUT_HEADROOM_TOKENS, planContextGrowth } from './promp
 import { requalifyLocalRuntime, runLocalRuntimeQualificationProbe, runtimeQualificationExecutionBudget } from './llm/localRuntimeRequalification';
 import { runtimeRoleAuthorization } from './llm/runtimeQualificationSession';
 import { unprobedLocalQualification } from './llm/connectionQualification';
+import { LocalThinkingMode, localThinkingMode, localThinkingOptions } from './llm/localThinking';
 import { currentBatchRuntimeQualification, initializeBatchRuntimeQualification } from './pipeline/batchRuntimeQualification';
 import { planWriterOutputGrowth, WriterOutputBudget } from './prompts/writerOutputBudget';
 import { planTraceStartupBudget } from './pipeline/traceStartupBudget';
@@ -140,8 +143,9 @@ import { getCompletedOllamaText, outputShape, readOutputShapeDiagnostic } from '
 import { buildModelOutputPreview, diagnoseModelOutput, readModelOutputPreview, writerOutputFormatCorrection } from './llm/modelOutputDiagnostics';
 import { readCandidateMethodInventory, CandidateSyntaxDiagnostic } from './pipeline/candidateMethodInventory';
 import { buildWriterSeedFormatRepairPrompt, buildWriterReviewCorrectionPrompt, buildWriterMethodEditPrompt, getWriterMethodEditSystemPrompt } from './roles/writerPhases';
-import { planWriterMethodEdits, planWriterNameBindingEdits, applyWriterMethodEdits, WriterMethodEditPlan } from './validation/writerMethodEdits';
-import { writerSeedCompletionPrompt, assembleWriterSeedCompletion } from './llm/writerSeedCompletion';
+import { planWriterMethodEdits, planWriterNameBindingEdits, applyWriterMethodEdits, isWriterMethodEditFormatFailure, writerMethodEditFormatGuidance, WriterMethodEditPlan } from './validation/writerMethodEdits';
+import { writerSeedCompletionPrompt, assembleWriterSeedCompletion, writerAdditionCompletionPrompt,
+    assembleWriterAdditionCompletion } from './llm/writerSeedCompletion';
 import { writerSeedCodePrefix } from './pipeline/targetContract';
 import { formatSourceLineContext } from './pipeline/sourceLineContext';
 import { prepareParameterFixtureExperiments, ParameterFixtureSession, checkParameterFixtureReplay, parameterFixtureReplayInstruction, type FixtureEvidence } from './pipeline/parameterFixtureExperiments';
@@ -159,7 +163,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { runSpawn } from './utils/processRunner';
+import { ProcessTimeoutError, runSpawn } from './utils/processRunner';
 import { existingRealPath } from './utils/fileIdentity';
 import { ExecutionManager, currentExecution, runInExecution, isExecutionCancelled, throwIfExecutionCancelled } from './pipeline/executionContext';
 
@@ -186,7 +190,9 @@ async function assessFunctionComplexity(
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
         return JSON.parse(stdout.trim()) as ComplexityResult;
-    } catch {
+    } catch (error) {
+        throwIfExecutionCancelled();
+        if (error instanceof AnalysisStageError) { throw error; }
         return { score: 30, level: 'Moderate', reasons: ['parse error, defaulting to Moderate'] };
     }
 }
@@ -197,11 +203,13 @@ async function assessFunctionComplexity(
  */
 async function runSequentially<T>(
     tasks: (() => Promise<T>)[],
-    onError: (message: string) => void
+    onError: (message: string) => void,
+    shouldStart: () => boolean = () => true
 ): Promise<(T | undefined)[]> {
     const results: (T | undefined)[] = [];
     for (let index = 0; index < tasks.length; index++) {
         throwIfExecutionCancelled();
+        if (!shouldStart()) { break; }
         try {
             results.push(await tasks[index]());
         } catch (err: any) {
@@ -298,7 +306,7 @@ interface ModelSnapshot {
 const analysisRuns = new ExecutionManager<ModelSnapshot>();
 interface AnalysisView { webview?: Pick<vscode.Webview, 'postMessage'> }
 
-type AnalysisModelSelection = Pick<AnalysisParams, 'envType' | 'modelName' | 'ollamaUrl' | 'customUrl'>;
+type AnalysisModelSelection = Pick<AnalysisParams, 'envType' | 'modelName' | 'ollamaUrl' | 'customUrl' | 'localThinkingMode'>;
 
 /** Resolve the exact initial model/context once with the same policy as targets. */
 function initialAnalysisModel(params: AnalysisModelSelection, modelSnapshot: ModelSnapshot) {
@@ -327,7 +335,8 @@ function initialAnalysisModel(params: AnalysisModelSelection, modelSnapshot: Mod
     const activeModelProfile = { ...selectedModelProfile,
         budgetTokens: localRuntime?.ok ? localRuntime.inputBudget : selectedModelProfile.budgetTokens };
     const qualificationRequest = { envType: params.envType, modelName: params.modelName,
-        endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow };
+        endpointKey: selectedEndpointKey, runtimeContextTokens: requestContextWindow,
+        localThinkingMode: params.localThinkingMode };
     return { selectedEndpointKey, selectedModelProfile, contextPreference, localRuntime,
         requestContextWindow, activeModelProfile, qualificationRequest };
 }
@@ -378,6 +387,8 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
     if (writerSeedPromptMode !== 'instruction' && writerSeedPromptMode !== 'code-completion') {
         throw new AnalysisStageError('validation', 'writer-prompt-policy', 'Invalid Writer seed prompt mode.');
     }
+    const stopPolicy = Object.freeze(normalizeStopPolicy((params as Partial<AnalysisParams>).stopPolicy
+        ?? config.get<unknown>('stopPolicy', {})));
     const environmentLease = AnalysisEnvironmentLease.acquire(pythonEnvironmentActivity);
     if (!environmentLease) {
         const hadActiveAnalysis = analysisRuns.hasActiveRun;
@@ -388,7 +399,8 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
         return;
     }
     const selectedParams = params.envType === 'local' ? { ...params,
-        ollamaUrl: params.ollamaUrl || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434') } : params;
+        ollamaUrl: params.ollamaUrl || config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434'),
+        localThinkingMode: localThinkingMode(params.localThinkingMode ?? config.get('localThinkingMode', 'provider-default')) } : params;
     const execution = analysisRuns.begin({ current: currentModelProfile, stored: storedModelProfiles,
         writerSeedPromptMode,
         requireRoleQualification: required,
@@ -407,7 +419,7 @@ async function runAnalysisSession<T extends AnalysisModelSelection & Partial<Pic
     const log = (text: string) => { void view.webview?.postMessage({ command: 'appendLog', text }); };
     sidebar.beginAnalysis(execution.id);
     // Group this run's results under its local date and minute.
-    const runParams = { ...selectedParams, sessionDate: formatSessionDate() };
+    const runParams = { ...selectedParams, sessionDate: formatSessionDate(), stopPolicy };
     await withLanguage(() => runInExecution(execution, async () => {
         try {
             // Capture once for the entire run; retries and later batch targets
@@ -498,6 +510,7 @@ interface AnalysisParams {
     timeoutSeconds: number;
     /** Immutable run-level limits selected before any target or request starts. */
     targetBudget?: Partial<TargetBudgetLimits>;
+    stopPolicy?: Partial<StopPolicySettings>;
     outputPath: string;
     customUrl?: string;
     customKey?: string;
@@ -512,6 +525,8 @@ interface AnalysisParams {
     requestOutputTokens?: number;
     /** Optional caller-owned Ollama prompt-evaluation batch; neither context nor output limit. */
     requestPromptBatchTokens?: number;
+    /** Frozen before the run; provider reasoning is distinct from output/context budgets. */
+    localThinkingMode?: LocalThinkingMode;
     /** Internal seed completion scope; not a saved model capability. */
     requestSeedCompletion?: boolean;
     /** Internal batch inventory; never serialized with provider credentials. */
@@ -694,7 +709,7 @@ export function activate(context: vscode.ExtensionContext) {
                     runParams.sessionDate || formatSessionDate(), projectName);
                 const batch = new BatchJournal(batchDirectory, runParams.batchPath, {
                     model: runParams.modelName, buildTimestamp: extensionBuildIdentity.buildTimestamp,
-                    python: runParams.pythonExecutable, validationMode: runParams.validationMode
+                    python: runParams.pythonExecutable, validationMode: runParams.validationMode, stopPolicy: runParams.stopPolicy
                 });
                 let outcome: 'completed' | 'cancelled' | 'failed' | 'environment-blocked' = 'failed';
                 try {
@@ -745,7 +760,7 @@ export function activate(context: vscode.ExtensionContext) {
                                     ...runParams, filePath: file, funcName: target,
                                     projectName, batchJournal: batch, batchTargetId: id
                                 }, log, view); }
-                                finally { batch.refresh(id); }
+                                finally { batch.refresh(id); batch.stopDispatch(); }
                             });
                         }
                     }
@@ -857,7 +872,7 @@ export function activate(context: vscode.ExtensionContext) {
                     // into the final batch status.
                     if (partition.runnableIds.length) {
                         outcome = 'failed';
-                        await runSequentially(partition.runnableIds.map(id => tasks[id]), log);
+                        await runSequentially(partition.runnableIds.map(id => tasks[id]), log, () => !batch.stopDispatch());
                         outcome = 'completed';
                     } else if (!partition.blocked.length) {
                         outcome = 'completed';
@@ -964,7 +979,9 @@ async function extractAstContext(
             return { error: stdout || stderr, name: '', args: [], docstring: '', calls: [], code: '' };
         }
         return JSON.parse(stdout);
-    } catch {
+    } catch (error) {
+        throwIfExecutionCancelled();
+        if (error instanceof AnalysisStageError) { throw error; }
         return null;
     }
 }
@@ -992,7 +1009,9 @@ async function findCallerContexts(
             && Array.isArray(value.args) && value.args.every((arg: unknown) => typeof arg === 'string')
             && value.kwargs && typeof value.kwargs === 'object' && !Array.isArray(value.kwargs)
             && Object.values(value.kwargs).every(arg => typeof arg === 'string')) : [];
-    } catch {
+    } catch (error) {
+        throwIfExecutionCancelled();
+        if (error instanceof AnalysisStageError) { throw error; }
         return [];
     }
 }
@@ -1022,7 +1041,17 @@ async function runBehaviorProbe(
 ): Promise<BehaviorProbeResult | null> {
     const pythonScript = pythonToolPath('trace');
     const baseArgs = [pythonScript, filePath, funcName];
-    const suppliedInputs = skillInputs || buildProbeInputs(callerArgs || [], supplementalInputs);
+    const proposedInputs = skillInputs || buildProbeInputs(callerArgs || [], supplementalInputs);
+    // A caller containing variables is discovery context, not an executable
+    // probe. Keep its rejection separately so completed source-guided cases
+    // remain usable. Explicit fixture/skill inputs retain their original gates.
+    const rejectedInputs = skillInputs ? [] : (proposedInputs?.cases || []).filter(item =>
+        item.source.kind === 'caller_literals' && !typedCallFields(item.input));
+    const suppliedInputs = proposedInputs && { ...proposedInputs,
+        cases: proposedInputs.cases.filter(item => !rejectedInputs.includes(item)) };
+    const withInputRejections = (observations: BehaviorProbeResult): BehaviorProbeResult => rejectedInputs.length
+        ? { ...observations, input_rejections: [...(observations.input_rejections || []), ...rejectedInputs.map(item => ({
+            source: item.source, reason: 'unreplayable-caller-input' as const }))] } : observations;
     try {
         currentTargetBudget()?.assertRemaining();
         const owner = currentExecution();
@@ -1063,14 +1092,14 @@ async function runBehaviorProbe(
         const initial = await runProbe(suppliedInputs);
         if (!userFixture && shouldRetryTraceWithoutCallerInputs(initial, suppliedInputs?.cases.length || 0)) {
             const retry = await runProbe();
-            return { ...mergeBehaviorObservations(initial, retry), input_source: 'source_guided_retry' };
+            return withInputRejections({ ...mergeBehaviorObservations(initial, retry), input_source: 'source_guided_retry' });
         }
-        return {
+        return withInputRejections({
             ...initial,
             input_source: userFixture ? 'user_fixture' : skillInputs || supplementalInputs.length > 0
                 ? 'semantic_guided'
                 : suppliedInputs?.cases.length ? 'caller_literals' : 'source_guided'
-        };
+        });
     } catch (e: any) {
         throwIfExecutionCancelled();
         if (e instanceof AnalysisStageError) { throw e; }
@@ -1172,6 +1201,7 @@ async function requestLlmApiUnlocked(
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
         bodyData = {
             model: params.modelName,
+            ...localThinkingOptions(params.localThinkingMode),
             ...(params.requestSeedCompletion ? { prompt: userPrompt, raw: true }
                 : buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt)),
             stream: true,
@@ -1495,13 +1525,13 @@ async function validateGeneratedTestCode(
         );
         if (parsed.code !== 0) {
             if (!bindingContext) { return { valid: false, reason: localize("生成測試未通過 Python 語法解析。") }; }
-            throw new AnalysisStageError('validation', 'static-analysis', localize("Python AST 驗證工具執行失敗；未交給 Writer 修復或降級 Tier。"),
+            throw new AnalysisStageError('tool', 'static-analysis', localize("Python AST 驗證工具執行失敗；未交給 Writer 修復或降級 Tier。"),
                 { reasonCode: 'bindings-tool-failed' });
         }
         if (bindingContext) {
             const bindings = JSON.parse(parsed.stdout) as TestCodeValidation;
             if (!bindings || typeof bindings.valid !== 'boolean') {
-                throw new AnalysisStageError('validation', 'static-analysis', 'Invalid binding validator contract.', { reasonCode: 'bindings-contract-invalid' });
+                throw new AnalysisStageError('tool', 'static-analysis', 'Invalid binding validator contract.', { reasonCode: 'bindings-contract-invalid' });
             }
             if (!bindings.valid) {
                 if (refineUnusedSetup && bindings.reasonCode === 'writer-undefined-name') {
@@ -1516,11 +1546,11 @@ async function validateGeneratedTestCode(
             const validatorScript = pythonToolPath('calls');
             const compatibility = await runSpawn(
                 pythonExecutable,
-                [validatorScript, targetCallable, JSON.stringify(targetSignature)],
+                [validatorScript, targetCallable, JSON.stringify(targetSignature), JSON.stringify(bindingContext || {})],
                 { env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, input: code, timeout: 5000 }
             );
             if (compatibility.code !== 0) {
-                throw new AnalysisStageError('validation', 'static-analysis', 'Target call validator failed.', { reasonCode: 'target-calls-tool-failed' });
+                throw new AnalysisStageError('tool', 'static-analysis', 'Target call validator failed.', { reasonCode: 'target-calls-tool-failed' });
             }
             try {
                 const callValidation = JSON.parse(compatibility.stdout) as { valid?: boolean; reason?: string };
@@ -1529,14 +1559,14 @@ async function validateGeneratedTestCode(
                     return { valid: false, reason: callValidation.reason || localize("呼叫不符合被測函式簽名") };
                 }
             } catch {
-                throw new AnalysisStageError('validation', 'static-analysis', 'Invalid target call validator contract.', { reasonCode: 'target-calls-contract-invalid' });
+                throw new AnalysisStageError('tool', 'static-analysis', 'Invalid target call validator contract.', { reasonCode: 'target-calls-contract-invalid' });
             }
         }
         return { valid: true };
     } catch (error: any) {
         if (error instanceof AnalysisStageError) { throw error; }
         throwIfExecutionCancelled();
-        throw new AnalysisStageError('validation', 'static-analysis', localize("Python AST 驗證工具無法完成；未交給 Writer 修復或降級 Tier。"),
+        throw new AnalysisStageError('tool', 'static-analysis', localize("Python AST 驗證工具無法完成；未交給 Writer 修復或降級 Tier。"),
             { reasonCode: 'bindings-tool-unavailable' });
     }
 }
@@ -1751,6 +1781,62 @@ async function resolveAstAndDependencies(
     return astContext;
 }
 
+interface TargetReportState {
+    journal?: AnalysisJournal;
+    directory?: string;
+    identity?: ReportIdentity;
+    finalized?: boolean;
+}
+
+/** Recording a stop is still required when the analysis allowance is already
+ * exhausted. This path writes metadata only; it never starts another stage. */
+function recordEarlyTargetBudgetStop(params: AnalysisParams, projectRoot: string, error: AnalysisStageError,
+    budget: TargetBudget, policy: TargetStopPolicy, state: TargetReportState,
+    log: (text: string) => void, sidebarProvider: AnalysisView): void {
+    runWithStopPolicy(policy, () => {
+        if (!state.journal || !state.directory || !state.identity) {
+            let source = '';
+            let sourceAvailable = false;
+            try { source = fs.readFileSync(params.filePath, 'utf8'); sourceAvailable = true; } catch { /* No source evidence is asserted. */ }
+            const root = createAnalysisDirectory(params.outputPath || path.dirname(params.filePath),
+                params.sessionDate || formatSessionDate(), params.filePath, params.funcName || 'file',
+                params.projectName, projectRoot, params.batchJournal?.directory);
+            if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, root); }
+            const directory = createResultLayout(root);
+            const focused = isTestFocus(params.promptStrategy);
+            const identity: ReportIdentity = { schemaVersion: 'target-report-v1', sourcePath: params.filePath,
+                sourceFile: path.relative(projectRoot, params.filePath).replace(/\\/g, '/'), target: params.funcName || 'file',
+                modelIdentity: `${params.envType}/${params.modelName}`, requestedTier: focused ? 'auto' : params.promptStrategy || 'auto',
+                ...(focused ? { testFocus: resolveTestFocus(params.promptStrategy) } : {}),
+                requestedMutationEngine: params.mutationEngine || 'builtin', mutationWorkers: params.mutationWorkers ?? 2,
+                build: { ...extensionBuildIdentity } };
+            const mode = verificationMode(params.validationMode);
+            const secrets = [params.cloudKey, params.customKey].filter((value): value is string => Boolean(value));
+            state.journal = new AnalysisJournal(directory, source, params.funcName || 'file', params.modelName,
+                mode === 'full' ? createDefaultQualityPolicy() : undefined, mode, identity, secrets);
+            state.directory = directory; state.identity = identity;
+            state.journal.knowledge({ sourceAvailable, evidenceValid: sourceAvailable, testAuthor: 'none', executionVerified: false,
+                reviewStatus: 'not-run', mutationStatus: 'not-measured', mutationScore: null,
+                ...(params.envType === 'local' ? { localThinkingMode: localThinkingMode(params.localThinkingMode) } : {}) });
+        }
+        policy.stop('budget-exhausted');
+        const journal = state.journal;
+        journal.record(0, 'target-budget', 'failed', { reason: error.message, category: error.category });
+        journal.knowledge({ terminalStatus: 'failed', failure: error.message, failureCategory: error.category,
+            failureStage: 'target-budget', diagnostic: error.diagnostic, targetBudget: budget.snapshot(), ...policy.snapshot() });
+        const report = writeTargetReports(state.directory, state.identity, journal.sourceHash, journal.runId, journal.snapshot(),
+            localize('# 目標預算停止\n\n{0}\n', error.message));
+        state.finalized = true;
+        const file = params.projectName ? path.relative(projectRoot, params.filePath) : path.basename(params.filePath);
+        const fileName = params.funcName ? `${file}:${params.funcName}` : file;
+        sidebarProvider.webview?.postMessage({ command: 'updateCoverage', fileName, file, func: params.funcName || '',
+            score: 'N/A', coverage: null, reason: error.message, reportPath: report });
+        sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName, file, func: params.funcName || '',
+            reportPath: report, outcome: presentSummaryOutcome(journal.snapshot()) });
+        log(`[target-budget] ${error.message}`);
+    });
+}
+
 async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView) {
     const configured = params.targetBudget ?? {};
     const limits = configured && typeof configured === 'object' && !Array.isArray(configured)
@@ -1765,11 +1851,24 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
         log(localize("[初始化設定] 本次未套用其他專案的設定；仍使用隔離預檢。"));
     }
     const budget = planAnalysisTargetBudget(normalizeExecutionSettings(params).maxLoops, limits);
-    return withImportFixtures(fixtures, () => runWithTargetBudget(new TargetBudget(budget),
-        () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider, root)));
+    const stopPolicy = currentStopPolicy() || new TargetStopPolicy(params.stopPolicy ?? config.get<unknown>('stopPolicy', {}));
+    const targetBudget = currentTargetBudget() || new TargetBudget(budget);
+    const reportState: TargetReportState = {};
+    return withImportFixtures(fixtures, async () => {
+        try {
+            return await runWithTargetBudget(targetBudget,
+                () => runWithStopPolicy(stopPolicy, () => executeSingleFileAnalysisWithBudget(params, log, sidebarProvider, root, reportState)));
+        } catch (error) {
+            if (error instanceof AnalysisStageError && error.stage === 'target-budget' && !reportState.finalized) {
+                recordEarlyTargetBudgetStop(params, root, error, targetBudget, stopPolicy, reportState, log, sidebarProvider);
+            }
+            throw error;
+        }
+    });
 }
 
-async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView, projectRoot: string) {
+async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: (text: string) => void, sidebarProvider: AnalysisView,
+    projectRoot: string, reportState: TargetReportState) {
     params = { ...params, ...normalizeExecutionSettings(params) };
     const mode = verificationMode(params.validationMode);
     if (params.replayCandidate && mode !== 'execution') {
@@ -1811,7 +1910,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const reviewerAdditions = new Map<string, WriterReviewFeedback>();
     const reviewEditRejections = new Map<string, { reason: string; reasonCode: string }>();
     let analystTasks = '';
-    const qualityProgress = new QualityProgress(3);
+    const qualityProgress = new QualityProgress(currentStopPolicy()?.settings.qualityNoImprovementLimit ?? 3);
     // Keep the qualified selection for reports and output paths, while using
     // the AST-confirmed leaf name when building Python calls and assertions.
     let targetFuncName = params.funcName;
@@ -1836,7 +1935,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let requestContextWindow = initialModel.requestContextWindow;
     const runtimeQualifications = currentBatchRuntimeQualification(projectRoot, params.filePath, pythonExecutable);
     const runtimeIdentity = (numCtx: number) => runtimeQualifications.identity({ endpointKey: selectedEndpointKey,
-        modelName: params.modelName, numCtx, qualificationVersion: QUALIFICATION_VERSION }, currentImportFixtures()?.id);
+        modelName: params.modelName, numCtx, qualificationVersion: QUALIFICATION_VERSION,
+        thinkingMode: params.localThinkingMode }, currentImportFixtures()?.id);
     let batchContextReused = false;
     const preferredContext = params.envType === 'local' && localRuntime?.ok
         && activeModelProfile.contextLengthKnown === true ? runtimeQualifications.preferredContext(runtimeIdentity(requestContextWindow)) : undefined;
@@ -1876,6 +1976,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let writerAdditionBaseline: string | undefined;
     const methodInventories = new Map<string, ScenarioIdentity[]>();
     const candidateSyntaxFailures = new Map<string, CandidateSyntaxDiagnostic>();
+    const additionCompletionRequests = new Set<string>();
+    let seedCompletionRequested = false;
+    let activeAdditionCaseFacts = '';
+    let activeAdditionBaselineHash = '';
     const completedOutputDiagnostics = new Map<string, {
         responseShape: ReturnType<typeof outputShape>; responsePreview: ReturnType<typeof buildModelOutputPreview>;
         contextWindow: number; outputTokenLimit?: number;
@@ -1986,6 +2090,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     const knownSecrets = [params.cloudKey, params.customKey].filter((value): value is string => Boolean(value));
     const journal = new AnalysisJournal(sessionDir, initialSource, params.funcName || 'file', params.modelName,
         mode === 'full' ? qualityPolicy : undefined, mode, reportIdentity, knownSecrets);
+    Object.assign(reportState, { journal, directory: sessionDir, identity: reportIdentity });
+    if (params.envType === 'local') { journal.knowledge({ localThinkingMode: localThinkingMode(params.localThinkingMode) }); }
     const rejectedCandidates = new RejectedCandidateStore(sessionDir, {
         sourceHash: journal.sourceHash, target: params.funcName || 'file', runId: journal.runId, sourceCode: initialSource
     }, knownSecrets);
@@ -2108,12 +2214,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         const methods = methodInventories.get(baselineHash);
         if (!methods?.length) {
-            throw new AnalysisStageError('validation', 'writer-addition-context',
+            throw new AnalysisStageError('tool', 'writer-addition-context',
                 'The executed Writer baseline has no valid AST method inventory.',
                 { reasonCode: 'writer-method-inventory-unavailable' });
         }
         return buildWriterAdditionMethodInstruction(selectWriterAdditionMethodName(baselineHash,
             activeQualityTaskEvidence?.focusId || analystTasks, methods.map(item => item.id)));
+    };
+    const planAdditionCompletion = (baseline: string, reasonCode: string, methodName?: string) => {
+        if (params.envType !== 'local') { return; }
+        const baselineHash = evidenceHash(baseline);
+        const name = methodName || selectWriterAdditionMethodName(baselineHash,
+            activeQualityTaskEvidence?.focusId || analystTasks,
+            (methodInventories.get(baselineHash) || []).map(item => item.id));
+        additionCompletionRequests.add(baselineHash + ':' + name);
+        recordRole('writer-addition', 'completion-planned', { reasonCode,
+            baselineCodeHash: baselineHash, methodBodyAuthor: 'model' });
     };
     const requestBudgetedOne = async (
         requestParams: AnalysisParams, system: string, prompt: string,
@@ -2165,6 +2281,18 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             prompt += '\n\nSOURCE MOCK SETUP (non-executable TODO guidance, not output evidence):\n' + focusedMockSetup;
         }
         if (!sourceSelectionScope) { prompt += importResourcePrompt(); }
+        if (role === 'reviewer') {
+            // Host resource descriptions follow TEST_FILE. End with the review
+            // task so tooling metadata is not mistaken for an import to add.
+            prompt += '\n\nREVIEW_RESPONSE_V8\n'
+                + 'Review the numbered TEST_FILE using the supplied execution and source facts. '
+                + 'Host fixture names and configuration labels are tooling metadata, not Python modules or missing imports. '
+                + 'executionVerified is a field of E1, not I1/I2/I3; import facts expose binding and origin. '
+                + 'For semantic test-code advice, kind="test-code", ref must be the actual L-number in test_line, '
+                + 'field="judgment", value="unverified"; never use the literal word "test_line" as ref. '
+                + 'Return only one findings JSON object. Each concrete defect needs category, test_line, reason, action and basis. '
+                + 'Use an empty findings array only when no concrete defect is demonstrated; do not copy instructions as findings.';
+        }
         if (!methodEditRequest && mode === 'full' && seedPending && ['writer', 'writer-revision'].includes(role)) {
             // Finish both generation and correction with the same small task.
             // Wider focus/resource context must not become a request to expand.
@@ -2172,6 +2300,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         if (!methodEditRequest && mode === 'full' && writerAdditionBaseline && ['writer', 'writer-revision'].includes(role)) {
             if (activeParameterFixtureEvidence) { prompt += parameterFixtureReplayInstruction(activeParameterFixtureEvidence); }
+            if (!writerCaseMode && activeAdditionCaseFacts
+                && evidenceHash(checkpoints.executable?.code || '') === activeAdditionBaselineHash) {
+                prompt += '\n\n' + activeAdditionCaseFacts
+                    + '\nImplement EVERY selected observed case in the one NEW method; the baseline already tests different inputs.\n';
+            }
             const focusCases = qualityFocusCasesForPrompt(writerCaseMode?.evidence || activeQualityTaskEvidence);
             if (focusCases && !prompt.includes(focusCases)) { prompt += '\n\n' + focusCases; }
             if (writerCaseMode) {
@@ -2188,19 +2321,47 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             && ['writer', 'writer-revision'].includes(role) ? 'single-test-addition' as const : undefined;
         let contractedSystem = addOutputContract(system, format);
         let completionPrefix = '';
+        let completionMode = 'seed-code-completion-v1';
         const instructionSystem = contractedSystem, instructionPrompt = prompt;
+        const additionMethodName = writerOutputScope && writerAdditionBaseline
+            ? writerCaseMode?.methodName || selectWriterAdditionMethodName(evidenceHash(writerAdditionBaseline),
+                activeQualityTaskEvidence?.focusId || analystTasks,
+                (methodInventories.get(evidenceHash(writerAdditionBaseline)) || []).map(item => item.id)) : undefined;
+        const additionCompletionKey = requestParams.envType === 'local' && additionMethodName && writerAdditionBaseline
+            ? evidenceHash(writerAdditionBaseline) + ':' + additionMethodName : undefined;
         const singleTestSeedOutput = !methodEditRequest && !sourceSelectionScope && (mode === 'full' && seedPending
             && ['writer', 'writer-revision'].includes(role)
             || mode === 'execution' && role === 'writer' && requestParams.requestSeedCompletion === true);
-        const preferredCompletion = requestParams.envType === 'local' && role === 'writer'
+        const configuredSeedCompletion = requestParams.envType === 'local' && role === 'writer'
             && modelSnapshot.writerSeedPromptMode === 'code-completion' && Boolean(seedPackagingPrefix)
             && (mode === 'full' && seedPending || mode === 'execution' && requestParams.requestSeedCompletion === true);
+        const preferredCompletion = configuredSeedCompletion || requestParams.envType === 'local'
+            && singleTestSeedOutput && seedCompletionRequested && Boolean(seedPackagingPrefix);
         if (preferredCompletion) {
             completionPrefix = seedPackagingPrefix;
             prompt = writerSeedCompletionPrompt(contractedSystem, prompt, completionPrefix);
             system = ''; contractedSystem = '';
-            recordRole('writer-seed', 'completion-selected', { version: 'seed-code-completion-v1', selection: 'configured-preference',
+            recordRole('writer-seed', 'completion-selected', { version: 'seed-code-completion-v1',
+                selection: configuredSeedCompletion ? 'configured-preference' : 'completed-without-test-code',
                 packagingPrefixHash: evidenceHash(completionPrefix), methodBodyAuthor: 'model', evidencePreserved: true });
+        } else if (additionCompletionKey && additionCompletionRequests.has(additionCompletionKey)) {
+            const selected = await writerAdditionCompletionPrefix({ baseline: writerAdditionBaseline!,
+                methodName: additionMethodName!, isAsync: seedTargetIsAsync,
+                python: pythonExecutable });
+            if (!selected.ok && selected.reasonCode === 'prefix-tool-error') {
+                throw new AnalysisStageError('tool', 'writer-addition-prefix', 'The addition completion prefix tool did not complete.');
+            }
+            if (selected.ok) {
+                completionPrefix = selected.prefix;
+                completionMode = 'addition-code-completion-v1';
+                prompt = writerAdditionCompletionPrompt(contractedSystem, prompt, completionPrefix);
+                system = ''; contractedSystem = '';
+                recordRole('writer-addition', 'completion-selected', { version: completionMode,
+                    selection: 'observed-generation-failure', baselineCodeHash: selected.baselineHash,
+                    packagingPrefixHash: evidenceHash(completionPrefix), methodBodyAuthor: 'model', evidencePreserved: true });
+            } else {
+                recordRole('writer-addition', 'completion-unavailable', { reasonCode: selected.reasonCode });
+            }
         }
         const recoveryAllowed = !methodEditRequest && !sourceSelectionScope && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
             && localRuntime?.ok === true;
@@ -2215,6 +2376,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         let recoveryTransport: TransportAttemptTiming | undefined;
         let recoveryMode: 'output-growth' | 'format-correction' | undefined;
         for (let outputAttempt = 0; outputAttempt < outputStage.maximumAttempts; outputAttempt++) {
+        if (outputAttempt > 0) { currentStopPolicy()?.beginAttempt(); }
         const qualificationDeadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt);
         throwIfExecutionCancelled();
         currentTargetBudget()?.assertRemaining();
@@ -2282,7 +2444,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     recordRole('context-qualification', 'cache-hit', { role, contextWindow: growth.contextTokens,
                         roleQualification: cached.roleQualification, qualificationVersion: cached.qualificationVersion });
                 }
-                const requalified = cached || (!requireRoleQualification ? unprobedLocalQualification(growth.contextTokens) : await requalifyLocalRuntime({ numCtx: growth.contextTokens, includeBugFixer,
+                const requalified = cached || (!requireRoleQualification ? unprobedLocalQualification(growth.contextTokens, params.localThinkingMode) : await requalifyLocalRuntime({ numCtx: growth.contextTokens, includeBugFixer,
+                    thinkingMode: params.localThinkingMode,
                     request: async (probeRole, probeSystem, probePrompt, probeFormat) => {
                         throwIfExecutionCancelled();
                         currentTargetBudget()?.assertRemaining();
@@ -2356,6 +2519,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const formalAttemptStartedAt = Date.now();
         const deadline = outputRecoveryAttemptDeadline(outputStage, outputAttempt, formalAttemptStartedAt);
         const metrics = { role, format, estimatedInputTokens,
+            ...(requestParams.envType === 'local' ? { localThinkingMode: localThinkingMode(requestParams.localThinkingMode) } : {}),
             ...(sourceSelectionScope ? { requestScope: sourceSelectionScope === 'literal-argument'
                 ? 'source-literal-selection-v1' : sourceSelectionScope === 'test-binding'
                     ? 'source-test-binding-selection-v1' : sourceSelectionScope === 'parameter-mock'
@@ -2368,7 +2532,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             capacity: capacityAt(contextWindow),
             ...(observedInputTokens !== undefined ? { observedInputTokens, effectiveInputTokens: requiredInputTokens } : {}),
             contextWindow, deadlineAt: deadline, stageDeadlineAt: outputStage.deadlineAt, outputAttempt, recoveryMode,
-            ...(completionPrefix ? { writerPromptMode: 'seed-code-completion-v1', packagingPrefixHash: evidenceHash(completionPrefix),
+            ...(completionPrefix ? { writerPromptMode: completionMode, packagingPrefixHash: evidenceHash(completionPrefix),
                 methodBodyAuthor: 'model' } : {}),
             ...(localRuntime?.ok ? { contextPolicy: localRuntime.mode, configuredContextTokens: localRuntime.configuredTokens } : {}),
             writerContext: prompt.startsWith(COMPACT_WRITER_VERSION) ? COMPACT_WRITER_VERSION : undefined };
@@ -2407,7 +2571,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     localize('模型回覆含疑似憑證，已停止採用；未保存或執行該回覆。'));
             }
             recordRole('model-request', 'completed', { ...metrics, elapsedMs: Date.now() - started });
-            const completed = completionPrefix ? assembleWriterSeedCompletion(completionPrefix, response) : response;
+            if ((additionCompletionKey || singleTestSeedOutput) && !completionPrefix) {
+                const shape = outputShape(response);
+                if (shape.sampleComplete && shape.testMethods === 0 && shape.assertionCalls === 0) {
+                    if (singleTestSeedOutput && requestParams.envType === 'local' && seedPackagingPrefix) {
+                        seedCompletionRequested = true;
+                        recordRole('writer-seed', 'completion-planned', { reasonCode: 'completed-without-test-code',
+                            methodBodyAuthor: 'model' });
+                    } else if (additionCompletionKey) {
+                        planAdditionCompletion(writerAdditionBaseline!, 'completed-without-test-code', additionMethodName);
+                    }
+                }
+            }
+            const completed = completionPrefix ? completionMode === 'addition-code-completion-v1'
+                ? assembleWriterAdditionCompletion(completionPrefix, response)
+                : assembleWriterSeedCompletion(completionPrefix, response) : response;
             if (!sourceSelectionScope && ['writer', 'writer-revision'].includes(role)) {
                 // Retain the privacy context, never the raw provider reply. The
                 // extracted Python coordinates become known only after inventory.
@@ -2440,6 +2618,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     ? { reasonCode: 'queue-timeout', transportStarted: false } : {}),
                 ...(modelRequestHttpStatus(error) !== undefined ? { httpStatus: modelRequestHttpStatus(error) } : {}),
                 reason: error instanceof AnalysisStageError ? `${error.stage}: ${error.category}` : 'model request failed' });
+            if (error instanceof AnalysisStageError && error.category === 'model-format'
+                && diagnostic?.reasonCode === 'output-token-limit') {
+                currentStopPolicy()?.reject('output-token-limit');
+            }
             if (outputAttempt === 0 && requestParams.envType === 'local' && ['writer', 'writer-revision', 'analyst-planning'].includes(role)
                 && error instanceof AnalysisStageError && diagnostic?.reasonCode === 'output-token-limit'
                 && recoveryAllowed && remainingDeadlineMs(outputStage.deadlineAt) > 0) {
@@ -2534,6 +2716,12 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const artifact = rejectedCandidates.record({ code, phase: seedPending ? 'seed' : currentLoop > 1 ? 'expand' : 'generation',
             tier: currentTier, attempt, gate, reasonCode });
         recordRole('candidate-artifact', 'rejected', { ...artifact, category: 'validation', gate, reason: reasonCode });
+        // Tool failures and scope/source violations stop separately; they are not model retries.
+        if (!/tool|scope-result-invalid|preservation-tool-error|source-changed/.test(reasonCode)
+            && !(gate === 'revision-scope' && reasonCode.startsWith('edit-') && reasonCode !== 'edit-no-method-change')) {
+            try { currentStopPolicy()?.reject(reasonCode); }
+            finally { journal.knowledge({ ...currentStopPolicy()?.snapshot() }); }
+        }
     };
     finalReportMarkdown += localize("- **執行識別**: {0}\n- **來源版本**: {1}\n\n", journal.runId, journal.sourceHash);
     if (batchContextReused) {
@@ -2615,6 +2803,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
     }
     const targetImportModule = inferTargetImportModule(params.filePath, astContext?.file_imports || []);
+    // Only the complete source-hash-bound contract proves that an attribute-call
+    // root is a stable module binding rather than a shadowed parameter/local.
+    const sourceCallRoots = new Set<string>(sourceSetupCallGuidance(targetImportModule, astContext)
+        ? (astContext!.source_setup_call_contract as { calls: Array<{ callee: string }> }).calls
+            .map(call => call.callee.split('.')[0]) : []);
     const testBindingContext = {
         module: targetImportModule,
         target: targetFuncName,
@@ -2623,7 +2816,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         moduleSource: initialSource,
         dependencies: Object.fromEntries((astContext?.file_imports || [])
             .filter((item: any) => item.kind === 'from' && item.name && item.name !== '*'
-                && (astContext?.calls || []).includes(item.alias || item.bound_name || item.name))
+                && ((astContext?.calls || []).includes(item.alias || item.bound_name || item.name)
+                    || sourceCallRoots.has(item.alias || item.bound_name || item.name)))
             .map((item: any) => [item.alias || item.bound_name || item.name, `${item.module}.${item.name}`])) as Record<string, string>
     };
     const sourceMockUsePointNames = [...new Set([
@@ -2721,7 +2915,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         }
         const baselineContext = writerBaselineContexts.get(baselineHash)!;
         if (!baselineContext.ok && baselineContext.reasonCode !== 'addition-context-unsupported') {
-            throw new AnalysisStageError('validation', 'writer-addition-context',
+            throw new AnalysisStageError('tool', 'writer-addition-context',
                 'The Writer baseline context tool did not establish a valid result.', { reasonCode: baselineContext.reasonCode });
         }
         recordRole('writer-baseline-context', baselineContext.ok ? 'projected' : 'complete', {
@@ -2731,6 +2925,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         const composed = await composeFocusedWriterAdditions({ baseline, evidence,
             request: async (caseEvidence, accumulator, ordinal, total, correction) => {
                 throwIfExecutionCancelled();
+                // A rejected transport response must not be attributed to the
+                // preceding case's successfully composed addition.
+                lastCaseAddition = '';
                 const methodName = `test_focus_${evidence.focusId.slice(1)}_${evidenceHash(baseline).slice(0, 8)}_${ordinal}`;
                 const identity = { runId: journal.runId, sourceHash: journal.sourceHash, target: params.funcName || targetFuncName };
                 const projection = resolveQualityTaskTraceCaseIds({ identity, evidence: caseEvidence,
@@ -2768,7 +2965,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const merged = await mergeWriterTestAddition({ baseline: accumulator, addition,
                     python: pythonExecutable, env: testExecutionEnv });
                 if (!merged.ok && merged.reasonCode === 'merge-tool-error') {
-                    throw new AnalysisStageError('validation', 'writer-addition-tool', 'Writer case composition did not complete.');
+                    throw new AnalysisStageError('tool', 'writer-addition-tool', 'Writer case composition did not complete.');
                 }
                 if (merged.ok) {
                     await recordCandidateMethods(merged.mergedCode, 'merged', role, accumulator);
@@ -2865,7 +3062,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             recordRole('writer-addition', 'rejected', { reasonCode: merged.reasonCode,
                 baselineCodeHash: evidenceHash(writerAdditionBaseline), additionCodeHash: evidenceHash(code) });
             if (merged.reasonCode === 'merge-tool-error') {
-                throw new AnalysisStageError('validation', 'writer-addition-tool', 'Writer addition composition did not complete.');
+                throw new AnalysisStageError('tool', 'writer-addition-tool', 'Writer addition composition did not complete.');
             }
             additionRejections.set(evidenceHash(code), { reason: 'Writer addition rejected: ' + merged.reasonCode,
                 reasonCode: merged.reasonCode, gate: 'revision-scope' });
@@ -2978,9 +3175,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 reasonCode: applied.reasonCode, trigger: 'name-binding-repair', validationMode: mode,
                 ...(applied.syntax ? { syntax: applied.syntax, candidateHash: applied.candidateHash } : {}) });
             // This typed stop cannot reopen a wider Writer/Tier repair path.
-            throw new AnalysisStageError('validation', 'writer-method-edit-scope',
+            throw new AnalysisStageError(isWriterMethodEditFormatFailure(applied) ? 'model-format' : 'validation', 'writer-method-edit-scope',
                 applied.reasonCode === 'edit-no-method-change'
-                    ? localize('沒有有效修改：測試修訂未變更方法內容，停止重複修復。')
+                    ? 'The scoped response did not change a planned method; return an effective replacement within the original scope.'
                     : 'Scoped name binding repair rejected: ' + applied.reasonCode,
                 { reasonCode: applied.reasonCode });
         }
@@ -2989,8 +3186,10 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             trigger: 'name-binding-repair', validationMode: mode });
         return applied.code;
     };
-    const requestBindingRevision = (edit: NonNullable<Awaited<ReturnType<typeof planBindingRevision>>>) =>
-        requestBudgeted(params, getWriterMethodEditSystemPrompt(), edit.prompt, log, 'text', 'writer-revision',
+    const requestBindingRevision = (edit: NonNullable<Awaited<ReturnType<typeof planBindingRevision>>>, failure = '') =>
+        requestBudgeted(params, getWriterMethodEditSystemPrompt(), edit.prompt
+            + (failure.startsWith('FORMAT REPAIR: ') ? '\n\nPREVIOUS EDIT RESPONSE FAILURE:\n'
+                + summarizeRepairOutput(failure, 1500) : ''), log, 'text', 'writer-revision',
             undefined, 0, edit.baseline, undefined, undefined, { findingCount: 1, missingScenarioCount: 0 }, undefined, true);
 
     if (mode === 'full' && !isStubFunction(astContext)) {
@@ -3113,7 +3312,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             return bindingCandidate;
                         }
                         const edit = await planBindingRevision(code, bindingValidation, evidence);
-                        return applyBindingRevision(edit!, await requestBindingRevision(edit!), attempt);
+                        return applyBindingRevision(edit!, await requestBindingRevision(edit!, failure), attempt);
                     }
                     if (role === 'writer' && /^Do not patch .+: .+ is a parameter of .+, not a module attribute of .+\./.test(failure)) {
                         const parameterCandidate = await repairSourceParameterMock({ source: astContext.code,
@@ -3638,6 +3837,21 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         // Reserve the same phase system, complete facts and output floor that the
         // final request will carry before optional Writer materials use this allowance.
         const generationBaseline = seedPending ? '' : checkpoints.executable?.code || bestCode || '';
+        let additionCaseIds: string[] | undefined;
+        activeAdditionCaseFacts = ''; activeAdditionBaselineHash = '';
+        if (mode === 'full' && generationBaseline && !activeQualityTaskEvidence && !activeParameterFixtureEvidence) {
+            const baselineFacts = await buildReviewFacts({ ...seedIdentity, code: generationBaseline, module: targetImportModule,
+                python: pythonExecutable, env: testExecutionEnv, executionVerified: true, knownSecrets });
+            const calls = baselineFacts.methods.flatMap(method => method.calls.map(call => call.call));
+            if (calls.length) { additionCaseIds = selectWriterAdditionCaseIds(astContext?.traceResult, calls); }
+            if (additionCaseIds) {
+                activeAdditionBaselineHash = evidenceHash(generationBaseline);
+                activeAdditionCaseFacts = additionCaseFactsForPrompt({ identity: seedIdentity, selectedCaseIds: additionCaseIds,
+                    observations: astContext?.traceResult ? { ...seedIdentity, value: astContext.traceResult } : undefined });
+                recordRole('writer-context', 'selected', { phase: 'addition', caseIds: additionCaseIds,
+                    scope: 'observed-input-not-matched-to-baseline', evidenceRetained: true });
+            }
+        }
         seedTargetIsAsync = typeof astContext?.is_async === 'boolean' ? astContext.is_async : undefined;
         seedInputContext = astContext;
         seedPackagingPrefix = writerSeedCodePrefix(targetImportModule, params.funcName || targetFuncName, astContext);
@@ -3650,6 +3864,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             generationEnvelope += await writerAdditionMethodInstruction(generationBaseline);
         }
         if (mode === 'full' && seedPending && activeSeedCaseFacts) { generationEnvelope += '\n\n' + activeSeedCaseFacts; }
+        if (activeAdditionCaseFacts) { generationEnvelope += '\n\n' + activeAdditionCaseFacts; }
         if (qualityObservationEvidence) { generationEnvelope += '\n\n' + qualityObservationEvidence; }
         const generationNumericEvidence = numericEvidencePrompt();
         if (mode === 'full' && numericEvidence.hasEvidence && generationNumericEvidence) {
@@ -3664,7 +3879,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             minimumOutputTokens: writerOutputBudget.minimumTokens });
         const generationBudget = Math.max(1, generationRoleBudget.inputBudget - estimateTokens(generationEnvelope));
         const writerContext = seedPending ? { ...astContext, writerGenerationPhase: 'seed',
-            ...(seedCaseIds ? { writerScenarioCaseIds: seedCaseIds } : {}) } : astContext;
+            ...(seedCaseIds ? { writerScenarioCaseIds: seedCaseIds } : {}) }
+            : mode === 'full' && generationBaseline ? { ...astContext, writerGenerationPhase: 'addition',
+                ...(additionCaseIds ? { writerScenarioCaseIds: additionCaseIds } : {}) } : astContext;
         if (seedCaseIds) {
             recordRole('writer-context', 'selected', { phase: 'seed', caseIds: seedCaseIds,
                 scope: 'one-complete-observation', evidenceRetained: true });
@@ -3800,7 +4017,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     let subRaw = "";
                     let subGenerationPrompt = subUserPrompt;
                     let subRevisionCode: string | undefined;
-                    for (let retry = 0; retry < 2; retry++) {
+                    for (let retry = 0; currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : retry < 2; retry++) {
+                        currentStopPolicy()?.beginAttempt();
                         try {
                             // An expansion repair must also return the executed baseline;
                             // its short rejected partition cannot size that full output.
@@ -3836,7 +4054,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 const subReason = subGate.reason || localize("不明驗證錯誤");
                                 recordRejected(subClean, retry, additionFailure ? additionFailure.gate : subValidation.valid ? 'assertion-evidence' : 'unittest-structure',
                                     subValidation.valid ? 'trace-evidence-rejected' : subValidation.reasonCode || 'candidate-structure-rejected');
-                                if (retry === 0) {
+                                if (currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : retry === 0) {
                                     log(localize("[分治合流] 呼叫點 {0} 子回覆未通過格式／行為觀測證據驗證：{1}；將重試此子任務。", cIdx + 1, subReason));
                                     subGenerationPrompt = buildWriterRevisionRequest({
                                         code: subClean, findings: subReason,
@@ -3851,11 +4069,16 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                                 } else {
                                     log(localize("[警告] 呼叫點 {0} 子回覆連續未通過格式／行為觀測證據驗證：{1}", cIdx + 1, subReason));
                                 }
-                            } else if (retry === 0) {
+                            } else if (currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : retry === 0) {
+                                recordRejected('', retry, 'response-format', 'no-python-candidate');
                                 log(localize("[分治合流] 呼叫點 {0} 子回覆為空或不可擷取，將重試此子任務。", cIdx + 1));
                             }
                         } catch (err: any) {
                             throwIfExecutionCancelled();
+                            if (currentStopPolicy() && err instanceof AnalysisStageError && err.category === 'model-format') {
+                                recordRejected('', retry, 'response-format', 'response-format');
+                                continue;
+                            }
                             if (err instanceof AnalysisStageError) { throw err; }
                             if (retry === 1) {log(localize("[警告] 呼叫點 {0} 生成失敗: {1}", cIdx + 1, err.message));}
                         }
@@ -3884,7 +4107,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 let generationPrompt = userPrompt;
                 let generationRevisionCode: string | undefined;
                 let generationBindingEdit: Awaited<ReturnType<typeof planBindingRevision>>;
-                for (let llmRetry = 0; llmRetry < 2; llmRetry++) {
+                for (let llmRetry = 0; currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : llmRetry < 2; llmRetry++) {
+                    currentStopPolicy()?.beginAttempt();
                     if (llmRetry === 0) {log(localize("[LLM] 正在呼叫模型推論中... (模型: {0})", params.modelName));}
                     try {
                         // Expansion repairs retain the full checkpoint as well as this
@@ -3895,6 +4119,11 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             seedPending ? generationRevisionCode : undefined, undefined, undefined,
                             generationRevisionCode === undefined ? undefined : { findingCount: 1, missingScenarioCount: 0 });
                     } catch (err: any) {
+                        if (currentStopPolicy() && err instanceof AnalysisStageError && err.category === 'model-format') {
+                            recordRejected('', llmRetry, 'response-format', 'response-format');
+                            // Output formatting recovery retains this prompt and any exact method-edit plan.
+                            continue;
+                        }
                         if (err instanceof AnalysisStageError) { throw err; }
                         if (llmRetry === 0) {
                             log(localize("[警告] 網路或 API 請求失敗: {0}，嘗試自動重試 (1/1)...", err.message));
@@ -3904,14 +4133,26 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }
 
-                    const composedBindingCode = generationBindingEdit
-                        ? await applyBindingRevision(generationBindingEdit, rawCode, llmRetry) : undefined;
+                    let composedBindingCode: string | undefined;
+                    try {
+                        composedBindingCode = generationBindingEdit
+                            ? await applyBindingRevision(generationBindingEdit, rawCode, llmRetry) : undefined;
+                    } catch (error) {
+                        if (!(error instanceof AnalysisStageError) || error.category !== 'model-format'
+                            || !currentStopPolicy()) { throw error; }
+                        const reason = error.diagnostic && typeof error.diagnostic === 'object'
+                            ? (error.diagnostic as { reasonCode?: unknown }).reasonCode : undefined;
+                        generationBindingEdit!.prompt += '\nFORMAT REPAIR: '
+                            + (writerMethodEditFormatGuidance(reason) || 'Return valid Python for exactly the planned methods.')
+                            + ' Preserve the original baseline and scope.';
+                        continue;
+                    }
                     sanitizedCode = await prepareWriterCandidate(composedBindingCode ?? rawCode,
                         generationRevisionCode === undefined ? 'writer' : 'writer-revision', llmRetry, Boolean(generationBindingEdit));
 
                     if (!sanitizedCode) {
                         recordRejected('', llmRetry, 'response-format', 'no-python-candidate');
-                        if (llmRetry === 0) {
+                        if ((currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : llmRetry === 0)) {
                             log(localize("[警告] 模型回傳程式碼為空或包含無效標籤，嘗試自動重試..."));
                             continue;
                         } else {
@@ -3919,10 +4160,30 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }
 
+                    const additionFailure = writerAdditionBaseline && additionRejections.get(evidenceHash(sanitizedCode));
+                    if (additionFailure) {
+                        // The merger owns this failure. Do not overwrite its
+                        // precise cause with a generic missing-inventory/import
+                        // diagnostic or attempt whole-file unittest rescue.
+                        recordRejected(sanitizedCode, llmRetry, additionFailure.gate, additionFailure.reasonCode);
+                        if (currentStopPolicy() ? currentStopPolicy()!.remainingFailures === 0 : llmRetry > 0) {
+                            throw new CandidateValidationError(additionFailure.reason);
+                        }
+                        generationPrompt = buildWriterAdditionRepairPrompt(
+                            buildWriterExpansionPrompt(userPrompt, writerAdditionBaseline!, analystTasks), additionFailure.reasonCode,
+                            additionFailure.reason, candidateSyntaxFailures.get(evidenceHash(sanitizedCode)));
+                        generationRevisionCode = '';
+                        recordRole('model-request', 'output-format-retry', { role: 'writer',
+                            reasonCode: additionFailure.reasonCode, writerPromptMode: 'same-addition-format-repair-v1',
+                            originalPromptHash: evidenceHash(userPrompt),
+                            baselineCodeHash: evidenceHash(writerAdditionBaseline!), evidencePreserved: true });
+                        continue;
+                    }
+
                     if (!methodInventories.has(evidenceHash(sanitizedCode))) {
                         const reason = localize('模型回覆未能抽取為可解析的 Python 測試；未推定為缺少 import。');
                         recordRejected(sanitizedCode, llmRetry, 'response-format', 'response-not-extracted-python');
-                        if (llmRetry > 0) { throw new CandidateValidationError(reason); }
+                        if (!currentStopPolicy() && llmRetry > 0) { throw new CandidateValidationError(reason); }
                         const syntax = candidateSyntaxFailures.get(evidenceHash(sanitizedCode));
                         generationPrompt = seedPending && syntax ? buildWriterSeedFormatRepairPrompt(userPrompt, syntax)
                             : buildWriterRevisionRequest({ code: '', findings: reason,
@@ -3945,7 +4206,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const looksLikeSourceCopy = !hasTestMethods && targetFuncName && sanitizedCode.includes(`def ${targetFuncName}`);
                     if (looksLikeSourceCopy) {
                         recordRejected(sanitizedCode, llmRetry, 'response-format', 'source-copy');
-                        if (llmRetry === 0) {
+                        if ((currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : llmRetry === 0)) {
                             log(localize("[警告] ⚠️ AI 輸出的是原始碼而不是測試碼（偵測到複製行為），嘗試重試..."));
                             continue;
                         } else {
@@ -3959,7 +4220,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         const rescued = await rescueToUnittest(sanitizedCode, params.filePath, targetFuncName, targetImportModule, pythonExecutable);
                         if (!rescued) {
                             recordRejected(sanitizedCode, llmRetry, 'unittest-structure', 'no-executable-unittest');
-                            if (llmRetry === 0) {
+                            if ((currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : llmRetry === 0)) {
                                 log(localize("[警告] AI 回傳格式無法解析出有效的測試案例，嘗試重新請求..."));
                                 continue;
                             } else {
@@ -3997,7 +4258,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         recordRejected(sanitizedCode, llmRetry, compositionFailure?.gate
                             || (candidateValidation.valid ? 'assertion-evidence' : 'unittest-structure'),
                             candidateValidation.valid ? 'trace-evidence-rejected' : candidateValidation.reasonCode || 'candidate-structure-rejected');
-                        if (llmRetry === 0) {
+                        if ((currentStopPolicy() ? currentStopPolicy()!.remainingFailures > 0 : llmRetry === 0)) {
                             log(localize("[警告] 模型輸出未通過證據／Python unittest 驗證：{0}；將以嚴格格式要求重試。", validationReason));
                             if (seedPending && candidateValidation.reasonCode === 'writer-undefined-name') {
                                 generationBindingEdit = await planBindingRevision(sanitizedCode, candidateValidation,
@@ -4045,14 +4306,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             // Import, fixture and assertion changes belong to the AI revision path.
             const baseName = path.basename(params.filePath, '.py');
 
-            if (bestCode && !seedPending) {
-                const novelty = await assessQualityCandidateNovelty(bestCode, finalCode, pythonExecutable, testExecutionEnv);
-                recordRole('quality-novelty', novelty.novelMethods ? 'novel' : 'duplicate', novelty);
-                if (!novelty.novelMethods) {
-                    throw new AnalysisStageError('validation', 'quality-stagnation',
-                        localize('候選僅重複或重新命名既有測試，未新增可驗證情境；保留已測量基線。'));
-                }
-            }
             recordRole('writer', 'candidate', { tier: currentTier, responseHash: evidenceHash(rawCode),
                 responseCharacters: rawCode.length, code: finalCode });
             const repairContext = (code: string, failure: string) => getBugFixerUserPrompt(
@@ -4142,7 +4395,19 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const additionFailure = additionRejections.get(evidenceHash(code));
                     if (additionFailure) { return additionFailure; }
                     const preservation = await checkPreservation(checkpoints.executable?.code || retainedCode, code, 'all');
-                    if (preservation) { return preservation; }
+                    if (preservation) {
+                        throw new AnalysisStageError(preservation.reasonCode === 'preservation-tool-error' ? 'tool' : 'validation',
+                            'repair-scope', preservation.reason, { reasonCode: preservation.reasonCode, previousTestUnchanged: true });
+                    }
+                    if (bestCode && !seedPending) {
+                        const novelty = await assessQualityCandidateNovelty(bestCode, code, pythonExecutable, testExecutionEnv);
+                        recordRole('quality-novelty', novelty.novelMethods ? 'novel' : 'duplicate', novelty);
+                        if (!novelty.novelMethods) {
+                            if (writerAdditionBaseline) { planAdditionCompletion(writerAdditionBaseline, 'repeated-candidate'); }
+                            return { reason: localize('候選僅重複或重新命名既有測試，未新增可驗證情境；保留已測量基線。'),
+                                gate: 'candidate-deduplication', reasonCode: 'repeated-candidate' };
+                        }
+                    }
                     const structural = await validateGeneratedTestCode(code, targetFuncName, baseName,
                         astContext?.method_kind === 'property' ? 'property' : 'call', astContext?.signature,
                         exceptionNamesFromEvidence(astContext), astContext?.class_name || undefined, pythonExecutable, testBindingContext);
@@ -4208,7 +4473,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (assessment?.issues.length) {
                         const methods = methodInventories.get(evidenceHash(code));
                         if (!methods?.length) {
-                            throw new AnalysisStageError('validation', 'candidate-inventory-tool', 'Review revision requires the current method inventory.');
+                            throw new AnalysisStageError('tool', 'candidate-inventory-tool', 'Review revision requires the current method inventory.');
                         }
                         const preserveMethodSet = assessment.issues.every(issue => issue.category && issue.category !== 'missing-scenario');
                         reviewerRevisionWorkloads.set(evidenceHash(code), {
@@ -4234,7 +4499,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const bindingValidation = bindingValidations.get(evidenceHash(code));
                     if (role === 'writer' && bindingValidation?.reasonCode === 'writer-undefined-name') {
                         const edit = await planBindingRevision(code, bindingValidation, roleEvidence);
-                        const candidate = await applyBindingRevision(edit!, await requestBindingRevision(edit!), attempt);
+                        const candidate = await applyBindingRevision(edit!, await requestBindingRevision(edit!, failure), attempt);
                         return prepareWriterCandidate(candidate, 'writer-revision', attempt, true);
                     }
                     const workloadKey = evidenceHash(code);
@@ -4278,7 +4543,8 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             moduleName: targetImportModule,
                             functionName: targetFuncName,
                             evidence: buildWriterRevisionContext({ module: targetImportModule, name: targetFuncName,
-                                source: astContext?.code || targetCode, context: astContext, evidence: writerEvidenceBundle,
+                                source: astContext?.code || targetCode, context: isAdditionMode && !matchedReview
+                                    ? { ...writerContext, writerGenerationPhase: 'addition' } : astContext, evidence: writerEvidenceBundle,
                                 allowedMockTargets: sourceMockUsePointNames.map(name => `${targetImportModule}.${name}`) })
                         });
                     if (isAdditionMode && !matchedReview) {
@@ -4295,13 +4561,19 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const revisionWorkload = matchedReview?.workload ?? { findingCount: methodEdit?.feedback.findings.length ?? reviewAddition?.findings.length ?? 1,
                         missingScenarioCount: reviewAddition?.findings.length ?? 0 };
                     reviewerRevisionWorkloads.delete(workloadKey);
+                    if (isAdditionMode) {
+                        // The Reviewer owns this exact executed candidate. Route
+                        // its missing cases through the same new-method contract
+                        // as ordinary expansion, including a collision-free name.
+                        writerAdditionBaseline = code;
+                    }
                     const repairStarted = Date.now();
                     const raw = await requestBudgeted(
                         params, sys, prompt, log,
-                        role === 'bug-fixer' ? 'text' : testGenerationResponseFormat,
+                        role === 'bug-fixer' || methodEdit ? 'text' : testGenerationResponseFormat,
                         role === 'bug-fixer' ? 'bug-fixer' : 'writer-revision', undefined, 0,
                         role === 'writer' ? code : undefined, undefined, undefined,
-                        role === 'writer' ? revisionWorkload : undefined
+                        role === 'writer' ? revisionWorkload : undefined, undefined, Boolean(methodEdit)
                     );
                     if (role === 'bug-fixer') {
                         const merged = mergeBugFixReplacementDetailed(raw, code, failure);
@@ -4324,6 +4596,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throwIfExecutionCancelled();
                         completedOutputDiagnostics.delete(evidenceHash(raw));
                         if (!applied.ok) {
+                            if (currentStopPolicy() && isWriterMethodEditFormatFailure(applied)) {
+                                throw new AnalysisStageError('model-format', 'writer-method-edit-scope',
+                                    'Return valid Python for the same planned method replacements.', { reasonCode: applied.reasonCode });
+                            }
+                            if (currentStopPolicy()) {
+                                throw new AnalysisStageError('validation', 'writer-method-edit-scope',
+                                    'Scoped method replacement rejected: ' + applied.reasonCode, { reasonCode: applied.reasonCode });
+                            }
                             reviewEditRejections.set(`${workloadKey}:${evidenceHash(replacement)}`, {
                                 reasonCode: applied.reasonCode,
                                 reason: 'Scoped method replacement rejected: ' + applied.reasonCode
@@ -4345,7 +4625,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         throwIfExecutionCancelled();
                         completedOutputDiagnostics.delete(evidenceHash(raw));
                         if (!merged.ok && merged.reasonCode === 'merge-tool-error') {
-                            throw new AnalysisStageError('validation', 'writer-addition-tool', 'Review addition composition did not complete.');
+                            throw new AnalysisStageError('tool', 'writer-addition-tool', 'Review addition composition did not complete.');
                         }
                         if (!merged.ok || merged.addedMethodsCount === 0) {
                             const reasonCode = merged.ok ? 'writer-review-addition-empty' : merged.reasonCode;
@@ -4420,13 +4700,30 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     const testHash = evidenceHash(code);
                     const [invocationFile, coverageFile, resultFile] = reserveArtifactFiles(testDir, ['invocation', 'coverage', 'result'], 'json');
                     const [isolationFile] = reserveArtifactFiles(testDir, ['isolation'], 'jsonl');
+                    const [progressFile] = reserveArtifactFiles(testDir, ['progress'], 'jsonl');
                     const executionArguments = [...generatedUnittestArguments(path.basename(testPath, '.py'), targetDir, true, true),
                         '--target-file', params.filePath, '--target-name', params.funcName || targetFuncName,
                         '--target-evidence', invocationFile, '--target-run-id', testRunId, '--target-test-file', testPath,
-                        '--violation-report', isolationFile, '--result-json', resultFile];
-                    const run = await runSpawn(pythonExecutable,
-                        executionArguments,
-                        { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
+                        '--violation-report', isolationFile, '--result-json', resultFile, '--test-progress', progressFile];
+                    let run: Awaited<ReturnType<typeof runSpawn>>;
+                    try {
+                        run = await runSpawn(pythonExecutable, executionArguments,
+                            { cwd: testDir, env: testExecutionEnv, timeout: 30000 });
+                    } catch (error) {
+                        if (!(error instanceof ProcessTimeoutError)) { throw error; }
+                        throwIfExecutionCancelled(); currentTargetBudget()?.assertRemaining();
+                        if (!evidenceStillCurrent()) {
+                            throw new AnalysisStageError('validation', 'source-changed', localize("來源版本已改變，停止使用舊證據。"));
+                        }
+                        const out = readNativeTimeoutFeedback({ progressFile, sourceFile: params.filePath,
+                            testFile: testPath, target: params.funcName || targetFuncName, testRunId,
+                            sourceHash: journal.sourceHash, testHash, timeoutMs: error.timeoutMs });
+                        if (!out || !canRepairTestMethod(code, out)) { throw error; }
+                        recordRole('validation', 'native-timeout-repairable', { reasonCode: 'native-test-body-timeout',
+                            testRunId, testHash, progressFile: path.basename(progressFile), timeoutMs: error.timeoutMs,
+                            completedExecutionEvidence: false, repairScope: 'single-test-method' });
+                        return { ok: false, out, qualityGaps: [] };
+                    }
                     const resourceFailure = readResourceSetupFailure({ isolationFile, sourceFile: params.filePath,
                         testFile: testPath, targetRunId: testRunId, sourceHash: journal.sourceHash, testHash,
                         importFixturePlanId: currentImportFixtures()?.id, exitCode: run.code });
@@ -4440,7 +4737,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                     if (runnerDiagnostic) {
                         recordRole('validation', 'load-failed', runnerDiagnostic);
                         if (run.code === 0 || runnerDiagnostic.repairRole !== 'writer') {
-                            throw new AnalysisStageError('validation', 'generated-test-runner',
+                            throw new AnalysisStageError('tool', 'generated-test-runner',
                                 localize('生成測試的載入或身分證據無效；停止修復，未計入通過。'), runnerDiagnostic);
                         }
                         return { ok: false, out: generatedLoadRepairFeedback(`${run.stdout}${run.stderr}`),
@@ -4594,8 +4891,25 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const mutpyResult = JSON.stringify(mutationRun, null, 2);
             if (!['complete', 'no-candidates'].includes(mutationRun.status)) {
                 journal.knowledge({ latestMutation: mutationRun });
-                throw new AnalysisStageError('mutation', 'mutation-execution',
-                    localize("突變測量尚未完整或結果無效（{0}）；不宣稱完整品質分數。", mutationRun.status), mutationRun);
+                const baselineFailure = mutationRun.baselineFailure;
+                if (baselineFailure) {
+                    // This exact candidate has already passed native execution. A
+                    // disagreement in the isolated baseline cannot establish model failure.
+                    const category = baselineFailure.category === 'validation' ? 'environment' : baselineFailure.category;
+                    throw new AnalysisStageError(category, `mutation-baseline-${category}`,
+                        localize('突變基線無法完成（{0}）；保留 native 結果，停止本次量測。', baselineFailure.reasonCode),
+                        { reasonCode: baselineFailure.category === 'validation' ? 'mutation-baseline-native-mismatch'
+                            : baselineFailure.reasonCode, mutation: mutationRun });
+                }
+                // Compatibility for historical runner reports without typed failures.
+                const environmentBlocked = !mutationRun.baselinePassed && mutationRun.baselineStatus === 'error'
+                    && /^(?:ModuleNotFoundError|ImportError|TraceSafetyError):/m.test(mutationRun.diagnostic || '');
+                const missing = /^ModuleNotFoundError: No module named '([\w.]+)'$/m.exec(mutationRun.diagnostic || '');
+                throw new AnalysisStageError(environmentBlocked ? 'environment' : 'mutation',
+                    environmentBlocked ? 'mutation-environment' : 'mutation-execution',
+                    localize("突變測量尚未完整或結果無效（{0}）；不宣稱完整品質分數。", mutationRun.status),
+                    environmentBlocked ? { reasonCode: 'mutation-environment-blocked', mutation: mutationRun,
+                        ...(missing ? { exception_type: 'ModuleNotFoundError', missing_module: missing[1] } : {}) } : mutationRun);
             }
 
             log(localize("[{0}] 突變分析執行完畢！正在解析報告與分數...", engine));
@@ -4780,13 +5094,6 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 vscode.env.openExternal(vscode.Uri.file(path.join(reportDir, 'index.html')));
             }
 
-            if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), coverageGapIds(
-                loopAssessment))) {
-                recordRole('analyst-quality', 'stagnated', { reason: localize("連續 3 輪沒有減少已測量缺口；保留基線並停止。") });
-                finalReportMarkdown += localize("> 品質尚未達標：連續 3 輪沒有進步，停止相同策略重試。\n");
-                journal.knowledge({ terminalStatus: 'stagnated' });
-                break;
-            }
             if (noMutationCandidates && measuredQualityGaps.length === 0) {
                 log(localize("[優化] 本輪沒有可評分的突變點，停止重複迴圈。"));
                 journal.knowledge({ terminalStatus: 'no-mutation-candidates' });
@@ -4796,6 +5103,14 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 log(localize("[優化] 同一候選的完整量測已符合執行前固定的品質政策；已保存基準。"));
                 journal.knowledge({ terminalStatus: checkpoints.quality.qualityAssessment.fullyPassed
                     ? 'passed' : 'execution-passed-review-incomplete' });
+                break;
+            }
+            currentStopPolicy()?.reject('quality-thresholds-not-met');
+            if (qualityProgress.observe(survivedMutants.split('\n').filter(Boolean), coverageGapIds(
+                loopAssessment))) {
+                recordRole('analyst-quality', 'stagnated', { reason: localize("連續 {0} 輪沒有減少已測量缺口；保留基線並停止。", qualityProgress.limit) });
+                finalReportMarkdown += localize("> 品質尚未達標：連續 {0} 輪沒有進步，停止相同策略重試。\n", qualityProgress.limit);
+                journal.knowledge({ terminalStatus: 'stagnated' });
                 break;
             }
             if ((survivedMutants || qualityGaps.length) && !mayUseModelAuthoredTests) {
@@ -5145,10 +5460,22 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
         if (journal.snapshot().terminalStatus === 'running') {
             journal.knowledge({ terminalStatus: isExecutionCancelled() ? 'cancelled' : 'incomplete' });
         }
-        journal.knowledge({ targetBudget: currentTargetBudget()?.snapshot() });
+        const policy = currentStopPolicy();
+        if (policy && !policy.snapshot().stopReason) {
+            const state = journal.snapshot();
+            policy.stop(state.failureStage === 'target-budget' ? 'budget-exhausted'
+                : state.failureCategory === 'environment' ? 'environment-blocked'
+                    : state.failureCategory === 'tool' ? 'tool-blocked'
+                        : state.failureCategory === 'model-api' ? 'model-api-error'
+                            : state.failureCategory === 'timeout' ? 'stage-timeout'
+                                : typeof state.failureStage === 'string' ? state.failureStage
+                                    : String(state.terminalStatus || 'incomplete'));
+        }
+        journal.knowledge({ targetBudget: currentTargetBudget()?.snapshot(), ...policy?.snapshot() });
         writeReport();
         sidebarProvider.webview?.postMessage({ command: 'updateOutcome', fileName: displayName, file: displayFile,
             func: params.funcName || '', reportPath: existingReport, outcome: presentSummaryOutcome(journal.snapshot()) });
+        reportState.finalized = true;
     }
     // Full-mode failures may have restored a valid checkpoint before leaving
     // the loop. Propagate only after reports/cleanup, without overwriting that

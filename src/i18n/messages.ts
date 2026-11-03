@@ -1,5 +1,22 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "未通過：驗證工具受阻": "Not passed: validation tool blocked",
+    "共 {0} 個目標；執行驗證通過 {1}、完整通過 {2}、環境／工具受阻 {3}、失敗 {4}、略過／未評分 {5}、未完成 {6}": "{0} targets; execution verified {1}, fully passed {2}, environment/tool blocked {3}, failed {4}, skipped/unscored {5}, incomplete {6}",
+    "- 通過率 {0}；受阻率 {1}；未完成率 {2}（分母 {3} 個確認目標）。": "- Passed {0}; blocked {1}; incomplete {2} (denominator: {3} confirmed targets).",
+    "- 模型請求 {0} 次；HTTP {1} 次；有計時配對的輸出 {2} tokens；用量未知目標 {3} 個。": "- Model requests {0}; HTTP attempts {1}; timed output {2} tokens; targets with unknown usage {3}.",
+    "- 有計時配對的輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。": "- Timed output tokens: {0}; generation timing: {1} ms; measured output rate: {2} tokens/s.",
+
+    "單一目標最多失敗次數（第一次失敗算 1 次）": "Failure limit per target (first failure counts as 1)",
+    "品質無改善上限（0 關閉）": "Measured rounds without improvement (0 disables)",
+    "批次失敗目標上限（0 不中止整批）": "Failed target limit per batch (0 continues all targets)",
+    "停止政策必須是有效整數；單目標失敗上限至少 1，其餘至少 0。": "Stop limits must be integers; target failures must be at least 1 and other limits at least 0.",
+    "因批次停止政策未執行": "Not run due to batch stop policy",
+    "請依來源位置確認邏輯資源路徑，填入測試用內容或原專案 schema；補齊前停止生成測試。": "Use the source location to identify the logical resource path and provide test content or the project schema before generating tests.",
+    "範例中的預留值必須依原專案補齊，不能直接套用。": "Replace example placeholders with project facts before applying.",
+    "目標請求預算：模型 {0} 次；HTTP {1} 次；候選 {2} 次；估計輸入 {3} tokens。": "Target request budget: {0} model requests; {1} HTTP attempts; {2} candidates; {3} estimated input tokens.",
+    "連續 {0} 輪沒有減少已測量缺口；保留基線並停止。": "No measured gap reduction for {0} consecutive rounds; retained the baseline and stopped.",
+    "> 品質尚未達標：連續 {0} 輪沒有進步，停止相同策略重試。\n": "> Quality not met: no progress for {0} consecutive rounds; stopped retrying the same strategy.\n",
+
     'Reviewer 已通過 review-v8 分類、行號引用與結構化依據契約。': 'Reviewer passed review-v8 categories, line citations and structured evidence basis contracts.',
     '詞法辨識到多個測試方法簽名，超出單一種子工作範圍；增加額度不能解決範圍偏離，這些計數不是有效測試數。': 'Lexical diagnostics found multiple test method signatures outside the single-test seed scope. More output does not correct the scope; these counts are not valid test counts.',
     '[輸出恢復] {0} 超出單一種子範圍；改送一次格式修正，不以增額要求完成整份測試集。': '[Output recovery] {0} exceeded the single-test seed scope; sending one format correction instead of expanding output for a full suite.',

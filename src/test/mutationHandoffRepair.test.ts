@@ -6,10 +6,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { functionReportDirectory } from '../pipeline/resultLayout';
 import { setLanguage } from '../i18n/core';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 test('orchestrator shares the execution import environment and reports mutation process failures', async () => {
     const repo = path.resolve(__dirname, '../..');
-    const python = path.join(repo, process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
+    const python = resolvePythonExecutable(undefined, repo);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mutation-handoff-'));
     fs.mkdirSync(path.join(root, 'pkg/sub'), { recursive: true });
     for (const name of ['pkg/__init__.py', 'pkg/sub/__init__.py']) { fs.writeFileSync(path.join(root, name), ''); }
@@ -75,7 +76,7 @@ test('orchestrator shares the execution import environment and reports mutation 
         const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
         assert.equal(mutationRuns, 1, JSON.stringify(knowledge.lastFailure));
         assert.notEqual(knowledge.terminalStatus, 'passed');
-        assert.equal(knowledge.lastFailure.category, 'mutation');
+        assert.equal(knowledge.lastFailure.category, 'tool');
         assert.equal(knowledge.failureStage, 'mutation-execution', JSON.stringify(knowledge.lastFailure));
         assert.equal(knowledge.diagnostic.exitCode, 2);
         assert.equal(knowledge.diagnostic.stderr.exceptionType, 'ValueError');

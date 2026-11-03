@@ -7,6 +7,7 @@ extensions. Generated tests still use mocks instead of direct filesystem I/O.
 """
 from contextlib import contextmanager, ExitStack
 import ast
+import hashlib
 import builtins
 import errno
 import importlib._bootstrap_external
@@ -16,6 +17,7 @@ import linecache
 import io
 import os
 import ntpath
+import platform
 import socket
 import site
 import sqlite3
@@ -25,6 +27,7 @@ import tokenize
 import traceback
 import types
 import sysconfig
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 from trace_value_codec import type_field
@@ -37,6 +40,8 @@ POLICY_VERSION = 'python-execution-policy-v1'
 ISOLATION_EXIT_CODE = 86
 ISOLATION_MARKER = 'TEST_ISOLATION_BLOCKED'
 _active = None
+_WINDOWS_VER_PROBE = getattr(platform, '_syscmd_ver', None)
+_WINDOWS_VER_SNAPSHOT = None
 _THREAD_BOOTSTRAP_CODE = threading.Thread._bootstrap_inner.__code__
 _THREAD_START_CODE = threading.Thread.start.__code__
 _CURRENT_FRAMES = sys._current_frames
@@ -44,6 +49,9 @@ _THREAD_EXCEPT_ARGS = threading.ExceptHookArgs
 _WAIT_EVENT = threading.Event
 _LOADER_GET_DATA_CODE = importlib._bootstrap_external.FileLoader.get_data.__code__
 _TOKENIZE_OPEN_CODE = tokenize.open.__code__
+_WARNING_FORMAT_CODE = getattr(getattr(warnings, '_formatwarnmsg_impl', None), '__code__', None)
+_WARNING_MESSAGE_TYPE = warnings.WarningMessage
+_SOURCE_TO_CODE_CODE = importlib._bootstrap_external.SourceLoader.source_to_code.__code__
 _LINECACHE_CODES = {value.__code__ for value in vars(linecache).values() if type(value) is types.FunctionType}
 _TRACEBACK_CODES = {value.__code__ for value in vars(traceback).values() if type(value) is types.FunctionType}
 for _owner in (traceback.FrameSummary, traceback.StackSummary, traceback.TracebackException):
@@ -87,6 +95,30 @@ def _prepare_metadata_reads():
     _METADATA_FILES = permitted
 
 
+def _prepare_windows_version_probe():
+    """Snapshot only the stdlib's fixed host `ver` probe before app execution.
+
+    platform.win32_ver() can launch a shell even for platform.machine() during
+    a dependency import. Replay its real host result without exempting any
+    subprocess or device operation inside the execution guard. Respect the
+    original helper's fallback/default arguments; never invent an OS version.
+    """
+    global _WINDOWS_VER_SNAPSHOT
+    if sys.platform != 'win32' or _WINDOWS_VER_PROBE is None:
+        return None
+    if _WINDOWS_VER_SNAPSHOT is None:
+        _WINDOWS_VER_SNAPSHOT = _WINDOWS_VER_PROBE()
+    snapshot = _WINDOWS_VER_SNAPSHOT
+
+    def cached_ver(system='', release='', version='',
+                   supported_platforms=('win32', 'win16', 'dos')):
+        if sys.platform not in supported_platforms or snapshot == ('', '', ''):
+            return system, release, version
+        return snapshot
+
+    return cached_ver
+
+
 def _package_metadata_read(filename, frame):
     if not isinstance(filename, (str, bytes, os.PathLike)):
         return False
@@ -121,12 +153,18 @@ class BackgroundExecutionError(RuntimeError):
         super().__init__('Background execution failed: ' + ', '.join(self.failures))
 
 
-def block_operation(operation, error_type=RuntimePolicyError):
+def block_operation(operation, error_type=RuntimePolicyError, resource=None):
     """Record before raising so application code cannot swallow a violation."""
     if _active is not None:
         _active['violations'].append(operation)
         error_type = _active['error_type']
     error = error_type(operation)
+    if type(resource) in (str, bytes):
+        raw = resource if type(resource) is bytes else resource.encode('utf-8', errors='surrogatepass')
+        # Never persist original paths, URLs, contents or credential-bearing names.
+        error.resource_diagnostic = {'id': 'resource-' + hashlib.sha256(raw).hexdigest()[:16],
+                                     'fixtureType': 'sqlite' if 'SQLite' in operation or operation == 'resource-schema-required' else
+                                     'directory' if operation in ('os.mkdir', 'os.listdir', 'os.scandir') else 'text'}
     if _active is not None and _active['first_error'] is None:
         _active['first_error'] = error
     raise error
@@ -207,7 +245,7 @@ class _MemoryConnection(sqlite3.Connection):
                 and str(error).lower().startswith(('no such table:', 'no such column:'))):
             # An absent declared schema is setup evidence, never an assertion
             # oracle manufactured from the tool's empty database.
-            block_operation('resource-schema-required')
+            block_operation('resource-schema-required', resource=getattr(self, '_resource_logical_name', None))
 
     def _require_resource_caller(self):
         if self._isolated_file_resource and self._resource_owner:
@@ -274,6 +312,24 @@ def _import_or_traceback_read(filename):
     # application must not turn arbitrary file contents into allowed input.
     while frame and frame.f_code in _LINECACHE_CODES:
         frame = frame.f_back
+    if frame and frame.f_code is _WARNING_FORMAT_CODE:
+        message = frame.f_locals.get('msg')
+        if type(message) is not _WARNING_MESSAGE_TYPE:
+            return False
+        details = vars(message)
+        if details.get('category') is not SyntaxWarning or details.get('filename') != filename:
+            return False
+        # Python's compiler warning formatter reads the same source through
+        # linecache. Require the actual source-loader compilation on the stack;
+        # application warn_explicit/getline calls gain no general read access.
+        caller = frame.f_back
+        for _ in range(64):
+            if caller is None:
+                break
+            if caller.f_code is _SOURCE_TO_CODE_CODE:
+                return True
+            caller = caller.f_back
+        return False
     return bool(frame and frame.f_code in _TRACEBACK_CODES)
 
 
@@ -373,9 +429,9 @@ def _audit(event, args):
     if event in ('open', 'sqlite3.connect', 'os.listdir', 'os.scandir') and args and is_unc_or_device(args[0]):
         # Import/traceback permissions never extend to an original network path.
         # Approved normal API calls have already become local physical paths.
-        block_operation('unapproved UNC or device filesystem access')
+        block_operation('unapproved UNC or device filesystem access', resource=args[0])
     if event == 'sqlite3.connect' and not (type(args[0]) is str and args[0] == ':memory:') and not resource_operation:
-        block_operation('non-isolated SQLite connection')
+        block_operation('non-isolated SQLite connection', resource=args[0])
     if event == 'sqlite3.connect/handle' and not isinstance(args[0], _MemoryConnection):
         block_operation('unguarded SQLite connection factory')
     if event in ('sqlite3.load_extension', 'sqlite3.enable_load_extension'):
@@ -385,11 +441,11 @@ def _audit(event, args):
         writing = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
             isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
         if not resource_operation and (writing or not _import_or_traceback_read(args[0])):
-            block_operation('file write' if writing else 'file read')
+            block_operation('file write' if writing else 'file read', resource=args[0])
     if event in ('os.remove', 'os.rename', 'os.rmdir', 'os.mkdir', 'os.chmod', 'os.chown',
                  'os.link', 'os.symlink', 'os.truncate', 'os.utime', 'os.chdir'):
         if not resource_operation:
-            block_operation(event)
+            block_operation(event, resource=args[0] if args else None)
     if event in ('subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn', 'os.fork', 'os.forkpty'):
         block_operation('shell / subprocess')
     if event in ('socket.connect', 'socket.bind', 'socket.getaddrinfo', 'socket.sendto') and not _asyncio_socketpair():
@@ -418,10 +474,10 @@ def _guard_unc_metadata(resources):
                 logical = ntpath.normpath(os.fsdecode(value))
                 return os.fsencode(logical) if isinstance(value, bytes) else logical
             if unsupported or not resources:
-                block_operation(operation)
+                block_operation(operation, resource=value)
             mapped, matched = resources.translate(value, operation)
             if not matched:
-                block_operation(operation)
+                block_operation(operation, resource=value)
             if kwargs.get('dir_fd') is not None or kwargs.get('follow_symlinks') is False:
                 block_operation('unsupported isolated resource descriptor or symlink operation')
             new_args, new_kwargs = list(args), dict(kwargs)
@@ -507,6 +563,7 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, imp
     if _active is not None:
         raise RuntimeError('Nested execution policy guards are unsupported')
     _prepare_metadata_reads()
+    windows_version_probe = _prepare_windows_version_probe()
     from python_import_paths import configured_import_paths
     # Search roots are application data.  They are deliberately installed only
     # after the policy and its standard-library dependencies have loaded.
@@ -529,7 +586,11 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, imp
         if len(args) > 5 or 'factory' in kwargs:
             block_operation('custom SQLite connection factory')
         if resources:
-            return resources.sqlite_connect(connect, args, {**kwargs, 'factory': _MemoryConnection})
+            connection = resources.sqlite_connect(connect, args, {**kwargs, 'factory': _MemoryConnection})
+            value = args[0] if args else kwargs.get('database')
+            if type(value) in (str, bytes):
+                connection._resource_logical_name = value
+            return connection
         return connect(*args, **kwargs, factory=_MemoryConnection)
 
     def observe_background_exception(args):
@@ -542,6 +603,8 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, imp
     try:
         _active = state
         with ExitStack() as stack:
+            if windows_version_probe is not None:
+                stack.enter_context(patch.object(platform, '_syscmd_ver', windows_version_probe))
             for module in (sqlite3, sqlite3.dbapi2):
                 stack.enter_context(patch.object(module, 'connect', memory_connect))
                 stack.enter_context(patch.object(module, 'Connection', _MemoryConnection))

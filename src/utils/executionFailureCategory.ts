@@ -10,6 +10,7 @@ export type ExecutionFailureCategory =
     | 'coverage'
     | 'mutation'
     | 'environment'
+    | 'tool'
     | 'unknown';
 
 /** A stage-owned diagnostic survives wrapping and must not trigger Tier fallback. */

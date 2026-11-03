@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as path from 'node:path';
-import { applyWriterMethodEdits, planWriterMethodEdits, planWriterNameBindingEdits } from '../validation/writerMethodEdits';
+import { applyWriterMethodEdits, isWriterMethodEditFormatFailure, planWriterMethodEdits, planWriterNameBindingEdits } from '../validation/writerMethodEdits';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { validatePassingTestPreservation } from '../pipeline/passingTestPreservation';
@@ -91,6 +91,7 @@ test('complete suite replies, new methods and fixture edits are rejected rather 
         'class Second:\n    def setUp(self):\n        self.control = 9']) {
         const result = await applyWriterMethodEdits({ baseline, lineRefs, plan, response: '```python\n' + code + '\n```', python });
         assert.equal(result.ok, false);
+        if (!result.ok) { assert.equal(isWriterMethodEditFormatFailure(result), false); }
     }
 });
 
@@ -102,6 +103,7 @@ test('malformed method replies retain only hash-bound syntax coordinates, withou
     assert.equal(result.ok, false);
     if (result.ok) { return; }
     assert.equal(result.reasonCode, 'invalid-edit-python');
+    assert.equal(isWriterMethodEditFormatFailure(result), true);
     assert.equal(result.syntax?.kind, 'SyntaxError');
     assert.equal(result.syntax?.line, 3);
     assert.equal(typeof result.syntax?.column, 'number');

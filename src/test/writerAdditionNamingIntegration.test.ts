@@ -21,7 +21,7 @@ test('ordinary Writer additions require the same executed baseline AST inventory
     const originalRun = processRunner.runSpawn;
     const handlers = new Map<string, (...args: any[]) => any>(), persisted = new Map<string, unknown>();
     const modelName = 'neutral-writer-addition-naming';
-    let scenario: 'normal' | 'empty' = 'normal';
+    let scenario: 'normal' | 'empty' | 'format-repair' | 'completion-repair' = 'normal';
     let writerRequests: any[] = [], reviewerRequests = 0, mutationRuns = 0, inventoryCalls = 0;
     let fixtureErrors: string[] = [];
     let corruptedInventory = false, seedCode = '';
@@ -71,7 +71,7 @@ test('ordinary Writer additions require the same executed baseline AST inventory
                     + `        self.assertEqual(Calculator.target(${selected.args.join(', ')}), ${selected.observedResult})\n`;
                 response = '```python\n' + seedCode + '\n```';
             } else {
-                assert.equal(scenario, 'normal', 'unknown inventory must stop before another Writer transport');
+                assert.notEqual(scenario, 'empty', 'unknown inventory must stop before another Writer transport');
                 assert.match(request.roleInstructions, /WRITER_ADDITION_V1 OUTPUT MODE/);
                 assert.doesNotMatch(request.roleInstructions, /WRITER_CASE_SUBTASK_V1/);
                 const signature = /WRITER_ADDITION_METHOD_V1[\s\S]*\ndef (test_[a-zA-Z0-9_]+)\(self\):\s*$/.exec(request.prompt);
@@ -86,6 +86,27 @@ test('ordinary Writer additions require the same executed baseline AST inventory
                 }) || ['    self.assertEqual(Calculator.target(0), 0)', '    self.assertEqual(Calculator.target(1), 2)'];
                 response = '```python\ndef ' + signature[1] + '(self):\n'
                     + assertions.join('\n') + '\n```';
+                if (scenario === 'format-repair') {
+                    if (writerRequests.length === 2) { response = 'This is an explanation of the test, without implemented Python.'; }
+                    else {
+                        assert.match(request.prompt, /WRITER_ADDITION_FORMAT_REPAIR_V1/);
+                        assert.doesNotMatch(request.prompt, /WRITER_REVISION_REQUEST_V2/);
+                        assert.match(request.prompt, /original executed baseline/);
+                        const firstFocus = writerRequests[1].prompt.match(/WRITER_FOCUS_CASE_FACTS_V1\n([^\n]+)/)?.[1];
+                        if (firstFocus) { assert.ok(request.prompt.includes(firstFocus)); }
+                        if (writerRequests.length === 3) { response = response.replace('```python\n', '```python\nshared = 123\n'); }
+                    }
+                }
+                if (scenario === 'completion-repair') {
+                    if (writerRequests.length === 2) {
+                        assert.notEqual(request.raw, true);
+                        response = 'This test checks the observed result. Here is an explanation without Python.';
+                    } else {
+                        assert.equal(request.raw, true, 'the completed non-test response selects code continuation');
+                        assert.ok(request.transmittedPrompt.endsWith('def ' + signature[1] + '(self):\n'));
+                        response = assertions.join('\n') + '\n';
+                    }
+                }
             }
         }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
@@ -103,11 +124,13 @@ test('ordinary Writer additions require the same executed baseline AST inventory
         inventoryCalls++;
         // The real tool parses the real generated seed. Corrupt only its first
         // bookkeeping delivery; the separate execution scenario tool still works.
-        if (scenario !== 'normal' && !corruptedInventory && args[2]?.input?.includes('def test_seed(')) {
+        if (scenario === 'empty' && !corruptedInventory && args[1].includes('--diagnostics')
+            && args[2]?.input?.includes('def test_seed(')) {
             corruptedInventory = true;
             assert.equal(result.code, 0);
-            assert.equal(JSON.parse(result.stdout)[0].id, 'Cases.test_seed');
-            return { ...result, stdout: '[]' };
+            const inventory = JSON.parse(result.stdout);
+            assert.equal(inventory.methods[0].id, 'Cases.test_seed');
+            return { ...result, stdout: JSON.stringify({ ...inventory, methods: [] }) };
         }
         return result;
     };
@@ -122,13 +145,14 @@ test('ordinary Writer additions require the same executed baseline AST inventory
             testGenerationMode: TEST_GEN_MODE_PYTHON, roleQualification: {
                 writer: { state: 'verified', reason: 'public fixture' }, reviewer: { state: 'verified', reason: 'public fixture' },
                 bugFixer: { state: 'not-run', reason: 'unused' } } });
-        for (scenario of ['normal', 'empty'] as const) {
+        for (scenario of ['normal', 'format-repair', 'completion-repair', 'empty'] as const) {
             await t.test(scenario, async () => {
                 writerRequests = []; reviewerRequests = 0; mutationRuns = 0; inventoryCalls = 0;
                 corruptedInventory = false; seedCode = '';
                 fixtureErrors = [];
                 const output = path.join(directory, scenario);
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName,
+                    stopPolicy: { failureLimit: scenario === 'format-repair' ? 4 : 3 },
                     filePath: source, funcName: 'Calculator.target', promptStrategy: 'tier2', validationMode: 'full',
                     maxLoops: 2, timeoutSeconds: 60, mutationEngine: 'builtin', mutationTimeoutSeconds: 20, outputPath: output });
                 const files = fs.readdirSync(output, { recursive: true }).map(String);
@@ -177,6 +201,34 @@ test('ordinary Writer additions require the same executed baseline AST inventory
                     assert.ok(!baselineInventory.detail.methods.some((item: any) => item.id.endsWith('.' + addedName)));
                     assert.ok(fs.readFileSync(checkpointPath, 'utf8').startsWith(seedCode.trimEnd()), 'executed seed bytes remain retained');
                     assert.ok(events.some(event => event.stage === 'writer-addition' && event.status === 'merged'));
+                } else if (scenario === 'completion-repair') {
+                    assert.equal(writerRequests.length, 3, debug);
+                    assert.equal(mutationRuns, 2, 'the completed method composition reaches real mutation');
+                    assert.equal(reviewerRequests, 2);
+                    assert.equal(knowledge.failureCount, 2);
+                    const selected = events.find(event => event.stage === 'writer-addition' && event.status === 'completion-selected');
+                    assert.equal(selected?.detail.version, 'addition-code-completion-v1');
+                    assert.equal(selected.detail.baselineCodeHash, evidenceHash(seedCode.trimEnd()));
+                    assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'requested'
+                        && event.detail.writerPromptMode === 'addition-code-completion-v1'));
+                    assert.ok(fs.readFileSync(checkpointPath, 'utf8').startsWith(seedCode.trimEnd()));
+                } else if (scenario === 'format-repair') {
+                    assert.equal(writerRequests.length, 4, debug);
+                    assert.equal(mutationRuns, 2, 'malformed additions never execute or reach mutation');
+                    assert.equal(reviewerRequests, 2, 'only the seed and the complete repaired candidate receive review');
+                    const retries = events.filter(event => event.stage === 'model-request'
+                        && event.detail.writerPromptMode === 'same-addition-format-repair-v1');
+                    assert.deepEqual(retries.map(event => event.detail.reasonCode),
+                        ['invalid-python-structure', 'unsupported-addition-context']);
+                    assert.ok(retries.every(event => event.detail.evidencePreserved
+                        && event.detail.baselineCodeHash === evidenceHash(seedCode.trimEnd())));
+                    assert.ok(!events.some(event => event.stage === 'candidate-artifact'
+                        && event.detail.reasonCode === 'response-not-extracted-python'));
+                    assert.ok(fs.readFileSync(checkpointPath, 'utf8').startsWith(seedCode.trimEnd()));
+                    // The seed's valid measurement misses the final quality
+                    // threshold once; the two malformed additions add two.
+                    assert.equal(knowledge.failureCount, 3);
+                    assert.equal(knowledge.failureLimit, 4);
                 } else {
                     assert.equal(corruptedInventory, true);
                     assert.equal(writerRequests.length, 1, 'the next Writer request cannot use a guessed empty inventory');

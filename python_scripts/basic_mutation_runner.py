@@ -372,7 +372,14 @@ def apply_mutation(tree, candidate_index, target_function=None, target_class=Non
 
 def package_copy_ignore():
     """Omit declared resources before copytree opens or follows them."""
-    ordinary_ignore = shutil.ignore_patterns('__pycache__', '*.pyc')
+    ignored_names = shutil.ignore_patterns('__pycache__', '*.pyc')
+    def ordinary_ignore(directory, names):
+        excluded = set(ignored_names(directory, names))
+        for name in names:
+            candidate = os.path.join(directory, name)
+            if os.path.islink(candidate) or getattr(os.path, 'isjunction', lambda _path: False)(candidate):
+                excluded.add(name)
+        return excluded
     plan = import_fixture_plan()
     if not plan:
         return ordinary_ignore, lambda _path: False
@@ -443,6 +450,71 @@ def package_copy_ignore():
     return ignore, declared
 
 
+def flat_dependency_closure(source_file, roots=None, seeds=None):
+    """Copy local Python imports transitively, without reopening production data.
+
+    Site packages remain installed interpreter dependencies. Symlinks and declared
+    resource paths use the same exclusion policy as package copies.
+    """
+    ignore, is_resource = package_copy_ignore()
+    roots = roots or [source_file.parent]
+    # Native/preflight may explicitly supply a separate local dependency root.
+    # Copy its needed source, never retain that original path in a mutant child.
+    from python_import_paths import configured_import_paths
+    from isolated_resources import is_unc_or_device
+    explicit = [*configured_import_paths(), *filter(None, os.environ.get('PYTHONPATH', '').split(os.pathsep))]
+    for raw in explicit:
+        if is_unc_or_device(raw):
+            continue
+        root = Path(raw).absolute()
+        if (root == Path(__file__).parent or root.is_relative_to(Path(sys.base_prefix))
+                or root.is_relative_to(Path(sys.prefix)) or root in roots):
+            continue
+        if root.is_symlink():
+            raise ValueError('Mutation dependency root is a link')
+        roots.append(root)
+    pending, seen, files, packages = list(seeds or [source_file]), set(), [], []
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if len(seen) > 512:
+            raise ValueError('Mutation dependency closure exceeds limit')
+        if current.is_symlink() or is_resource(current):
+            raise ValueError('Mutation dependency overlaps isolated resource or link')
+        tree = ast.parse(current.read_bytes())
+        for node in ast.walk(tree):
+            names = ([item.name for item in node.names] if isinstance(node, ast.Import)
+                     else [node.module] if isinstance(node, ast.ImportFrom) and not node.level and node.module else [])
+            for name in names:
+                head = name.split('.')[0]
+                matches = [(root / (head + '.py'), root / head, root) for root in roots
+                           if (root / (head + '.py')).is_file() or (root / head / '__init__.py').is_file()]
+                if not matches:
+                    continue
+                module, package, root = matches[0]
+                if module.is_file():
+                    if head + '.py' in ignore(str(root), [head + '.py']):
+                        raise ValueError('Mutation dependency source is excluded')
+                    if module != source_file and module not in files:
+                        files.append(module)
+                        pending.append(module)
+                elif package.is_dir() and (package / '__init__.py').is_file():
+                    if package.is_symlink():
+                        raise ValueError('Mutation dependency package is a link')
+                    if head in ignore(str(root), [head]):
+                        raise ValueError('Mutation dependency package is excluded')
+                    if package not in packages:
+                        packages.append(package)
+                        for directory, dirs, entries in os.walk(package, followlinks=False):
+                            excluded = ignore(directory, dirs + entries)
+                            dirs[:] = [item for item in dirs if item not in excluded]
+                            pending.extend(Path(directory, item) for item in entries
+                                           if item.endswith('.py') and item not in excluded)
+    return files, packages
+
+
 def mutation_import_layout(source_file, test_file, temp_root):
     """Describe only copies required by statically bound target imports.
 
@@ -493,6 +565,7 @@ def mutation_import_layout(source_file, test_file, temp_root):
     targets = []
     packages = []
     bindings = []
+    dependencies = []
     if source_stem in modules:
         target = temp_root / source_file.name
         targets.append(target)
@@ -510,13 +583,39 @@ def mutation_import_layout(source_file, test_file, temp_root):
         targets.append(destination_root / source_file.relative_to(package_root))
     if not targets:
         raise ValueError('Mutation target import layout is unsupported')
-    return {'targets': targets, 'packages': packages, 'bindings': bindings}
+    # A package's root imports (config.*, db.*, etc.) are siblings of that
+    # package, not children. Derive roots from the actual target import layout.
+    roots = list(dict.fromkeys([package.parent for package, _ in packages]
+                              + ([source_file.parent] if source_stem in modules else [])))
+    ignore, _ = package_copy_ignore()
+    seeds = [source_file]
+    for package, _ in packages:
+        for directory, dirs, entries in os.walk(package, followlinks=False):
+            excluded = ignore(directory, dirs + entries)
+            dirs[:] = [item for item in dirs if item not in excluded]
+            seeds.extend(Path(directory, item) for item in entries if item.endswith('.py') and item not in excluded)
+    files, local_packages = flat_dependency_closure(source_file, roots, seeds)
+    for file in files:
+        if any(file.is_relative_to(package) for package, _ in packages):
+            continue
+        copied = temp_root / file.name
+        dependencies.append((file, copied))
+        bindings.append((file, copied, False))
+    for package in local_packages:
+        if any(package.is_relative_to(existing) for existing, _ in packages):
+            continue
+        copied = temp_root / package.name
+        packages.append((package, copied))
+        bindings.append((package, copied, True))
+    return {'targets': targets, 'packages': packages, 'bindings': bindings, 'dependencies': dependencies}
 
 
 def package_mutant_targets(source_file, test_file, temp_root, layout=None):
     """Mirror the package roots selected by the test's static target imports."""
     layout = layout or mutation_import_layout(source_file, test_file, temp_root)
     ignore, is_resource = package_copy_ignore()
+    for source, destination in layout.get('dependencies', []):
+        destination.write_bytes(source.read_bytes())
     for package_root, destination_root in layout['packages']:
         if is_resource(package_root):
             raise ValueError('Mutation package overlaps a declared isolated resource')
@@ -586,14 +685,20 @@ def read_trial_result(path, expected_fixture_id=None, expected_activation=None):
         result = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
+    blocked = isinstance(result, dict) and result.get('status') == 'isolation-blocked'
     if (not isinstance(result, dict) or result.get('schemaVersion') != 'generated-test-result-v1'
-            or type(result.get('testsRun')) is not int or result['testsRun'] <= 0
+            or type(result.get('testsRun')) is not int or result['testsRun'] < 0
+            or result['testsRun'] == 0 and not blocked
             or not isinstance(result.get('testFailures'), list) or len(result['testFailures']) > 1000):
         return None
     if expected_fixture_id and (not isinstance(result.get('importFixtures'), dict)
             or result['importFixtures'].get('id') != expected_fixture_id):
         return None
-    if expected_activation and not valid_activation(result.get('functionActivation'), expected_activation):
+    # A blocked import can precede both unittest execution and activation.
+    # Keep its environment failure; it cannot prove a pass or a killed mutant.
+    if expected_activation and not blocked and not valid_activation(result.get('functionActivation'), expected_activation):
+        return None
+    if blocked and result['testFailures']:
         return None
     for failure in result['testFailures']:
         if not isinstance(failure, dict) or failure.get('kind') not in ('failure', 'error', 'unexpected-success'):
@@ -791,7 +896,9 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 mutation_import_layout(source_file, baseline_test, baseline_root)['targets'], baseline_test) if activate_function else None
         except (OSError, ValueError):
             result.update(baselineStatus='error', diagnosticCode='mutation-trial-setup-failed',
-                          baseline_output='Mutation trial import layout or fixture setup failed')
+                          baseline_output='Mutation trial import layout or fixture setup failed',
+                          baselineFailure={'schemaVersion': 'mutation-baseline-failure-v1',
+                                           'category': 'environment', 'reasonCode': 'baseline-environment-setup-failed'})
             return result
 
         baseline_started = None
@@ -799,6 +906,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             result['baselineAllocatedSeconds'] = trial_timeout(baseline_timeout_seconds)
             if result['baselineAllocatedSeconds'] <= 0:
                 result['baseline_output'] = 'Stage budget exhausted before baseline'
+                result['baselineFailure'] = {'schemaVersion': 'mutation-baseline-failure-v1',
+                                             'category': 'budget', 'reasonCode': 'baseline-stage-budget-exhausted'}
                 return result
             baseline_result_path = baseline_root / 'runner-result.json'
             baseline_started = time.monotonic()
@@ -817,19 +926,25 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
             baseline_result = read_trial_result(baseline_result_path, result['importFixtureId'],
                 {'sourceHash': source_hash, 'variantHash': source_hash, 'testHash': result['testHash'], 'target': target_function}
                 if activate_function else None)
-            if activate_function and baseline_result:
+            if activate_function and baseline_result and baseline_result.get('functionActivation') is not None:
                 result['baselineFunctionActivation'] = baseline_result['functionActivation']
             result['baselineImportFixtures'] = baseline_result.get('importFixtures') if baseline_result else None
             if (baseline.returncode or baseline_result is None or baseline_result.get('status') != 'passed'
                     or baseline_result['testFailures']):
+                test_failure = (baseline.returncode == 1 and baseline_result is not None
+                                and baseline_result.get('status') == 'failed' and baseline_result['testFailures']
+                                and all(item['phase'] == 'test' for item in baseline_result['testFailures']))
+                load_failure = (baseline_result is not None
+                                and (baseline_result.get('status') == 'isolation-blocked'
+                                     or any(item['phase'] == 'fixture-or-load' for item in baseline_result['testFailures'])))
                 result.update({
                     'total': 0,
                     'baseline_passed': False,
-                    'baselineStatus': ('failed' if baseline.returncode == 1 and baseline_result is not None
-                                       and baseline_result.get('status') == 'failed'
-                                       and baseline_result['testFailures']
-                                       and all(item['phase'] == 'test' for item in baseline_result['testFailures'])
-                                       else 'error'),
+                    'baselineStatus': 'failed' if test_failure else 'error',
+                    'baselineFailure': {'schemaVersion': 'mutation-baseline-failure-v1',
+                                        'category': 'environment' if load_failure else 'validation' if test_failure else 'tool',
+                                        'reasonCode': 'baseline-module-or-fixture-load-failed' if load_failure
+                                        else 'baseline-tests-failed' if test_failure else 'baseline-runner-report-unavailable'},
                     'baseline_output': (baseline.stdout + baseline.stderr).strip()[-500:],
                     'mutants': [],
                 })
@@ -839,6 +954,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 'total': 0,
                 'baseline_passed': False,
                 'baselineStatus': 'timeout',
+                'baselineFailure': {'schemaVersion': 'mutation-baseline-failure-v1',
+                                    'category': 'timeout', 'reasonCode': 'baseline-timeout'},
                 'baseline_output': ('Baseline timed out after '
                                     f'{result["baselineAllocatedSeconds"]:.3f}s '
                                     f'(cold-start limit {baseline_timeout_seconds}s; shared stage budget applies)'),
@@ -850,6 +967,8 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                 'total': 0,
                 'baseline_passed': False,
                 'baselineStatus': 'error',
+                'baselineFailure': {'schemaVersion': 'mutation-baseline-failure-v1',
+                                    'category': 'tool', 'reasonCode': 'baseline-process-start-failed'},
                 'baseline_output': str(error),
                 'mutants': [],
             })
@@ -936,7 +1055,7 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
                       'allocatedSeconds': allocated_seconds,
                       'importFixtures': detail.get('importFixtures') if detail else None,
                       'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
-            if activate_function and detail:
+            if activate_function and detail and detail.get('functionActivation') is not None:
                 record['functionActivation'] = detail['functionActivation']
             if status == 'KILLED':
                 record['killedBy'] = sorted({item['testId'] for item in detail['testFailures']})

@@ -18,7 +18,21 @@ export interface WriterMethodEditPlan {
     schemaVersion: typeof PLAN; ok: true; baselineHash: string; planHash: string; methods: WriterMethodEdit[];
 }
 type RejectedEdit = { ok: false; reasonCode: string; syntax?: CandidateSyntaxDiagnostic; candidateHash?: string };
-const invalid = (): never => { throw new AnalysisStageError('validation', 'writer-method-edit-tool',
+const formatGuidance = {
+    'empty-edit-response': 'The response was empty. Return implemented Python for every method in the original plan.',
+    'edit-method-missing': 'The response omitted planned methods. Return EVERY original planned method exactly once under its original owner.',
+    'duplicate-edit-method': 'The response repeated a planned method. Return each original planned method exactly once under its original owner.',
+    'edit-no-method-change': 'The response made no method change. Address the cited finding with an effective edit to the original planned method.'
+} as const;
+export function writerMethodEditFormatGuidance(reasonCode: unknown): string | undefined {
+    return typeof reasonCode === 'string' && Object.hasOwn(formatGuidance, reasonCode)
+        ? formatGuidance[reasonCode as keyof typeof formatGuidance] : undefined;
+}
+/** Retry only a response-shape failure inside the unchanged method plan. */
+export function isWriterMethodEditFormatFailure(rejection: RejectedEdit): boolean {
+    return Boolean(rejection.syntax) || writerMethodEditFormatGuidance(rejection.reasonCode) !== undefined;
+}
+const invalid = (): never => { throw new AnalysisStageError('tool', 'writer-method-edit-tool',
     'The source-bound method edit tool could not complete.', { reasonCode: 'method-edit-tool-invalid' }); };
 
 function validPlan(value: any, baseline: string, lineRefs: readonly number[]): value is WriterMethodEditPlan {
@@ -107,8 +121,14 @@ export async function applyWriterMethodEdits(options: {
     python: string; env?: NodeJS.ProcessEnv;
 }): Promise<{ ok: true; code: string; changedMethodIds: string[] } | RejectedEdit> {
     if (!validPlan(options.plan, options.baseline, options.lineRefs)) { return invalid(); }
-    const replacement = extractPythonTestCode(options.response, 'addition');
+    const replacement = extractPythonTestCode(options.response, 'method-edit');
     if (Buffer.byteLength(replacement, 'utf8') > LIMIT) { return { ok: false, reasonCode: 'edit-input-limit' }; }
+    if (!replacement.trim()) {
+        // Extraction also refuses out-of-scope artifacts. Only a genuinely empty
+        // response or one empty code fence can be called an empty format reply.
+        const empty = !options.response.trim() || /^\s*```(?:python|py)?[ \t]*\r?\n[ \t\r\n]*```\s*$/.test(options.response);
+        return { ok: false, reasonCode: empty ? 'empty-edit-response' : 'unsupported-edit-response' };
+    }
     const value = await invoke(options.python, options.env, { mode: 'apply', baseline: options.baseline, lineRefs: options.lineRefs,
         baselineHash: options.plan.baselineHash, planHash: options.plan.planHash, replacement }, RESULT);
     if (value.ok === false) {

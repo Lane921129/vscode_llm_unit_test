@@ -7,7 +7,7 @@ import { TargetBudget } from '../pipeline/targetBudget';
 test('mutation process failure preserves known error codes and exit code without accepting successful stdout', () => {
     const error = mutationProcessFailure('mutatest', { code: 2,
         stdout: JSON.stringify({ error: 'external-engine-unavailable', diagnosticCode: 'package-missing', secret: 'do-not-copy' }), stderr: '' });
-    assert.equal(error.category, 'mutation');
+    assert.equal(error.category, 'environment');
     assert.match(error.message, /exitCode=2; package-missing/);
     assert.doesNotMatch(JSON.stringify(error.diagnostic), /do-not-copy/);
     const invalid = mutationProcessFailure('builtin', { code: 1, stdout: '{"status":"complete"}', stderr: '' });

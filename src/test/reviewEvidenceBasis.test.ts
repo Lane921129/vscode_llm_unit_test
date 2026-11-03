@@ -1,5 +1,5 @@
 import * as assert from 'node:assert/strict';
-import * as path from 'node:path';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { test } from 'node:test';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { NumericEvidenceLedger } from '../pipeline/numericEvidenceLedger';
@@ -16,7 +16,7 @@ const identity = { runId: 'review-basis', sourceHash: 'a'.repeat(64), target: 'i
 const code = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
     + '    def test_first(self):\n        self.assertEqual(increment(1), 2)\n'
     + '    def test_second(self):\n        self.assertEqual(increment(2), 3)\n';
-const python = path.join(process.cwd(), '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+const python = resolvePythonExecutable(undefined, process.cwd());
 const ledger = new NumericEvidenceLedger(identity);
 for (const input of [1, 2]) {
     ledger.add('VERIFIED NUMERIC OBSERVATIONS (evidence only; the AI must revise the test):\n' + JSON.stringify({

@@ -1,6 +1,7 @@
 import { localize } from '../i18n/core';
 import { resolveTestFocus } from '../pipeline/testFocus';
 import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettings';
+import { planAnalysisTargetBudget } from '../pipeline/targetBudget';
 
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false) {
     const selectedFocus = resolveTestFocus(currentStrategy);
@@ -335,6 +336,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
                 <label style="margin-top:0;">${t('ui.maxLoops')}${t('ui.fullModeSuffix')}</label>
                 <input type="number" id="max-loop" value="5" min="1">
+                <label>${localize('單一目標最多失敗次數（第一次失敗算 1 次）')}</label>
+                <input type="number" id="failure-limit" value="5" min="1" step="1">
+                <label>${localize('品質無改善上限（0 關閉）')}</label>
+                <input type="number" id="quality-no-improvement-limit" value="3" min="0" step="1">
+                <label>${localize('批次失敗目標上限（0 不中止整批）')}</label>
+                <input type="number" id="batch-failure-limit" value="0" min="0" step="1">
+                <p id="target-request-budget" role="status"></p>
                 
                 <label>${t('ui.mutpyTimeout')}${t('ui.fullModeSuffix')}</label>
                 <input type="number" id="mutpy-timeout" value="60" min="1" style="width:100%;">
@@ -476,6 +484,26 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let timingSettingsTouched = false;
         const timingMessages = ${JSON.stringify({ effective: localize('當前單次最多 {0} 秒（API {1} 秒、整目標 {2} 秒）；前序工作與排隊會減少實際剩餘時間。'), invalid: localize('API 上限須為 1 至 86400 的整數秒；整目標上限須為 0.001 至 86400 秒，精確至毫秒。請檢查時間單位。') }).replace(/</g, '\\u003c')};
 
+        let stopPolicyTouched = false;
+        let requestBudgetOverrides = {};
+        const plannedRequestBudgets = ${JSON.stringify(Array.from({ length: 10 }, (_, index) => planAnalysisTargetBudget(index + 1)))};
+        function updateTargetRequestBudget() {
+            const loops = Math.min(10, Math.max(1, Number(document.getElementById('max-loop').value) || 5));
+            const budget = { ...plannedRequestBudgets[Math.floor(loops) - 1], ...requestBudgetOverrides };
+            document.getElementById('target-request-budget').textContent =
+                ${JSON.stringify(localize('目標請求預算：模型 {0} 次；HTTP {1} 次；候選 {2} 次；估計輸入 {3} tokens。'))}
+                    .replace('{0}', budget.logicalRequests).replace('{1}', budget.transportAttempts)
+                    .replace('{2}', budget.candidateAttempts).replace('{3}', budget.estimatedInputTokens);
+        }
+        document.getElementById('max-loop').addEventListener('input', updateTargetRequestBudget);
+        updateTargetRequestBudget();
+        const stopFields = ['failure-limit', 'quality-no-improvement-limit', 'batch-failure-limit'];
+        for (const id of stopFields) document.getElementById(id).addEventListener('input', () => { stopPolicyTouched = true; });
+        function stopPolicySettings() {
+            const values = stopFields.map(id => Number(document.getElementById(id).value));
+            if (!values.every((value, index) => Number.isSafeInteger(value) && value >= (index === 0 ? 1 : 0))) return undefined;
+            return { failureLimit: values[0], qualityNoImprovementLimit: values[1], batchFailureLimit: values[2] };
+        }
         function executionTimingSettings() {
             const timeoutSeconds = Number(document.getElementById('timeout-sec').value);
             const targetTimeoutSeconds = Number(document.getElementById('target-timeout-sec').value);
@@ -707,6 +735,15 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         window.addEventListener('message', event => {
             const msg = event.data;
             switch (msg.command) {
+                case 'stopPolicySettings':
+                    if (!analysisRunning && !stopPolicyTouched) {
+                        document.getElementById('failure-limit').value = msg.settings.failureLimit;
+                        document.getElementById('quality-no-improvement-limit').value = msg.settings.qualityNoImprovementLimit;
+                        document.getElementById('batch-failure-limit').value = msg.settings.batchFailureLimit;
+                        requestBudgetOverrides = msg.budget;
+                        updateTargetRequestBudget();
+                    }
+                    break;
                 case 'executionTimingSettings':
                     if (analysisRunning || timingSettingsTouched) break;
                     document.getElementById('timeout-sec').value = msg.timeoutSeconds;
@@ -1132,6 +1169,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 mutationEngine: document.getElementById('mutation-engine').value,
                 mutationWorkers: mutationWorkerCount(),
                 maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 5,
+                stopPolicy: stopPolicySettings(),
                 mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 60,
                 ...executionTimingSettings(),
                 outputPath: document.getElementById('output-path').value,
@@ -1166,6 +1204,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if(environmentBusy || document.getElementById('btn-run').disabled) return;
             if (!executionTimingSettings()) {
                 vscode.postMessage({ command: 'appendLog', text: timingMessages.invalid });
+                return;
+            }
+            if (!stopPolicySettings()) {
+                vscode.postMessage({ command: 'appendLog', text: ${JSON.stringify(localize('停止政策必須是有效整數；單目標失敗上限至少 1，其餘至少 0。'))} });
                 return;
             }
             if(!envType || !modelName || (!filePath && !batchPath) || (envType === 'cloud' && !cloudKeyName)) {

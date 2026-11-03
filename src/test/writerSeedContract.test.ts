@@ -109,7 +109,9 @@ test('one real observed return or exception binds a formal seed input, without a
     assert.equal(validateWriterSeedContract({ ...context, facts: guessed }).status, 'grounded',
         'input binding does not certify an assertion; numeric/execution/Reviewer gates must reject a guessed expected value');
     const raisedId = trace.cases![1].case_id;
-    const raisedContext = { ...context, selectedCaseIds: [raisedId] };
+    const returnedCalls = trace.cases!.filter(item => item.status === 'returned').map(item => item.input_before.call_graph!);
+    const raisedContext = { ...context, selectedCaseIds: selectWriterSeedCaseIds(trace, returnedCalls) };
+    assert.deepEqual(raisedContext.selectedCaseIds, [raisedId]);
     const exceptionSeed = 'import unittest\nfrom sample import scale_ratio\nclass Cases(unittest.TestCase):\n'
         + '    def test_seed(self):\n        with self.assertRaises(ZeroDivisionError):\n            scale_ratio(1, 0)\n';
     assert.equal(validateWriterSeedContract({ ...raisedContext, facts: await facts(exceptionSeed) }).status, 'grounded');

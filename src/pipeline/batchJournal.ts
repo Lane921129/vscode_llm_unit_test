@@ -16,6 +16,7 @@ import { BatchScopeSelection, canonicalScopeRoot, createBatchScopeSelection } fr
 import { AI_WORKFLOW_VERSION, requireReviewApproval } from './aiWorkflow';
 import type { BatchPreflightBlockedTarget } from './batchPreflightPartition';
 import { measuredOutputRateMilli, mergeModelCapabilitySummaries, ModelCapabilitySummary, summarizeModelCapability } from '../llm/modelCapabilitySummary';
+import { normalizeStopPolicy, StopPolicySettings } from './stopPolicy';
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -23,6 +24,8 @@ interface BatchTarget {
     terminalStatus?: string; category?: string; stage?: string; reportDirectory?: string;
     modelRequests?: number; qualificationRequests?: number; formalRequests?: number; transportAttempts?: number; environment?: EnvironmentIssue;
     capabilitySummary?: ModelCapabilitySummary;
+    failureCount?: number; failureLimit?: number; stopReason?: string | null;
+    effectiveSettings?: StopPolicySettings;
     preflightReason?: BatchPreflightBlockedTarget['reason']; preflightReport?: string;
 }
 interface EnvironmentIssue {
@@ -109,8 +112,11 @@ export class BatchJournal {
     private scope?: BatchScopeSelection;
     /** Stable batch-level stage when work stops before an individual target owns a report. */
     private terminalFailureStage?: string;
+    private readonly stopPolicy: StopPolicySettings;
     constructor(readonly directory: string, private readonly sourceRoot: string,
-        private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode }) {
+        private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode;
+            stopPolicy?: Partial<StopPolicySettings> }) {
+        this.stopPolicy = normalizeStopPolicy(identity.stopPolicy);
         this.save();
     }
     private relative(file: string): string {
@@ -183,6 +189,24 @@ export class BatchJournal {
         if (this.targets[id].terminalStatus === 'environment-blocked') { throw new Error('Cannot execute a preflight-blocked target'); }
         this.targets[id].state = 'running'; this.save();
     }
+    /** Evaluated before dispatch, after the previous target's verified terminal report. */
+    stopDispatch(): boolean {
+        if (this.terminalFailureStage === 'batch-failure-limit') { return true; }
+        const failures = this.targets.filter(target => target.state === 'finished'
+            && !['environment', 'tool'].includes(target.category || '')
+            && ['failed', 'retained-after-failure', 'review-blocked', 'source-changed', 'round-limit', 'stagnated',
+                'quality-incomplete', 'execution-passed-review-incomplete'].includes(target.terminalStatus || '')).length;
+        if (!this.stopPolicy.batchFailureLimit || failures < this.stopPolicy.batchFailureLimit) { return false; }
+        this.terminalFailureStage = 'batch-failure-limit';
+        for (const target of this.targets) {
+            if (target.state === 'pending') {
+                Object.assign(target, { state: 'finished', terminalStatus: 'policy-not-run', stage: 'batch-failure-limit',
+                    modelRequests: 0, formalRequests: 0, transportAttempts: 0 });
+            }
+        }
+        this.save();
+        return true;
+    }
     attach(id: number, directory: string): void {
         const relative = path.relative(this.directory, directory);
         if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) {
@@ -235,6 +259,12 @@ export class BatchJournal {
                 target.terminalStatus = knowledge.terminalStatus;
                 target.category = knowledge.failureCategory;
                 target.stage = knowledge.failureStage;
+                if (Number.isSafeInteger(knowledge.failureCount) && Number.isSafeInteger(knowledge.failureLimit)) {
+                    target.failureCount = knowledge.failureCount;
+                    target.failureLimit = knowledge.failureLimit;
+                    target.stopReason = typeof knowledge.stopReason === 'string' ? knowledge.stopReason : null;
+                    target.effectiveSettings = normalizeStopPolicy(knowledge.effectiveSettings);
+                }
                 if (target.category === 'environment') {
                     const diagnostic = knowledge.diagnostic || {};
                     target.environment = describeImportIssue(diagnostic, target.stage || 'environment');
@@ -281,22 +311,27 @@ export class BatchJournal {
             if (['passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
         }
         const unfinished = this.discoveryFailures.length || this.targets.some(target => target.state !== 'finished');
-        const targetFailures = this.targets.some(target => target.category !== 'environment'
+        const targetFailures = this.targets.some(target => !['environment', 'tool'].includes(target.category || '')
             && ['failed', 'retained-after-failure', 'source-changed'].includes(target.terminalStatus || ''));
-        this.status = status === 'completed' && unfinished ? 'incomplete'
+        const blocked = this.targets.filter(target => ['environment', 'tool'].includes(target.category || '')
+            || target.terminalStatus === 'environment-blocked');
+        this.status = this.terminalFailureStage === 'batch-failure-limit' ? 'policy-stopped'
+            : status === 'completed' && unfinished ? 'incomplete'
             : status === 'completed' && targetFailures ? 'failed'
-                : status === 'completed' && this.targets.some(target => target.terminalStatus === 'environment-blocked')
-                    ? this.targets.every(target => target.terminalStatus === 'environment-blocked') ? 'environment-blocked' : 'partial' : status;
+                : status === 'completed' && blocked.length
+                    ? blocked.length === this.targets.length
+                        ? blocked.every(target => target.category === 'tool') ? 'tool-blocked' : 'environment-blocked'
+                        : 'partial' : status;
         this.finishedAt = new Date().toISOString(); this.save();
     }
     summary(): string {
         const passed = this.targets.filter(t => t.terminalStatus === 'passed').length;
         const executed = this.targets.filter(t => t.terminalStatus === 'execution-passed').length;
-        const blocked = this.targets.filter(t => t.category === 'environment').length;
-        const failed = this.targets.filter(t => t.category !== 'environment'
+        const blocked = this.targets.filter(t => ['environment', 'tool'].includes(t.category || '')).length;
+        const failed = this.targets.filter(t => !['environment', 'tool'].includes(t.category || '')
             && ['failed', 'retained-after-failure', 'source-changed'].includes(t.terminalStatus || '')).length;
         const skipped = this.targets.filter(t => ['dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'no-mutation-candidates'].includes(t.terminalStatus || '')).length;
-        return localize("共 {0} 個目標；執行驗證通過 {1}、完整通過 {2}、環境受阻 {3}、失敗 {4}、略過／未評分 {5}、未完成 {6}", this.targets.length, executed, passed, blocked, failed, skipped, this.targets.length - executed - passed - blocked - failed - skipped);
+        return localize("共 {0} 個目標；執行驗證通過 {1}、完整通過 {2}、環境／工具受阻 {3}、失敗 {4}、略過／未評分 {5}、未完成 {6}", this.targets.length, executed, passed, blocked, failed, skipped, this.targets.length - executed - passed - blocked - failed - skipped);
     }
 
     /** Batch-wide totals remain observations, never a quality score or model authorization. */
@@ -326,8 +361,22 @@ export class BatchJournal {
         const mode = this.identity.validationMode ?? 'full';
         const capabilitySummary = this.capabilitySummary();
         const capabilityRate = measuredOutputRateMilli(capabilitySummary);
+        const blocked = this.targets.filter(target => ['environment', 'tool'].includes(target.category || '')
+            || target.terminalStatus === 'environment-blocked').length;
+        const incomplete = this.targets.filter(target => target.state !== 'finished'
+            || ['policy-not-run', 'review-blocked', 'round-limit', 'stagnated', 'quality-incomplete',
+                'execution-passed-review-incomplete'].includes(target.terminalStatus || '')).length;
+        const denominator = this.targets.length;
+        const rates = { denominator, passed: denominator ? passed / denominator : null,
+            blocked: denominator ? blocked / denominator : null, incomplete: denominator ? incomplete / denominator : null };
+        const cost = { modelRequests: this.targets.reduce((total, target) => total + (target.modelRequests || 0), 0),
+            transportAttempts: this.targets.reduce((total, target) => total + (target.transportAttempts || 0), 0),
+            outputTokens: capabilitySummary.outputTokens,
+            unknownRequestTargets: this.targets.filter(target => target.modelRequests === undefined).length };
         const manifest = { schemaVersion: 1, batchId: this.id, startedAt: this.startedAt, finishedAt: this.finishedAt,
             validationMode: mode,
+            stopPolicy: this.stopPolicy,
+            stopReason: this.terminalFailureStage === 'batch-failure-limit' ? 'batch-failure-limit' : null,
             allTargetsExecutionVerified: complete && this.targets.length > 0 && executed === this.targets.length,
             status: this.status, complete, allTargetsPassed: complete && this.targets.length > 0 && passed === this.targets.length,
             preflightBlockedModules: this.blockedModules,
@@ -338,9 +387,10 @@ export class BatchJournal {
             ...(this.scope ? { scope: this.scope } : {}),
             discoveredFiles: this.files, discoveryFailures: this.discoveryFailures,
             expectedTargets: this.targets.length, finishedTargets: this.targets.filter(t => t.state === 'finished').length,
-            attemptedTargets: this.targets.filter(target => target.state !== 'pending' && target.terminalStatus !== 'environment-blocked').length,
+            attemptedTargets: this.targets.filter(target => target.state !== 'pending'
+                && !['environment-blocked', 'policy-not-run'].includes(target.terminalStatus || '')).length,
             preflightBlockedTargets: counts['environment-blocked'] || 0,
-            statusCounts: counts, environmentIssues, modelCapabilitySummary: capabilitySummary, targets: this.targets };
+            statusCounts: counts, environmentIssues, rates, cost, modelCapabilitySummary: capabilitySummary, targets: this.targets };
         const temporary = path.join(this.directory, 'batch_manifest.pending.json');
         fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');
         fs.renameSync(temporary, path.join(this.directory, 'batch_manifest.json'));
@@ -354,13 +404,17 @@ export class BatchJournal {
             ...(this.blockedModules ? [localize("- 前置預檢有 {0} 個模組受阻：[原因與處理方式]({1})。受影響目標不計為測試通過。", this.blockedModules,
                 reportLink(this.targets.find(target => target.preflightReport)?.preflightReport || 'preflight/import_check.md'))] : []),
             localize("- 預期目標：{0}；已有終態：{1}；完整通過：{2}", this.targets.length, manifest.finishedTargets, passed),
+            localize('- 通過率 {0}；受阻率 {1}；未完成率 {2}（分母 {3} 個確認目標）。',
+                ...[rates.passed, rates.blocked, rates.incomplete].map(rate => rate === null ? 'N/A' : (rate * 100).toFixed(1) + '%'), denominator),
+            localize('- 模型請求 {0} 次；HTTP {1} 次；有計時配對的輸出 {2} tokens；用量未知目標 {3} 個。',
+                cost.modelRequests, cost.transportAttempts, cost.outputTokens, cost.unknownRequestTargets),
             localize("- 模型：{0}；建置：{1}", safe(this.identity.model), safe(this.identity.buildTimestamp)),
             `- Python：${safe(this.identity.python)}`, '', localize("| 目標狀態 | 數量 |"), '| --- | ---: |',
             ...Object.entries(counts).map(([status, count]) => `| ${status} | ${count} |`), '',
             localize('## 模型能力觀測（本次批次）'), '',
             localize('- 完成傳輸：{0}；逾時：{1}；因輸出長度停止：{2}。', capabilitySummary.completedTransports,
                 capabilitySummary.timedOutTransports, capabilitySummary.lengthStoppedTransports),
-            localize('- 已回報輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。', capabilitySummary.outputTokens,
+            localize('- 有計時配對的輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。', capabilitySummary.outputTokens,
                 capabilitySummary.outputEvalMs, capabilityRate === null ? localize('未知') : (capabilityRate / 1000).toFixed(3)),
             localize('- 只彙總已驗證逐目標傳輸數字；這不是品質分數、模型資格、容量宣稱或後續請求保證。'), '',
             ...(this.preflightEvents.length ? [localize('## 初始化處理紀錄'), '',
